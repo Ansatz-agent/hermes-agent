@@ -21,12 +21,14 @@ ACTUAL_NODE_VERSION="$(node --version)"
 
 export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 export ELECTRON_MIRROR="${ELECTRON_MIRROR:-https://npmmirror.com/mirrors/electron/}"
+export ELECTRON_BUILDER_BINARIES_MIRROR="${ELECTRON_BUILDER_BINARIES_MIRROR:-https://npmmirror.com/mirrors/electron-builder-binaries/}"
 export CSC_IDENTITY_AUTO_DISCOVERY=false
 
 if [[ "${1:-}" == "--check" ]]; then
   printf 'Node=%s\n' "$ACTUAL_NODE_VERSION"
   printf 'PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=%s\n' "$PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD"
   printf 'ELECTRON_MIRROR=%s\n' "$ELECTRON_MIRROR"
+  printf 'ELECTRON_BUILDER_BINARIES_MIRROR=%s\n' "$ELECTRON_BUILDER_BINARIES_MIRROR"
   exit 0
 fi
 

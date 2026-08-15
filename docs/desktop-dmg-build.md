@@ -9,8 +9,8 @@ FFmpeg.
 - macOS on Apple silicon
 - Node.js 26.7.0
 - npm compatible with the committed `package-lock.json`
-- network access to the npm registry and the configured Electron mirror when
-  dependencies are not already cached
+- network access to the npm registry and the configured Electron and
+  electron-builder binary mirrors when dependencies are not already cached
 
 The repository pins Node in both `.nvmrc` and `.node-version`. The build also
 checks the running Node executable and stops before installing dependencies if
@@ -27,7 +27,11 @@ PATH="/Users/zhouzhangchen/.hermes/node/bin:$PATH" npm run build:desktop:dmg
 The command installs dependencies from `package-lock.json`, builds Hermes
 Desktop, and invokes Electron Builder's macOS DMG target. It sets
 `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` for the complete command and rejects the
-result if the build log contains a Playwright browser-download attempt.
+result if the build log contains a Playwright browser-download attempt. The
+script defaults both Electron download sources to `npmmirror` for reliable
+builds in China; callers can override `ELECTRON_MIRROR` and
+`ELECTRON_BUILDER_BINARIES_MIRROR`. Electron Builder still verifies its binary
+downloads against the checksums shipped with the package.
 
 The resulting artifact is written under `apps/desktop/release/`. The retained
 build log is `apps/desktop/build/logs/phase1-desktop-dmg-build.log`.
