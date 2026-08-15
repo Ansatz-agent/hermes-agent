@@ -35,6 +35,7 @@ fi
 [[ $# -eq 0 ]] || fail "unknown argument: $1"
 
 RELEASE_DIR="$REPO_ROOT/apps/desktop/release"
+PACKAGED_APP="$RELEASE_DIR/mac-arm64/Hermes.app"
 LOG_DIR="$REPO_ROOT/apps/desktop/build/logs"
 BUILD_LOG="$LOG_DIR/phase1-desktop-dmg-build.log"
 CONTRACT_SCRIPT="$REPO_ROOT/scripts/desktop-dmg-contract.mjs"
@@ -50,7 +51,8 @@ run_logged() {
 
 cd "$REPO_ROOT"
 run_logged npm ci
-run_logged npm run --workspace apps/desktop dist:mac:dmg
+run_logged npm run --workspace apps/desktop dist:mac:dmg -- --config.mac.identity=-
+run_logged codesign --verify --deep --strict "$PACKAGED_APP"
 
 node "$CONTRACT_SCRIPT" validate-log "$BUILD_LOG"
 DMG_PATH="$(node "$CONTRACT_SCRIPT" find-dmg "$RELEASE_DIR" "$BUILD_STARTED_AT_MS")"

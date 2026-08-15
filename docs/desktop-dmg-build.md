@@ -33,6 +33,12 @@ builds in China; callers can override `ELECTRON_MIRROR` and
 `ELECTRON_BUILDER_BINARIES_MIRROR`. Electron Builder still verifies its binary
 downloads against the checksums shipped with the package.
 
+For this local-testing milestone the macOS build explicitly uses Electron
+Builder's ad-hoc identity (`mac.identity=-`). The pipeline then runs
+`codesign --verify --deep --strict` against the packaged `Hermes.app`; an
+unsigned or partially signed bundle fails the build instead of producing a DMG
+that opens to a blank renderer.
+
 The resulting artifact is written under `apps/desktop/release/`. The retained
 build log is `apps/desktop/build/logs/phase1-desktop-dmg-build.log`.
 

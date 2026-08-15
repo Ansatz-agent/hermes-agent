@@ -23,10 +23,11 @@ function runCheck(version) {
   }
 }
 
-function runPipeline({ produceDmg, builderBinariesMirror }) {
+function runPipeline({ produceDmg, builderBinariesMirror, signatureValid = true }) {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-dmg-pipeline-'))
   const fakeNode = path.join(tempRoot, 'node')
   const fakeNpm = path.join(tempRoot, 'npm')
+  const fakeCodesign = path.join(tempRoot, 'codesign')
   const recordPath = path.join(tempRoot, 'npm-record.txt')
   const artifactPath = path.join(
     repoRoot,
@@ -46,6 +47,11 @@ function runPipeline({ produceDmg, builderBinariesMirror }) {
     `#!/bin/sh\nprintf '%s|%s|%s|%s\\n' "$PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD" "$ELECTRON_MIRROR" "$ELECTRON_BUILDER_BINARIES_MIRROR" "$*" >> "$HERMES_DMG_TEST_RECORD"\nif [ "\${HERMES_DMG_TEST_PRODUCE:-0}" = "1" ] && [ "\${1:-}" = "run" ]; then\n  mkdir -p "$(dirname "$HERMES_DMG_TEST_ARTIFACT")"\n  printf '%s\\n' 'fake dmg' > "$HERMES_DMG_TEST_ARTIFACT"\nfi\n`,
     { mode: 0o755 }
   )
+  fs.writeFileSync(
+    fakeCodesign,
+    `#!/bin/sh\nprintf 'codesign|%s\\n' "$*" >> "$HERMES_DMG_TEST_RECORD"\n[ "$HERMES_DMG_TEST_SIGNATURE_VALID" = "1" ]\n`,
+    { mode: 0o755 }
+  )
 
   try {
     const result = spawnSync('/bin/bash', [buildScript], {
@@ -56,6 +62,7 @@ function runPipeline({ produceDmg, builderBinariesMirror }) {
         HERMES_DMG_TEST_RECORD: recordPath,
         HERMES_DMG_TEST_ARTIFACT: artifactPath,
         HERMES_DMG_TEST_PRODUCE: produceDmg ? '1' : '0',
+        HERMES_DMG_TEST_SIGNATURE_VALID: signatureValid ? '1' : '0',
         ...(builderBinariesMirror
           ? { ELECTRON_BUILDER_BINARIES_MIRROR: builderBinariesMirror }
           : {})
@@ -95,8 +102,9 @@ test('pipeline installs locked dependencies and builds the desktop DMG', () => {
   )
   assert.match(
     record,
-    /1\|https:\/\/npmmirror\.com\/mirrors\/electron\/\|https:\/\/npmmirror\.com\/mirrors\/electron-builder-binaries\/\|run --workspace apps\/desktop dist:mac:dmg/
+    /1\|https:\/\/npmmirror\.com\/mirrors\/electron\/\|https:\/\/npmmirror\.com\/mirrors\/electron-builder-binaries\/\|run --workspace apps\/desktop dist:mac:dmg -- --config\.mac\.identity=-/
   )
+  assert.match(record, /codesign\|--verify --deep --strict .+\/release\/mac-arm64\/Hermes\.app/)
   assert.match(result.stdout, /Hermes-test-.+-mac-arm64\.dmg/)
 })
 
@@ -114,4 +122,9 @@ test('pipeline fails when the current build produces no DMG', () => {
   const { result } = runPipeline({ produceDmg: false })
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /no macOS arm64 Hermes DMG found/)
+})
+
+test('pipeline fails when the packaged app signature is invalid', () => {
+  const { result } = runPipeline({ produceDmg: true, signatureValid: false })
+  assert.notEqual(result.status, 0)
 })
