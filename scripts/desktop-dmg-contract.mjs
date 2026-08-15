@@ -16,13 +16,14 @@ export function forbiddenBrowserDownloadLine(logText) {
   return null
 }
 
-export function findNewestDmg(releaseDir) {
+export function findNewestDmg(releaseDir, notBeforeMs = 0) {
   const absoluteReleaseDir = path.resolve(releaseDir)
   const candidates = fs.existsSync(absoluteReleaseDir)
     ? fs.readdirSync(absoluteReleaseDir)
       .filter(name => /^Hermes-.+-mac-arm64\.dmg$/.test(name))
       .map(name => path.join(absoluteReleaseDir, name))
       .filter(filePath => fs.statSync(filePath).isFile())
+      .filter(filePath => fs.statSync(filePath).mtimeMs >= notBeforeMs)
       .sort((left, right) => {
         const mtimeDelta = fs.statSync(right).mtimeMs - fs.statSync(left).mtimeMs
         return mtimeDelta || right.localeCompare(left)
@@ -39,17 +40,18 @@ function usage() {
   return [
     'Usage:',
     '  node scripts/desktop-dmg-contract.mjs validate-log <log-file>',
-    '  node scripts/desktop-dmg-contract.mjs find-dmg <release-directory>'
+    '  node scripts/desktop-dmg-contract.mjs find-dmg <release-directory> [not-before-ms]'
   ].join('\n')
 }
 
 function main(argv) {
-  const [command, target, ...extra] = argv
+  const [command, target, optional, ...extra] = argv
   if (!command || !target || extra.length > 0) {
     throw new Error(usage())
   }
 
   if (command === 'validate-log') {
+    if (optional !== undefined) throw new Error(usage())
     const absoluteLogPath = path.resolve(target)
     const matchedLine = forbiddenBrowserDownloadLine(fs.readFileSync(absoluteLogPath, 'utf8'))
     if (matchedLine) {
@@ -60,7 +62,9 @@ function main(argv) {
   }
 
   if (command === 'find-dmg') {
-    process.stdout.write(`${findNewestDmg(target)}\n`)
+    const notBeforeMs = optional === undefined ? 0 : Number(optional)
+    if (!Number.isFinite(notBeforeMs) || notBeforeMs < 0) throw new Error(usage())
+    process.stdout.write(`${findNewestDmg(target, notBeforeMs)}\n`)
     return
   }
 

@@ -11,6 +11,7 @@
     "tests-js"
   ],
   "scripts": {
+    "build:desktop:dmg": "bash scripts/build-desktop-dmg.sh",
     "postinstall": "echo '\u2705 Node dependencies installed. Run: python run_agent.py --help'",
     "install:root": "npm install --workspaces=false",
     "install:web": "npm install --workspace web",

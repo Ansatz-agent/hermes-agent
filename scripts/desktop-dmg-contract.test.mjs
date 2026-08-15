@@ -58,3 +58,19 @@ test('findNewestDmg fails when the build produced no matching artifact', () => {
     fs.rmSync(releaseDir, { recursive: true, force: true })
   }
 })
+
+test('findNewestDmg ignores artifacts older than the current build', () => {
+  const releaseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-dmg-release-'))
+  try {
+    const stale = path.join(releaseDir, 'Hermes-0.17.0-mac-arm64.dmg')
+    fs.writeFileSync(stale, 'stale')
+    fs.utimesSync(stale, new Date(1_000), new Date(1_000))
+
+    assert.throws(
+      () => findNewestDmg(releaseDir, 2_000),
+      /no macOS arm64 Hermes DMG found/
+    )
+  } finally {
+    fs.rmSync(releaseDir, { recursive: true, force: true })
+  }
+})
