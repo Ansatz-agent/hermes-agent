@@ -1935,6 +1935,7 @@ EOF
 }
 
 copy_config_templates() {
+    local install_scope="${1:-cli}"
     log_info "Setting up configuration files..."
 
     # Create ~/.hermes directory structure (config at top level, code in subdir)
@@ -1963,6 +1964,24 @@ copy_config_templates() {
         if [ -f "$INSTALL_DIR/cli-config.yaml.example" ]; then
             cp "$INSTALL_DIR/cli-config.yaml.example" "$HERMES_HOME/config.yaml"
             log_success "Created ~/.hermes/config.yaml from template"
+            if [ "$install_scope" = "desktop" ]; then
+                local provider_anchor='  # provider: "local"          # auto-detected if omitted'
+                local desktop_provider='  provider: "sensevoice"       # fresh Hermes Desktop default'
+                local anchor_count
+                local config_tmp
+                anchor_count="$(grep -Fxc "$provider_anchor" "$HERMES_HOME/config.yaml" || true)"
+                config_tmp="$(mktemp "$HERMES_HOME/.config.yaml.desktop.XXXXXX")"
+                if [ "$anchor_count" = "1" ]; then
+                    awk -v old="$provider_anchor" -v new="$desktop_provider" \
+                        '{ if ($0 == old) print new; else print }' \
+                        "$HERMES_HOME/config.yaml" > "$config_tmp"
+                    mv "$config_tmp" "$HERMES_HOME/config.yaml"
+                    log_success "Selected SenseVoice for the fresh Desktop config"
+                else
+                    rm -f "$config_tmp"
+                    log_warn "Desktop STT default was not applied: expected one provider anchor, found $anchor_count; keeping the valid auto-detected config"
+                fi
+            fi
         fi
     else
         log_info "~/.hermes/config.yaml already exists, keeping it"
@@ -3330,7 +3349,7 @@ run_stage_body() {
             detect_os
             resolve_install_layout
             require_install_dir
-            copy_config_templates
+            copy_config_templates desktop
             ;;
         setup)
             detect_os

@@ -427,6 +427,13 @@ TOOL_CATEGORIES = {
                 "post_setup": "faster_whisper",
             },
             {
+                "name": "SenseVoice",
+                "badge": "free · Mandarin-first",
+                "tag": "local on-device transcription, no API key",
+                "env_vars": [],
+                "stt_provider": "sensevoice",
+            },
+            {
                 "name": "Nous Subscription",
                 "badge": "subscription",
                 "tag": "Managed OpenAI transcription billed to your subscription",

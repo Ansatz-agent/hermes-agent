@@ -1779,6 +1779,13 @@ export interface Translations {
     newSessionPlaceholders: readonly string[]
     followUpPlaceholders: readonly string[]
     startVoice: string
+    senseVoicePreparing: string
+    senseVoicePreparingDependencies: string
+    senseVoiceDownloading: (downloaded: string, total: string, percent: number) => string
+    senseVoiceInsufficientDisk: string
+    senseVoiceVerificationFailed: string
+    senseVoiceDependencyInstallFailed: string
+    senseVoiceDownloadFailed: string
     openDirective: string
     queueMessage: string
     steer: string

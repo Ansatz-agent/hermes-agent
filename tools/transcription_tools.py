@@ -143,12 +143,12 @@ _local_model_lock = threading.Lock()
 # The model singleton above is loaded once and never released — hundreds of MB
 # of RAM/VRAM sit idle between voice messages. On long-running gateway
 # processes (especially with local LLMs competing for the same GPU) this is
-# wasteful. A single long-lived daemon thread checks _last_transcription_time
-# and unloads the model after a configurable idle period, then exits. The next
-# voice message reloads the model and restarts the watcher transparently.
-_last_transcription_time: float = 0.0
-_idle_unload_thread: Optional[threading.Thread] = None
-_idle_unload_stop = threading.Event()
+# wasteful. One daemon watcher per active local provider checks its last-use
+# timestamp and invokes that provider's unload callback after a configurable
+# idle period. The next voice message reloads the model transparently.
+_last_transcription_times: Dict[str, float] = {}
+_idle_unload_threads: Dict[str, threading.Thread] = {}
+_idle_unload_stops: Dict[str, threading.Event] = {}
 # Serializes watcher start checks so two concurrent transcriptions can't
 # both observe "no watcher alive" and spawn duplicates.
 _idle_unload_mgmt_lock = threading.Lock()
@@ -379,6 +379,7 @@ def _try_lazy_install_stt() -> bool:
 BUILTIN_STT_PROVIDERS = frozenset({
     "local",
     "local_command",
+    "sensevoice",
     "groq",
     "openai",
     "mistral",
@@ -387,6 +388,9 @@ BUILTIN_STT_PROVIDERS = frozenset({
     "deepinfra",
 })
 
+# Native/local handlers never upload audio and therefore bypass remote-only
+# preprocessing and upload-size limits.
+LOCAL_STT_PROVIDERS = frozenset({"local", "local_command", "sensevoice"})
 
 # ---------------------------------------------------------------------------
 # Command-provider registry (``stt.providers.<name>: type: command``)
@@ -398,8 +402,8 @@ BUILTIN_STT_PROVIDERS = frozenset({
 # become an STT backend with zero Python.
 #
 # Resolution order:
-#   1. Built-in (``local``, ``local_command``, ``groq``, ``openai``,
-#      ``mistral``, ``xai``)              → native handler. **Always wins.**
+#   1. Built-in (``local``, ``local_command``, ``sensevoice``, ``groq``,
+#      ``openai``, ``mistral``, ``xai``)  → native handler. **Always wins.**
 #   2. ``stt.providers.<name>: type: command``  → command-provider runner.
 #   3. Plugin-registered TranscriptionProvider  → plugin dispatch.
 #   4. No match                                 → "No STT provider available".
@@ -487,9 +491,7 @@ def _resolve_command_stt_provider_config(
 def _is_local_stt_provider(provider: str, stt_config: Dict[str, Any]) -> bool:
     """Return whether *provider* is exempt from Hermes's remote upload cap."""
     key = (provider or "").lower().strip()
-    if key in {"local", "local_command"}:
-        return True
-    return False
+    return key in LOCAL_STT_PROVIDERS
 
 
 def _iter_command_stt_providers(stt_config: Dict[str, Any]):
@@ -1669,14 +1671,24 @@ def _unload_local_model() -> None:
             _local_model_name = None
 
 
-def _start_idle_unload_watcher(timeout_seconds: int) -> None:
+def _is_local_model_loaded() -> bool:
+    with _local_model_lock:
+        return _local_model is not None
+
+
+def _start_idle_unload_watcher(
+    timeout_seconds: int,
+    provider_key: str,
+    unload_callback: Any,
+    is_loaded_callback: Any = None,
+) -> None:
     """Ensure the idle-unload watcher thread is running.
 
     A single long-lived watcher: started only when none is alive, so the
     per-transcription cost is one lock + one ``is_alive()`` check — no
     stop/join/restart churn on the response path. The loop re-reads the
     configured timeout from config every cycle, so changing
-    ``stt.local.unload_after_idle_seconds`` takes effect within one check
+    ``stt.<provider>.unload_after_idle_seconds`` takes effect within one check
     interval without a restart. After unloading (or when the timeout is set
     to 0/never, or the model is already gone) the thread exits; the next
     transcription restarts it.
@@ -1684,44 +1696,48 @@ def _start_idle_unload_watcher(timeout_seconds: int) -> None:
     ``timeout_seconds`` seeds the first cycle so a just-written config is
     honored even if a concurrent config read would race.
     """
-    global _idle_unload_thread
     with _idle_unload_mgmt_lock:
-        if _idle_unload_thread is not None and _idle_unload_thread.is_alive():
+        existing = _idle_unload_threads.get(provider_key)
+        if existing is not None and existing.is_alive():
             return
+        stop_event = threading.Event()
+        _idle_unload_stops[provider_key] = stop_event
 
         def _watch(initial_timeout=timeout_seconds):
             timeout = initial_timeout
-            while not _idle_unload_stop.is_set():
-                if _idle_unload_stop.wait(_IDLE_UNLOAD_CHECK_INTERVAL):
+            while not stop_event.is_set():
+                if stop_event.wait(_IDLE_UNLOAD_CHECK_INTERVAL):
                     break
-                if _local_model is None:
+                if is_loaded_callback is not None and not is_loaded_callback():
                     break
                 # Re-read the timeout each cycle: config edits apply without
                 # waiting for the next voice message.
                 try:
                     timeout = _get_idle_unload_seconds(
-                        _load_stt_config().get("local") or {}
+                        _load_stt_config().get(provider_key) or {}
                     )
                 except Exception:  # noqa: BLE001 - keep the seed value
                     timeout = initial_timeout
                 if timeout <= 0:
                     break  # unload disabled mid-flight — stand down
-                idle_for = time.monotonic() - _last_transcription_time
+                last_activity = _last_transcription_times.get(provider_key, 0.0)
+                idle_for = time.monotonic() - last_activity
                 if idle_for >= timeout:
-                    _unload_local_model()
+                    unload_callback()
                     break
 
-        _idle_unload_stop.clear()
-        _idle_unload_thread = threading.Thread(
-            target=_watch, name="hermes-stt-idle-unload", daemon=True
+        thread = threading.Thread(
+            target=_watch,
+            name=f"hermes-stt-{provider_key}-idle-unload",
+            daemon=True,
         )
-        _idle_unload_thread.start()
+        _idle_unload_threads[provider_key] = thread
+        thread.start()
 
 
-def _touch_transcription_time() -> None:
+def _touch_transcription_time(provider_key: str = "local") -> None:
     """Record transcription activity (resets the idle timer)."""
-    global _last_transcription_time
-    _last_transcription_time = time.monotonic()
+    _last_transcription_times[provider_key] = time.monotonic()
 
 
 def _load_local_whisper_model(model_name: str, device: str = "auto", compute_type: str = "auto"):
@@ -1927,7 +1943,7 @@ def _transcribe_local(
         # Reset the idle timer BEFORE loading/transcribing so the idle-unload
         # watcher can't count a long in-flight transcription as idle time and
         # unload mid-use.
-        _touch_transcription_time()
+        _touch_transcription_time("local")
         # Lazy-load the model (downloads on first use, ~150 MB for 'base').
         # Double-checked lock: concurrent voice messages must not both
         # download/load the model (#24767).
@@ -1997,16 +2013,41 @@ def _transcribe_local(
             Path(file_path).name, model_name, info.language, info.duration,
         )
 
-        _touch_transcription_time()
+        _touch_transcription_time("local")
         idle_timeout = _get_idle_unload_seconds(local_cfg)
         if idle_timeout > 0:
-            _start_idle_unload_watcher(idle_timeout)
+            _start_idle_unload_watcher(
+                idle_timeout,
+                provider_key="local",
+                unload_callback=_unload_local_model,
+                is_loaded_callback=_is_local_model_loaded,
+            )
 
         return {"success": True, "transcript": transcript, "provider": "local"}
 
     except Exception as e:
         logger.error("Local transcription failed: %s", e, exc_info=True)
         return {"success": False, "transcript": "", "error": f"Local transcription failed: {e}"}
+
+
+def _transcribe_sensevoice(
+    file_path: str,
+    *,
+    language: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Dispatch to the optional local SenseVoice runtime."""
+    try:
+        from tools.sensevoice_stt import transcribe_sensevoice
+    except ImportError as exc:
+        logger.error("SenseVoice runtime could not be imported: %s", exc)
+        return {
+            "success": False,
+            "transcript": "",
+            "provider": "sensevoice",
+            "error_type": "runtime_load_failed",
+            "error": "SenseVoice runtime could not be loaded",
+        }
+    return transcribe_sensevoice(file_path, language=language)
 
 
 def _prepare_local_audio(file_path: str, work_dir: str) -> tuple[Optional[str], Optional[str]]:
@@ -2779,7 +2820,7 @@ _CLOUD_TRIM_MIN_RESULT_SECONDS = 0.3  # all-silence guard floor: never upload ~e
 _CLOUD_TRIM_MIN_INPUT_SECONDS = 12.0
 
 # Built-in providers that upload audio to a remote API.
-CLOUD_STT_PROVIDERS = frozenset(BUILTIN_STT_PROVIDERS - {"local", "local_command"})
+CLOUD_STT_PROVIDERS = frozenset(BUILTIN_STT_PROVIDERS - LOCAL_STT_PROVIDERS)
 
 
 def _find_ffprobe_binary() -> Optional[str]:
@@ -2972,7 +3013,9 @@ def _transcribe_prepared_audio(
             return error
 
     # Convert CAF (iMessage voice notes) to WAV for cloud STT providers.
-    if Path(file_path).suffix.lower() == ".caf" and provider not in ("local", "local_command"):
+    if Path(file_path).suffix.lower() == ".caf" and not _is_local_stt_provider(
+        provider, stt_config
+    ):
         converted = _convert_caf_to_wav(file_path)
         if converted:
             file_path = converted
@@ -3050,6 +3093,15 @@ def _dispatch_stt_provider(
         )
         return _transcribe_local_command(
             file_path, model_name, language=language, prompt=prompt,
+        )
+
+    if provider == "sensevoice":
+        sensevoice_language = language or _resolve_stt_language(
+            "sensevoice", stt_config
+        )
+        return _transcribe_sensevoice(
+            file_path,
+            language=sensevoice_language,
         )
 
     if provider == "groq":

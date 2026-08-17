@@ -2300,6 +2300,13 @@ export const zh: Translations = {
       '调整或继续'
     ],
     startVoice: '开始语音对话',
+    senseVoicePreparing: '正在准备语音识别…',
+    senseVoicePreparingDependencies: '正在准备语音识别依赖…',
+    senseVoiceDownloading: (downloaded, total, percent) => `正在下载语音模型 ${downloaded}/${total}（${percent}%）`,
+    senseVoiceInsufficientDisk: '磁盘空间不足，无法准备语音模型。',
+    senseVoiceVerificationFailed: '下载的语音模型已损坏，请重试。',
+    senseVoiceDependencyInstallFailed: '无法安装语音识别依赖。',
+    senseVoiceDownloadFailed: '无法下载语音模型。',
     openDirective: '打开',
     queueMessage: '排队消息',
     steer: '引导当前运行',

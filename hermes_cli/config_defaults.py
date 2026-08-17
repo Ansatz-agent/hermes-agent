@@ -1611,7 +1611,7 @@ DEFAULT_CONFIG = {
         # the raw transcript is also echoed back to the user as a 🎙️ message.
         # Set false to keep STT for the agent while suppressing that user-facing echo.
         "echo_transcripts": True,
-        "provider": "local",  # "local" (free, faster-whisper) | "groq" | "openai" (Whisper API) | "mistral" (Voxtral Transcribe) | "elevenlabs" (Scribe) | "deepinfra"
+        "provider": "local",  # "local" (free, faster-whisper) | "sensevoice" (free, local, Mandarin-first) | "groq" | "openai" (Whisper API) | "mistral" (Voxtral Transcribe) | "elevenlabs" (Scribe) | "deepinfra"
         # Global language hint applied to EVERY provider unless a per-provider
         # language overrides it. Defaults to "en" — Whisper auto-detection
         # frequently misidentifies short/accented clips, which reads as
@@ -1637,6 +1637,11 @@ DEFAULT_CONFIG = {
             "no_speech_prob_threshold": 0.6,  # drop a segment only if no_speech_prob is ABOVE this...
             "logprob_threshold": -1.0,  # ...AND its avg_logprob is BELOW this (both must hit)
             "unload_after_idle_seconds": 0,  # 0=never (default); e.g. 300 releases the model after 5min idle
+        },
+        "sensevoice": {
+            "language": "zh",
+            "use_itn": True,
+            "unload_after_idle_seconds": 300,
         },
         "groq": {
             "model": "whisper-large-v3-turbo",  # whisper-large-v3, whisper-large-v3-turbo, distil-whisper-large-v3-en

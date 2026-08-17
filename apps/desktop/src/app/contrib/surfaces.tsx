@@ -108,10 +108,12 @@ export const StatusbarSurface = memo(function StatusbarSurface({
  *  atoms, so streaming never round-trips through the controller. */
 export const ChatRoutesSurface = memo(function ChatRoutesSurface({
   actions,
-  maxVoiceRecordingSeconds
+  maxVoiceRecordingSeconds,
+  sttProvider
 }: {
   actions: WiringActions
   maxVoiceRecordingSeconds?: number
+  sttProvider?: string
 }) {
   const activeGatewayProfile = useStore($activeGatewayProfile)
   const gateway = useStore($gateway)
@@ -139,6 +141,7 @@ export const ChatRoutesSurface = memo(function ChatRoutesSurface({
       gateway={gateway}
       maxVoiceRecordingSeconds={maxVoiceRecordingSeconds}
       modelMenuContent={modelMenuContent}
+      sttProvider={sttProvider}
       {...chatActions}
     />
   )

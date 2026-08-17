@@ -2113,6 +2113,14 @@ export const en: Translations = {
       'Adjust or continue'
     ],
     startVoice: 'Start voice conversation',
+    senseVoicePreparing: 'Preparing speech recognition…',
+    senseVoicePreparingDependencies: 'Preparing speech recognition dependencies…',
+    senseVoiceDownloading: (downloaded, total, percent) =>
+      `Downloading speech model ${downloaded}/${total} (${percent}%)`,
+    senseVoiceInsufficientDisk: 'Not enough disk space for the speech model.',
+    senseVoiceVerificationFailed: 'The downloaded speech model is corrupted.',
+    senseVoiceDependencyInstallFailed: 'Could not install speech recognition dependencies.',
+    senseVoiceDownloadFailed: 'Could not download the speech model.',
     openDirective: 'Open',
     queueMessage: 'Queue message',
     steer: 'Steer the current run',

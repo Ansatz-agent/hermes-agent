@@ -1062,7 +1062,12 @@ _SCHEMA_OVERRIDES: Dict[str, Dict[str, Any]] = {
         "description": "Speech-to-text provider",
         # "mistral" temporarily removed — mistralai PyPI package quarantined
         # (malicious 2.4.6 release on 2026-05-12). Restore once available.
-        "options": ["local", "groq", "openai", "xai", "elevenlabs"],
+        "options": ["local", "sensevoice", "groq", "openai", "xai", "elevenlabs"],
+    },
+    "stt.sensevoice.language": {
+        "type": "select",
+        "description": "SenseVoice recognition language",
+        "options": ["zh", "auto", "en", "ja", "ko", "yue"],
     },
     "stt.local.model": {
         "type": "select",
@@ -4632,6 +4637,31 @@ async def check_hermes_update(force: bool = False):
             payload["commits"] = await asyncio.to_thread(_recent_upstream_commits)
 
     return payload
+
+
+class SttPreparationRequest(BaseModel):
+    retry: bool = False
+
+
+@app.post("/api/audio/stt/prepare")
+async def prepare_stt(
+    payload: SttPreparationRequest, profile: Optional[str] = None
+):
+    """Start or poll preparation of the selected local Desktop STT runtime."""
+    with _config_profile_scope(profile):
+        provider = str(
+            cfg_get(load_config(), "stt", "provider") or "local"
+        ).strip().lower()
+        if provider != "sensevoice":
+            return {"state": "not_applicable"}
+
+        from tools.sensevoice_stt import model_cache_root, prepare_sensevoice
+
+        # Resolve the profile path before spawning: ContextVars do not flow
+        # into a fresh threading.Thread, while profile caches must remain
+        # isolated even when one backend serves several profiles.
+        cache_root = model_cache_root()
+        return prepare_sensevoice(retry=payload.retry, cache_root=cache_root)
 
 
 @app.post("/api/audio/transcribe")

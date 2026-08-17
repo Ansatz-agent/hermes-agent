@@ -62,6 +62,7 @@ import type {
   SkillInfo,
   StarmapGraph,
   StatusResponse,
+  SttPreparationResponse,
   TerminalBackendsResponse,
   ToolsetConfig,
   ToolsetInfo,
@@ -221,6 +222,7 @@ export type {
   StaleAuxAssignment,
   StarmapGraph,
   StatusResponse,
+  SttPreparationResponse,
   ToolsetConfig,
   ToolsetInfo,
   ToolsetModel,
@@ -1781,6 +1783,15 @@ export function transcribeAudio(dataUrl: string, mimeType?: string): Promise<Aud
     // encoding finish. Remote providers and long clips regularly exceed the
     // default 15s Electron backend timeout.
     timeoutMs: audioTranscribeRequestTimeoutMs(dataUrl)
+  })
+}
+
+export function prepareSenseVoice(retry = false): Promise<SttPreparationResponse> {
+  return window.hermesDesktop.api<SttPreparationResponse>({
+    ...profileScoped(),
+    path: '/api/audio/stt/prepare',
+    method: 'POST',
+    body: { retry }
   })
 }
 

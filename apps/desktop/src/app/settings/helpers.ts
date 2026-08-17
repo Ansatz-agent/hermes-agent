@@ -219,6 +219,7 @@ const BUILTIN_TTS_PROVIDERS = new Set([
 const BUILTIN_STT_PROVIDERS = new Set([
   'local',
   'local_command',
+  'sensevoice',
   'groq',
   'openai',
   'mistral',

@@ -300,7 +300,9 @@ export function ContribWiring({ children }: { children: ReactNode }) {
     requestGateway
   })
 
-  const { refreshHermesConfig, sttEnabled, voiceMaxRecordingSeconds } = useHermesConfig({ activeSessionIdRef })
+  const { refreshHermesConfig, sttEnabled, sttProvider, voiceMaxRecordingSeconds } = useHermesConfig({
+    activeSessionIdRef
+  })
 
   const { applySavedMainModel, refreshCurrentModel, selectModel } = useModelControls({
     queryClient,
@@ -962,8 +964,14 @@ export function ContribWiring({ children }: { children: ReactNode }) {
   // The voice cap changes only on config load; the gateway instance + all
   // chat reactivity are subscribed inside ChatRoutesSurface / ChatView.
   const chatRoutesNode = useMemo(
-    () => <ChatRoutesSurface actions={actions} maxVoiceRecordingSeconds={voiceMaxRecordingSeconds} />,
-    [actions, voiceMaxRecordingSeconds]
+    () => (
+      <ChatRoutesSurface
+        actions={actions}
+        maxVoiceRecordingSeconds={voiceMaxRecordingSeconds}
+        sttProvider={sttProvider}
+      />
+    ),
+    [actions, sttProvider, voiceMaxRecordingSeconds]
   )
 
   const api = useMemo<WiringApi>(

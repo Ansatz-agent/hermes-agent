@@ -11,6 +11,7 @@ import {
   stopVoicePlayback
 } from '@/lib/voice-playback'
 import { isVoiceStopCommand } from '@/lib/voice-stop-word'
+import { VOICE_END_SILENCE_MS } from '@/lib/voice-timing'
 import { notify, notifyError } from '@/store/notifications'
 import { $voicePlayback } from '@/store/voice-playback'
 
@@ -233,10 +234,12 @@ export function useVoiceConversation({
     }
 
     try {
-      // VAD tuning mirrors `tools.voice_mode` defaults so the browser loop matches the CLI.
+      // Keep all Desktop capture profiles on the shared 1000 ms endpoint.
+      // The separate CLI voice_mode recorder intentionally retains its 1250 ms
+      // default; this constant does not mirror or configure that stack.
       await handle.start({
         silenceLevel: 0.075,
-        silenceMs: 1_250,
+        silenceMs: VOICE_END_SILENCE_MS,
         idleSilenceMs: 12_000,
         onError: error => {
           notifyError(error, voiceCopy.microphoneFailed)

@@ -89,6 +89,7 @@ export function ChatBar({
   focusKey,
   gateway,
   maxRecordingSeconds = 120,
+  sttProvider,
   queueSessionKey,
   sessionId,
   state,
@@ -945,6 +946,7 @@ export function ChatBar({
     endConversation,
     handleToggleAutoSpeak,
     startConversation,
+    senseVoiceReadiness,
     voiceActivityState,
     voiceConversationActive,
     voiceStatus
@@ -955,6 +957,7 @@ export function ChatBar({
     focusInput,
     insertText,
     maxRecordingSeconds,
+    sttProvider,
     // Voice barge-in mid-generation halts the run like the Stop button.
     onInterrupt: haltRun,
     onSubmit,
@@ -1003,6 +1006,7 @@ export function ChatBar({
       onQueue={queueDraft}
       onToggleAutoSpeak={handleToggleAutoSpeak}
       state={state}
+      voiceReadiness={senseVoiceReadiness}
       voiceStatus={voiceStatus}
     />
   )
