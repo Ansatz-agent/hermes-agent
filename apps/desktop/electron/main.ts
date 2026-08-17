@@ -46,6 +46,7 @@ import {
 } from './backend-probes'
 import { waitForDashboardPortAnnouncement } from './backend-ready'
 import { shouldLatchBackendStartFailure, shouldLatchRemoteReauthFailure } from './backend-start-failure'
+import { bundledSourceBackupPath, readBundledSourceMarker } from './bootstrap-payload'
 import {
   detectRemoteDisplay,
   isWindowsBinaryPathInWsl,
@@ -54,6 +55,7 @@ import {
 } from './bootstrap-platform'
 import { decideBootstrapRepair } from './bootstrap-repair-guard'
 import { runBootstrap } from './bootstrap-runner'
+import { classifyBundledRuntime, resolveBundledBootstrapRoot } from './bundled-runtime-state'
 import { applyConnectionChange, resolveTerminalConnection } from './connection-apply'
 import {
   authModeFromStatus,
@@ -594,6 +596,12 @@ function loadInstallStamp() {
 }
 
 const INSTALL_STAMP = loadInstallStamp()
+
+const BUNDLED_BOOTSTRAP_ROOT = resolveBundledBootstrapRoot({
+  packaged: IS_PACKAGED,
+  platform: process.platform,
+  resourcesPath: process.resourcesPath
+})
 
 if (INSTALL_STAMP) {
   console.log(
@@ -3944,6 +3952,35 @@ function activeRuntimeState() {
   return classifyActiveRuntime(readBootstrapMarker(), BOOTSTRAP_MARKER_SCHEMA_VERSION, isActiveRuntimeUsable())
 }
 
+function readActiveInstallMethod() {
+  try {
+    return fs.readFileSync(path.join(ACTIVE_HERMES_ROOT, '.install_method'), 'utf8').trim() || null
+  } catch {
+    return null
+  }
+}
+
+function classifyPackagedBundledRuntime(runtimeUsable) {
+  const payloadManifest = BUNDLED_BOOTSTRAP_ROOT
+    ? readJson(path.join(BUNDLED_BOOTSTRAP_ROOT, 'payload-manifest.json'))
+    : null
+
+  const sourceMarker = readBundledSourceMarker(ACTIVE_HERMES_ROOT)
+
+  return classifyBundledRuntime({
+    // A packaged Windows/Linux app has no macOS bootstrap resource today.
+    // Treat that as not-applicable instead of misreporting a healthy runtime
+    // as payload-invalid; the transaction protocol remains reusable when a
+    // future platform explicitly supplies its own bundled resource root.
+    packaged: Boolean(BUNDLED_BOOTSTRAP_ROOT),
+    runtimeUsable,
+    installMethod: readActiveInstallMethod(),
+    sourceCommit: sourceMarker?.commit || null,
+    payloadCommit: typeof payloadManifest?.commit === 'string' ? payloadManifest.commit : null,
+    transactionPending: fs.existsSync(bundledSourceBackupPath(ACTIVE_HERMES_ROOT))
+  })
+}
+
 function writeBootstrapMarker(payload) {
   fs.mkdirSync(path.dirname(BOOTSTRAP_COMPLETE_MARKER), { recursive: true })
 
@@ -4239,6 +4276,34 @@ function resolveHermesBackend(backendArgs) {
   //    active runtime is usable, launch it directly; only fall through to
   //    bootstrap when the runtime itself is unusable.
   const activeRuntime = activeRuntimeState()
+  const bundledRuntimeDecision = classifyPackagedBundledRuntime(activeRuntime.shouldUseActiveRuntime)
+
+  if (bundledRuntimeDecision === 'refresh' && !bootstrapRepairRequested) {
+    rememberLog(
+      '[bootstrap] Packaged backend commit differs from the active desktop-bundle runtime; starting local payload refresh.'
+    )
+
+    return {
+      kind: 'bootstrap-needed',
+      label: 'Hermes bundled backend refresh required',
+      command: null,
+      args: backendArgs,
+      bootstrap: true,
+      env: {},
+      shell: false,
+      activeRoot: ACTIVE_HERMES_ROOT,
+      installStamp: INSTALL_STAMP,
+      isPackaged: IS_PACKAGED,
+      platform: process.platform,
+      reason: 'bundled-refresh'
+    }
+  }
+
+  if (bundledRuntimeDecision === 'payload-invalid' && activeRuntime.shouldUseActiveRuntime) {
+    rememberLog(
+      '[bootstrap] Packaged backend payload metadata is invalid; preserving the existing usable runtime instead of refreshing it.'
+    )
+  }
 
   if (activeRuntime.shouldUseActiveRuntime && !bootstrapRepairRequested) {
     if (!activeRuntime.hasValidMarker) {
@@ -4439,6 +4504,7 @@ async function ensureRuntime(backend) {
       installStamp: backend.installStamp,
       activeRoot: backend.activeRoot,
       sourceRepoRoot: SOURCE_REPO_ROOT,
+      bundledBootstrapRoot: BUNDLED_BOOTSTRAP_ROOT,
       hermesHome: HERMES_HOME,
       logRoot: path.join(HERMES_HOME, 'logs'),
       abortSignal: bootstrapAbortController.signal,

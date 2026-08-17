@@ -82,6 +82,7 @@ STAGE_NAME=""
 JSON_OUTPUT=false
 NON_INTERACTIVE=false
 INCLUDE_DESKTOP=false
+BUNDLED_SOURCE=false
 
 # Detect non-interactive mode (e.g. curl | bash)
 # When stdin is not a terminal, read -p will fail with EOF,
@@ -147,6 +148,10 @@ while [[ $# -gt 0 ]]; do
             INCLUDE_DESKTOP=true
             shift
             ;;
+        --bundled-source)
+            BUNDLED_SOURCE=true
+            shift
+            ;;
         --dir)
             INSTALL_DIR="$2"
             INSTALL_DIR_EXPLICIT=true
@@ -183,6 +188,8 @@ while [[ $# -gt 0 ]]; do
             echo "  --json         Print a JSON result frame for --stage"
             echo "  --non-interactive  Skip stages that require user input"
             echo "  --include-desktop  Also build the desktop app (apps/desktop -> Hermes.app)"
+            echo "  --bundled-source  Use verified Desktop source already present at --dir;"
+            echo "                    never clone, fetch, pull, or check out repository data"
             echo "  --dir PATH     Installation directory"
             echo "                   default (non-root):  ~/.hermes/hermes-agent"
             echo "                   default (root, Linux): /usr/local/lib/hermes-agent"
@@ -1242,8 +1249,63 @@ show_manual_install_hint() {
 # Installation
 # ============================================================================
 
+validate_bundled_source() {
+    local marker_path="$INSTALL_DIR/.hermes-bundled-source.json"
+
+    if [ ! -f "$marker_path" ]; then
+        log_error "Bundled source marker not found: $marker_path"
+        return 1
+    fi
+
+    local required_path
+    for required_path in \
+        "pyproject.toml" \
+        "hermes_cli/main.py" \
+        "tools/sensevoice_stt.py" \
+        "scripts/install.sh"; do
+        if [ ! -f "$INSTALL_DIR/$required_path" ]; then
+            log_error "Bundled source is missing required file: $required_path"
+            return 1
+        fi
+    done
+
+    if [ -n "$INSTALL_COMMIT" ]; then
+        if [ "${#INSTALL_COMMIT}" -ne 40 ]; then
+            log_error "Bundled source commit must be exactly 40 hexadecimal characters"
+            return 1
+        fi
+        case "$INSTALL_COMMIT" in
+            *[!0-9a-fA-F]*)
+                log_error "Bundled source commit must be exactly 40 hexadecimal characters"
+                return 1
+                ;;
+        esac
+        if ! grep -Eq '"commit"[[:space:]]*:[[:space:]]*"'"$INSTALL_COMMIT"'"' "$marker_path"; then
+            log_error "Bundled source marker does not match requested commit $INSTALL_COMMIT"
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
+write_install_method_stamp() {
+    local method="git"
+    if [ "$BUNDLED_SOURCE" = true ]; then
+        method="desktop-bundle"
+    fi
+    printf '%s\n' "$method" > "$INSTALL_DIR/.install_method"
+}
+
 clone_repo() {
     log_info "Installing to $INSTALL_DIR..."
+
+    if [ "$BUNDLED_SOURCE" = true ]; then
+        validate_bundled_source || return 1
+        cd "$INSTALL_DIR"
+        log_success "Using verified backend source bundled with Hermes Desktop"
+        return 0
+    fi
 
     # An interrupted previous clone leaves a .git with no initial commit, where
     # the update path's `git stash` / `git checkout` abort with "You do not
@@ -3302,7 +3364,9 @@ run_stage_body() {
             resolve_install_layout
             install_uv
             check_python
-            check_git
+            if [ "$BUNDLED_SOURCE" != true ]; then
+                check_git
+            fi
             check_node
             check_network_prerequisites
             install_system_packages
@@ -3310,7 +3374,9 @@ run_stage_body() {
         repository)
             detect_os
             resolve_install_layout
-            check_git
+            if [ "$BUNDLED_SOURCE" != true ]; then
+                check_git
+            fi
             clone_repo
             ;;
         venv)
@@ -3385,7 +3451,7 @@ run_stage_body() {
             # bind-mounted into a Docker gateway too), so a stamp there gets
             # clobbered by the container's 'docker' stamp and wrongly blocks
             # 'hermes update' on this host install. See detect_install_method().
-            echo "git" > "$INSTALL_DIR/.install_method"
+            write_install_method_stamp
             ;;
         *)
             log_error "Unknown stage: $stage"
@@ -3444,7 +3510,9 @@ main() {
     resolve_install_layout
     install_uv
     check_python
-    check_git
+    if [ "$BUNDLED_SOURCE" != true ]; then
+        check_git
+    fi
     check_node
     check_network_prerequisites
     install_system_packages
@@ -3474,7 +3542,7 @@ main() {
     # gateway too), so a stamp there gets clobbered by the container's 'docker'
     # stamp and wrongly blocks 'hermes update' on this host install.
     # See detect_install_method().
-    echo "git" > "$INSTALL_DIR/.install_method"
+    write_install_method_stamp
 }
 
 if [ "$MANIFEST_MODE" = true ]; then

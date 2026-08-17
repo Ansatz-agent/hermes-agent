@@ -58,7 +58,7 @@
         },
         "install_method": {
           "type": "string",
-          "enum": ["docker", "git", "homebrew", "nixos", "pip", "unknown"]
+          "enum": ["desktop-bundle", "docker", "git", "homebrew", "nixos", "pip", "unknown"]
         },
         "os_family": {
           "type": "string",

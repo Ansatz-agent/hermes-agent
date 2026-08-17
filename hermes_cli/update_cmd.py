@@ -2427,6 +2427,12 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
     """
     from hermes_cli.config import detect_install_method, recommended_update_command_for_method
     method = detect_install_method(_m().PROJECT_ROOT)
+    if method == "desktop-bundle":
+        from hermes_cli.config import format_desktop_bundle_update_message
+
+        print(format_desktop_bundle_update_message())
+        sys.exit(1)
+
     if method == "docker":
         # Docker can't ``git fetch`` from within the container.  Surface the
         # same long-form ``docker pull`` guidance ``hermes update`` (apply

@@ -1,7 +1,7 @@
 /**
  * before-pack.mjs — electron-builder beforePack hook.
  *
- * Two responsibilities:
+ * Three responsibilities:
  *
  * 1. Removes any stale unpacked app directory (`appOutDir`) before
  *    electron-builder stages the Electron binaries into it.
@@ -56,11 +56,39 @@
  *   - appOutDir:            the unpacked app directory about to be staged
  *   - electronPlatformName: 'win32' | 'darwin' | 'linux'
  *   - arch:                 Arch enum (0=ia32, 1=x64, 2=armv7l, 3=arm64, 4=universal)
+ *
+ * 3. Generates the verified backend source payload for macOS packages only.
+ *    Keeping this in the platform-aware hook means generic development builds
+ *    and Windows/Linux packages do not inherit the macOS clean-commit guard.
  */
 import { existsSync, rmSync, renameSync } from 'node:fs'
 import path from 'node:path'
 import { Arch } from 'electron-builder'
+import { buildBackendPayload } from './build-backend-payload.mjs'
 import { stageNodePty, stageGetWindows } from './stage-native-deps.mjs'
+
+let bundledBackendPayloadPromise = null
+
+export async function ensureBundledBackendPayload(platform, build = buildBackendPayload) {
+  if (platform !== 'darwin') {
+    return false
+  }
+
+  // electron-builder can invoke beforePack once per architecture. Share one
+  // promise so multi-arch macOS builds cannot race while replacing the same
+  // three bootstrap resources.
+  if (!bundledBackendPayloadPromise) {
+    bundledBackendPayloadPromise = Promise.resolve().then(() => build())
+  }
+
+  await bundledBackendPayloadPromise
+
+  return true
+}
+
+export function resetBundledBackendPayloadForTests() {
+  bundledBackendPayloadPromise = null
+}
 
 export function cleanStaleAppOutDir(appOutDir) {
   if (!appOutDir || typeof appOutDir !== 'string') {
@@ -113,6 +141,12 @@ export function preserveRollbackBackup(appOutDir, productExeName = 'Hermes.exe')
 export default async function beforePack(context) {
   const appOutDir = context && context.appOutDir
   const platformName = context && context.electronPlatformName
+
+  // The runtime payload is a macOS distribution resource. Keeping this out of
+  // generic `npm run build` preserves dirty developer builds and leaves the
+  // Windows/Linux packaging paths unchanged.
+  await ensureBundledBackendPayload(platformName)
+
   try {
     // Windows: keep the previous working build as rollback material for the
     // post-build integrity gate (#69179) instead of destroying it. Falls

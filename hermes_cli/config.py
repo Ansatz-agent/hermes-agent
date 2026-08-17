@@ -410,7 +410,10 @@ def _install_method_project_root(project_root: Optional[Path] = None) -> Path:
 
 
 def detect_install_method(project_root: Optional[Path] = None) -> str:
-    """Detect how Hermes was installed: 'docker', 'nix', 'nixos', 'git', or 'unknown'.
+    """Detect how Hermes was installed.
+
+    Supported methods are ``desktop-bundle``, ``docker``, ``nix``, ``nixos``,
+    ``git``, and ``unknown``.
 
     Resolution order:
     1. Code-scoped stamp ``<install tree>/.install_method`` (next to the
@@ -454,7 +457,14 @@ def detect_install_method(project_root: Optional[Path] = None) -> str:
     See issue #34397.
     """
     root = _install_method_project_root(project_root)
-    supported_methods = {"docker", "nix", "nixos", "git", "unknown"}
+    supported_methods = {
+        "desktop-bundle",
+        "docker",
+        "nix",
+        "nixos",
+        "git",
+        "unknown",
+    }
 
     # 1. Code-scoped stamp — authoritative, immune to shared $HERMES_HOME.
     try:
@@ -544,6 +554,8 @@ def stamp_install_method(method: str, project_root: Optional[Path] = None) -> No
 
 def recommended_update_command_for_method(method: str) -> str:
     """Return the update command or guidance for a given install method."""
+    if method == "desktop-bundle":
+        return "Install a newer Hermes Desktop DMG"
     if method in {"nix", "nixos"}:
         return _NIX_UPDATE_MSG
     if method == "docker":
@@ -610,6 +622,17 @@ def format_docker_update_message() -> str:
     above for the full rationale.
     """
     return _DOCKER_UPDATE_MESSAGE
+
+
+_DESKTOP_BUNDLE_UPDATE_MESSAGE = """\
+Hermes Agent was installed from the backend payload bundled with Hermes Desktop.
+Install a newer Hermes Desktop DMG to update the app and its matching backend.
+The Git-based `hermes update` command does not apply to this installation."""
+
+
+def format_desktop_bundle_update_message() -> str:
+    """Return update guidance for a backend bundled with Hermes Desktop."""
+    return _DESKTOP_BUNDLE_UPDATE_MESSAGE
 
 
 def format_managed_message(action: str = "modify this Hermes installation") -> str:

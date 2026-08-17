@@ -38,6 +38,7 @@ import fsp from 'node:fs/promises'
 import https from 'node:https'
 import path from 'node:path'
 
+import { prepareBundledSource, type PreparedBundledSource, resolveBundledPayload } from './bootstrap-payload'
 import { hiddenWindowsChildOptions } from './windows-child-options'
 
 const IS_WINDOWS = process.platform === 'win32'
@@ -318,6 +319,7 @@ async function resolveInstallScript({
   installStamp,
   sourceRepoRoot,
   hermesHome,
+  bundledBootstrapRoot = null,
   emit,
   _download = downloadInstallScript
 }) {
@@ -332,7 +334,31 @@ async function resolveInstallScript({
     return { path: localScript, source: 'local', kind: installScriptKind() }
   }
 
-  // 2. Packaged path: download from GitHub at the install stamp's ref.
+  // 2. Packaged Desktop path: the installer is part of the signed app
+  // resources. A missing/corrupt package must fail locally instead of quietly
+  // reintroducing the raw.githubusercontent.com first-launch dependency.
+  if (bundledBootstrapRoot) {
+    const bundledScript = path.join(bundledBootstrapRoot, installScriptName())
+
+    try {
+      const stats = fs.lstatSync(bundledScript)
+
+      if (!stats.isFile() || stats.isSymbolicLink()) {
+        throw new Error('not a regular file')
+      }
+    } catch (err) {
+      throw new Error(
+        `Packaged Hermes is missing bundled ${installScriptName()} at ${bundledScript}. ` +
+          `Reinstall or re-download the Hermes DMG. (${err.message})`
+      )
+    }
+
+    emit({ type: 'log', line: `[bootstrap] using bundled ${installScriptName()} at ${bundledScript}` })
+
+    return { path: bundledScript, source: 'bundled', commit: installStamp?.commit || null, kind: installScriptKind() }
+  }
+
+  // 3. Backward-compatible non-packaged path: download from GitHub at the install stamp's ref.
   // Non-git fallback builds carry an all-zero commit; treat that as an
   // unpinned branch ref instead of trying to fetch a non-existent SHA.
   const installRef = installRefForStamp(installStamp)
@@ -676,7 +702,7 @@ function buildPinArgs(installStamp, { pinCommit = true } = {}) {
   return args
 }
 
-function buildPosixPinArgs({ installStamp, activeRoot, hermesHome, pinCommit = true }) {
+function buildPosixPinArgs({ installStamp, activeRoot, hermesHome, pinCommit = true, bundledSource = false }) {
   const args = ['--dir', activeRoot, '--hermes-home', hermesHome]
 
   if (installStamp && installStamp.branch) {
@@ -687,14 +713,31 @@ function buildPosixPinArgs({ installStamp, activeRoot, hermesHome, pinCommit = t
     args.push('--commit', installStamp.commit)
   }
 
+  if (bundledSource) {
+    // The bundled voice runtime only needs the package registries and its
+    // ModelScope/GitHub model mirror ladder. Avoid the installer's unrelated,
+    // best-effort GitHub fetch for the optional Computer Use driver; that
+    // capability still installs on demand if the user enables it later.
+    args.push('--bundled-source', '--skip-computer-use')
+  }
+
   return args
 }
 
-async function fetchManifest({ scriptPath, installerKind, emit, hermesHome, activeRoot, installStamp, pinCommit }) {
+async function fetchManifest({
+  scriptPath,
+  installerKind,
+  emit,
+  hermesHome,
+  activeRoot,
+  installStamp,
+  pinCommit,
+  bundledSource
+}) {
   const isPosix = installerKind === 'posix'
 
   const args = isPosix
-    ? ['--manifest', ...buildPosixPinArgs({ installStamp, activeRoot, hermesHome, pinCommit })]
+    ? ['--manifest', ...buildPosixPinArgs({ installStamp, activeRoot, hermesHome, pinCommit, bundledSource })]
     : ['-Manifest', ...buildPinArgs(installStamp, { pinCommit })]
 
   const result = await (isPosix ? spawnBash : spawnPowerShell)(scriptPath, args, {
@@ -761,7 +804,8 @@ async function runStage({
   activeRoot,
   abortSignal,
   installStamp,
-  pinCommit
+  pinCommit,
+  bundledSource
 }) {
   const startedAt = Date.now()
   emit({ type: 'stage', name: stage.name, state: 'running' })
@@ -774,7 +818,7 @@ async function runStage({
         stage.name,
         '--non-interactive',
         '--json',
-        ...buildPosixPinArgs({ installStamp, activeRoot, hermesHome, pinCommit })
+        ...buildPosixPinArgs({ installStamp, activeRoot, hermesHome, pinCommit, bundledSource })
       ]
     : ['-Stage', stage.name, '-NonInteractive', '-Json', ...buildPinArgs(installStamp, { pinCommit })]
 
@@ -852,6 +896,88 @@ function openRunLog(logRoot) {
   return { path: logPath, stream }
 }
 
+function bundledRuntimePython(activeRoot) {
+  return process.platform === 'win32'
+    ? path.join(activeRoot, 'venv', 'Scripts', 'python.exe')
+    : path.join(activeRoot, 'venv', 'bin', 'python')
+}
+
+function validateBundledRuntime(activeRoot) {
+  const python = bundledRuntimePython(activeRoot)
+
+  try {
+    const stats = fs.statSync(python)
+
+    if (!stats.isFile()) {
+      throw new Error('not a regular file')
+    }
+  } catch (err) {
+    return Promise.reject(new Error(`Bundled runtime validation failed: Python is unavailable at ${python}`))
+  }
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(python, ['-c', 'import hermes_cli'], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env: {
+        ...process.env,
+        PYTHONPATH: [activeRoot, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter)
+      }
+    })
+
+    let stderr = ''
+    let settled = false
+
+    const timeout = setTimeout(() => {
+      if (settled) {
+        return
+      }
+
+      settled = true
+
+      try {
+        child.kill('SIGTERM')
+      } catch {
+        void 0
+      }
+
+      reject(new Error('Bundled runtime import smoke check timed out'))
+    }, 30_000)
+
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', chunk => {
+      stderr += chunk
+    })
+    child.on('error', err => {
+      if (settled) {
+        return
+      }
+
+      settled = true
+      clearTimeout(timeout)
+      reject(new Error(`Bundled runtime import smoke check failed: ${err.message}`))
+    })
+    child.on('close', code => {
+      if (settled) {
+        return
+      }
+
+      settled = true
+      clearTimeout(timeout)
+
+      if (code === 0) {
+        resolve(true)
+      } else {
+        reject(
+          new Error(
+            `Bundled runtime import smoke check failed with exit ${code}` +
+              (stderr.trim() ? `: ${stderr.trim()}` : '')
+          )
+        )
+      }
+    })
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Public entrypoint
 // ---------------------------------------------------------------------------
@@ -861,6 +987,7 @@ async function runBootstrap(opts) {
     installStamp,
     activeRoot,
     sourceRepoRoot,
+    bundledBootstrapRoot,
     hermesHome,
     logRoot,
     onEvent,
@@ -913,9 +1040,12 @@ async function runBootstrap(opts) {
       `runLog=${runLog.path}`
   })
 
+  let sourceTransaction: PreparedBundledSource | null = null
+
   try {
     const existingCheckout = hasExistingGitCheckout(activeRoot)
     const pinCommit = !existingCheckout
+    let bundledSource = false
 
     if (existingCheckout && installStamp && installStamp.commit) {
       emit({
@@ -926,8 +1056,30 @@ async function runBootstrap(opts) {
       })
     }
 
+    const payload = bundledBootstrapRoot
+      ? await resolveBundledPayload({ bootstrapRoot: bundledBootstrapRoot, installStamp })
+      : null
+
+    if (payload && !existingCheckout) {
+      sourceTransaction = await prepareBundledSource({ payload, activeRoot, hermesHome })
+      bundledSource = sourceTransaction.kind !== 'existing-git'
+      emit({
+        type: 'log',
+        line:
+          `[bootstrap] prepared bundled backend ${payload.manifest.commit.slice(0, 12)} ` +
+          `(${sourceTransaction.kind})`
+      })
+    }
+
     // 1. Resolve the platform installer.
-    const scriptInfo = await resolveInstallScript({ installStamp, sourceRepoRoot, hermesHome, emit })
+    const scriptInfo = await resolveInstallScript({
+      installStamp,
+      sourceRepoRoot,
+      hermesHome,
+      bundledBootstrapRoot,
+      emit
+    })
+
     const installerKind = scriptInfo.kind || 'powershell'
 
     // 2. Fetch manifest
@@ -938,7 +1090,8 @@ async function runBootstrap(opts) {
       hermesHome,
       activeRoot,
       installStamp,
-      pinCommit
+      pinCommit,
+      bundledSource
     })
 
     emit({
@@ -953,6 +1106,10 @@ async function runBootstrap(opts) {
     //    client-side.
     for (const stage of manifest.stages) {
       if (abortSignal && abortSignal.aborted) {
+        if (sourceTransaction) {
+          await sourceTransaction.rollback()
+        }
+
         emit({ type: 'failed', error: 'bootstrap cancelled by user' })
 
         return { ok: false, cancelled: true }
@@ -967,14 +1124,23 @@ async function runBootstrap(opts) {
         activeRoot,
         abortSignal,
         installStamp,
-        pinCommit
+        pinCommit,
+        bundledSource
       })
 
       if (ev.state === 'failed') {
+        if (sourceTransaction) {
+          await sourceTransaction.rollback()
+        }
+
         emit({ type: 'failed', stage: stage.name, error: (ev as any).error || 'stage failed' })
 
         return { ok: false, failedStage: stage.name, error: (ev as any).error }
       }
+    }
+
+    if (bundledSource) {
+      await validateBundledRuntime(activeRoot)
     }
 
     // 4. Write the bootstrap-complete marker. Fallback (all-zero) stamps are
@@ -1003,10 +1169,26 @@ async function runBootstrap(opts) {
     }
 
     const marker = typeof writeMarker === 'function' ? writeMarker(markerPayload) : markerPayload
+
+    if (sourceTransaction) {
+      await sourceTransaction.finalize()
+    }
+
     emit({ type: 'complete', marker })
 
     return { ok: true, marker }
   } catch (err) {
+    if (sourceTransaction) {
+      try {
+        await sourceTransaction.rollback()
+      } catch (rollbackError) {
+        emit({
+          type: 'log',
+          line: `[bootstrap] bundled source rollback failed: ${rollbackError.message || String(rollbackError)}`
+        })
+      }
+    }
+
     emit({ type: 'failed', error: err.message || String(err) })
 
     return { ok: false, error: err.message || String(err) }
