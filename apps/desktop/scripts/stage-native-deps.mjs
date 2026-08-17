@@ -69,10 +69,12 @@ function copyGlobByExt(srcDir, destDir, extensions) {
   mkdirSync(destDir, { recursive: true })
   for (const entry of readdirSync(srcDir, { withFileTypes: true })) {
     if (entry.isDirectory()) {
+      if (/^(?:test|tests|__tests__)$/i.test(entry.name)) continue
       copyGlobByExt(join(srcDir, entry.name), join(destDir, entry.name), extensions)
       continue
     }
-    if (extensions.some((ext) => entry.name.endsWith(ext))) {
+    const isTestArtifact = /(?:^|\.)(?:test|spec)\.[^.]+$/i.test(entry.name)
+    if (!isTestArtifact && extensions.some((ext) => entry.name.endsWith(ext))) {
       mkdirSync(destDir, { recursive: true })
       cpSync(join(srcDir, entry.name), join(destDir, entry.name))
     }
