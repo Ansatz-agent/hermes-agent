@@ -1,4 +1,4 @@
-export type GatewayAuthMode = 'oauth' | 'token' | (string & {})
+export type GatewayAuthMode = 'oauth' | 'scope' | 'token' | (string & {})
 
 export interface GatewayWsConnection {
   authMode?: GatewayAuthMode | null
@@ -9,8 +9,8 @@ export interface GatewayWsConnection {
 export interface ResolveGatewayWsUrlDeps {
   /**
    * Returns a fresh WebSocket URL for the selected backend/profile.
-   * OAuth-gated gateways use single-use tickets, so callers should mint
-   * immediately before opening the socket.
+   * OAuth-gated gateways and Desktop scope backends use single-use tickets,
+   * so callers should mint immediately before opening the socket.
    */
   getGatewayWsUrl?: (profile?: null | string) => Promise<GatewayWsUrlResult>
 }
@@ -40,9 +40,13 @@ export async function resolveGatewayWsUrl(deps: ResolveGatewayWsUrlDeps, conn: G
   const mint = deps.getGatewayWsUrl
   const profile = conn.profile ?? null
 
-  if (conn.authMode === 'oauth') {
+  if (conn.authMode === 'oauth' || conn.authMode === 'scope') {
     if (!mint) {
-      throw new Error('This Desktop build cannot refresh OAuth WebSocket tickets. Update Hermes Desktop and try again.')
+      throw new Error(
+        conn.authMode === 'scope'
+          ? 'This Desktop build cannot refresh the local WebSocket ticket. Restart Hermes Desktop and try again.'
+          : 'This Desktop build cannot refresh OAuth WebSocket tickets. Update Hermes Desktop and try again.'
+      )
     }
 
     try {
@@ -56,16 +60,21 @@ export async function resolveGatewayWsUrl(deps: ResolveGatewayWsUrlDeps, conn: G
         return result.wsUrl
       }
 
-      if (result.needsOauthLogin) {
+      if (conn.authMode === 'oauth' && result.needsOauthLogin) {
         throw new GatewayReauthRequiredError(
           'Your remote gateway session has expired. Open Settings -> Gateway and click "Sign in" again.',
           { cause: new Error(result.error) }
         )
       }
 
-      throw new Error(result.error || 'Could not refresh the remote gateway WebSocket ticket.')
+      throw new Error(
+        result.error ||
+          (conn.authMode === 'scope'
+            ? 'Could not refresh the local WebSocket ticket.'
+            : 'Could not refresh the remote gateway WebSocket ticket.')
+      )
     } catch (error) {
-      if (isGatewayReauthRequired(error)) {
+      if (conn.authMode === 'oauth' && isGatewayReauthRequired(error)) {
         throw error instanceof GatewayReauthRequiredError
           ? error
           : new GatewayReauthRequiredError(

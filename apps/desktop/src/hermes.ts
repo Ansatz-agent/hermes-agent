@@ -318,10 +318,10 @@ export async function pluginRest<T>(pluginId: string, path: string, opts: Plugin
 
 /** The plugin WebSocket door — the live twin of `pluginRest`, scoped the same
  *  way: `path` is relative to `/api/plugins/<pluginId>` ('/events' → the
- *  plugin's own event stream). Token-mode backends auth via the same query
- *  credential the app's own sockets use; OAuth remotes resolve null (callers
- *  keep their polling fallback — every consumer must have one anyway, since a
- *  socket can drop). Auto-reconnects with backoff until disposed. */
+ *  plugin's own event stream). Token-mode remotes auth via the same query
+ *  credential the app's own sockets use. OAuth remotes and Desktop scope
+ *  backends stay on their polling fallback because neither may put its bearer
+ *  in a URL. Auto-reconnects with backoff until disposed. */
 export function pluginSocket(pluginId: string, path: string, onMessage: (data: unknown) => void): () => void {
   const suffix = pluginPathSuffix('pluginSocket', path)
 
@@ -332,9 +332,9 @@ export function pluginSocket(pluginId: string, path: string, onMessage: (data: u
   const connect = async () => {
     const connection = await window.hermesDesktop.getConnection().catch(() => null)
 
-    // No bridge / OAuth cookie auth (WS tickets are single-use, core-managed):
-    // stay on the polling fallback rather than half-working.
-    if (disposed || !connection || connection.authMode === 'oauth') {
+    // OAuth/scope tickets are single-use and core-managed. Stay on the polling
+    // fallback rather than putting a bearer in a URL or reusing a stale ticket.
+    if (disposed || !connection || connection.authMode === 'oauth' || connection.authMode === 'scope') {
       return
     }
 

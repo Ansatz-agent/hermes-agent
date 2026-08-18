@@ -32,6 +32,11 @@ import nodePty from 'node-pty'
 import { classifyActiveRuntime } from './active-runtime-state'
 import { AuthBridgeError, DesktopAuthBridge } from './auth-bridge'
 import { AuthCoordinator } from './auth-coordinator'
+import {
+  encodeScopeTokenRegistration,
+  issueAuthScopeToken,
+  sanitizeAuthChildEnvironment
+} from './auth-scope-token'
 import { stopBackendChild as stopBackendChildImpl, stopBackendTreesForUpdate } from './backend-child'
 import { dashboardFallbackArgs, sourceDeclaresServe } from './backend-command'
 import { createBackendConnectionState } from './backend-connection-state'
@@ -688,6 +693,74 @@ let desktopAuthCoordinator: AuthCoordinator | null = null
 let desktopAuthStartupPromise: Promise<void> | null = null
 let desktopCapabilityShellEnabled = false
 let desktopDisplayListenersRegistered = false
+const desktopBackendScopeTokens = new Map<string, any>()
+
+async function writeBackendScopeToken(child, token) {
+  if (!child?.stdin || child.stdin.destroyed || !child.stdin.writable) {
+    throw new AuthBridgeError('runtime_unavailable', 'runtime_unavailable')
+  }
+
+  const frame = encodeScopeTokenRegistration(token)
+  await new Promise<void>((resolve, reject) => {
+    child.stdin.write(frame, error => {
+      if (error) {
+        reject(new AuthBridgeError('runtime_unavailable', 'runtime_unavailable'))
+      } else {
+        resolve()
+      }
+    })
+  })
+}
+
+function sameConnectionScope(left, right) {
+  return Boolean(
+    left &&
+      right &&
+      left.connection_id === right.connection_id &&
+      left.runtime_instance_id === right.runtime_instance_id &&
+      left.epoch === right.epoch
+  )
+}
+
+async function ensureFreshDesktopScopeToken(descriptor) {
+  if (descriptor?.authMode !== 'scope') {
+    return descriptor
+  }
+
+  const state = desktopBackendScopeTokens.get(descriptor.baseUrl)
+  const scope = desktopAuthCoordinator?.scope('local')
+
+  if (!state || !sameConnectionScope(state.scope, scope)) {
+    throw new AuthBridgeError('auth_required', 'session_rejected')
+  }
+
+  if (state.token.validUntil - os.uptime() <= 10) {
+    const token = issueAuthScopeToken(scope)
+    await writeBackendScopeToken(state.child, token)
+    state.token = token
+  }
+
+  descriptor.token = state.token.bearer
+
+  return descriptor
+}
+
+function forgetDesktopBackendScopeTokens(child) {
+  for (const [baseUrl, state] of desktopBackendScopeTokens) {
+    if (state.child === child) {
+      desktopBackendScopeTokens.delete(baseUrl)
+    }
+  }
+
+  // EOF is the control-channel revocation signal. Close it before process
+  // teardown so a slow/refusing child clears its in-memory token registry even
+  // if it has not exited yet. Never write the bearer during revocation.
+  try {
+    child?.stdin?.end()
+  } catch {
+    // The pipe may already be gone; process teardown remains authoritative.
+  }
+}
 
 function createDesktopAuthBridge() {
   // Resolve Python without starting a Hermes command. Development source
@@ -7371,6 +7444,21 @@ async function mintGatewayWsTicket(baseUrl) {
   return ticket
 }
 
+async function mintDesktopScopeWsTicket(baseUrl, bearer) {
+  const body = (await fetchJson(`${baseUrl}/api/auth/ws-ticket`, bearer, {
+    method: 'POST',
+    timeoutMs: 8_000
+  })) as any
+
+  const ticket = body?.ticket
+
+  if (!ticket || typeof ticket !== 'string') {
+    throw new Error('Local Hermes backend did not return a scope-bound WebSocket ticket.')
+  }
+
+  return ticket
+}
+
 // Build a fresh WS URL for the *current* connection. Critical for reconnects:
 // OAuth WS tickets are single-use with a ~30s TTL, so the ticket baked into
 // the cached connection's wsUrl is stale on the second connect. The renderer
@@ -7385,6 +7473,13 @@ async function freshGatewayWsUrl(profile) {
   // the wrong profile's DB. A null/empty profile resolves to the primary, so
   // legacy callers and single-profile users are unchanged.
   const connection = await ensureBackend(profile)
+
+  if (connection.authMode === 'scope') {
+    await ensureFreshDesktopScopeToken(connection)
+    const ticket = await mintDesktopScopeWsTicket(connection.baseUrl, connection.token)
+
+    return buildGatewayWsUrlWithTicket(connection.baseUrl, ticket)
+  }
 
   if (connection.authMode === 'oauth') {
     const ticket = await mintGatewayWsTicket(connection.baseUrl)
@@ -9236,9 +9331,10 @@ async function testDesktopConnectionConfig(input: any = {}) {
     }
   } else {
     const remote = (await resolveRemoteBackend(key)) || (await startHermes())
+    await ensureFreshDesktopScopeToken(remote)
     baseUrl = remote.baseUrl
     token = remote.token
-    authMode = normAuthMode(remote.authMode)
+    authMode = remote.authMode === 'scope' ? 'scope' : normAuthMode(remote.authMode)
   }
 
   const status = (await fetchJson(`${baseUrl}/api/status`, token, { timeoutMs: 8_000 })) as any
@@ -9250,7 +9346,10 @@ async function testDesktopConnectionConfig(input: any = {}) {
   // false-positive "reachable" while the real boot still failed with "Could not
   // connect to Hermes gateway". Mirror the renderer's connect here so the test
   // reflects the full path the app actually uses.
-  const wsUrl = await resolveTestWsUrl(baseUrl, authMode, token, { mintTicket: mintGatewayWsTicket })
+  const wsUrl = await resolveTestWsUrl(baseUrl, authMode, token, {
+    mintScopeTicket: mintDesktopScopeWsTicket,
+    mintTicket: mintGatewayWsTicket
+  })
 
   // Skip the WS leg only when the runtime genuinely lacks a WebSocket (so an
   // older Electron/Node never fails the test spuriously); Electron's main
@@ -9287,6 +9386,7 @@ function resetBootProgressForReconnect() {
 }
 
 function stopBackendChild(child) {
+  forgetDesktopBackendScopeTokens(child)
   stopBackendChildImpl(child, { forceKillProcessTree, isWindows: IS_WINDOWS })
 }
 
@@ -9422,9 +9522,11 @@ async function ensureBackend(profile) {
     // WebSocket, filesystem, and cache routing target the selected profile.
     // `sharedPrimary` marks this as the shared-primary route: pooled backends
     // also carry `profile`, so only this descriptor gets the flag.
-    return route.descriptorProfile
+    const descriptor = route.descriptorProfile
       ? { ...connection, profile: route.descriptorProfile, sharedPrimary: true }
       : connection
+
+    return ensureFreshDesktopScopeToken(descriptor)
   }
 
   const existing = backendPool.get(key)
@@ -9432,7 +9534,7 @@ async function ensureBackend(profile) {
   if (existing) {
     existing.lastActiveAt = Date.now()
 
-    return existing.connectionPromise
+    return ensureFreshDesktopScopeToken(await existing.connectionPromise)
   }
 
   evictLruPoolBackends(POOL_MAX_BACKENDS - 1)
@@ -9458,7 +9560,7 @@ async function ensureBackend(profile) {
   backendPool.set(key, entry)
   startPoolIdleReaper()
 
-  return entry.connectionPromise
+  return ensureFreshDesktopScopeToken(await entry.connectionPromise)
 }
 
 // ── Registry-scoped backends (multi-connection, PR 2 of the campaign) ──────
@@ -9702,7 +9804,8 @@ async function spawnPoolBackend(profile, entry) {
     }
   }
 
-  const token = crypto.randomBytes(32).toString('base64url')
+  const connectionScope = await requireDesktopConnectionScope()
+  const scopeToken = issueAuthScopeToken(connectionScope)
 
   // Same update mutual exclusion as the primary window's waitForLocalStart
   // (#73822): pool backends spawn from the same venv, so an ungated respawn
@@ -9746,14 +9849,11 @@ async function spawnPoolBackend(profile, entry) {
     hiddenWindowsChildOptions({
       cwd: hermesCwd,
       env: {
-        ...process.env,
-        HERMES_HOME,
-        ...backend.env,
+        ...sanitizeAuthChildEnvironment({ ...process.env, HERMES_HOME, ...backend.env }),
         // Pin the gateway's tool/terminal cwd to the same directory we chose for
         // the child process. Inherited TERMINAL_CWD (or a stale config bridge)
         // can still point at the install dir even when spawn cwd is home.
         TERMINAL_CWD: hermesCwd,
-        HERMES_DASHBOARD_SESSION_TOKEN: token,
         // Marks this dashboard backend as desktop-spawned so it runs the cron
         // scheduler tick loop (the gateway isn't running under the app).
         HERMES_DESKTOP: '1',
@@ -9766,13 +9866,14 @@ async function spawnPoolBackend(profile, entry) {
         ...(readyFile ? { HERMES_DESKTOP_READY_FILE: readyFile } : {})
       },
       shell: backend.shell,
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: ['pipe', 'pipe', 'pipe']
     })
   )
 
   entry.process = child
-  entry.token = token
+  entry.token = scopeToken.bearer
   await claimBackendChild(child, `${backend.command} ${backend.args.join(' ')}`, profile, backendNonce)
+  await writeBackendScopeToken(child, scopeToken)
 
   child.stdout.on('data', rememberLog)
   child.stderr.on('data', rememberLog)
@@ -9812,21 +9913,22 @@ async function spawnPoolBackend(profile, entry) {
   entry.port = port
 
   const baseUrl = `http://127.0.0.1:${port}`
-  await Promise.race([waitForHermes(baseUrl, token), startFailed])
+  desktopBackendScopeTokens.set(baseUrl, {
+    child,
+    scope: connectionScope,
+    token: scopeToken
+  })
+  await Promise.race([waitForHermes(baseUrl, scopeToken.bearer, undefined, 'scope'), startFailed])
   ready = true
 
-  const authToken = await adoptServedDashboardToken(baseUrl, token, {
-    childAlive: () => child.exitCode === null && !child.killed,
-    label: `Hermes backend for profile "${profile}"`,
-    rememberLog
-  })
+  entry.token = scopeToken.bearer
 
-  entry.token = authToken
-
-  // Verify the WebSocket session token before declaring backend ready.
-  // HTTP /api/status can pass while WS auth fails (separate transport, separate guards).
-  const wsUrl = `ws://127.0.0.1:${port}/api/ws?token=${encodeURIComponent(authToken)}`
-  const wsProbe = await probeGatewayWebSocket(wsUrl, { WebSocketImpl: globalThis.WebSocket })
+  // Browser WebSockets cannot set an Authorization header. Probe with a
+  // single-use ticket minted by the scope-authenticated HTTP channel; the
+  // bearer itself never enters a URL.
+  const probeTicket = await mintDesktopScopeWsTicket(baseUrl, scopeToken.bearer)
+  const probeWsUrl = buildGatewayWsUrlWithTicket(baseUrl, probeTicket)
+  const wsProbe = await probeGatewayWebSocket(probeWsUrl, { WebSocketImpl: globalThis.WebSocket })
 
   if (!wsProbe.ok) {
     throw new Error(
@@ -9838,10 +9940,10 @@ async function spawnPoolBackend(profile, entry) {
     baseUrl,
     mode: 'local',
     source: 'local',
-    authMode: 'token',
-    token: authToken,
+    authMode: 'scope',
+    token: scopeToken.bearer,
     profile,
-    wsUrl,
+    wsUrl: `${baseUrl.replace(/^http/, 'ws')}/api/ws`,
     logs: hermesLog.slice(-80),
     ...getWindowState()
   }
@@ -10014,7 +10116,7 @@ async function startHermes() {
     await advanceBootProgress('backend.resolve', 'Resolving Hermes backend', 8)
     // Resolve for the desktop's primary profile so a per-profile remote
     // override on the active profile is honored (falls back to env / global).
-    const token = crypto.randomBytes(32).toString('base64url')
+    const scopeToken = issueAuthScopeToken(connectionScope)
     // --port 0: the OS assigns an ephemeral port; the child announces it on stdout.
     const backendArgs = ['serve', '--host', '127.0.0.1', '--port', '0']
     // Pin the desktop's chosen profile via the global --profile flag. This is
@@ -10074,7 +10176,7 @@ async function startHermes() {
       hiddenWindowsChildOptions({
         cwd: hermesCwd,
         env: {
-          ...process.env,
+          ...sanitizeAuthChildEnvironment({ ...process.env, HERMES_HOME, ...backend.env }),
           // Explicitly pin HERMES_HOME for the child so Python's get_hermes_home()
           // resolves to the SAME location our resolveHermesHome() picked. Without
           // this pin, Python falls back to ~/.hermes on every platform — fine on
@@ -10083,10 +10185,7 @@ async function startHermes() {
           // Mismatch would split config / sessions / .env / logs across two
           // directories. install.ps1 sets HERMES_HOME via setx; the desktop
           // can't reliably do that, so we set it inline for every spawn.
-          HERMES_HOME,
-          ...backend.env,
           TERMINAL_CWD: hermesCwd,
-          HERMES_DASHBOARD_SESSION_TOKEN: token,
           // Marks this dashboard backend as desktop-spawned so it runs the cron
           // scheduler tick loop (the gateway isn't running under the app).
           HERMES_DESKTOP: '1',
@@ -10099,11 +10198,12 @@ async function startHermes() {
           ...(readyFile ? { HERMES_DESKTOP_READY_FILE: readyFile } : {})
         },
         shell: backend.shell,
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['pipe', 'pipe', 'pipe']
       })
     )
 
     await claimBackendChild(hermesProcess, `${backend.command} ${backend.args.join(' ')}`, profile, backendNonce)
+    await writeBackendScopeToken(hermesProcess, scopeToken)
     const processOwner = backendConnectionState.attachProcess(connectionAttempt, hermesProcess)
 
     if (!processOwner) {
@@ -10194,18 +10294,18 @@ async function startHermes() {
 
     const baseUrl = `http://127.0.0.1:${port}`
     await advanceBootProgress('backend.wait', 'Waiting for Hermes backend to become ready', 90)
-    await Promise.race([waitForHermes(baseUrl, token), backendStartFailed])
+    desktopBackendScopeTokens.set(baseUrl, {
+      child: hermesProcess,
+      scope: connectionScope,
+      token: scopeToken
+    })
+    await Promise.race([waitForHermes(baseUrl, scopeToken.bearer, undefined, 'scope'), backendStartFailed])
     backendReady = true
     backendStartFailure = null
 
-    const authToken = await adoptServedDashboardToken(baseUrl, token, {
-      childAlive: () => hermesProcess.exitCode === null && !hermesProcess.killed,
-      rememberLog
-    })
-
-    // Verify the WebSocket session token before declaring backend ready.
-    const wsUrl = `ws://127.0.0.1:${port}/api/ws?token=${encodeURIComponent(authToken)}`
-    const wsProbe = await probeGatewayWebSocket(wsUrl, { WebSocketImpl: globalThis.WebSocket })
+    const probeTicket = await mintDesktopScopeWsTicket(baseUrl, scopeToken.bearer)
+    const probeWsUrl = buildGatewayWsUrlWithTicket(baseUrl, probeTicket)
+    const wsProbe = await probeGatewayWebSocket(probeWsUrl, { WebSocketImpl: globalThis.WebSocket })
 
     if (!wsProbe.ok) {
       throw new Error(
@@ -10232,9 +10332,9 @@ async function startHermes() {
       baseUrl,
       mode: 'local',
       source: 'local',
-      authMode: 'token',
-      token: authToken,
-      wsUrl,
+      authMode: 'scope',
+      token: scopeToken.bearer,
+      wsUrl: `${baseUrl.replace(/^http/, 'ws')}/api/ws`,
       logs: hermesLog.slice(-80),
       ...getWindowState()
     }
@@ -12157,9 +12257,10 @@ guardedHandle('hermes:connections:test', async (_event, id) => {
 
   if (entry.kind === 'local') {
     const local = await startHermes()
+    await ensureFreshDesktopScopeToken(local)
     baseUrl = local.baseUrl
     token = local.token
-    authMode = normAuthMode(local.authMode)
+    authMode = local.authMode === 'scope' ? 'scope' : normAuthMode(local.authMode)
   } else {
     baseUrl = normalizeRemoteBaseUrl(entry.url)
     authMode = normAuthMode(entry.authMode)
@@ -12177,7 +12278,10 @@ guardedHandle('hermes:connections:test', async (_event, id) => {
 
   // Same HTTP+WS two-leg check as testDesktopConnectionConfig: HTTP alone is
   // a false positive when the WebSocket leg is blocked.
-  const wsUrl = await resolveTestWsUrl(baseUrl, authMode, token, { mintTicket: mintGatewayWsTicket })
+  const wsUrl = await resolveTestWsUrl(baseUrl, authMode, token, {
+    mintScopeTicket: mintDesktopScopeWsTicket,
+    mintTicket: mintGatewayWsTicket
+  })
 
   if (wsUrl && typeof globalThis.WebSocket === 'function') {
     const probe = await probeGatewayWebSocket(wsUrl, { WebSocketImpl: globalThis.WebSocket })
@@ -12255,6 +12359,13 @@ guardedHandle('hermes:gateway:ws-url-for', async (_event, payload) => {
   return gatewayWsUrlIpcResult(async () => {
     const connection: any = await ensureRegistryBackend(connectionId, profile)
 
+    if (connection.authMode === 'scope') {
+      await ensureFreshDesktopScopeToken(connection)
+      const ticket = await mintDesktopScopeWsTicket(connection.baseUrl, connection.token)
+
+      return buildGatewayWsUrlWithTicket(connection.baseUrl, ticket)
+    }
+
     if (connection.authMode === 'oauth') {
       const ticket = await mintGatewayWsTicket(connection.baseUrl)
 
@@ -12322,6 +12433,7 @@ guardedHandle('hermes:connections:update-all', async () => {
 // authenticate via the OAuth partition's cookies (same split as the rest of
 // the REST surface).
 async function postJsonForBackend(descriptor, path, body, opts: any = {}) {
+  await ensureFreshDesktopScopeToken(descriptor)
   const url = `${descriptor.baseUrl}${path}`
 
   if (descriptor.authMode === 'oauth') {
@@ -12333,6 +12445,7 @@ async function postJsonForBackend(descriptor, path, body, opts: any = {}) {
 
 // GET twin of postJsonForBackend — same token/cookie auth split.
 async function getJsonForBackend(descriptor, path, opts: any = {}) {
+  await ensureFreshDesktopScopeToken(descriptor)
   const url = `${descriptor.baseUrl}${path}`
 
   if (descriptor.authMode === 'oauth') {
@@ -13545,7 +13658,7 @@ function safeTerminalCwd(cwd) {
 }
 
 function terminalShellEnv() {
-  const env = { ...process.env }
+  const env = sanitizeAuthChildEnvironment()
 
   // Electron is commonly launched through `npm run dev`; do not leak npm's
   // managed prefix into a user's interactive shell (nvm/proto warn loudly).

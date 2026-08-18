@@ -953,8 +953,8 @@ test('connection-config save and apply IPC handlers route payloads through coerc
   const source = readMain()
 
   for (const channel of ['hermes:connection-config:save', 'hermes:connection-config:apply']) {
-    const handlerStart = source.indexOf(`ipcMain.handle('${channel}'`)
-    assert.notEqual(handlerStart, -1, `${channel} handler must exist`)
+    const handlerStart = source.indexOf(`guardedHandle('${channel}'`)
+    assert.notEqual(handlerStart, -1, `${channel} authenticated handler must exist`)
     const handlerBody = source.slice(handlerStart, handlerStart + 400)
     assert.match(
       handlerBody,

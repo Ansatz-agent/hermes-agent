@@ -583,7 +583,7 @@ export interface HermesConnection {
   // 'cloud' saved-config entry resolves to a 'remote' connection under the hood
   // (cloud-auto-discovery Q3/Q6), so this never carries 'cloud'.
   mode?: 'local' | 'remote'
-  authMode?: 'oauth' | 'token'
+  authMode?: 'oauth' | 'scope' | 'token'
   remoteHost?: string
   remoteIdentity?: string
   remoteKind?: 'cloud' | 'ssh' | 'url'

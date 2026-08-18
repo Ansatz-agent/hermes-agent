@@ -75,6 +75,12 @@ describe('mediaExternalUrl', () => {
     $connection.set({ mode: 'remote', baseUrl: 'https://gw' } as never)
     expect(mediaExternalUrl('/tmp/a.png')).toBe('file:///tmp/a.png')
   })
+
+  it('never places a Desktop scope bearer in a media URL', () => {
+    $connection.set({ authMode: 'scope', mode: 'remote', baseUrl: 'https://gw', token: 'scope-secret' } as never)
+    expect(mediaExternalUrl('/tmp/a.png')).toBe('file:///tmp/a.png')
+    expect(mediaExternalUrl('/tmp/a.png')).not.toContain('scope-secret')
+  })
 })
 
 describe('mediaGatewayStreamUrl', () => {

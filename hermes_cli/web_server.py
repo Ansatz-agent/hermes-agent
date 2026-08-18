@@ -101,7 +101,12 @@ from gateway.status import (
     resolve_gateway_liveness,
 )
 from utils import env_var_enabled
-from hermes_cli.client_auth.runtime import AuthRequired, require_authorized
+from hermes_cli.client_auth.runtime import (
+    AuthRequired,
+    backend_scope_tokens,
+    require_authorized,
+    start_backend_scope_token_control,
+)
 
 try:
     from fastapi import (
@@ -336,6 +341,14 @@ async def _lifespan(app: "FastAPI"):
     # On app.state (not a module global) so the Lock binds to the running
     # event loop during lifespan startup — see _get_event_state's docstring.
     app.state.chat_argv_lock = asyncio.Lock()
+    previous_desktop_scope_requirement = getattr(
+        app.state,
+        "desktop_scope_tokens_required",
+        False,
+    )
+    app.state.desktop_scope_tokens_required = os.getenv("HERMES_DESKTOP") == "1"
+    if app.state.desktop_scope_tokens_required:
+        start_backend_scope_token_control()
 
     # Bring this profile's state.db schema current BEFORE the first
     # session-list poll (#79531/#80037). Migrations used to run lazily on
@@ -404,6 +417,9 @@ async def _lifespan(app: "FastAPI"):
     try:
         yield
     finally:
+        if app.state.desktop_scope_tokens_required:
+            backend_scope_tokens.clear()
+        app.state.desktop_scope_tokens_required = previous_desktop_scope_requirement
         if cron_stop is not None:
             cron_stop.set()
         pty_reaper_task.cancel()
@@ -592,6 +608,8 @@ def _require_token(request: Request) -> None:
       making plugin install/enable/disable and the other ``_require_token``
       endpoints permanently unreachable behind the gate. Defer to the gate.
     """
+    if getattr(request.state, "desktop_scope_authenticated", False):
+        return
     if getattr(request.app.state, "auth_required", False):
         # Gate is authoritative. It attaches ``request.state.session`` on
         # success and 401s otherwise, so a request that reached us is already
@@ -733,6 +751,7 @@ async def _plugin_api_runtime_gate(request: Request, call_next):
         # this route can't be used as a plugin-name oracle.
         _authed = (
             getattr(request.state, "token_authenticated", False)
+            or getattr(request.state, "desktop_scope_authenticated", False)
             or getattr(request.app.state, "auth_required", False)
             or _has_valid_session_token(request)
             or _has_valid_query_token(request, path)
@@ -799,6 +818,8 @@ async def auth_middleware(request: Request, call_next):
     # presenting a bearer token on a registered token route) carries
     # ``token_authenticated`` — never bounce it through the cookie/session gate.
     if getattr(request.state, "token_authenticated", False):
+        return await call_next(request)
+    if getattr(request.state, "desktop_scope_authenticated", False):
         return await call_next(request)
     # When the OAuth gate is active, cookie-based auth (gated_auth_middleware
     # above) is authoritative.  The legacy _SESSION_TOKEN path is loopback-only
@@ -898,7 +919,17 @@ async def client_runtime_auth_middleware(request: Request, call_next):
     """Require the shared remote login for every dashboard API request."""
     if request.url.path.startswith("/api/"):
         try:
-            require_authorized("dashboard.api.request")
+            request_app = getattr(request, "app", app)
+            if getattr(request_app.state, "desktop_scope_tokens_required", False):
+                bearer = request.headers.get(_SESSION_HEADER_NAME, "")
+                grant = backend_scope_tokens.authorize(
+                    bearer,
+                    "dashboard.api.request",
+                )
+                request.state.desktop_scope_authenticated = True
+                request.state.desktop_scope_grant = grant
+            else:
+                require_authorized("dashboard.api.request")
         except AuthRequired:
             return JSONResponse(
                 status_code=401,
@@ -15474,6 +15505,8 @@ def _ws_request_is_allowed(ws: "WebSocket") -> bool:
 
 def _ws_auth_mode() -> str:
     """Short label for the active WS auth mode — logged on every connection."""
+    if getattr(app.state, "desktop_scope_tokens_required", False):
+        return "desktop-scope"
     if getattr(app.state, "auth_required", False):
         return "gated"
     bound_host = (getattr(app.state, "bound_host", "") or "").strip().lower()
@@ -15514,8 +15547,23 @@ def _ws_auth_reason(ws: "WebSocket") -> tuple[Optional[str], str]:
     Audit-logs the rejection so operators can debug "WS keeps closing"
     issues from the log.
     """
-    auth_required = bool(getattr(app.state, "auth_required", False))
-    if auth_required:
+    ws_state = getattr(ws, "state", None)
+    ws_app = getattr(ws, "app", app)
+    cached = getattr(ws_state, "hermes_auth_result", None)
+    if isinstance(cached, tuple) and len(cached) == 2:
+        return cached
+
+    def finish(reason: Optional[str], credential: str) -> tuple[Optional[str], str]:
+        result = (reason, credential)
+        if ws_state is not None:
+            ws_state.hermes_auth_result = result
+        return result
+
+    auth_required = bool(getattr(ws_app.state, "auth_required", False))
+    desktop_scope_required = bool(
+        getattr(ws_app.state, "desktop_scope_tokens_required", False)
+    )
+    if auth_required or desktop_scope_required:
         # Lazy import — keeps this function importable in test harnesses
         # that don't bring in the dashboard_auth layer.
         from hermes_cli.dashboard_auth.audit import AuditEvent, audit_log
@@ -15532,7 +15580,7 @@ def _ws_auth_reason(ws: "WebSocket") -> tuple[Optional[str], str]:
         if internal:
             try:
                 consume_internal_credential(internal)
-                return None, "internal"
+                return finish(None, "internal")
             except TicketInvalid as exc:
                 audit_log(
                     AuditEvent.WS_TICKET_REJECTED,
@@ -15540,15 +15588,25 @@ def _ws_auth_reason(ws: "WebSocket") -> tuple[Optional[str], str]:
                     ip=(ws.client.host if ws.client else ""),
                     path=ws.url.path,
                 )
-                return "internal_invalid", "internal"
+                return finish("internal_invalid", "internal")
 
         ticket = ws.query_params.get("ticket", "")
         if not ticket:
-            return "no_credential", "none"
+            return finish("no_credential", "none")
 
         try:
-            consume_ticket(ticket)
-            return None, "ticket"
+            info = consume_ticket(ticket)
+            if desktop_scope_required:
+                claim = info.get("auth_scope")
+                backend_scope_tokens.authorize_claim(
+                    claim,
+                    "dashboard.ws.upgrade",
+                )
+                if ws_state is not None:
+                    ws_state.desktop_scope_claim = claim
+            return finish(None, "ticket")
+        except AuthRequired:
+            return finish("scope_invalid", "ticket")
         except TicketInvalid as exc:
             audit_log(
                 AuditEvent.WS_TICKET_REJECTED,
@@ -15556,14 +15614,14 @@ def _ws_auth_reason(ws: "WebSocket") -> tuple[Optional[str], str]:
                 ip=(ws.client.host if ws.client else ""),
                 path=ws.url.path,
             )
-            return "ticket_invalid", "ticket"
+            return finish("ticket_invalid", "ticket")
 
     token = ws.query_params.get("token", "")
     if not token:
-        return "no_credential", "none"
+        return finish("no_credential", "none")
     if hmac.compare_digest(token.encode(), _SESSION_TOKEN.encode()):
-        return None, "token"
-    return "token_mismatch", "token"
+        return finish(None, "token")
+    return finish("token_mismatch", "token")
 
 
 def _ws_auth_ok(ws: "WebSocket") -> bool:
@@ -15574,7 +15632,21 @@ def _ws_auth_ok(ws: "WebSocket") -> bool:
 async def _ws_client_runtime_authorized(ws: "WebSocket", boundary: str) -> bool:
     """Validate the central login and close a locked WebSocket fail-closed."""
     try:
-        require_authorized(boundary)
+        ws_app = getattr(ws, "app", app)
+        ws_state = getattr(ws, "state", None)
+        if getattr(ws_app.state, "desktop_scope_tokens_required", False):
+            reason, credential = _ws_auth_reason(ws)
+            if reason is not None:
+                raise AuthRequired("runtime_unavailable")
+            claim = getattr(ws_state, "desktop_scope_claim", None)
+            if credential == "ticket":
+                backend_scope_tokens.authorize_claim(claim, boundary)
+            elif credential == "internal":
+                require_authorized(boundary)
+            else:
+                raise AuthRequired("runtime_unavailable")
+        else:
+            require_authorized(boundary)
         return True
     except AuthRequired:
         with contextlib.suppress(Exception):

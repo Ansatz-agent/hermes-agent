@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -36,6 +37,8 @@ LEASE_SECONDS = 60.0
 LOGIN_ATTEMPT_LIMIT = 5
 LOGIN_ATTEMPT_WINDOW_SECONDS = 60.0
 OWNER_IDLE_SECONDS = 15.0 * 60.0
+BACKEND_SCOPE_TOKEN_TTL_SECONDS = 60.0
+_BACKEND_SCOPE_TOKEN_BYTES = 32
 
 
 class AuthState(StrEnum):
@@ -64,6 +67,269 @@ class AuthRequired(RuntimeError):
         normalized = reason or self.code
         super().__init__(normalized)
         self.reason = reason
+
+
+@dataclass(frozen=True)
+class BackendScopeTokenRegistration:
+    bearer: str
+    connection_id: str
+    auth: AuthScope
+    ttl_seconds: float
+
+
+@dataclass(frozen=True)
+class BackendScopeGrant:
+    connection_id: str
+    auth: AuthScope
+    valid_until: float
+    token_digest: str
+
+    def claim(self) -> dict[str, object]:
+        return {
+            "connection_id": self.connection_id,
+            "runtime_instance_id": self.auth.runtime_instance_id,
+            "epoch": self.auth.epoch,
+            "valid_until": self.valid_until,
+            "token_digest": self.token_digest,
+        }
+
+
+class BackendScopeTokenRegistry:
+    """Process-local, hashed bearer grants for Desktop backend traffic."""
+
+    def __init__(
+        self,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        authorize: Callable[..., AuthScope] | None = None,
+    ) -> None:
+        self._clock = clock
+        self._authorize = authorize or (
+            lambda boundary, *, expected: require_authorized(
+                boundary,
+                expected=expected,
+            )
+        )
+        self._lock = threading.RLock()
+        self._records: dict[bytes, BackendScopeGrant] = {}
+
+    def register(
+        self,
+        bearer: str,
+        *,
+        connection_id: str,
+        expected: AuthScope,
+        ttl_seconds: float,
+    ) -> BackendScopeGrant:
+        _validate_backend_scope_bearer(bearer)
+        _validate_connection_id(connection_id)
+        _validate_auth_scope(expected)
+        if (
+            isinstance(ttl_seconds, bool)
+            or not isinstance(ttl_seconds, (int, float))
+            or not 0 < float(ttl_seconds) <= BACKEND_SCOPE_TOKEN_TTL_SECONDS
+        ):
+            raise AuthRequired("runtime_unavailable")
+        self._authorize("backend.scope_token.register", expected=expected)
+        now = self._clock()
+        digest = hashlib.sha256(bearer.encode("ascii")).digest()
+        grant = BackendScopeGrant(
+            connection_id=connection_id,
+            auth=expected,
+            valid_until=now + float(ttl_seconds),
+            token_digest=digest.hex(),
+        )
+        with self._lock:
+            self._prune_locked(now)
+            self._records[digest] = grant
+        return grant
+
+    def authorize(
+        self,
+        bearer: str,
+        boundary: str,
+        *,
+        connection_id: str | None = None,
+    ) -> BackendScopeGrant:
+        _validate_backend_scope_bearer(bearer)
+        digest = hashlib.sha256(bearer.encode("ascii")).digest()
+        with self._lock:
+            grant = self._records.get(digest)
+        if grant is None:
+            raise AuthRequired("runtime_unavailable")
+        if connection_id is not None and grant.connection_id != connection_id:
+            raise AuthRequired("runtime_unavailable")
+        return self._authorize_grant(grant, boundary)
+
+    def authorize_claim(
+        self,
+        claim: object,
+        boundary: str,
+    ) -> BackendScopeGrant:
+        grant = _grant_from_claim(claim)
+        try:
+            digest = bytes.fromhex(grant.token_digest)
+        except ValueError:
+            raise AuthRequired("runtime_unavailable") from None
+        if len(digest) != hashlib.sha256().digest_size:
+            raise AuthRequired("runtime_unavailable")
+        with self._lock:
+            current = self._records.get(digest)
+        if current != grant:
+            raise AuthRequired("runtime_unavailable")
+        return self._authorize_grant(current, boundary)
+
+    def revoke(self, *, connection_id: str, expected: AuthScope) -> None:
+        _validate_connection_id(connection_id)
+        _validate_auth_scope(expected)
+        with self._lock:
+            doomed = [
+                digest
+                for digest, grant in self._records.items()
+                if grant.connection_id == connection_id and grant.auth == expected
+            ]
+            for digest in doomed:
+                self._records.pop(digest, None)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._records.clear()
+
+    def _authorize_grant(
+        self,
+        grant: BackendScopeGrant,
+        boundary: str,
+    ) -> BackendScopeGrant:
+        now = self._clock()
+        if now >= grant.valid_until:
+            with self._lock:
+                self._records.pop(bytes.fromhex(grant.token_digest), None)
+            raise AuthRequired("session_expired")
+        self._authorize(boundary, expected=grant.auth)
+        return grant
+
+    def _prune_locked(self, now: float) -> None:
+        expired = [
+            digest
+            for digest, grant in self._records.items()
+            if now >= grant.valid_until
+        ]
+        for digest in expired:
+            self._records.pop(digest, None)
+
+
+def parse_backend_scope_token_registration(
+    value: object,
+) -> BackendScopeTokenRegistration:
+    expected_keys = {
+        "version",
+        "operation",
+        "bearer",
+        "connection_id",
+        "runtime_instance_id",
+        "epoch",
+        "ttl_seconds",
+    }
+    if not isinstance(value, dict) or set(value) != expected_keys:
+        raise AuthRequired("runtime_unavailable")
+    if value.get("version") != 1 or value.get("operation") != "register_scope_token":
+        raise AuthRequired("runtime_unavailable")
+    bearer = value.get("bearer")
+    connection_id = value.get("connection_id")
+    runtime_instance_id = value.get("runtime_instance_id")
+    epoch = value.get("epoch")
+    ttl_seconds = value.get("ttl_seconds")
+    if not isinstance(bearer, str) or not isinstance(connection_id, str):
+        raise AuthRequired("runtime_unavailable")
+    auth = AuthScope(runtime_instance_id, epoch)  # type: ignore[arg-type]
+    _validate_backend_scope_bearer(bearer)
+    _validate_connection_id(connection_id)
+    _validate_auth_scope(auth)
+    if (
+        isinstance(ttl_seconds, bool)
+        or not isinstance(ttl_seconds, (int, float))
+        or not 0 < float(ttl_seconds) <= BACKEND_SCOPE_TOKEN_TTL_SECONDS
+    ):
+        raise AuthRequired("runtime_unavailable")
+    return BackendScopeTokenRegistration(
+        bearer=bearer,
+        connection_id=connection_id,
+        auth=auth,
+        ttl_seconds=float(ttl_seconds),
+    )
+
+
+def _validate_backend_scope_bearer(bearer: str) -> None:
+    if not isinstance(bearer, str) or len(bearer) != 43:
+        raise AuthRequired("runtime_unavailable")
+    try:
+        decoded = base64.b64decode(
+            bearer + "=",
+            altchars=b"-_",
+            validate=True,
+        )
+    except (ValueError, UnicodeError):
+        raise AuthRequired("runtime_unavailable") from None
+    if len(decoded) != _BACKEND_SCOPE_TOKEN_BYTES:
+        raise AuthRequired("runtime_unavailable")
+
+
+def _validate_connection_id(connection_id: str) -> None:
+    if (
+        not isinstance(connection_id, str)
+        or not 0 < len(connection_id) <= 128
+        or any(ord(character) < 0x20 or ord(character) == 0x7F for character in connection_id)
+    ):
+        raise AuthRequired("runtime_unavailable")
+
+
+def _validate_auth_scope(scope: AuthScope) -> None:
+    if not isinstance(scope, AuthScope):
+        raise AuthRequired("runtime_unavailable")
+    if (
+        len(scope.runtime_instance_id) != 32
+        or any(character not in "0123456789abcdef" for character in scope.runtime_instance_id)
+        or not isinstance(scope.epoch, int)
+        or isinstance(scope.epoch, bool)
+        or scope.epoch < 0
+    ):
+        raise AuthRequired("runtime_unavailable")
+
+
+def _grant_from_claim(value: object) -> BackendScopeGrant:
+    expected_keys = {
+        "connection_id",
+        "runtime_instance_id",
+        "epoch",
+        "valid_until",
+        "token_digest",
+    }
+    if not isinstance(value, dict) or set(value) != expected_keys:
+        raise AuthRequired("runtime_unavailable")
+    connection_id = value.get("connection_id")
+    auth = AuthScope(
+        value.get("runtime_instance_id"),  # type: ignore[arg-type]
+        value.get("epoch"),  # type: ignore[arg-type]
+    )
+    valid_until = value.get("valid_until")
+    token_digest = value.get("token_digest")
+    if not isinstance(connection_id, str):
+        raise AuthRequired("runtime_unavailable")
+    _validate_connection_id(connection_id)
+    _validate_auth_scope(auth)
+    if (
+        not isinstance(valid_until, (int, float))
+        or isinstance(valid_until, bool)
+        or not isinstance(token_digest, str)
+        or len(token_digest) != 64
+    ):
+        raise AuthRequired("runtime_unavailable")
+    return BackendScopeGrant(
+        connection_id=connection_id,
+        auth=auth,
+        valid_until=float(valid_until),
+        token_digest=token_digest,
+    )
 
 
 @dataclass(frozen=True)
@@ -1833,6 +2099,9 @@ def _decode_cookie_blob(raw: str) -> CookieRecord:
 
 _consumer_lock = threading.RLock()
 _consumer: RuntimeConsumer | None = None
+_BACKEND_SCOPE_CONTROL_FRAME_LIMIT = 4_096
+_backend_scope_control_lock = threading.Lock()
+_backend_scope_control_thread: threading.Thread | None = None
 
 
 def install_runtime_consumer(consumer: RuntimeConsumer) -> None:
@@ -1857,6 +2126,65 @@ def require_authorized(
     if consumer is None:
         raise AuthRequired("runtime_unavailable")
     return consumer.require_authorized(boundary, expected=expected)
+
+
+backend_scope_tokens = BackendScopeTokenRegistry()
+
+
+def register_backend_scope_token(value: object) -> BackendScopeGrant:
+    registration = parse_backend_scope_token_registration(value)
+    return backend_scope_tokens.register(
+        registration.bearer,
+        connection_id=registration.connection_id,
+        expected=registration.auth,
+        ttl_seconds=registration.ttl_seconds,
+    )
+
+
+def _run_backend_scope_token_control(stream: Any) -> None:
+    try:
+        while True:
+            try:
+                raw = stream.readline(_BACKEND_SCOPE_CONTROL_FRAME_LIMIT + 1)
+            except (OSError, ValueError):
+                break
+            if not raw:
+                break
+            if len(raw) > _BACKEND_SCOPE_CONTROL_FRAME_LIMIT or not raw.endswith(b"\n"):
+                break
+            try:
+                value = json.loads(raw)
+                register_backend_scope_token(value)
+            except (AuthRequired, UnicodeError, ValueError):
+                break
+    finally:
+        backend_scope_tokens.clear()
+
+
+def start_backend_scope_token_control(
+    stream: Any | None = None,
+) -> threading.Thread:
+    """Read the Desktop-only token protocol from inherited stdin.
+
+    The raw bearer exists only in the bounded registration frame and the
+    caller's request object. The registry stores its SHA-256 digest. EOF or
+    malformed input revokes every grant for this backend process.
+    """
+    global _backend_scope_control_thread
+    selected = stream if stream is not None else sys.stdin.buffer
+    with _backend_scope_control_lock:
+        running = _backend_scope_control_thread
+        if running is not None and running.is_alive():
+            return running
+        thread = threading.Thread(
+            target=_run_backend_scope_token_control,
+            args=(selected,),
+            daemon=True,
+            name="hermes-backend-scope-control",
+        )
+        _backend_scope_control_thread = thread
+        thread.start()
+        return thread
 
 
 def _lease_deadline(

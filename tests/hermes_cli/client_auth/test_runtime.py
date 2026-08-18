@@ -1,3 +1,5 @@
+import base64
+import json
 import os
 import socket
 import subprocess
@@ -21,6 +23,7 @@ from hermes_cli.client_auth.runtime import (
     AuthRequired,
     AuthScope,
     AuthState,
+    BackendScopeTokenRegistry,
     MemoryOwner,
     OwnerBroker,
     OwnerElectionContext,
@@ -36,9 +39,171 @@ from hermes_cli.client_auth.runtime import (
     connect_runtime_owner,
     install_entrypoint_owner,
     resolve_owner,
+    parse_backend_scope_token_registration,
     runtime_endpoint,
     start_runtime_owner,
 )
+
+
+def _scope_bearer(seed: bytes = b"A") -> str:
+    return base64.urlsafe_b64encode(seed * 32).decode("ascii").rstrip("=")
+
+
+def test_backend_scope_token_is_hashed_bounded_and_exactly_scope_bound():
+    clock = FakeClock(100.0)
+    current = AuthScope("0123456789abcdef0123456789abcdef", 7)
+
+    def authorize(boundary, *, expected):
+        assert boundary
+        if expected != current:
+            raise AuthRequired("runtime_unavailable")
+        return expected
+
+    registry = BackendScopeTokenRegistry(clock=clock, authorize=authorize)
+    bearer = _scope_bearer()
+    grant = registry.register(
+        bearer,
+        connection_id="local",
+        expected=current,
+        ttl_seconds=60,
+    )
+
+    assert grant.connection_id == "local"
+    assert grant.auth == current
+    assert grant.valid_until == 160.0
+    assert bearer not in repr(registry._records)
+    assert all(isinstance(digest, bytes) and len(digest) == 32 for digest in registry._records)
+    assert registry.authorize(
+        bearer,
+        "dashboard.api.request",
+        connection_id="local",
+    ) == grant
+
+    with pytest.raises(AuthRequired):
+        registry.authorize(
+            "local:0123456789abcdef0123456789abcdef:7",
+            "dashboard.api.request",
+            connection_id="local",
+        )
+    with pytest.raises(AuthRequired):
+        registry.authorize(
+            bearer,
+            "dashboard.api.request",
+            connection_id="remote-a",
+        )
+
+
+def test_backend_scope_token_expires_revokes_and_rejects_owner_epoch_change():
+    clock = FakeClock(100.0)
+    current = AuthScope("0123456789abcdef0123456789abcdef", 7)
+
+    def authorize(_boundary, *, expected):
+        if expected != current:
+            raise AuthRequired("runtime_unavailable")
+        return expected
+
+    registry = BackendScopeTokenRegistry(clock=clock, authorize=authorize)
+    bearer = _scope_bearer()
+    grant = registry.register(
+        bearer,
+        connection_id="local",
+        expected=current,
+        ttl_seconds=30,
+    )
+
+    current = AuthScope(current.runtime_instance_id, current.epoch + 1)
+    with pytest.raises(AuthRequired, match="runtime_unavailable"):
+        registry.authorize_claim(grant.claim(), "dashboard.ws.message")
+
+    current = grant.auth
+    registry.revoke(connection_id="local", expected=grant.auth)
+    with pytest.raises(AuthRequired):
+        registry.authorize_claim(grant.claim(), "dashboard.ws.message")
+
+    replacement = registry.register(
+        _scope_bearer(b"B"),
+        connection_id="local",
+        expected=current,
+        ttl_seconds=30,
+    )
+    clock.now = replacement.valid_until
+    with pytest.raises(AuthRequired, match="session_expired"):
+        registry.authorize_claim(replacement.claim(), "dashboard.ws.message")
+
+
+def test_scope_token_control_frame_is_closed_and_rejects_schema_drift():
+    frame = {
+        "version": 1,
+        "operation": "register_scope_token",
+        "bearer": _scope_bearer(),
+        "connection_id": "local",
+        "runtime_instance_id": "0123456789abcdef0123456789abcdef",
+        "epoch": 7,
+        "ttl_seconds": 45,
+    }
+
+    parsed = parse_backend_scope_token_registration(frame)
+    assert parsed.connection_id == "local"
+    assert parsed.auth == AuthScope(frame["runtime_instance_id"], 7)
+    assert parsed.ttl_seconds == 45
+
+    with pytest.raises(AuthRequired):
+        parse_backend_scope_token_registration({**frame, "unknown": True})
+    with pytest.raises(AuthRequired):
+        parse_backend_scope_token_registration({**frame, "ttl_seconds": 61})
+
+
+def test_scope_token_control_eof_revokes_every_registered_bearer(monkeypatch):
+    from hermes_cli.client_auth import runtime
+
+    registered = threading.Event()
+    release_eof = threading.Event()
+    current = AuthScope("0123456789abcdef0123456789abcdef", 7)
+
+    def authorize(_boundary, *, expected):
+        assert expected == current
+        registered.set()
+        return expected
+
+    registry = BackendScopeTokenRegistry(authorize=authorize)
+    monkeypatch.setattr(runtime, "backend_scope_tokens", registry)
+    bearer = _scope_bearer()
+    frame = json.dumps(
+        {
+            "version": 1,
+            "operation": "register_scope_token",
+            "bearer": bearer,
+            "connection_id": "local",
+            "runtime_instance_id": current.runtime_instance_id,
+            "epoch": current.epoch,
+            "ttl_seconds": 60,
+        }
+    ).encode("utf-8") + b"\n"
+
+    class BlockingStream:
+        def __init__(self):
+            self.first = True
+
+        def readline(self, _limit):
+            if self.first:
+                self.first = False
+                return frame
+            release_eof.wait(timeout=2)
+            return b""
+
+    control = threading.Thread(
+        target=runtime._run_backend_scope_token_control,
+        args=(BlockingStream(),),
+    )
+    control.start()
+    assert registered.wait(timeout=2)
+    assert registry.authorize(bearer, "dashboard.api.request").auth == current
+
+    release_eof.set()
+    control.join(timeout=2)
+    assert not control.is_alive()
+    with pytest.raises(AuthRequired):
+        registry.authorize(bearer, "dashboard.api.request")
 
 
 def status_at(*, server_second: int = 0, expiry_second: int = 120) -> SessionStatus:

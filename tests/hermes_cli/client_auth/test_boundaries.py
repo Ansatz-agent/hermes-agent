@@ -8,6 +8,7 @@ import pytest
 
 from hermes_cli.client_auth.runtime import (
     AuthRequired,
+    BackendScopeTokenRegistry,
     RuntimeConsumer,
     RuntimeSnapshot,
     clear_runtime_consumer,
@@ -382,6 +383,46 @@ async def test_gateway_http_middleware_returns_401_before_handler_state():
 
 
 @pytest.mark.asyncio
+async def test_desktop_gateway_http_requires_registered_scope_header(monkeypatch):
+    from gateway.platforms import api_server
+
+    if api_server.client_runtime_auth_middleware is None:
+        pytest.skip("aiohttp optional dependency is not installed")
+
+    scope = _install_authenticated_consumer()
+    registry = BackendScopeTokenRegistry()
+    bearer = "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI"
+    registry.register(
+        bearer,
+        connection_id="local",
+        expected=scope,
+        ttl_seconds=60,
+    )
+    monkeypatch.setenv("HERMES_DESKTOP", "1")
+    monkeypatch.setattr(api_server, "backend_scope_tokens", registry)
+
+    class Request:
+        def __init__(self, headers):
+            self.headers = headers
+
+    async def handler(_request):
+        return "allowed"
+
+    assert (
+        await api_server.client_runtime_auth_middleware(
+            Request({"X-Hermes-Scope-Token": bearer}),
+            handler,
+        )
+        == "allowed"
+    )
+    denied = await api_server.client_runtime_auth_middleware(
+        Request({}),
+        lambda _request: pytest.fail("missing scope bearer reached handler"),
+    )
+    assert denied.status == 401
+
+
+@pytest.mark.asyncio
 async def test_dashboard_api_rejects_before_downstream_handler():
     from hermes_cli.web_server import client_runtime_auth_middleware
 
@@ -392,6 +433,50 @@ async def test_dashboard_api_rejects_before_downstream_handler():
         lambda _request: pytest.fail("locked dashboard request reached handler"),
     )
 
+    assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_desktop_dashboard_api_requires_the_registered_scope_header(monkeypatch):
+    from hermes_cli import web_server
+
+    scope = _install_authenticated_consumer()
+    registry = BackendScopeTokenRegistry()
+    bearer = "QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUE"
+    registry.register(
+        bearer,
+        connection_id="local",
+        expected=scope,
+        ttl_seconds=60,
+    )
+    monkeypatch.setattr(web_server, "backend_scope_tokens", registry)
+
+    async def handler(request):
+        assert request.state.desktop_scope_authenticated is True
+        assert request.state.desktop_scope_grant.auth == scope
+        return "allowed"
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(desktop_scope_tokens_required=True)
+    )
+    allowed = SimpleNamespace(
+        app=app,
+        headers={"X-Hermes-Session-Token": bearer},
+        state=SimpleNamespace(),
+        url=SimpleNamespace(path="/api/status"),
+    )
+    denied = SimpleNamespace(
+        app=app,
+        headers={},
+        state=SimpleNamespace(),
+        url=SimpleNamespace(path="/api/status"),
+    )
+
+    assert await web_server.client_runtime_auth_middleware(allowed, handler) == "allowed"
+    response = await web_server.client_runtime_auth_middleware(
+        denied,
+        lambda _request: pytest.fail("missing scope bearer reached handler"),
+    )
     assert response.status_code == 401
 
 

@@ -95,7 +95,11 @@ from gateway.platforms.base import (
 from agent.redact import redact_sensitive_text
 from agent.interrupt_compat import request_hard_interrupt
 from gateway.readiness import collect_runtime_readiness
-from hermes_cli.client_auth.runtime import AuthRequired, require_authorized
+from hermes_cli.client_auth.runtime import (
+    AuthRequired,
+    backend_scope_tokens,
+    require_authorized,
+)
 
 from agent.secret_scope import UnscopedSecretError as _UnscopedSecretError
 from agent.secret_scope import get_secret as _scoped_get_secret
@@ -989,12 +993,24 @@ class ResponseStore:
 
 _CORS_HEADERS = {
     "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-    "Access-Control-Allow-Headers": "Authorization, Content-Type, Idempotency-Key",
+    "Access-Control-Allow-Headers": (
+        "Authorization, Content-Type, Idempotency-Key, "
+        "X-Hermes-Scope-Token"
+    ),
 }
 
 
-def _require_client_runtime_request() -> None:
+def _require_client_runtime_request(request=None) -> None:
     """Framework-independent auth boundary shared by every API request."""
+    if os.environ.get("HERMES_DESKTOP") == "1":
+        if request is None:
+            raise AuthRequired("runtime_unavailable")
+        bearer = request.headers.get("X-Hermes-Scope-Token", "")
+        backend_scope_tokens.authorize(
+            bearer,
+            "gateway.api.request",
+        )
+        return
     require_authorized("gateway.api.request")
 
 
@@ -1003,7 +1019,7 @@ if AIOHTTP_AVAILABLE:
     async def client_runtime_auth_middleware(request, handler):
         """Reject every API request when the central Hermes login is locked."""
         try:
-            _require_client_runtime_request()
+            _require_client_runtime_request(request)
         except AuthRequired:
             return web.json_response(
                 {
