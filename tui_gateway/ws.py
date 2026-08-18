@@ -396,6 +396,11 @@ async def handle_ws(ws: Any) -> None:
             req_id = req.get("id") if isinstance(req, dict) else None
             req_method = req.get("method") if isinstance(req, dict) else None
             try:
+                # A WebSocket can outlive the account lease that admitted it.
+                # Re-check immediately before every RPC so owner EOF, logout,
+                # or session rejection closes the stale connection instead of
+                # leaving it alive to submit more work.
+                require_authorized("tui.ws.request")
                 resp = await asyncio.to_thread(server.dispatch, req, transport)
             except AuthRequired:
                 disconnect_reason = "hermes_login_required"

@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process'
 
 import { buildAppEnv, createSandbox, launchDesktop, type Sandbox } from './fixtures'
-import { allowErrorBanners, expect, test, type ElectronApplication, type Page } from './test'
+import { allowErrorBanners, type ElectronApplication, expect, type Page, test } from './test'
 
 let app: ElectronApplication | null = null
 let page: Page | null = null
@@ -35,7 +35,10 @@ test('unauthenticated startup exposes only account login and rejects every capab
 
   await expect(page!.locator('main section h1')).toContainText('Hermes')
   await expect(page!.getByText('https://c2sml.cn/agent')).toBeVisible()
-  await expect(page!.locator('input[name="username"]')).toBeVisible()
+  // Initial online verification has its own 5s deadline. Give the UI enough
+  // room to transition from "checking" to the signed-out form on a cold CI
+  // start instead of racing Playwright's default 5s assertion timeout.
+  await expect(page!.locator('input[name="username"]')).toBeVisible({ timeout: 15_000 })
   await expect(page!.locator('input[name="password"]')).toHaveAttribute('type', 'password')
   await expect(page!.locator('main section button')).toHaveCount(2)
   await expect(page!.locator('main section button[type="submit"]')).toBeVisible()

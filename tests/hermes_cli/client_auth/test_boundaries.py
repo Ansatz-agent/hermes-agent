@@ -351,12 +351,33 @@ def test_cron_tick_rejects_before_opening_scheduler_state(monkeypatch):
 
 
 @pytest.mark.parametrize("boundary", ["dispatch", "handle_request"])
-def test_tui_rpc_rejects_before_parsing_or_scheduling_request(boundary):
+def test_tui_rpc_rejects_before_scheduling_request(monkeypatch, boundary):
     from tui_gateway import server
 
+    called = []
+    monkeypatch.setitem(
+        server._methods,
+        "session.create",
+        lambda _rid, _params: called.append("handler") or {"result": {}},
+    )
     clear_runtime_consumer()
-    with pytest.raises(AuthRequired, match="runtime_unavailable"):
-        getattr(server, boundary)(_ExplodingMapping())
+    response = getattr(server, boundary)({
+        "jsonrpc": "2.0",
+        "id": "locked-request",
+        "method": "session.create",
+        "params": {},
+    })
+
+    assert response == {
+        "jsonrpc": "2.0",
+        "id": "locked-request",
+        "error": {
+            "code": 20,
+            "message": "AUTH_REQUIRED",
+            "data": {"reason": "runtime_unavailable"},
+        },
+    }
+    assert called == []
 
 
 def test_gateway_http_rejects_without_optional_http_runtime():
