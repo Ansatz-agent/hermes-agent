@@ -296,7 +296,7 @@ git commit -m "feat: gate ink tui with account login"
 
 ### Task 7: Enforce explicit SSH host trust before remote password login
 
-- [ ] **Step 1: Write failing host-key policy tests**
+- [x] **Step 1: Write failing host-key policy tests**
 
 Extend `ssh-config.test.ts`, `ssh-connection.test.ts`, and `ssh-bootstrap-coordinator.test.ts` with real command-construction behavior:
 
@@ -307,7 +307,7 @@ Extend `ssh-config.test.ts`, `ssh-connection.test.ts`, and `ssh-bootstrap-coordi
 - cancel leaves known-hosts unchanged;
 - no account password path contains `accept-new`, `StrictHostKeyChecking=no`, or an empty `UserKnownHostsFile`.
 
-- [ ] **Step 2: Run and capture the current `accept-new` failure**
+- [x] **Step 2: Run and capture the current `accept-new` failure**
 
 ```bash
 cd apps/desktop
@@ -316,7 +316,7 @@ npx vitest run --project electron electron/ssh-config.test.ts electron/ssh-conne
 
 Expected: FAIL because `ssh-connection.ts` currently emits `StrictHostKeyChecking=accept-new`.
 
-- [ ] **Step 3: Implement explicit TOFU and strict reconnects**
+- [x] **Step 3: Implement explicit TOFU and strict reconnects**
 
 Change `baseSshOptions` to `StrictHostKeyChecking=yes`. Add a typed `UnknownHostKey` result containing host, algorithm, and SHA256 fingerprint but no command stderr. Add an Electron confirmation dialog before any credential-bearing operation; its copy must state that `ssh-keyscan` is not proof of identity and require the user to compare the fingerprint with a trusted administrator/out-of-band source. Re-read the effective key immediately before append and reject if it differs from the displayed fingerprint. Use an owner-only temporary file in the same directory, `fsync`, rename, and mode `0600`; preserve existing known-host entries.
 
