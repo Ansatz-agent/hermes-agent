@@ -1,5 +1,5 @@
-import type { FirstRunSetupDecision } from './first-run-setup-gate'
 import { type ConnectionScope, requireAuthenticatedConnectionScope } from './auth-bridge'
+import type { FirstRunSetupDecision } from './first-run-setup-gate'
 
 export interface PrimaryBackendStartupOptions<Backend, RuntimeBackend, Remote, Connection> {
   connectionScope: ConnectionScope
