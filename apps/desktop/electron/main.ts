@@ -249,13 +249,19 @@ import {
   SESSION_WINDOW_MIN_WIDTH
 } from './session-windows'
 import { ensureSpawnHelperExecutable } from './spawn-helper-perms'
-import { createBootstrapCoordinator, sshConfigFingerprint } from './ssh-bootstrap-coordinator'
-import { collectSshConfigHosts, parseSshGOutput } from './ssh-config'
+import {
+  buildUnknownHostConfirmation,
+  createBootstrapCoordinator,
+  openSshWithExplicitHostTrust,
+  sshConfigFingerprint
+} from './ssh-bootstrap-coordinator'
+import { appendKnownHostKeyAtomic, collectSshConfigHosts, parseSshGOutput } from './ssh-config'
 import {
   buildInteractiveSshArgs,
   createSshProbeConnection,
   pickLocalPort,
   redactSecrets,
+  scanSshHostKey,
   SshConnection
 } from './ssh-connection'
 import { createStreamThrottle } from './stream-throttle'
@@ -8900,7 +8906,30 @@ async function bootstrapSshConnectionInner(profile, sshConfig, reuseToken, sourc
       }
     )
     removeForceCleanup = lease.onForceCleanup(() => ssh.close())
-    await ssh.open()
+    await openSshWithExplicitHostTrust({
+      append: async candidate => appendKnownHostKeyAtomic(candidate.knownHostsEntry),
+      confirm: async candidate => {
+        const copy = buildUnknownHostConfirmation(candidate)
+
+        const options = {
+          buttons: copy.buttons,
+          cancelId: 0,
+          defaultId: 0,
+          detail: copy.detail,
+          message: copy.message,
+          noLink: true,
+          title: copy.title,
+          type: 'warning' as const
+        }
+
+        const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+        const answer = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options)
+
+        return answer.response === 1
+      },
+      openStrict: () => ssh.open(),
+      scan: () => scanSshHostKey({ host: sshConfig.host, port: sshConfig.port })
+    })
   }
 
   let result

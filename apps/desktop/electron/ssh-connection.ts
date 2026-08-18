@@ -19,9 +19,10 @@
  *     interactivity we fail fast and tell the user to load the key into their
  *     agent.
  *
- * Host-key policy: StrictHostKeyChecking=accept-new (trust-on-first-use, log
- * the fingerprint), never `no`. A host-key *change* fails closed with the
- * verbatim OpenSSH error surfaced to the UI.
+ * Host-key policy: StrictHostKeyChecking=yes for every SSH invocation. An
+ * unknown key is scanned and confirmed by the Electron coordinator before it
+ * is atomically added to the normal user known-hosts file. Changed keys fail
+ * closed and never reach authentication.
  *
  * Every operation is raced against a hard timeout. A half-open TCP connection
  * after laptop sleep can leave ssh hanging indefinitely rather than erroring;
@@ -40,6 +41,8 @@ const DEFAULT_CONNECT_TIMEOUT_MS = 15_000
 const DEFAULT_EXEC_TIMEOUT_MS = 20_000
 const DEFAULT_FORWARD_TIMEOUT_MS = 15_000
 const CONTROL_PERSIST_SECONDS = 300
+const DEFAULT_KEYSCAN_TIMEOUT_MS = 5_000
+const MAX_KEYSCAN_OUTPUT_BYTES = 256 * 1024
 
 // eslint-disable-next-line no-control-regex -- deliberately reject control chars in ssh targets
 const _CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/
@@ -170,7 +173,7 @@ function baseSshOptions(controlPath, connectTimeoutMs?) {
     '-o',
     'BatchMode=yes',
     '-o',
-    'StrictHostKeyChecking=accept-new',
+    'StrictHostKeyChecking=yes',
     '-o',
     'ExitOnForwardFailure=yes',
     '-o',
@@ -280,6 +283,7 @@ const SSH_ERROR = {
   UNREACHABLE: 'unreachable',
   AUTH_FAILED: 'auth-failed',
   HOST_KEY_CHANGED: 'host-key-changed',
+  UNKNOWN_HOST_KEY: 'unknown-host-key',
   TIMEOUT: 'timeout',
   UNKNOWN: 'unknown'
 }
@@ -288,6 +292,12 @@ const SSH_ERROR = {
 // so check it before generic auth.
 function classifySshError(stderr) {
   const text = String(stderr || '')
+
+  if (
+    /No [A-Z0-9-]+ host key is known for .*strict checking|authenticity of host .* can't be established/i.test(text)
+  ) {
+    return SSH_ERROR.UNKNOWN_HOST_KEY
+  }
 
   if (
     /REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed|Offending (?:key|ECDSA|RSA|ED25519)/i.test(
@@ -320,6 +330,9 @@ function sshErrorMessage(kind, conn, stderr?) {
   const host = target(conn.user, conn.host)
 
   switch (kind) {
+    case SSH_ERROR.UNKNOWN_HOST_KEY:
+      return `The SSH host key for ${host} is not trusted yet. Verify its fingerprint before connecting.`
+
     case SSH_ERROR.HOST_KEY_CHANGED:
       return (
         `The host key for ${host} has CHANGED since you last connected. ` +
@@ -344,6 +357,154 @@ function sshErrorMessage(kind, conn, stderr?) {
 
     default:
       return `SSH error connecting to ${host}: ${String(stderr || '').trim() || 'unknown failure'}`
+  }
+}
+
+function scanHostLabel(host, port) {
+  return Number(port) === 22 ? host : `[${host}]:${Number(port)}`
+}
+
+function scanSshHostKey(config, options: any = {}) {
+  const port = config?.port ? Number(config.port) : 22
+  validateSshTarget(config?.host, '', port)
+  const timeoutMs = options.timeoutMs ?? DEFAULT_KEYSCAN_TIMEOUT_MS
+  const timeoutSeconds = Math.max(1, Math.ceil(timeoutMs / 1_000))
+  const args = ['-T', String(timeoutSeconds)]
+
+  if (port !== 22) {
+    args.push('-p', String(port))
+  }
+
+  args.push(config.host)
+  const spawnFn = options.spawnFn || spawn
+
+  return new Promise((resolve, reject) => {
+    let child
+
+    try {
+      child = spawnFn('ssh-keyscan', args, {
+        shell: false,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        windowsHide: true
+      })
+    } catch {
+      reject(new Error('Could not read the SSH host key.'))
+
+      return
+    }
+
+    let stdout = Buffer.alloc(0)
+    let settled = false
+
+    const fail = () => {
+      if (settled) {
+        return
+      }
+
+      settled = true
+      clearTimeout(timer)
+
+      try {
+        child.kill('SIGKILL')
+      } catch {
+        void 0
+      }
+
+      reject(new Error('Could not read the SSH host key.'))
+    }
+
+    const timer = setTimeout(fail, timeoutMs)
+    child.stdout?.on('data', chunk => {
+      const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))
+
+      if (stdout.length + bytes.length > MAX_KEYSCAN_OUTPUT_BYTES) {
+        fail()
+
+        return
+      }
+
+      stdout = Buffer.concat([stdout, bytes])
+    })
+    // stderr is deliberately drained and discarded. Scanner diagnostics are
+    // never returned to Renderer-visible errors or lifecycle logs.
+    child.stderr?.on('data', () => {})
+    child.on('error', fail)
+    child.on('close', code => {
+      if (settled) {
+        return
+      }
+
+      settled = true
+      clearTimeout(timer)
+
+      if (code !== 0) {
+        reject(new Error('Could not read the SSH host key.'))
+
+        return
+      }
+
+      try {
+        resolve(parseScannedHostKey(stdout.toString('utf8'), config.host, port))
+      } catch {
+        reject(new Error('Could not read the SSH host key.'))
+      }
+    })
+  })
+}
+
+function parseScannedHostKey(output, host, port) {
+  const candidates: Array<{ algorithm: string; key: string }> = []
+
+  for (const rawLine of String(output || '').split(/\r?\n/)) {
+    const line = rawLine.trim()
+
+    if (!line || line.startsWith('#')) {
+      continue
+    }
+
+    const parts = line.split(/\s+/)
+    const algorithm = parts[1]
+    const key = parts[2]
+
+    if (
+      parts.length < 3 ||
+      !/^[A-Za-z0-9@._+-]+$/.test(algorithm) ||
+      !/^[A-Za-z0-9+/]+={0,2}$/.test(key)
+    ) {
+      continue
+    }
+
+    candidates.push({ algorithm, key })
+  }
+
+  const preference = ['ssh-ed25519', 'ecdsa-sha2-nistp256', 'ecdsa-sha2-nistp384', 'ecdsa-sha2-nistp521', 'ssh-rsa']
+  candidates.sort((left, right) => {
+    const leftIndex = preference.indexOf(left.algorithm)
+    const rightIndex = preference.indexOf(right.algorithm)
+
+    return (leftIndex === -1 ? preference.length : leftIndex) - (rightIndex === -1 ? preference.length : rightIndex)
+  })
+  const selected = candidates[0]
+
+  if (!selected) {
+    throw new Error('No valid SSH host key was returned.')
+  }
+
+  const keyBytes = Buffer.from(selected.key, 'base64')
+
+  if (keyBytes.length === 0) {
+    throw new Error('No valid SSH host key was returned.')
+  }
+
+  const fingerprint = crypto.createHash('sha256').update(keyBytes).digest('base64').replace(/=+$/, '')
+  const label = scanHostLabel(host, port)
+
+  return {
+    algorithm: selected.algorithm,
+    fingerprint: `SHA256:${fingerprint}`,
+    host,
+    knownHostsEntry: `${label} ${selected.algorithm} ${selected.key}`,
+    port
   }
 }
 
@@ -911,6 +1072,7 @@ export {
   pickLocalPort,
   redactSecrets,
   runSsh,
+  scanSshHostKey,
   SSH_ERROR,
   SshConnection,
   sshErrorMessage,

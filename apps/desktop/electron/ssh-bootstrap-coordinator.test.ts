@@ -2,7 +2,12 @@ import assert from 'node:assert/strict'
 
 import { test } from 'vitest'
 
-import { createBootstrapCoordinator, sshConfigFingerprint } from './ssh-bootstrap-coordinator'
+import {
+  buildUnknownHostConfirmation,
+  createBootstrapCoordinator,
+  openSshWithExplicitHostTrust,
+  sshConfigFingerprint
+} from './ssh-bootstrap-coordinator'
 
 function deferred() {
   let resolve
@@ -190,4 +195,143 @@ test('a generation started during cancelAndWait cannot run before the drain comp
   await assert.rejects(old, (error: any) => error.kind === 'superseded')
   assert.equal(await next, 'new')
   assert.deepEqual(events, ['old-start', 'new-start'])
+})
+
+const unknownHost = {
+  algorithm: 'ssh-ed25519',
+  fingerprint: 'SHA256:displayed',
+  host: 'box',
+  knownHostsEntry: 'box ssh-ed25519 ZGlzcGxheWVk',
+  port: 22
+}
+
+test('unknown host confirmation warns that keyscan is not identity proof', () => {
+  const copy = buildUnknownHostConfirmation(unknownHost)
+
+  assert.match(copy.detail, /ssh-keyscan is not proof of identity/i)
+  assert.match(copy.detail, /trusted administrator|out-of-band/i)
+  assert.match(copy.detail, /SHA256:displayed/)
+})
+
+test('unknown host requires confirmation, re-scan, atomic append, then strict retry', async () => {
+  const events: string[] = []
+  let opens = 0
+  const unknownError: any = new Error('unknown')
+  unknownError.kind = 'unknown-host-key'
+
+  await openSshWithExplicitHostTrust({
+    append: async candidate => {
+      events.push(`append:${candidate.fingerprint}`)
+    },
+    confirm: async candidate => {
+      events.push(`confirm:${candidate.fingerprint}`)
+
+      return true
+    },
+    openStrict: async () => {
+      opens += 1
+      events.push('open-strict')
+
+      if (opens === 1) {
+        throw unknownError
+      }
+    },
+    scan: async () => {
+      events.push('scan')
+
+      return unknownHost
+    }
+  })
+
+  assert.deepEqual(events, [
+    'open-strict',
+    'scan',
+    'confirm:SHA256:displayed',
+    'scan',
+    'append:SHA256:displayed',
+    'open-strict'
+  ])
+})
+
+test('cancel leaves known_hosts unchanged and never retries or starts auth bridge', async () => {
+  const events: string[] = []
+  const unknownError: any = new Error('unknown')
+  unknownError.kind = 'unknown-host-key'
+
+  await assert.rejects(
+    async () => {
+      await openSshWithExplicitHostTrust({
+        append: async () => events.push('append'),
+        confirm: async () => false,
+        openStrict: async () => {
+          events.push('open-strict')
+          throw unknownError
+        },
+        scan: async () => unknownHost
+      })
+      events.push('auth-bridge')
+    },
+    (error: any) => error.kind === 'host-key-untrusted'
+  )
+
+  assert.deepEqual(events, ['open-strict'])
+})
+
+test('changed host key fails closed before scan, append, or auth bridge', async () => {
+  const events: string[] = []
+  const changedError: any = new Error('changed')
+  changedError.kind = 'host-key-changed'
+
+  await assert.rejects(async () => {
+    await openSshWithExplicitHostTrust({
+      append: async () => events.push('append'),
+      confirm: async () => {
+        events.push('confirm')
+
+        return true
+      },
+      openStrict: async () => {
+        events.push('open-strict')
+        throw changedError
+      },
+      scan: async () => {
+        events.push('scan')
+
+        return unknownHost
+      }
+    })
+    events.push('auth-bridge')
+  }, changedError)
+
+  assert.deepEqual(events, ['open-strict'])
+})
+
+test('key change between confirmation and append fails closed', async () => {
+  const first = unknownHost
+
+  const changed = {
+    ...unknownHost,
+    fingerprint: 'SHA256:changed',
+    knownHostsEntry: 'box ssh-ed25519 Y2hhbmdlZA=='
+  }
+
+  const candidates = [first, changed]
+  const unknownError: any = new Error('unknown')
+  unknownError.kind = 'unknown-host-key'
+  let appended = false
+
+  await assert.rejects(
+    openSshWithExplicitHostTrust({
+      append: async () => {
+        appended = true
+      },
+      confirm: async () => true,
+      openStrict: async () => {
+        throw unknownError
+      },
+      scan: async () => candidates.shift()!
+    }),
+    (error: any) => error.kind === 'host-key-changed'
+  )
+  assert.equal(appended, false)
 })

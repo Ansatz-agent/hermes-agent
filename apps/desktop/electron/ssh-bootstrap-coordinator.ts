@@ -1,5 +1,63 @@
 import crypto from 'node:crypto'
 
+type UnknownHostKey = {
+  algorithm: string
+  fingerprint: string
+  host: string
+  knownHostsEntry: string
+  port: number
+}
+
+function buildUnknownHostConfirmation(candidate: UnknownHostKey) {
+  return {
+    title: 'Verify SSH host key',
+    message: `Verify the SSH host key for ${candidate.host}:${candidate.port}`,
+    detail:
+      `Fingerprint: ${candidate.fingerprint}\nAlgorithm: ${candidate.algorithm}\n\n` +
+      'ssh-keyscan is not proof of identity. Compare this fingerprint with a trusted administrator ' +
+      'or another trusted out-of-band source before choosing Trust Host Key.',
+    buttons: ['Cancel', 'Trust Host Key']
+  }
+}
+
+async function openSshWithExplicitHostTrust({ append, confirm, openStrict, scan }) {
+  try {
+    await openStrict()
+
+    return
+  } catch (error: any) {
+    if (error?.kind !== 'unknown-host-key') {
+      throw error
+    }
+  }
+
+  const displayed: UnknownHostKey = await scan()
+  const confirmed = await confirm(displayed)
+
+  if (!confirmed) {
+    const error: any = new Error('SSH host key was not trusted.')
+    error.kind = 'host-key-untrusted'
+    throw error
+  }
+
+  const effective: UnknownHostKey = await scan()
+
+  if (
+    displayed.host !== effective.host ||
+    displayed.port !== effective.port ||
+    displayed.algorithm !== effective.algorithm ||
+    displayed.fingerprint !== effective.fingerprint ||
+    displayed.knownHostsEntry !== effective.knownHostsEntry
+  ) {
+    const error: any = new Error('The SSH host key changed before it could be trusted.')
+    error.kind = 'host-key-changed'
+    throw error
+  }
+
+  await append(effective)
+  await openStrict()
+}
+
 function sshConfigFingerprint(scope, config) {
   const parts = [
     scope,
@@ -128,4 +186,10 @@ function createBootstrapCoordinator() {
   return { active, cancel, cancelAll, cancelAndWait, forceCleanupAll, pending, promises, start }
 }
 
-export { createBootstrapCoordinator, sshConfigFingerprint }
+export {
+  buildUnknownHostConfirmation,
+  createBootstrapCoordinator,
+  openSshWithExplicitHostTrust,
+  sshConfigFingerprint,
+  type UnknownHostKey
+}

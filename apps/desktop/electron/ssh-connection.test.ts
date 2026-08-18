@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import crypto from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -19,6 +20,7 @@ import {
   hostArgs,
   redactSecrets,
   runSsh,
+  scanSshHostKey,
   SSH_ERROR,
   SshConnection,
   sshErrorMessage,
@@ -80,17 +82,19 @@ test('controlSocketPath default base stays under sun_path even with the temp-lis
   assert.ok(!p.includes('/var/folders/'), 'default base must not be os.tmpdir() on macOS')
 })
 
-test('baseSshOptions carries the house ControlMaster/BatchMode/accept-new policy', () => {
+test('baseSshOptions uses strict checking and the normal user known-hosts files', () => {
   const opts = baseSshOptions('/tmp/x.sock', 15000)
   const joined = opts.join(' ')
   assert.match(joined, /ControlPath=\/tmp\/x\.sock/)
   assert.match(joined, /ControlMaster=auto/)
   assert.match(joined, /ControlPersist=\d+/)
   assert.match(joined, /BatchMode=yes/)
-  assert.match(joined, /StrictHostKeyChecking=accept-new/)
+  assert.match(joined, /StrictHostKeyChecking=yes/)
   assert.match(joined, /ExitOnForwardFailure=yes/)
   assert.match(joined, /ConnectTimeout=15/)
   assert.ok(!joined.includes('StrictHostKeyChecking=no'), 'never disables host-key checking')
+  assert.ok(!joined.includes('accept-new'), 'never writes a host key before explicit confirmation')
+  assert.ok(!joined.includes('UserKnownHostsFile='), 'uses the normal user known-hosts files')
 })
 
 test('hostArgs adds -p only for non-default port and -i only with a key', () => {
@@ -170,6 +174,13 @@ test('classifySshError detects a changed host key (fail-closed)', () => {
   assert.equal(classifySshError('Offending ECDSA key in /home/u/.ssh/known_hosts:5'), SSH_ERROR.HOST_KEY_CHANGED)
 })
 
+test('classifySshError distinguishes an unknown key from a changed key', () => {
+  assert.equal(
+    classifySshError('No ED25519 host key is known for box and you have requested strict checking.'),
+    SSH_ERROR.UNKNOWN_HOST_KEY
+  )
+})
+
 test('classifySshError detects auth failure', () => {
   assert.equal(classifySshError('Permission denied (publickey).'), SSH_ERROR.AUTH_FAILED)
   assert.equal(classifySshError('Too many authentication failures'), SSH_ERROR.AUTH_FAILED)
@@ -239,6 +250,45 @@ function scriptedSpawn(scripts) {
 
   return fn
 }
+
+test('scanSshHostKey uses bounded non-shell ssh-keyscan and computes SHA256 locally', async () => {
+  const key = Buffer.from('host-key-material')
+  const calls: any[] = []
+
+  const spawnFn: any = (command, args, options) => {
+    calls.push({ args, command, options })
+
+    return fakeChild({ stdout: `[box]:2222 ssh-ed25519 ${key.toString('base64')}\n` })
+  }
+
+  const candidate = await scanSshHostKey(
+    { host: 'box', port: 2222 },
+    { spawnFn, timeoutMs: 1_000 }
+  )
+
+  const digest = crypto.createHash('sha256').update(key).digest('base64').replace(/=+$/, '')
+  assert.deepEqual(candidate, {
+    algorithm: 'ssh-ed25519',
+    fingerprint: `SHA256:${digest}`,
+    host: 'box',
+    knownHostsEntry: `[box]:2222 ssh-ed25519 ${key.toString('base64')}`,
+    port: 2222
+  })
+  assert.equal(calls[0].command, 'ssh-keyscan')
+  assert.equal(calls[0].options.shell, false)
+  assert.deepEqual(calls[0].options.stdio, ['ignore', 'pipe', 'pipe'])
+  assert.deepEqual(calls[0].args, ['-T', '1', '-p', '2222', 'box'])
+})
+
+test('scanSshHostKey never promotes ssh-keyscan stderr into its result or error', async () => {
+  const stderrSentinel = 'scanner-secret-stderr'
+  const spawnFn: any = () => fakeChild({ code: 1, stderr: stderrSentinel })
+
+  await assert.rejects(
+    scanSshHostKey({ host: 'box', port: 22 }, { spawnFn, timeoutMs: 1_000 }),
+    error => !String(error).includes(stderrSentinel)
+  )
+})
 
 test('open() establishes the master when not already alive', async () => {
   // `-O check` fails first (not alive) → master opens (code 0). Track which
