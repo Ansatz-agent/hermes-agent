@@ -117,6 +117,7 @@ Logout 顺序固定为：先递增 epoch 并锁定本地运行时，再尽力 PO
 
 ```text
 hermes_cli/client_auth/
+  __init__.py   空文件；不得 re-export 或触发第三方 import
   guard.py      stdlib-only；精确 argv 白名单和入口预检
   runtime.py    Broker、leader、存储模式、lease、epoch 与边界校验
   client.py     固定 Django HTTP、CSRF、Session 和错误分类
@@ -128,10 +129,10 @@ hermes_cli/client_auth/
 不创建独立的 AuthGuard、AuthMonitor、AuthBoundary、EntrypointRegistry、Store 或 Docker Supervisor 状态对象。`runtime.py` 是唯一认证真值；所有执行位置调用同一个原语：
 
 ```text
-require_authorized(boundary)
+require_authorized(boundary, expected=scope)
 ```
 
-`guard.py` 保持 stdlib-only，必须能在完整 CLI parser、插件与 Agent 模块导入前运行。安全边界复检在 `runtime.py`，避免把完整运行时依赖带入启动预检。
+`client_auth/__init__.py` 保持空文件，`guard.py` 保持 stdlib-only，必须能在完整 CLI parser、插件与 Agent 模块导入前运行。安全边界复检在 `runtime.py`，避免把完整运行时依赖带入启动预检。
 
 `runtime.py` 内部只有一套租约协议和两种私有 secret owner：`VaultOwner` 与 `MemoryOwner`。两者发布同样的状态记录、使用同样的活性连接、epoch 和边界校验；区别只在 Cookie 存放位置。不能分别实现“leader 状态机”和“Broker 状态机”。
 
@@ -140,6 +141,8 @@ Ink TUI 复用现有 `tui_gateway` JSON-RPC 增加登录方法，不再启动第
 `bridge.py` 的 JSONL 动词同样精确限制为 `{status, login, logout}`，只接受版本化的固定字段 schema；禁止调用方传入任意 URL、Python 模块、函数、命令或扩展 RPC。Bridge 不提供账户创建、邀请、密码找回或修改能力，也不能绕过 Broker 的同名动词契约。
 
 ## 7. 两种 Session 所有权模式
+
+解析器先连接当前 OS 用户下任何仍存活的 owner；只有确认不存在 live owner 后，才根据首次创建者的实际执行环境选举 `VaultOwner` 或 `MemoryOwner`。因此 SSH/headless 调用方可以复用已经运行的本地图形 `VaultOwner`，不能因调用方环境与 owner mode 不同而再建第二个 owner 或拒绝已有有效 owner。mode 只在新 owner 选举时决定，在该 generation 内固定，且不存在公开 flag、配置或环境变量 override。
 
 ### 7.1 本地图形环境：OS vault
 
@@ -224,7 +227,7 @@ Socket/Pipe 名和无秘密状态可以存在于 runtime 目录，Session 不写
 
 `runtime_instance_id` 是每次 owner 启动时生成的 128-bit CSPRNG nonce。`boot_id` 只用于确认 `valid_until` 的单调时钟域；`username`、`checked_at` 和 `leader_pid` 只用于展示或诊断。这些字段都不直接参与授权相等比较。
 
-`valid_until` 使用包含系统休眠时间的 boot-relative 单调时钟；boot ID 变化、时钟不可比较或 deadline 到期均视为过期。状态缺失、不可读、owner/mode 错误、schema 不符、活性连接断开，或 `(runtime_instance_id, epoch)` 不等，一律 `locked`。
+`valid_until` 使用包含系统休眠时间的 boot-relative 单调时钟；boot ID 变化、时钟不可比较或 deadline 到期均视为过期。状态缺失、不可读、owner 身份错误、schema 不符、活性连接断开，或 `(runtime_instance_id, epoch)` 不等，一律 `locked`。
 
 验证周期固定为 60 秒并带小抖动。网络重试只能发生在当前 `valid_until` 之前，不能延长 deadline。周期检查发现失败后立即递增 epoch 并锁定，不增加额外 grace。60 秒是显式撤销检测窗口，不是离线授权。
 
@@ -247,7 +250,9 @@ Socket/Pipe 名和无秘密状态可以存在于 runtime 目录，Session 不写
 - cron tick 与 job 开始
 - MCP 和 ACP 请求
 
-授权必须对 `(runtime_instance_id, epoch)` 做相等比较，不能只比较 epoch，也不能使用大于等于。所有 HTTP/WS token、worker 授权和边界上下文都携带该二元组。HTTP/WS token 本体必须是高熵、不可伪造的随机秘密或服务端 HMAC；二元组只是绑定并由服务端校验的元数据，绝不能把可观察的二元组本身当作 bearer token。锁定、owner 换代或重新登录后，旧 worker、旧连接和旧 token 永远不能复活。
+授权必须对 `(runtime_instance_id, epoch)` 做相等比较，不能只比较 epoch，也不能使用大于等于。所有 HTTP/WS token、worker 授权和边界上下文都携带该二元组。只有同一进程刚取得当前 snapshot 后的即时入口/活性检查允许 `expected=None`；队列、并发、延迟、token 或跨进程边界缺少捕获的精确 scope 时必须作为编程错误 fail closed。HTTP/WS token 本体必须是高熵、不可伪造的随机秘密或服务端 HMAC；二元组只是绑定并由服务端校验的元数据，绝不能把可观察的二元组本身当作 bearer token。锁定、owner 换代或重新登录后，旧 worker、旧连接和旧 token 永远不能复活。
+
+工具调用的共享 chokepoint 是 `model_tools.handle_function_call`，无论调用来自 Agent、tool search、code execution 还是 Hermes Tools MCP，都必须在查找/执行工具前复检。`mcp_serve.py` 与 `agent/transports/hermes_tools_mcp_server.py` 还需在每个请求入口复检，确保长期 MCP 进程在 owner 撤销后不能继续读取 SessionDB/history 或调用工具。
 
 在途任务在下一个边界停止，不再产生新的外部副作用。已经完成且不可逆的外部操作不回滚。
 
@@ -319,7 +324,7 @@ Desktop 不把本机 Keychain Session 转发给远端，也不缓存远端 Sessi
 承载账户密码的 SSH 连接必须严格校验 host key：
 
 - 已知 key 必须精确匹配；变化时 hard fail。
-- 未知主机必须在 Desktop UI 显示 fingerprint，并由用户显式确认一次 TOFU；不得静默 `accept-new`。
+- 未知主机必须在 Desktop UI 显示 fingerprint，明确说明 `ssh-keyscan` 本身不能证明主机身份，并要求用户通过可信管理员/带外渠道核对后显式确认一次 TOFU；不得静默 `accept-new`。
 - 该凭据路径禁止 `StrictHostKeyChecking=no`、自动接受未知主机或临时空 `UserKnownHostsFile`。
 - 实施 SSH 阶段前必须专项审计 `ssh-config.ts`、`ssh-connection.ts` 与 `ssh-bootstrap-coordinator.ts`；现有 `accept-new` 只能在改成显式确认后承载账户密码。
 

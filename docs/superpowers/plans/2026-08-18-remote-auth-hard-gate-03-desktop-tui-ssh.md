@@ -26,11 +26,11 @@
 - Create: `ui-tui/src/authGate.tsx`
 - Create: `ui-tui/src/__tests__/authGate.test.tsx`
 - Create: `tests/tui_gateway/test_account_auth.py`
-- Create: `docs/security/remote-auth-desktop-tui-ssh-evidence.md`
+- Create/append initial sections: `docs/security/remote-auth-release-evidence.md`
 - Modify: `apps/desktop/electron/main.ts`, `apps/desktop/electron/preload.ts`, `apps/desktop/electron/primary-backend-startup.ts`, `apps/desktop/electron/connection-registry.ts`, `apps/desktop/electron/profile-session-routing.ts`
 - Modify: `apps/desktop/electron/ssh-config.ts`, `apps/desktop/electron/ssh-connection.ts`, `apps/desktop/electron/ssh-bootstrap-coordinator.ts`
 - Modify: `apps/desktop/src/main.tsx`, `apps/desktop/src/app/index.tsx`
-- Modify locales: `apps/desktop/src/i18n/en.ts`, `apps/desktop/src/i18n/ja.ts`, `apps/desktop/src/i18n/zh.ts`, `apps/desktop/src/i18n/zh-hant.ts`
+- Modify locales: `apps/desktop/src/i18n/en.ts`, `apps/desktop/src/i18n/ja.ts`, `apps/desktop/src/i18n/zh.ts`, `apps/desktop/src/i18n/zh-hant.ts`; verify `apps/desktop/src/i18n/ar.ts` uses the intended English fallback.
 - Modify: `ui-tui/src/entry.tsx`, `ui-tui/src/app.tsx`, `ui-tui/src/gatewayClient.ts`, `tui_gateway/entry.py`, `tui_gateway/server.py`
 - Modify backend enforcement: `hermes_cli/client_auth/runtime.py`, `hermes_cli/web_server.py`, `gateway/platforms/api_server.py`
 
@@ -44,7 +44,7 @@ Create `apps/desktop/electron/auth-bridge.test.ts`. Inject a fake child-process 
 
 ```bash
 cd apps/desktop
-pnpm vitest run --project electron electron/auth-bridge.test.ts
+npx vitest run --project electron electron/auth-bridge.test.ts
 ```
 
 Expected: FAIL because `auth-bridge.ts` does not exist.
@@ -77,8 +77,8 @@ In `apps/desktop/electron/main.ts`, construct the bridge after the existing sign
 
 ```bash
 cd apps/desktop
-pnpm vitest run --project electron electron/auth-bridge.test.ts electron/primary-backend-startup.test.ts
-pnpm typecheck
+npx vitest run --project electron electron/auth-bridge.test.ts electron/primary-backend-startup.test.ts
+npm run typecheck
 cd ../..
 git diff --check
 git add apps/desktop/electron/auth-bridge.ts apps/desktop/electron/auth-bridge.test.ts apps/desktop/electron/primary-backend-startup.ts apps/desktop/electron/primary-backend-startup.test.ts apps/desktop/electron/main.ts
@@ -112,7 +112,7 @@ The full test must enumerate all channels registered by production registration 
 
 ```bash
 cd apps/desktop
-pnpm vitest run --project electron electron/guarded-ipc.test.ts
+npx vitest run --project electron electron/guarded-ipc.test.ts
 ```
 
 Expected: FAIL because handlers register directly through `ipcMain`.
@@ -138,9 +138,9 @@ Refactor `main.ts` registration into callable registration functions and pass th
 
 ```bash
 cd apps/desktop
-pnpm vitest run --project electron electron/guarded-ipc.test.ts
-pnpm lint
-pnpm typecheck
+npx vitest run --project electron electron/guarded-ipc.test.ts
+npm run lint
+npm run typecheck
 cd ../..
 git diff --check
 git add apps/desktop/electron/guarded-ipc.ts apps/desktop/electron/guarded-ipc.test.ts apps/desktop/electron/main.ts apps/desktop/electron/preload.ts apps/desktop/eslint.config.mjs
@@ -157,8 +157,8 @@ Create `apps/desktop/src/components/auth-gate.test.tsx` and `apps/desktop/e2e/au
 
 ```bash
 cd apps/desktop
-pnpm vitest run --project ui src/components/auth-gate.test.tsx
-pnpm vitest run --project electron electron/auth-coordinator.test.ts
+npx vitest run --project ui src/components/auth-gate.test.tsx
+npx vitest run --project electron electron/auth-coordinator.test.ts
 ```
 
 Expected: FAIL because the auth gate and coordinator do not exist.
@@ -171,15 +171,15 @@ Create `auth-gate.tsx` and wrap `apps/desktop/src/app/index.tsx` from `main.tsx`
 
 - [ ] **Step 4: Add complete locale messages**
 
-Add the same auth message keys to `en`, `ja`, `zh`, and `zh-hant`. Map reason codes to user-safe text. All other locales fall back to English. Add a catalog test proving no locale omits a key and no message suggests self-registration or self-service reset; the password-reset instruction must be “contact the server administrator”.
+Add the same auth message keys to `en`, `ja`, `zh`, and `zh-hant`. Map reason codes to user-safe text. All other locales fall back to English. Add a catalog test proving the required catalogs contain every key, explicitly load `ar.ts` and prove each missing Arabic auth key resolves to the English fallback, and prove no message suggests self-registration or self-service reset; the password-reset instruction must be “contact the server administrator”.
 
 - [ ] **Step 5: Run and commit**
 
 ```bash
 cd apps/desktop
-pnpm vitest run --project ui src/components/auth-gate.test.tsx src/i18n
-pnpm vitest run --project electron electron/auth-coordinator.test.ts electron/main-window-lifecycle.test.ts
-pnpm typecheck
+npx vitest run --project ui src/components/auth-gate.test.tsx src/i18n
+npx vitest run --project electron electron/auth-coordinator.test.ts electron/main-window-lifecycle.test.ts
+npm run typecheck
 cd ../..
 git diff --check
 git add apps/desktop/electron/auth-coordinator.ts apps/desktop/electron/auth-coordinator.test.ts apps/desktop/electron/main.ts apps/desktop/src/main.tsx apps/desktop/src/app/index.tsx apps/desktop/src/components/auth-gate.tsx apps/desktop/src/components/auth-gate.test.tsx apps/desktop/src/i18n/en.ts apps/desktop/src/i18n/ja.ts apps/desktop/src/i18n/zh.ts apps/desktop/src/i18n/zh-hant.ts apps/desktop/e2e/auth-hard-gate.spec.ts
@@ -196,7 +196,7 @@ Create `auth-scope-token.test.ts` and Python tests in `tests/hermes_cli/client_a
 
 ```bash
 cd apps/desktop
-pnpm vitest run --project electron electron/auth-scope-token.test.ts
+npx vitest run --project electron electron/auth-scope-token.test.ts
 cd ../..
 HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/hermes_cli/client_auth/test_runtime.py tests/gateway/test_api_server.py -q
 ```
@@ -215,7 +215,7 @@ Add behavior cases around the real `spawn` and `node-pty` helpers in `main.ts`. 
 
 ```bash
 cd apps/desktop
-pnpm vitest run --project electron electron/auth-scope-token.test.ts electron/backend-connection-state.test.ts electron/backend-ownership.test.ts
+npx vitest run --project electron electron/auth-scope-token.test.ts electron/backend-connection-state.test.ts electron/backend-ownership.test.ts
 cd ../..
 HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/hermes_cli/client_auth/test_runtime.py tests/gateway/test_api_server.py -q
 git diff --check
@@ -247,8 +247,8 @@ Persist only non-secret connection configuration. Add `connection_id + runtime_i
 
 ```bash
 cd apps/desktop
-pnpm vitest run --project electron electron/auth-coordinator.test.ts electron/connection-registry.test.ts electron/connection-apply.test.ts
-pnpm typecheck
+npx vitest run --project electron electron/auth-coordinator.test.ts electron/connection-registry.test.ts electron/connection-apply.test.ts
+npm run typecheck
 cd ../..
 git diff --check
 git add apps/desktop/electron/auth-coordinator.ts apps/desktop/electron/auth-coordinator.test.ts apps/desktop/electron/connection-registry.ts apps/desktop/electron/connection-registry.test.ts apps/desktop/electron/profile-session-routing.ts apps/desktop/electron/profile-session-routing.test.ts apps/desktop/electron/connection-apply.ts apps/desktop/electron/connection-apply.test.ts
@@ -270,7 +270,7 @@ Create `ui-tui/src/__tests__/authGate.test.tsx`. Render the form and assert user
 ```bash
 HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/tui_gateway/test_account_auth.py -q
 cd ui-tui
-pnpm vitest run src/__tests__/authGate.test.tsx src/__tests__/gatewayClient.test.ts
+npx vitest run src/__tests__/authGate.test.tsx src/__tests__/gatewayClient.test.ts
 ```
 
 Expected: FAIL because the gateway currently emits capability-ready state before account authentication.
@@ -286,8 +286,8 @@ Update `GatewayClient` with typed `authStatus`, `authLogin`, and `authLogout` me
 ```bash
 HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/tui_gateway/test_account_auth.py tests/hermes_cli/client_auth/test_guard.py -q
 cd ui-tui
-pnpm vitest run src/__tests__/authGate.test.tsx src/__tests__/gatewayClient.test.ts
-pnpm typecheck
+npx vitest run src/__tests__/authGate.test.tsx src/__tests__/gatewayClient.test.ts
+npm run typecheck
 cd ..
 git diff --check
 git add tui_gateway/entry.py tui_gateway/server.py tests/tui_gateway/test_account_auth.py ui-tui/src/authGate.tsx ui-tui/src/__tests__/authGate.test.tsx ui-tui/src/entry.tsx ui-tui/src/app.tsx ui-tui/src/gatewayClient.ts ui-tui/src/__tests__/gatewayClient.test.ts
@@ -302,7 +302,7 @@ Extend `ssh-config.test.ts`, `ssh-connection.test.ts`, and `ssh-bootstrap-coordi
 
 - known host uses `StrictHostKeyChecking=yes` and the normal user known-hosts files;
 - changed key fails closed and never starts auth bridge;
-- unknown host first runs `ssh-keyscan` through a bounded, non-shell spawn, computes the SHA256 fingerprint locally, and returns a confirmation request;
+- unknown host first runs `ssh-keyscan` through a bounded, non-shell spawn, computes the SHA256 fingerprint locally, and returns a confirmation request that clearly tells the user to verify the fingerprint through a trusted out-of-band source;
 - only an explicit UI confirmation atomically appends the exact key to the user known-hosts file with mode `0600`, then retries with `StrictHostKeyChecking=yes`;
 - cancel leaves known-hosts unchanged;
 - no account password path contains `accept-new`, `StrictHostKeyChecking=no`, or an empty `UserKnownHostsFile`.
@@ -311,14 +311,14 @@ Extend `ssh-config.test.ts`, `ssh-connection.test.ts`, and `ssh-bootstrap-coordi
 
 ```bash
 cd apps/desktop
-pnpm vitest run --project electron electron/ssh-config.test.ts electron/ssh-connection.test.ts electron/ssh-bootstrap-coordinator.test.ts
+npx vitest run --project electron electron/ssh-config.test.ts electron/ssh-connection.test.ts electron/ssh-bootstrap-coordinator.test.ts
 ```
 
 Expected: FAIL because `ssh-connection.ts` currently emits `StrictHostKeyChecking=accept-new`.
 
 - [ ] **Step 3: Implement explicit TOFU and strict reconnects**
 
-Change `baseSshOptions` to `StrictHostKeyChecking=yes`. Add a typed `UnknownHostKey` result containing host, algorithm, and SHA256 fingerprint but no command stderr. Add an Electron confirmation dialog before any credential-bearing operation. Re-read the effective key immediately before append and reject if it differs from the displayed fingerprint. Use an owner-only temporary file in the same directory, `fsync`, rename, and mode `0600`; preserve existing known-host entries.
+Change `baseSshOptions` to `StrictHostKeyChecking=yes`. Add a typed `UnknownHostKey` result containing host, algorithm, and SHA256 fingerprint but no command stderr. Add an Electron confirmation dialog before any credential-bearing operation; its copy must state that `ssh-keyscan` is not proof of identity and require the user to compare the fingerprint with a trusted administrator/out-of-band source. Re-read the effective key immediately before append and reject if it differs from the displayed fingerprint. Use an owner-only temporary file in the same directory, `fsync`, rename, and mode `0600`; preserve existing known-host entries.
 
 - [ ] **Step 4: Implement the remote auth-only bootstrap**
 
@@ -326,7 +326,7 @@ In `ssh-bootstrap-coordinator.ts`, the ordered remote flow is:
 
 1. verify/confirm host key;
 2. open the ControlMaster under strict checking;
-3. exec the packaged `python -m hermes_cli.client_auth.bridge --memory-owner` only;
+3. exec the packaged `python -m hermes_cli.client_auth.bridge` only; the private resolver first connects to any live owner for that remote OS user and, only if none exists, elects `MemoryOwner` from the SSH execution context;
 4. request remote status;
 5. if locked, send the bridge login JSON over child stdin;
 6. wait until the detached MemoryOwner endpoint is ready and authenticated;
@@ -338,8 +338,8 @@ The remote bridge detaches the broker from the login TTY and all inherited fds b
 
 ```bash
 cd apps/desktop
-pnpm vitest run --project electron electron/ssh-config.test.ts electron/ssh-connection.test.ts electron/ssh-bootstrap-coordinator.test.ts electron/auth-coordinator.test.ts
-pnpm typecheck
+npx vitest run --project electron electron/ssh-config.test.ts electron/ssh-connection.test.ts electron/ssh-bootstrap-coordinator.test.ts electron/auth-coordinator.test.ts
+npm run typecheck
 cd ../..
 git diff --check
 git add apps/desktop/electron/ssh-config.ts apps/desktop/electron/ssh-config.test.ts apps/desktop/electron/ssh-connection.ts apps/desktop/electron/ssh-connection.test.ts apps/desktop/electron/ssh-bootstrap-coordinator.ts apps/desktop/electron/ssh-bootstrap-coordinator.test.ts apps/desktop/electron/auth-coordinator.ts apps/desktop/electron/main.ts hermes_cli/client_auth/bridge.py hermes_cli/client_auth/runtime.py
@@ -352,10 +352,10 @@ git commit -m "feat: authenticate remote backends over strict ssh"
 
 ```bash
 cd apps/desktop
-pnpm typecheck
-pnpm lint
-pnpm test
-pnpm test:e2e -- e2e/auth-hard-gate.spec.ts
+npm run typecheck
+npm run lint
+npm test
+npm run test:e2e -- e2e/auth-hard-gate.spec.ts
 ```
 
 - [ ] **Step 2: Run TUI and Python integration suites**
@@ -364,7 +364,7 @@ pnpm test:e2e -- e2e/auth-hard-gate.spec.ts
 cd ../..
 HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/tui_gateway tests/hermes_cli/client_auth tests/gateway/test_api_server.py -q
 cd ui-tui
-pnpm check
+npm run check
 ```
 
 - [ ] **Step 3: Inspect secret-leak artifacts produced by tests**
@@ -373,11 +373,11 @@ Run the test harness with sentinel username, password, Session, and CSRF values,
 
 - [ ] **Step 4: Record and commit acceptance evidence**
 
-Create `docs/security/remote-auth-desktop-tui-ssh-evidence.md` with the tested commit, exact commands, pass/fail totals, native OS/SSH fixture used, and locations of redacted test artifacts. Record only test account labels and reason codes; do not include credentials, Cookies, bearer tokens, host private keys, or raw environment dumps.
+Create the initial Desktop/TUI/SSH sections of `docs/security/remote-auth-release-evidence.md` with the tested commit, exact commands, pass/fail totals, native OS/SSH fixture used, and locations of redacted test artifacts. Plan 4 extends this same file for server, background, container, and native-matrix acceptance rather than creating a second evidence authority. Record only test account labels and reason codes; do not include credentials, Cookies, bearer tokens, host private keys, or raw environment dumps.
 
 ```bash
 cd ../
 git diff --check
-git add docs/security/remote-auth-desktop-tui-ssh-evidence.md
+git add docs/security/remote-auth-release-evidence.md
 git commit -m "test: verify desktop tui and ssh auth gate"
 ```

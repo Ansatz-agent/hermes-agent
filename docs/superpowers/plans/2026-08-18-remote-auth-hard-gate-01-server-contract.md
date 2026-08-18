@@ -4,7 +4,7 @@
 
 **Goal:** Add a machine-readable Django Session endpoint with absolute non-sliding expiry while preserving administrator-only account distribution and all existing owner-scoped history behavior.
 
-**Architecture:** Keep the existing Django LoginView/LogoutView and Cookie contract. A custom LoginView stamps an absolute expiry datetime into the Session, and a read-only endpoint validates that timestamp without extending it; public account lifecycle routes remain absent, while Django Admin remains the only account-management surface.
+**Architecture:** Keep the existing Django LoginView/LogoutView and Cookie contract. A custom LoginView stamps an absolute expiry datetime into the Session, a read-only endpoint validates that timestamp without extending or mutating the Session, and a shared decorator applies the same absolute-expiry rule to every client-facing history/memory view while excluding Django Admin. Public account lifecycle routes remain absent, while Django Admin remains the only account-management surface.
 
 **Tech Stack:** Django 5.2.17, django-axes 8.3.1, SQLite, uv, Podman Compose, Django TestCase.
 
@@ -16,6 +16,7 @@
 - Create: `/opt/agent-history-portal/history/tests/test_client_session_api.py` — login, expiry, schema, route-absence, and non-renewal behavior.
 - Modify: `/opt/agent-history-portal/config/settings.py` — fixed absolute Session lifetime setting.
 - Modify: `/opt/agent-history-portal/config/urls.py` — use the custom LoginView and expose `api/session/`.
+- Modify: `/opt/agent-history-portal/history/views.py` — replace client-facing `login_required` decorators with the absolute Session decorator.
 - Modify: `/opt/agent-history-portal/history/tests/test_admin_auth.py` — complete administrator-only lifecycle regression set.
 - Modify: `/opt/agent-history-portal/OPERATIONS.md` — backup, deploy, smoke, rollback, and administrator reset notification procedure.
 
@@ -29,7 +30,7 @@ Run:
 ssh root@121.37.182.49 'cd /opt/agent-history-portal && test ! -d .git && grep -Fx .env .gitignore && test "$(stat -c %a .env)" = 600'
 ```
 
-Expected: `.env` is printed, all checks exit `0`, and no Git repository exists yet.
+Expected on the first run: `.env` is printed, all checks exit `0`, and no Git repository exists yet. This is a one-time characterization step; if a prior attempt already created `.git`, do not rerun initialization—resume from Step 4 and verify the recorded baseline instead.
 
 - [ ] **Step 2: Create a database backup and verify it before source changes**
 
@@ -117,8 +118,13 @@ class ClientSessionApiTests(TestCase):
         second = self.client.get(reverse("client-session")).json()
         self.assertEqual(first["session_expires_at"], second["session_expires_at"])
 
-    def test_status_checks_do_not_increment_axes(self):
+    def test_status_checks_do_not_increment_axes_after_failed_login(self):
+        self.client.post(
+            reverse("login"),
+            {"username": "alice", "password": "wrong-password"},
+        )
         before = AccessAttempt.objects.count()
+        self.assertGreater(before, 0)
         for _ in range(3):
             self.client.get(reverse("client-session"))
         self.assertEqual(AccessAttempt.objects.count(), before)
@@ -147,6 +153,27 @@ class ClientSessionApiTests(TestCase):
         response = self.client.get(reverse("client-session"))
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json(), {"authenticated": False})
+
+    def test_rejected_status_is_read_only_and_does_not_logout_admin(self):
+        admin = get_user_model().objects.create_superuser(
+            username="server-admin", password="safe-admin-pass-1"
+        )
+        self.client.force_login(admin)
+        session_key = self.client.session.session_key
+        self.assertEqual(self.client.get(reverse("client-session")).status_code, 401)
+        self.assertEqual(self.client.session.session_key, session_key)
+        self.assertEqual(self.client.get(reverse("admin:index")).status_code, 200)
+
+    def test_expired_absolute_session_cannot_read_memory_or_history(self):
+        self.login()
+        session = self.client.session
+        session["hermes_absolute_session_expires_at"] = (
+            timezone.now() - timedelta(seconds=1)
+        ).isoformat()
+        session.save()
+        for name in ("history:memory-pool", "history:session-list"):
+            with self.subTest(name=name):
+                self.assertEqual(self.client.get(reverse(name)).status_code, 302)
 ```
 
 - [ ] **Step 2: Run the test and verify the red state**
@@ -179,10 +206,11 @@ Create `history/auth_views.py` with:
 
 ```python
 from datetime import timedelta
+from functools import wraps
 
 from django.conf import settings
-from django.contrib.auth import logout
-from django.contrib.auth.views import LoginView
+from django.contrib.auth.decorators import login_required
+from django.contrib.auth.views import LoginView, redirect_to_login
 from django.http import JsonResponse
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -202,9 +230,27 @@ class HermesLoginView(LoginView):
         return response
 
 
-def _reject(request):
-    if request.user.is_authenticated:
-        logout(request)
+def _absolute_expiry(request):
+    value = request.session.get(ABSOLUTE_EXPIRY_KEY)
+    return parse_datetime(value) if isinstance(value, str) else None
+
+
+def has_valid_absolute_session(request):
+    expires_at = _absolute_expiry(request)
+    return expires_at is not None and expires_at > timezone.now()
+
+
+def hermes_session_required(view):
+    @wraps(view)
+    def absolute_checked(request, *args, **kwargs):
+        if not has_valid_absolute_session(request):
+            return redirect_to_login(request.get_full_path(), settings.LOGIN_URL)
+        return view(request, *args, **kwargs)
+
+    return login_required(absolute_checked)
+
+
+def _reject():
     response = JsonResponse({"authenticated": False}, status=401)
     response["Cache-Control"] = "no-store"
     return response
@@ -213,11 +259,10 @@ def _reject(request):
 @require_GET
 def client_session(request):
     if not request.user.is_authenticated:
-        return _reject(request)
-    value = request.session.get(ABSOLUTE_EXPIRY_KEY)
-    expires_at = parse_datetime(value) if isinstance(value, str) else None
+        return _reject()
+    expires_at = _absolute_expiry(request)
     if expires_at is None or expires_at <= timezone.now():
-        return _reject(request)
+        return _reject()
     response = JsonResponse({
         "authenticated": True,
         "username": request.user.get_username(),
@@ -228,9 +273,21 @@ def client_session(request):
     return response
 ```
 
-- [ ] **Step 5: Register only the fixed login, logout, and session routes**
+Django 5.2.17's `SessionBase.set_expiry(datetime)` converts the datetime to an ISO string before the default JSON serializer saves the Session; the deployed container source was checked explicitly. Keep the datetime form so the framework Cookie/session expiry and `ABSOLUTE_EXPIRY_KEY` share the same fixed instant.
 
-Update `config/urls.py` to:
+- [ ] **Step 5: Apply absolute expiry to client-facing history and memory views**
+
+In `history/views.py`, replace the import of Django's `login_required` with:
+
+```python
+from .auth_views import hermes_session_required
+```
+
+Replace every `@login_required` that currently exists in `history/views.py` with `@hermes_session_required`. Leave `healthz` and every view that is currently public unchanged; do not expand the protected-view set by guessing from URL names. Do not apply this decorator to `admin_site`; Django Admin retains its separate administrator Session and never requires the Hermes client timestamp.
+
+- [ ] **Step 6: Register only the fixed login, logout, and session routes**
+
+Read the current `config/urls.py`, replace only the existing `accounts/login/` view with `HermesLoginView`, add only `path("api/session/", client_session, name="client-session")`, and retain every unrelated existing route in its current order. The resulting auth imports and three auth routes are:
 
 ```python
 from django.contrib.auth import views as auth_views
@@ -239,16 +296,14 @@ from django.urls import include, path
 from history.admin import admin_site
 from history.auth_views import HermesLoginView, client_session
 
-urlpatterns = [
-    path("admin/", admin_site.urls),
-    path("accounts/login/", HermesLoginView.as_view(), name="login"),
-    path("accounts/logout/", auth_views.LogoutView.as_view(), name="logout"),
-    path("api/session/", client_session, name="client-session"),
-    path("", include("history.urls")),
-]
+path("accounts/login/", HermesLoginView.as_view(), name="login"),
+path("accounts/logout/", auth_views.LogoutView.as_view(), name="logout"),
+path("api/session/", client_session, name="client-session"),
 ```
 
-- [ ] **Step 6: Run the endpoint and existing auth tests**
+Confirm the file does not include `django.contrib.auth.urls`; do not replace the whole `urlpatterns` list.
+
+- [ ] **Step 7: Run the endpoint and existing auth tests**
 
 Run:
 
@@ -258,10 +313,10 @@ cd /opt/agent-history-portal && uv run python manage.py test history.tests.test_
 
 Expected: all tests pass; repeated status calls return the identical `session_expires_at`.
 
-- [ ] **Step 7: Commit the endpoint**
+- [ ] **Step 8: Commit the endpoint**
 
 ```bash
-git add config/settings.py config/urls.py history/auth_views.py history/tests/test_client_session_api.py
+git add config/settings.py config/urls.py history/auth_views.py history/views.py history/tests/test_client_session_api.py
 git commit -m "feat: add absolute client session endpoint"
 ```
 
@@ -401,7 +456,11 @@ systemctl --no-pager --full status agent-history-portal.service
 
 Expected: unit is active and the container health check becomes healthy.
 
-- [ ] **Step 5: Run anonymous and authenticated HTTPS smoke checks**
+- [ ] **Step 5: Have an administrator create the disposable smoke-test account**
+
+From `/agent/admin/`, a server superuser creates one uniquely labelled, non-staff, non-superuser account solely for this deployment check. Generate and transfer its initial password through the approved protected channel; never place it in a command argument, transcript, Git, log, or general-purpose chat. Record only the non-identifying test-account label and the responsible administrator.
+
+- [ ] **Step 6: Run anonymous and authenticated HTTPS smoke checks**
 
 Run anonymous checks:
 
@@ -412,9 +471,13 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://c2sml.cn/agent/accounts/passwo
 
 Expected: first response is `401 application/json` with `{"authenticated":false}`; second prints `404`.
 
-Use a temporary Cookie jar and a non-admin test account through the documented CSRF form flow, then verify the authenticated endpoint returns exactly four keys and no Cookie value. Credentials must enter through an interactive prompt or protected stdin, never argv or shell history.
+Use a temporary Cookie jar and the administrator-created non-admin account through the documented CSRF form flow, then verify the authenticated endpoint returns exactly four keys and no Cookie value. Credentials must enter through an interactive prompt or protected stdin, never argv or shell history.
 
-- [ ] **Step 6: Prove rollback inputs are recorded**
+- [ ] **Step 7: Disable or delete the disposable account**
+
+Immediately after the smoke checks, the server administrator disables or deletes the temporary account through `/agent/admin/`, confirms that its existing Session now receives `401`, and destroys the temporary Cookie jar. The client gains no endpoint for this lifecycle action.
+
+- [ ] **Step 8: Prove rollback inputs are recorded**
 
 Run:
 

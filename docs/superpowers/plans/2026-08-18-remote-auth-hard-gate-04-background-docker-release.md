@@ -21,13 +21,15 @@
 - Create: `docker/s6-rc.d/user/contents.d/hermes-auth-runtime`
 - Create: `docker/s6-rc.d/dashboard/dependencies.d/hermes-auth-runtime`
 - Create: `docker/s6-rc.d/main-hermes/dependencies.d/hermes-auth-runtime`
-- Create: `scripts/check_auth_release.py`
-- Create: `docs/security/remote-auth-release-evidence.md`
+- Create: `scripts/check_auth_native_artifacts.py`
+- Modify/extend: `docs/security/remote-auth-release-evidence.md`
 - Modify: `hermes_cli/client_auth/runtime.py`, `hermes_cli/gateway.py`, `hermes_cli/web_server.py`, `hermes_cli/cron.py`, `hermes_cli/kanban.py`, `hermes_cli/mcp_startup.py`
 - Modify: `gateway/run.py`, `gateway/platforms/api_server.py`, `cron/scheduler.py`, `acp_adapter/entry.py`, `acp_adapter/server.py`, `run_agent.py`
+- Verify shared MCP/tool boundaries from Plan 2: `model_tools.py`, `mcp_serve.py`, `agent/transports/hermes_tools_mcp_server.py`
 - Modify: `hermes_cli/service_manager.py`, `scripts/hermes-gateway`, `scripts/install.sh`, `scripts/install.ps1`
 - Modify: `hermes_cli/container_boot.py`, `docker/entrypoint-dispatch.sh`, `docker/entrypoint.sh`, `docker/stage2-hook.sh`, `docker/s6-rc.d/dashboard/run`, `docker/s6-rc.d/main-hermes/run`
 - Modify tests: `tests/hermes_cli/test_container_boot.py`, `tests/docker/test_s6_profile_gateway_integration.py`, `tests/gateway/test_api_server.py`, `tests/cron/test_scheduler.py`, `tests/acp/test_entry.py`
+- Verify boundary tests: `tests/test_model_tools.py`, `tests/test_mcp_serve.py`, `tests/agent/transports/test_hermes_tools_mcp_server.py`
 - Modify CI: `.github/workflows/tests.yml`, `.github/workflows/tests-os.yml`, `.github/workflows/docker.yml`
 
 ### Task 1: Define noninteractive `locked-waiting` behavior
@@ -42,6 +44,8 @@ Create `tests/hermes_cli/client_auth/test_background_modes.py`. Launch the real 
 - emits only state, reason code, and “run `hermes login`” guidance.
 
 The test uses injectable real boundaries and subprocess event capture; it must not inspect production source text.
+
+Reuse the production locked-start harness created in Plan 2's `tests/hermes_cli/client_auth/test_entrypoints.py`; extend its fixtures/assertions for resident `locked-waiting` services instead of creating another entrypoint harness or another authority list.
 
 - [ ] **Step 2: Run and record the first unauthorized side effect**
 
@@ -121,9 +125,9 @@ Cron advances or records the scheduled fire according to its existing exactly-on
 - [ ] **Step 4: Run and commit**
 
 ```bash
-HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/hermes_cli/client_auth/test_service_locked_waiting.py tests/gateway/test_systemd_notify.py tests/gateway/test_systemd_watchdog_lifecycle.py tests/cron/test_scheduler.py tests/cron/test_execution_ledger.py -q
+HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/hermes_cli/client_auth/test_service_locked_waiting.py tests/test_model_tools.py tests/test_mcp_serve.py tests/agent/transports/test_hermes_tools_mcp_server.py tests/gateway/test_systemd_notify.py tests/gateway/test_systemd_watchdog_lifecycle.py tests/cron/test_scheduler.py tests/cron/test_execution_ledger.py -q
 git diff --check
-git add hermes_cli/client_auth/runtime.py gateway/run.py gateway/platforms/api_server.py gateway/systemd_notify.py cron/scheduler.py acp_adapter/server.py tests/hermes_cli/client_auth/test_service_locked_waiting.py tests/gateway/test_systemd_notify.py tests/gateway/test_systemd_watchdog_lifecycle.py tests/cron/test_scheduler.py tests/cron/test_execution_ledger.py
+git add hermes_cli/client_auth/runtime.py gateway/run.py gateway/platforms/api_server.py gateway/systemd_notify.py cron/scheduler.py acp_adapter/server.py tests/hermes_cli/client_auth/test_service_locked_waiting.py tests/test_model_tools.py tests/test_mcp_serve.py tests/agent/transports/test_hermes_tools_mcp_server.py tests/gateway/test_systemd_notify.py tests/gateway/test_systemd_watchdog_lifecycle.py tests/cron/test_scheduler.py tests/cron/test_execution_ledger.py
 git commit -m "feat: propagate auth revocation to services"
 ```
 
@@ -158,16 +162,18 @@ git commit -m "feat: make host services auth aware"
 
 - [ ] **Step 1: Change container reconciliation tests to the new invariant**
 
-Update `tests/hermes_cli/test_container_boot.py`. For default and named profiles whose prior `gateway_state.json` is `running`, assert:
+Update `tests/hermes_cli/test_container_boot.py`. For default and named profiles whose prior `gateway_state.json` is `running`, call the real keyword-only API and assert:
 
 ```python
 actions = reconcile_profile_gateways(
     hermes_home=hermes_home,
-    service_manager=manager,
+    scandir=scandir,
+    dry_run=False,
     container_argv=["/init"],
 )
-assert actions["coder"].desired == "running"
-assert actions["coder"].started is False
+coder = next(action for action in actions if action.profile == "coder")
+assert coder.prior_state == "running"
+assert coder.action == "registered"
 assert (scandir / "gateway-coder" / "down").exists()
 ```
 
@@ -183,7 +189,7 @@ Expected: FAIL because current reconciliation removes `down` for prior running g
 
 - [ ] **Step 3: Implement down-only reconciliation**
 
-Change `container_boot.py` so every call to `register_profile_gateway` uses `start=False`. Return both `desired` and `started=False` in the action record. Do not overwrite `gateway_state.json` merely because auth is locked. Modify static service definitions and `stage2-hook.sh` so dashboard, main Hermes, serve, and cron capability slots begin down as well. `entrypoint-dispatch.sh` must enter the s6 auth-runtime topology; it must not exec an ordinary Hermes CLI first.
+Change `container_boot.py` so every call to the existing registration helper uses `start=False`. Preserve the real `list[ReconcileAction]` API and its fields; prior desired state remains in `prior_state`, while a registered-down slot reports `action="registered"`. Do not invent `desired`/`started` fields and do not overwrite `gateway_state.json` merely because auth is locked. Modify static service definitions and `stage2-hook.sh` so dashboard, main Hermes, serve, and cron capability slots begin down as well. `entrypoint-dispatch.sh` must enter the s6 auth-runtime topology; it must not exec an ordinary Hermes CLI first.
 
 - [ ] **Step 4: Keep independent entry guards**
 
@@ -272,9 +278,9 @@ git commit -m "test: verify docker auth lifecycle"
 
 ### Task 7: Add native transport and service CI coverage
 
-- [ ] **Step 1: Create a release check that composes existing behavior tests**
+- [ ] **Step 1: Create only the native-artifact schema validator**
 
-Create `scripts/check_auth_release.py`. It reads `entrypoints.json`, invokes `scripts/check_auth_entrypoints.py --check`, runs every production entry locked-start harness, verifies static help parity, and checks that all native jobs supplied an artifact with these keys:
+Create `scripts/check_auth_native_artifacts.py`. It has one responsibility: validate that all native jobs supplied a JSON artifact with these keys and accepted values:
 
 ```json
 {
@@ -286,7 +292,7 @@ Create `scripts/check_auth_release.py`. It reads `entrypoints.json`, invokes `sc
 }
 ```
 
-It fails if a platform is missing, if a runner fakes `sys.platform`, or if a production entry has no real locked-start result.
+It fails if a platform is missing, a field/schema/value is invalid, or duplicate platform artifacts disagree. It does not run tests, scan entrypoints, verify help, or reimplement locked-start assertions. CI invokes the existing entrypoint scanner, static-help checker, and Plan 2 production locked-start tests directly, leaving one authority for each invariant.
 
 - [ ] **Step 2: Define the native matrix in the existing CI workflow**
 
@@ -298,6 +304,8 @@ Add jobs on actual Linux, macOS, and Windows runners:
 
 Each job runs the same owner parity, lease, entry, background, and secret-artifact tests. No test monkeypatches the platform identity.
 
+Each native job writes the artifact from tests running on that actual runner. The aggregator validates artifact-declared platform against CI-provided runner metadata; it does not infer or fake another `sys.platform`.
+
 - [ ] **Step 3: Add the Docker job**
 
 Build the release image, run `tests/docker/test_auth_hard_gate.py`, archive process/port/redaction artifacts, and require it for merge. The job must run with a non-root Hermes UID and real s6-overlay.
@@ -308,14 +316,14 @@ Build the release image, run `tests/docker/test_auth_hard_gate.py`, archive proc
 HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/hermes_cli/client_auth -q
 ../../.venv/bin/python scripts/check_auth_entrypoints.py --check
 ../../.venv/bin/python scripts/generate_auth_free_help.py --check
-../../.venv/bin/python scripts/check_auth_release.py --local
+../../.venv/bin/python scripts/check_auth_native_artifacts.py --allow-partial-local .auth-artifacts
 git diff --check
 ```
 
 Stage the exact workflow files changed plus the release checker and commit:
 
 ```bash
-git add scripts/check_auth_release.py .github/workflows/tests.yml .github/workflows/tests-os.yml .github/workflows/docker.yml
+git add scripts/check_auth_native_artifacts.py .github/workflows/tests.yml .github/workflows/tests-os.yml .github/workflows/docker.yml
 git commit -m "ci: require native auth hard gate matrix"
 ```
 
@@ -335,10 +343,10 @@ HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/hermes_cli/clien
 
 ```bash
 cd apps/desktop
-pnpm check
-pnpm test:e2e -- e2e/auth-hard-gate.spec.ts
+npm run check
+npm run test:e2e -- e2e/auth-hard-gate.spec.ts
 cd ../../ui-tui
-pnpm check
+npm run check
 ```
 
 - [ ] **Step 4: Run release entry and secret scans**
@@ -347,7 +355,8 @@ pnpm check
 cd ..
 ../../.venv/bin/python scripts/check_auth_entrypoints.py --check
 ../../.venv/bin/python scripts/generate_auth_free_help.py --check
-../../.venv/bin/python scripts/check_auth_release.py --local
+HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/hermes_cli/client_auth/test_entrypoints.py -q
+../../.venv/bin/python scripts/check_auth_native_artifacts.py .auth-artifacts
 git diff --check
 git status --short
 ```

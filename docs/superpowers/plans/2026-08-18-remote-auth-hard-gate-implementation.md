@@ -33,7 +33,7 @@ The approved specification spans four independently reviewable delivery plans. E
 | Desktop bootstrap, default-deny IPC, HTTP/WS scope tokens, Ink login, connection isolation, strict SSH | Plan 3 |
 | Noninteractive `locked-waiting`, host services, s6/Docker lifecycle, native CI, full release evidence | Plan 4 |
 
-The final Plan 4 acceptance gate composes all four plans. A phase is not complete merely because its own unit tests pass; it must also preserve administrator-only account distribution, the five-shape unauthenticated CLI whitelist, and zero capability activity before authentication.
+The final Plan 4 acceptance gate composes all four plans. A phase is not complete merely because its own unit tests pass; it must also preserve administrator-only account distribution, the five-shape unauthenticated CLI whitelist, and zero capability activity before authentication. Checkpoints B and C are development-only fail-closed states: some services may exit `20` until Plan 4 adds `locked-waiting`, so neither checkpoint may be shipped independently.
 
 ## Locked cross-plan interfaces
 
@@ -118,7 +118,7 @@ HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh <test-path> -q
 Desktop tests run from `apps/desktop`:
 
 ```bash
-pnpm vitest run <test-path>
+npx vitest run <test-path>
 ```
 
 The final release gate is not satisfied by source-text assertions. It must start every discovered production entrypoint against a locked runtime and observe exit `20`, `AUTH_REQUIRED`, or an auth-only shell with zero capability process/network activity.

@@ -4,7 +4,7 @@
 
 **Goal:** Build the shared Python authentication owner/runtime and make every Python/CLI entry fail closed before Hermes capability imports or side effects.
 
-**Architecture:** `guard.py` is stdlib-only and classifies raw argv before recovery, profiles, config, parser, or plugins. `client.py` owns the fixed Django HTTP contract; `runtime.py` owns one state machine with `VaultOwner` and `MemoryOwner`; `bridge.py` exposes only three JSONL verbs for Desktop. Entrypoint discovery and real locked-start tests prevent future bypasses.
+**Architecture:** `client_auth/__init__.py` is empty and `guard.py` is stdlib-only, so raw argv is classified before recovery, profiles, config, parser, plugins, or third-party imports. `client.py` owns the fixed Django HTTP contract; `runtime.py` owns one state machine with `VaultOwner` and `MemoryOwner`; `bridge.py` exposes only three JSONL verbs for Desktop. Entrypoint discovery, real locked-start tests, and a guard at the shared `model_tools.handle_function_call` dispatch chokepoint prevent direct-script and indirect-tool bypasses.
 
 **Tech Stack:** Python 3.11+, httpx 0.28.1, keyring 25.7.0, pywin32, Unix sockets, Windows Named Pipes, pytest.
 
@@ -29,8 +29,9 @@
 - Create: `tests/hermes_cli/client_auth/test_entrypoints.py`
 - Create: `tests/hermes_cli/client_auth/test_account_commands.py`
 - Create: `tests/hermes_cli/client_auth/test_boundaries.py`
-- Modify: `pyproject.toml`, `uv.lock`, `hermes_cli/main.py`, `hermes_cli/_startup_fast.py`, `hermes_cli/subcommands/auth.py`, `hermes_cli/subcommands/login.py`, `hermes_cli/subcommands/logout.py`, `run_agent.py`, `acp_adapter/entry.py`, `tui_gateway/entry.py`
-- Modify boundary files: `agent/tool_executor.py`, `agent/agent_runtime_helpers.py`, `gateway/platforms/api_server.py`, `cron/scheduler.py`, `hermes_cli/web_server.py`, `acp_adapter/server.py`
+- Modify: `pyproject.toml`, `uv.lock`, `hermes_cli/main.py`, `hermes_cli/_startup_fast.py`, `hermes_cli/subcommands/auth.py`, `hermes_cli/subcommands/login.py`, `hermes_cli/subcommands/logout.py`, `run_agent.py`, `acp_adapter/entry.py`, `tui_gateway/entry.py`, `mcp_serve.py`
+- Modify boundary files: `model_tools.py`, `agent/tool_executor.py`, `agent/agent_runtime_helpers.py`, `agent/transports/hermes_tools_mcp_server.py`, `gateway/platforms/api_server.py`, `cron/scheduler.py`, `hermes_cli/web_server.py`, `acp_adapter/server.py`
+- Modify boundary tests: `tests/test_model_tools.py`, `tests/test_mcp_serve.py`, `tests/agent/transports/test_hermes_tools_mcp_server.py`, `tests/integration/test_batch_runner.py`, `tests/test_mini_swe_runner.py`
 
 ### Task 1: Implement the fixed Django HTTP client
 
@@ -229,7 +230,7 @@ Expected: FAIL because `runtime.py` and its types do not exist.
 
 - [ ] **Step 3: Implement immutable state and one authorization primitive**
 
-Create `hermes_cli/client_auth/runtime.py` with the shared `AuthState`, `AuthScope`, and `RuntimeSnapshot` types from the master plan, plus:
+Create `hermes_cli/client_auth/__init__.py` as an empty file (comments/docstring only if necessary; no imports or re-exports). Create `hermes_cli/client_auth/runtime.py` with the shared `AuthState`, `AuthScope`, and `RuntimeSnapshot` types from the master plan, plus:
 
 ```python
 AUTH_EXIT_CODE = 20
@@ -282,6 +283,8 @@ class RuntimeSnapshot:
 ```
 
 Add a process-global consumer that keeps an atomic snapshot, a dedicated reader thread/task, and an exclusive owner connection. `require_authorized(boundary, expected=None)` must perform a zero-timeout liveness probe before reading the snapshot and must lock on EOF, reader death, boot mismatch, deadline expiry, schema failure, or exact scope mismatch.
+
+`expected=None` is permitted only for the immediate entry/liveness check in the same process that just obtained the current snapshot. Every queued, deferred, concurrent, tokenized, or cross-process boundary—including workers, delegates, kanban jobs, MCP/ACP requests, gateway messages, cron jobs, and tool calls—must capture and pass the exact `AuthScope`; omitting it at those boundaries is a programming error that fails closed.
 
 When converting the server response to a lease, parse both `server_time` and `session_expires_at` as timezone-aware datetimes, compute `absolute_remaining = session_expires_at - server_time`, and set `valid_until = min(monotonic_now + LEASE_SECONDS, monotonic_now + absolute_remaining)`. Retain the original absolute timestamp for the owner generation; refresh may shorten this deadline but can never extend it past that timestamp. Non-positive remaining time locks immediately. Wall-clock changes after conversion never lengthen the monotonic deadline.
 
@@ -414,7 +417,7 @@ class MemoryOwner:
 
 The owner schedules validation 57–60 seconds after each success using an injected CSPRNG jitter source, always at or before the current `valid_until`. A transient retry may occur only before that same deadline and never changes it. If no success arrives by the deadline, or the server returns TLS, network, 5xx, 429, invalid schema, or invalid Session at the scheduled check, increment epoch and lock immediately; there is no extra grace. Tests use an injected monotonic clock and jitter source, not real sleeps.
 
-Owner mode is not a public option. The packaged Desktop local bridge requests `VaultOwner`; its SSH remote bridge and container service request `MemoryOwner`; an interactive CLI under `SSH_CONNECTION`, inside the Hermes container, or in a genuinely headless Linux session with no graphical session uses `MemoryOwner`; a local macOS/Windows desktop session and a graphical Linux session use `VaultOwner`. If that graphical session's vault is locked or unavailable, authentication fails with `vault_unavailable` and never falls back to MemoryOwner or a file. Mode is fixed for an owner generation, published in its non-secret state record, and a consumer expecting the other mode fails closed. Tests cover every resolver input without allowing a CLI flag, config key, `HERMES_HOME`, or server URL override.
+Owner mode is not a public option. Resolution always tries to connect to any already-live owner for the current OS user first, regardless of whether the caller is graphical, SSH, or container-launched. Only when no live owner exists does the resolver elect a new one: the packaged Desktop local bridge creates `VaultOwner`; an SSH remote bridge, container service, interactive CLI under `SSH_CONNECTION`, or genuinely headless Linux session creates `MemoryOwner`; a local macOS/Windows desktop session and a graphical Linux session create `VaultOwner`. This preserves exactly one owner per OS user and avoids rejecting a valid live `VaultOwner` merely because the newest caller arrived through SSH. If a newly elected graphical owner's vault is locked or unavailable, authentication fails with `vault_unavailable` and never falls back to MemoryOwner or a file. Mode remains fixed for that owner generation and is published in its non-secret state record. Tests cover live-owner-first resolution and every owner-election input without allowing a CLI flag, config key, `HERMES_HOME`, or server URL override.
 
 - [ ] **Step 4: Implement native owner endpoints without fallback transport**
 
@@ -493,7 +496,7 @@ def test_every_shape_variant_is_protected(argv):
     assert classify_raw_argv(argv).auth_free is False
 ```
 
-Add a subprocess test importing `hermes_cli.main` with locked runtime paths and assert recovery/profile/config/parser modules are absent from `sys.modules` when a protected command exits `20`.
+Add a subprocess test importing `hermes_cli.main` with locked runtime paths and assert recovery/profile/config/parser modules are absent from `sys.modules` when a protected command exits `20`. Extend the import-weight test to import both `hermes_cli.client_auth` and `hermes_cli.client_auth.guard`; `client_auth/__init__.py` must remain empty (comments/docstring only) with no re-exports or third-party imports, because Python executes it before loading `guard.py`.
 
 - [ ] **Step 2: Run and verify the red state**
 
@@ -542,29 +545,11 @@ def enforce_raw_argv(argv: Sequence[str]) -> None:
 
 Create `scripts/generate_auth_free_help.py` that imports the real parser in a build/test process, captures `parser.format_help()`, and atomically writes `hermes_cli/client_auth/static_help.txt`. Add `scripts/generate_auth_free_help.py --check` to compare without writing. Update `hermes_cli/main.py` so the only pre-guard help path reads this packaged text file using stdlib path operations.
 
-- [ ] **Step 5: Reorder `hermes_cli/main.py` exactly**
+- [ ] **Step 5: Reorder `hermes_cli/main.py` without dropping bootstrap behavior**
 
-The module sequence becomes:
+Preserve these existing startup operations byte-for-byte unless relocation is required: the `try/except ModuleNotFoundError` around `hermes_bootstrap`, the import **and call** to `suppress_platform_ver_console()`, `os`/`sys`, the inline script-mode project-root bootstrap, and the `_ensure_project_root_on_path_fast()` behavior. Immediately after that stdlib-only safe bootstrap, handle `try_fast_version()` and packaged static help, then import `client_auth.guard` and call `enforce_raw_argv(sys.argv[1:])`.
 
-```python
-import hermes_bootstrap
-from hermes_cli._subprocess_compat import suppress_platform_ver_console
-from hermes_cli import _startup_fast
-
-if _startup_fast.try_fast_version():
-    raise SystemExit(0)
-if _startup_fast.try_static_help():
-    raise SystemExit(0)
-
-from hermes_cli.client_auth.guard import enforce_raw_argv
-enforce_raw_argv(sys.argv[1:])
-
-from hermes_cli import _early_recovery as _early_recovery_mod
-_early_recovery_mod.recover_if_needed()
-_apply_profile_override()
-```
-
-Move calls, not the stdlib-only `_early_recovery` definition import, as necessary. Ensure `_cleanup_quarantined_exes`, `_sweep_stale_bytecode_if_checkout_changed`, `_recover_from_interrupted_install`, dotenv/config imports, and every spawn remain after enforcement.
+Only after the guard succeeds may `main.py` import/call `_early_recovery`, define or execute full recovery routines, parse profile/config, import argparse/subcommands, load dotenv, or perform any process/network/SessionDB side effect. Move the existing early-recovery import and call behind enforcement; do not replace the guarded bootstrap with the shortened illustrative sequence from this plan.
 
 - [ ] **Step 6: Run guard, startup, and help parity tests, then commit**
 
@@ -597,7 +582,7 @@ def test_provider_commands_retain_old_provider_handlers(parser):
     assert args.provider == "nous"
 ```
 
-Add handler tests with a fake runtime: valid login is idempotent without `getpass`; signed-out login prompts once; logout increments epoch before remote logout; output states provider credentials were not modified.
+Add handler tests with a fake runtime: valid login is idempotent without `getpass`; signed-out login prompts once; logout increments epoch before remote logout; output states provider credentials were not modified. Add a subprocess case for `hermes login </dev/null` and assert structured `AUTH_REQUIRED`, exit `20`, and no traceback.
 
 - [ ] **Step 2: Run and verify the red state**
 
@@ -627,8 +612,10 @@ In `hermes_cli/main.py`, route handlers to runtime methods:
 
 ```python
 def cmd_login(_args):
+    from hermes_cli.client_auth.runtime import AuthRequired, AuthState, account_login, account_status
+    if not (sys.stdin.isatty() and sys.stderr.isatty()):
+        raise AuthRequired("interactive_login_required")
     from getpass import getpass
-    from hermes_cli.client_auth.runtime import AuthState, account_login, account_status
     current = account_status()
     if current.state is AuthState.AUTHENTICATED:
         print(f"Authenticated as {current.username}")
@@ -651,7 +638,7 @@ def cmd_auth_status(_args):
     print(json.dumps(account_status().public_dict(), sort_keys=True))
 ```
 
-Never log input values. Interactive protected commands may call the same prompt flow before capability initialization; noninteractive commands return exit `20` and instruct `hermes login`.
+Never log input values. Interactive protected commands may call the same prompt flow before capability initialization; noninteractive commands return structured exit `20` and instruct `hermes login`.
 
 - [ ] **Step 5: Run routing and existing provider tests, then commit**
 
@@ -748,9 +735,9 @@ Create `scripts/check_auth_entrypoints.py` using `tomllib`, Python `ast`, and ex
 
 Populate the file from the scanner's complete current output; each ID appears once. Record that root `registration_lifecycle.py` is provider/plugin replacement ownership, not user-account registration.
 
-- [ ] **Step 3: Add guards to direct Python entrypoints**
+- [ ] **Step 3: Guard every manifest entry, including direct Python scripts**
 
-Call `enforce_raw_argv` or the noninteractive runtime preflight before capability imports in `run_agent.py`, `acp_adapter/entry.py`, and `tui_gateway/entry.py`. Electron and TUI auth-shell modes may start only their authentication transport; Agent/session/tool registration remains after an authenticated snapshot.
+Every production entry emitted by the scanner and recorded in `entrypoints.json` must receive the declared startup guard; no hand-written subset is authoritative. This includes current direct paths such as `run_agent.py`, `cli.py`, `batch_runner.py`, `mini_swe_runner.py`, `mcp_serve.py`, `toolsets.py`, `toolset_distributions.py`, `trajectory_compressor.py`, `gateway/run.py`, `agent/learning_graph.py`, `acp_adapter/entry.py`, and `tui_gateway/entry.py`, plus every shell/service/Electron target the scanner discovers. Use `enforce_raw_argv` or the noninteractive runtime preflight before capability imports. Electron and TUI auth-shell modes may start only their authentication transport; Agent/session/tool registration remains after an authenticated snapshot.
 
 - [ ] **Step 4: Add real locked-start production tests**
 
@@ -763,7 +750,9 @@ HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/hermes_cli/clien
 HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/hermes_cli/client_auth/test_guard.py -q
 ../../.venv/bin/python scripts/check_auth_entrypoints.py --check
 git diff --check
-git add hermes_cli/client_auth/entrypoints.json scripts/check_auth_entrypoints.py tests/hermes_cli/client_auth/test_entrypoints.py run_agent.py acp_adapter/entry.py tui_gateway/entry.py
+git add hermes_cli/client_auth/entrypoints.json scripts/check_auth_entrypoints.py tests/hermes_cli/client_auth/test_entrypoints.py
+# Then stage every production entry file changed to satisfy the scanner,
+# using its explicit path; do not use a partial sample list or broad git add.
 git commit -m "test: require auth policy for every entrypoint"
 ```
 
@@ -771,7 +760,7 @@ git commit -m "test: require auth policy for every entrypoint"
 
 - [ ] **Step 1: Add boundary behavior tests**
 
-Create `tests/hermes_cli/client_auth/test_boundaries.py` and invoke real boundary functions with authenticated, locked, expired, and stale-scope consumers. Cover Agent turns, concurrent/sequential tool calls, gateway HTTP and WS messages, cron tick/job start, web-server requests, ACP requests, worker/delegate start, terminal spawn, file writes, git/network/message side effects. Each locked case must fail before the mocked irreversible operation is called.
+Create `tests/hermes_cli/client_auth/test_boundaries.py` and invoke real boundary functions with authenticated, locked, expired, and stale-scope consumers. Cover Agent turns, concurrent/sequential tool calls, gateway HTTP and WS messages, cron tick/job start, web-server requests, ACP requests, worker/delegate start, terminal spawn, file writes, git/network/message side effects. Exercise direct `model_tools.handle_function_call` callers, the standalone `mcp_serve.py` request surface, and `agent/transports/hermes_tools_mcp_server.py`. Each locked case must fail before SessionDB/history access, tool lookup, or the mocked irreversible operation is called.
 
 - [ ] **Step 2: Insert the single primitive at central dispatch points**
 
@@ -783,7 +772,9 @@ from hermes_cli.client_auth.runtime import require_authorized
 scope = require_authorized("tool.execute", expected=request_scope)
 ```
 
-Insert it at `agent/tool_executor.py` before sequential/concurrent dispatch, `agent/agent_runtime_helpers.py::invoke_tool`, `gateway/platforms/api_server.py` before HTTP/WS handling and each WS message, `cron/scheduler.py` before tick and job execution, `hermes_cli/web_server.py` before protected routes, and `acp_adapter/server.py` before request/session work. Pass `AuthScope` into worker/delegate creation and reject stale scopes in the child before any Agent/tool import.
+Insert it at `model_tools.handle_function_call` before any lookup or dispatch, because `agent/transports/hermes_tools_mcp_server.py`, `tools/tool_search.py`, `tools/code_execution_tool.py`, `agent/conversation_loop.py`, `run_agent.py`, and `agent/tool_executor.py` can reach this shared chokepoint through different paths. Keep defense-in-depth checks at `agent/tool_executor.py` before sequential/concurrent dispatch and `agent/agent_runtime_helpers.py::invoke_tool`. Add per-request checks to standalone `mcp_serve.py` and `agent/transports/hermes_tools_mcp_server.py`, before SessionDB/history or tool work, so a long-lived MCP process locks on owner revocation.
+
+Also guard `gateway/platforms/api_server.py` before HTTP/WS handling and each WS message, `cron/scheduler.py` before tick and job execution, `hermes_cli/web_server.py` before protected routes, and `acp_adapter/server.py` before request/session work. Pass `AuthScope` into worker/delegate creation and reject stale scopes in the child before any Agent/tool import.
 
 - [ ] **Step 3: Verify lock propagation and in-flight stopping**
 
@@ -792,10 +783,12 @@ Tests must prove owner EOF/epoch change blocks the next tool/message/job boundar
 - [ ] **Step 4: Run focused suites and commit**
 
 ```bash
-HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/hermes_cli/client_auth/test_boundaries.py tests/agent/test_tool_executor_checkpoint_paths.py tests/run_agent/test_tool_executor_contextvar_propagation.py tests/gateway/test_api_server.py tests/cron/test_scheduler.py tests/acp/test_server.py -q
+HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/hermes_cli/client_auth/test_boundaries.py tests/test_model_tools.py tests/test_mcp_serve.py tests/agent/transports/test_hermes_tools_mcp_server.py tests/integration/test_batch_runner.py tests/test_mini_swe_runner.py tests/agent/test_tool_executor_checkpoint_paths.py tests/run_agent/test_tool_executor_contextvar_propagation.py tests/gateway/test_api_server.py tests/cron/test_scheduler.py tests/acp/test_server.py -q
 git diff --check
-git add agent/tool_executor.py agent/agent_runtime_helpers.py gateway/platforms/api_server.py cron/scheduler.py hermes_cli/web_server.py acp_adapter/server.py tests/hermes_cli/client_auth/test_boundaries.py
+git add model_tools.py mcp_serve.py agent/tool_executor.py agent/agent_runtime_helpers.py agent/transports/hermes_tools_mcp_server.py gateway/platforms/api_server.py cron/scheduler.py hermes_cli/web_server.py acp_adapter/server.py tests/hermes_cli/client_auth/test_boundaries.py tests/test_model_tools.py tests/test_mcp_serve.py tests/agent/transports/test_hermes_tools_mcp_server.py tests/integration/test_batch_runner.py tests/test_mini_swe_runner.py
 git commit -m "feat: enforce auth at shared execution boundaries"
 ```
 
 Expected: new auth tests and the nearest existing boundary suites pass; no production test asserts implementation by reading source text.
+
+Checkpoint B is intentionally fail-closed but not production-releasable on its own: background services may exit `20` until Plan 4 adds healthy `locked-waiting`. Do not publish Checkpoint B or C as a release; only the composed Plan 4 release gate is shippable.
