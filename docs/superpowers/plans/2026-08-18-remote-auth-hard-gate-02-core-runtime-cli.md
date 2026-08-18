@@ -651,7 +651,7 @@ git commit -m "feat: make cli login manage hermes accounts"
 
 ### Task 6: Add the three-verb Desktop bridge
 
-- [ ] **Step 1: Write failing JSONL bridge tests**
+- [x] **Step 1: Write failing JSONL bridge tests**
 
 Create `tests/hermes_cli/client_auth/test_bridge.py`:
 
@@ -679,7 +679,7 @@ def test_login_response_contains_scope_but_no_secret():
     assert "cookie" not in json.dumps(response).lower()
 ```
 
-- [ ] **Step 2: Implement `bridge.py` with a closed dispatch table**
+- [x] **Step 2: Implement `bridge.py` with a closed dispatch table**
 
 ```python
 METHODS = {
@@ -705,7 +705,7 @@ def dispatch(request: dict[str, object]) -> dict[str, object]:
 
 The stdio loop accepts one bounded JSON object per line, caps line length, returns one line, flushes, redacts all exception text, and never echoes params. Login converts password to `bytearray`, calls runtime login, wipes it best-effort, and drops references.
 
-- [ ] **Step 3: Run and commit**
+- [x] **Step 3: Run and commit**
 
 ```bash
 HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/hermes_cli/client_auth/test_bridge.py -q
