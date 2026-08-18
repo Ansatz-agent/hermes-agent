@@ -30,6 +30,9 @@ from hermes_cli.client_auth.runtime import (
     UnixEndpoint,
     WindowsNamedPipeEndpoint,
     VaultOwner,
+    authorize_entrypoint,
+    clear_entrypoint_owner,
+    install_entrypoint_owner,
     resolve_owner,
     runtime_endpoint,
 )
@@ -235,10 +238,12 @@ class FakeAuthClient:
         self.status_calls = 0
         self.logout_calls = 0
         self.events: list[str] = []
+        self.password_refs: list[bytearray] = []
 
     def login(self, username: str, password: bytearray) -> CookieRecord:
         self.login_calls += 1
         self.events.append("login")
+        self.password_refs.append(password)
         assert username == "alice"
         assert password == bytearray(b"secret")
         if self.login_error is not None:
@@ -456,6 +461,61 @@ def test_unauthenticated_consumer_does_not_prevent_owner_idle_exit():
 
     assert owner.maintenance() is False
     assert owner.snapshot().state is AuthState.LOCKED
+
+
+def test_interactive_entrypoint_logs_in_once_and_wipes_password(monkeypatch):
+    owner, _secret_backend, auth_client, _clock = memory_owner_factory()
+    install_entrypoint_owner(owner)
+    monkeypatch.setattr("builtins.input", lambda _prompt: "alice")
+    monkeypatch.setattr("getpass.getpass", lambda _prompt: "secret")
+    try:
+        scope = authorize_entrypoint("cli.start", interactive=True)
+    finally:
+        clear_entrypoint_owner()
+
+    assert scope == owner.snapshot().scope
+    assert auth_client.login_calls == 1
+    assert auth_client.password_refs == [bytearray(b"\0" * 6)]
+
+
+def test_noninteractive_entrypoint_never_prompts(monkeypatch):
+    owner, _secret_backend, auth_client, _clock = memory_owner_factory()
+    install_entrypoint_owner(owner)
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda _prompt: pytest.fail("noninteractive auth must not prompt"),
+    )
+    monkeypatch.setattr(
+        "getpass.getpass",
+        lambda _prompt: pytest.fail("noninteractive auth must not prompt"),
+    )
+    try:
+        with pytest.raises(AuthRequired, match="signed_out"):
+            authorize_entrypoint("gateway.start", interactive=False)
+    finally:
+        clear_entrypoint_owner()
+
+    assert auth_client.login_calls == 0
+
+
+def test_entrypoint_service_failure_never_prompts(monkeypatch):
+    owner, _secret_backend, auth_client, _clock = vault_owner_factory()
+    owner.login("alice", bytearray(b"secret"))
+    auth_client.status_error = AuthServiceError("server_unavailable")
+    install_entrypoint_owner(owner)
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda _prompt: pytest.fail("service failures must not prompt"),
+    )
+    monkeypatch.setattr(
+        "getpass.getpass",
+        lambda _prompt: pytest.fail("service failures must not prompt"),
+    )
+    try:
+        with pytest.raises(AuthRequired, match="server_unavailable"):
+            authorize_entrypoint("cli.start", interactive=True)
+    finally:
+        clear_entrypoint_owner()
 
 
 def test_live_owner_is_reused_before_new_mode_election():

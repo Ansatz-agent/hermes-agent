@@ -470,7 +470,7 @@ Expected: parity tests pass on the host; transport and hardening tests marked fo
 
 ### Task 4: Add the exact raw-argv gate and static help
 
-- [ ] **Step 1: Write the exhaustive failing argv table**
+- [x] **Step 1: Write the exhaustive failing argv table**
 
 Create `tests/hermes_cli/client_auth/test_guard.py`:
 
@@ -498,7 +498,7 @@ def test_every_shape_variant_is_protected(argv):
 
 Add a subprocess test importing `hermes_cli.main` with locked runtime paths and assert recovery/profile/config/parser modules are absent from `sys.modules` when a protected command exits `20`. Extend the import-weight test to import both `hermes_cli.client_auth` and `hermes_cli.client_auth.guard`; `client_auth/__init__.py` must remain empty (comments/docstring only) with no re-exports or third-party imports, because Python executes it before loading `guard.py`.
 
-- [ ] **Step 2: Run and verify the red state**
+- [x] **Step 2: Run and verify the red state**
 
 ```bash
 HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/hermes_cli/client_auth/test_guard.py -q
@@ -506,7 +506,7 @@ HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/hermes_cli/clien
 
 Expected: FAIL because `guard.py` does not exist.
 
-- [ ] **Step 3: Implement stdlib-only classification**
+- [x] **Step 3: Implement stdlib-only classification**
 
 Create `hermes_cli/client_auth/guard.py` with no imports outside the standard library:
 
@@ -541,17 +541,17 @@ def enforce_raw_argv(argv: Sequence[str]) -> None:
 
 `authorize_entrypoint` first performs online validation. If the state is signed out/locked and `interactive=True`, it reads the username and password with `input`/`getpass`, calls the same rate-limited owner login once, wipes the password `bytearray`, and then re-runs `require_authorized` before returning. It never prompts for noninteractive callers, `rate_limited`, or service failures. Catch `AuthRequired` only in the top-level bootstrap wrapper, print structured `AUTH_REQUIRED` to stderr, and exit `20`. Do not turn runtime import failure into authorization.
 
-- [ ] **Step 4: Generate static help from the real parser**
+- [x] **Step 4: Generate static help from the real parser**
 
 Create `scripts/generate_auth_free_help.py` that imports the real parser in a build/test process, captures `parser.format_help()`, and atomically writes `hermes_cli/client_auth/static_help.txt`. Add `scripts/generate_auth_free_help.py --check` to compare without writing. Update `hermes_cli/main.py` so the only pre-guard help path reads this packaged text file using stdlib path operations.
 
-- [ ] **Step 5: Reorder `hermes_cli/main.py` without dropping bootstrap behavior**
+- [x] **Step 5: Reorder `hermes_cli/main.py` without dropping bootstrap behavior**
 
 Preserve these existing startup operations byte-for-byte unless relocation is required: the `try/except ModuleNotFoundError` around `hermes_bootstrap`, the import **and call** to `suppress_platform_ver_console()`, `os`/`sys`, the inline script-mode project-root bootstrap, and the `_ensure_project_root_on_path_fast()` behavior. Immediately after that stdlib-only safe bootstrap, handle `try_fast_version()` and packaged static help, then import `client_auth.guard` and call `enforce_raw_argv(sys.argv[1:])`.
 
 Only after the guard succeeds may `main.py` import/call `_early_recovery`, define or execute full recovery routines, parse profile/config, import argparse/subcommands, load dotenv, or perform any process/network/SessionDB side effect. Move the existing early-recovery import and call behind enforcement; do not replace the guarded bootstrap with the shortened illustrative sequence from this plan.
 
-- [ ] **Step 6: Run guard, startup, and help parity tests, then commit**
+- [x] **Step 6: Run guard, startup, and help parity tests, then commit**
 
 ```bash
 HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/hermes_cli/client_auth/test_guard.py tests/hermes_cli/test_startup_fast_guards.py tests/test_project_metadata.py -q

@@ -82,18 +82,42 @@ if _bootstrap_root not in sys.path:
     sys.path.insert(0, _bootstrap_root)
 from hermes_cli import _startup_fast  # noqa: E402
 
-# Early venv self-heal — MUST run before any third-party import below.  When
-# a prior ``hermes update`` left a recovery marker and a core package's import
-# files were wiped (#57828 — failed lazy backend refresh), the module-level
-# ``from hermes_cli.env_loader import ...`` / ``from hermes_cli.config import
-# ...`` imports further down would crash before ``main()`` ever reaches
-# ``_recover_from_interrupted_install()``.  ``_early_recovery`` is stdlib-only
-# (safe to import on a corrupted venv), repairs just enough for this module to
-# finish importing, and leaves the marker lifecycle to the full recovery path.
-# The module import itself is unguarded on purpose: it lives in this same
-# package directory, so if IT can't import, nothing else in hermes_cli can
-# either. It is also the canonical home of the probe/repair tables reused by
-# the full recovery path below.
+_startup_fast.ensure_project_root_on_path()
+_raw_startup_argv = tuple(sys.argv[1:])
+
+if _startup_fast.try_fast_version(list(_raw_startup_argv)):
+    raise SystemExit(0)
+
+if _raw_startup_argv in {("--help",), ("-h",)}:
+    _static_help_path = os.path.join(
+        os.path.dirname(__file__),
+        "client_auth",
+        "static_help.txt",
+    )
+    try:
+        with open(_static_help_path, encoding="utf-8") as _static_help_file:
+            _static_help = _static_help_file.read()
+    except (OSError, UnicodeError):
+        print("Hermes help is unavailable; reinstall Hermes.", file=sys.stderr)
+        raise SystemExit(1) from None
+    sys.stdout.write(_static_help)
+    raise SystemExit(0)
+
+from hermes_cli.client_auth.guard import GuardRejected, enforce_raw_argv
+
+try:
+    enforce_raw_argv(_raw_startup_argv)
+except GuardRejected as _auth_error:
+    print(
+        f"AUTH_REQUIRED {_auth_error.reason}; run `hermes login`",
+        file=sys.stderr,
+    )
+    raise SystemExit(20) from None
+
+# Early venv self-heal remains ahead of every third-party import, but only
+# after the central authentication gate. Protected invocations must not touch
+# recovery markers, configuration, profiles, sessions, or subprocesses before
+# authorization succeeds.
 from hermes_cli import _early_recovery as _early_recovery_mod
 
 try:
@@ -416,11 +440,6 @@ def _try_termux_ultrafast_version() -> bool:
         return False
     return _try_ultrafast_version()
 
-
-_ensure_project_root_on_path_fast()
-
-if _try_ultrafast_version():
-    raise SystemExit(0)
 
 import argparse
 import hashlib

@@ -1089,6 +1089,80 @@ class MemoryOwner(_OwnerCore):
         )
 
 
+class _EntryPointOwner(Protocol):
+    def refresh(self) -> RuntimeSnapshot: ...
+
+    def login(self, username: str, password: bytearray) -> RuntimeSnapshot: ...
+
+    def snapshot(self) -> RuntimeSnapshot: ...
+
+    def connect_consumer(self, *, profile: str | None = None) -> RuntimeConsumer: ...
+
+
+_entrypoint_owner_lock = threading.RLock()
+_entrypoint_owner: _EntryPointOwner | None = None
+
+
+def install_entrypoint_owner(owner: _EntryPointOwner) -> None:
+    global _entrypoint_owner
+    with _entrypoint_owner_lock:
+        _entrypoint_owner = owner
+
+
+def clear_entrypoint_owner() -> None:
+    global _entrypoint_owner
+    with _entrypoint_owner_lock:
+        _entrypoint_owner = None
+    clear_runtime_consumer()
+
+
+def authorize_entrypoint(boundary: str, *, interactive: bool) -> AuthScope:
+    with _entrypoint_owner_lock:
+        owner = _entrypoint_owner
+    if owner is None:
+        raise AuthRequired("runtime_unavailable")
+
+    recoverable = {"session_rejected", "session_expired", "signed_out"}
+    try:
+        snapshot = owner.refresh()
+    except AuthRequired as error:
+        if not interactive or error.reason not in recoverable:
+            raise
+        snapshot = owner.snapshot()
+
+    if snapshot.state is not AuthState.AUTHENTICATED:
+        reason = snapshot.reason or "signed_out"
+        if not interactive or reason in {
+            "rate_limited",
+            "server_unavailable",
+            "invalid_response",
+            "runtime_unavailable",
+            "vault_unavailable",
+        }:
+            raise AuthRequired(reason)
+        try:
+            username = input("Username: ").strip()
+            import getpass
+
+            password_text = getpass.getpass("Password: ")
+        except (EOFError, KeyboardInterrupt):
+            raise AuthRequired("signed_out") from None
+        password = bytearray(password_text.encode("utf-8"))
+        password_text = ""
+        try:
+            snapshot = owner.login(username, password)
+        finally:
+            password[:] = b"\0" * len(password)
+
+    consumer = owner.connect_consumer()
+    scope = consumer.require_authorized(
+        boundary,
+        expected=snapshot.scope,
+    )
+    install_runtime_consumer(consumer)
+    return scope
+
+
 @dataclass(frozen=True)
 class OwnerElectionContext:
     ssh_connection: bool

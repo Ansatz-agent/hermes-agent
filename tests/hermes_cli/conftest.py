@@ -38,6 +38,13 @@ def _suppress_concurrent_hermes_gate(request, monkeypatch):
     if request.node.get_closest_marker("real_concurrent_gate"):
         return
     try:
+        from hermes_cli.client_auth import guard as _auth_guard
+
+        # main.py now enforces the production auth gate at import time, before
+        # it exposes the update helper this fixture patches. This explicit
+        # in-process test seam prevents pytest's own argv from being treated as
+        # a Hermes launch. Subprocess guard tests do not inherit the monkeypatch.
+        monkeypatch.setattr(_auth_guard, "enforce_raw_argv", lambda _argv: None)
         from hermes_cli import main as _cli_main
     except Exception:
         return
