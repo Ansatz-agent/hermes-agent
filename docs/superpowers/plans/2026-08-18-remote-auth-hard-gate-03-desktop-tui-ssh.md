@@ -225,7 +225,7 @@ git commit -m "feat: bind desktop backends to auth scope"
 
 ### Task 5: Isolate local and remote connection scopes
 
-- [ ] **Step 1: Write the failing authorization matrix**
+- [x] **Step 1: Write the failing authorization matrix**
 
 Extend `auth-coordinator.test.ts`, `connection-registry.test.ts`, and `profile-session-routing` tests with:
 
@@ -239,11 +239,11 @@ Extend `auth-coordinator.test.ts`, `connection-registry.test.ts`, and `profile-s
 
 Also assert that switching the foreground from A to B revokes the foreground A token before B is displayed, while A background work can continue only with A's still-valid scope. Logout of A must not mutate local or B.
 
-- [ ] **Step 2: Implement connection-scoped routing**
+- [x] **Step 2: Implement connection-scoped routing**
 
 Persist only non-secret connection configuration. Add `connection_id + runtime_instance_id + epoch` to in-memory backend ownership and routing records. Every protected IPC call resolves the actual execution target; it must not use a global “current authenticated” flag. Rehome and profile routing must request a fresh token for the destination scope.
 
-- [ ] **Step 3: Run and commit**
+- [x] **Step 3: Run and commit**
 
 ```bash
 cd apps/desktop
