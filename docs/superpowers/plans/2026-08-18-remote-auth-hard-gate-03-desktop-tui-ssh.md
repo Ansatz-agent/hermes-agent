@@ -348,7 +348,7 @@ git commit -m "feat: authenticate remote backends over strict ssh"
 
 ### Task 8: Complete Desktop/TUI acceptance without capability leakage
 
-- [ ] **Step 1: Run Desktop unit, type, lint, and hard-gate E2E tests**
+- [x] **Step 1: Run Desktop unit, type, lint, and hard-gate E2E tests**
 
 ```bash
 cd apps/desktop
@@ -358,7 +358,7 @@ npm test
 npm run test:e2e -- e2e/auth-hard-gate.spec.ts
 ```
 
-- [ ] **Step 2: Run TUI and Python integration suites**
+- [x] **Step 2: Run TUI and Python integration suites**
 
 ```bash
 cd ../..
@@ -367,11 +367,11 @@ cd ui-tui
 npm run check
 ```
 
-- [ ] **Step 3: Inspect secret-leak artifacts produced by tests**
+- [x] **Step 3: Inspect secret-leak artifacts produced by tests**
 
 Run the test harness with sentinel username, password, Session, and CSRF values, then scan only generated test logs, crash reports, captured argv/env, and temporary connection registries. The sentinel password and Cookie values must have zero matches. This is an artifact test, not a production-source regex assertion.
 
-- [ ] **Step 4: Record and commit acceptance evidence**
+- [x] **Step 4: Record and commit acceptance evidence**
 
 Create the initial Desktop/TUI/SSH sections of `docs/security/remote-auth-release-evidence.md` with the tested commit, exact commands, pass/fail totals, native OS/SSH fixture used, and locations of redacted test artifacts. Plan 4 extends this same file for server, background, container, and native-matrix acceptance rather than creating a second evidence authority. Record only test account labels and reason codes; do not include credentials, Cookies, bearer tokens, host private keys, or raw environment dumps.
 
