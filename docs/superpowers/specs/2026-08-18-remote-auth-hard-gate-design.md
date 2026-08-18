@@ -109,6 +109,8 @@ Logout 顺序固定为：先递增 epoch 并锁定本地运行时，再尽力 PO
 
 客户端认证契约不包含 signup、account-create、password-reset 或 invitation endpoint。Django 管理端可以保留管理员专用账户生命周期能力，但不能通过 Hermes 客户端 bridge、Broker IPC 或公开用户路由暴露。
 
+服务端部署同样只向普通用户暴露固定 LoginView、LogoutView 与 `/agent/api/session/`，不得挂载 `django.contrib.auth.urls` 或提供 signup、password-reset、password-change、invitation 等公开生命周期路由；这些公开路径必须返回 404。服务器管理员仍可在受保护的 Django Admin/运维面执行创建、停用和重置。阶段 1 必须以负向路由测试证明普通用户没有这些端点。
+
 ## 6. 最小客户端架构
 
 认证实现是一个 Python 包和四个职责模块：
@@ -134,6 +136,8 @@ require_authorized(boundary)
 `runtime.py` 内部只有一套租约协议和两种私有 secret owner：`VaultOwner` 与 `MemoryOwner`。两者发布同样的状态记录、使用同样的活性连接、epoch 和边界校验；区别只在 Cookie 存放位置。不能分别实现“leader 状态机”和“Broker 状态机”。
 
 Ink TUI 复用现有 `tui_gateway` JSON-RPC 增加登录方法，不再启动第二个 Python auth bridge。Electron 仍需要 `bridge.py`，因为它在 Hermes backend 启动前必须完成认证。
+
+`bridge.py` 的 JSONL 动词同样精确限制为 `{status, login, logout}`，只接受版本化的固定字段 schema；禁止调用方传入任意 URL、Python 模块、函数、命令或扩展 RPC。Bridge 不提供账户创建、邀请、密码找回或修改能力，也不能绕过 Broker 的同名动词契约。
 
 ## 7. 两种 Session 所有权模式
 
@@ -182,6 +186,8 @@ Broker 启动时必须禁用 core dump 和可附加调试：Linux 使用 `PR_SET
 Broker 的硬过期时间不得超过服务端 `session_expires_at`。没有任何已认证消费者活性连接且没有受保护任务时，15 分钟后空闲退出；周期验证本身以及 `locked-waiting` 中未获授权的消费者连接都不算活性。持续运行的 gateway/serve/cron 可保持活性连接，但仍不能超过服务端绝对 Session 期限。
 
 Socket/Pipe 名和无秘密状态可以存在于 runtime 目录，Session 不写入该目录。
+
+随机 Socket 路径和首次 Pipe 实例用于避免普通跨用户抢占、陈旧路径重绑以及多个合法 owner 的竞态，不声称抵御同 UID 恶意代码改写 `0600` 指针记录或抢先占用端点；后者属于第 2 节明确让渡的同 OS 身份威胁边界。
 
 ## 8. OS-user 运行时、租约与撤销
 
@@ -259,6 +265,8 @@ scanner 覆盖：
 
 人工入口列表不进入规范正文；已发现入口作为测试 fixture。manifest 只保存 scanner 无法推导的 `interactive` / `noninteractive` 策略。
 
+仓库根目录的 `registration_lifecycle.py` 已核实为可替换插件/Provider 注册代际的所有权协调器，与用户账户注册无关；入口 fixture 保留该说明，避免文件名被误判为账号创建旁路。
+
 CLI 模块导入期的精确顺序固定为：
 
 1. 只允许 `hermes_bootstrap`、Windows stdio/subprocess 兼容补丁和 stdlib-only `_startup_fast`。
@@ -287,7 +295,7 @@ CLI 模块导入期的精确顺序固定为：
 
 ### 11.2 IPC 与 backend 直连
 
-Electron 使用统一 `guardedIpc` 默认拒绝。唯一适配层之外不直接注册 `ipcMain.handle/on`。`AUTH_FREE_CHANNELS` 只包含 auth、窗口 close/minimize、主题、脱敏错误报告和前述 bootstrap channel，并以注册表行为契约测试覆盖；测试不读取 `main.ts` 源码，也不依赖 handler 数量。
+Electron 使用统一 `guardedIpc` 默认拒绝。唯一适配层之外不直接注册 `ipcMain.handle/on`。单张 `CHANNEL_AUTH_POLICY` 为每个 channel 声明 `'auth-free' | 'local' | 'connection' | 'both'`：auth、窗口 close/minimize、主题、脱敏错误报告和前述 bootstrap channel 才能标为 `auth-free`；未列出或未分类一律拒绝。若兼容代码需要 `AUTH_FREE_CHANNELS`，它只能由该表派生，不能成为第二份手工维护的真值。行为契约和快照测试覆盖整张策略表，新增 channel 未分类即失败；测试不读取 `main.ts` 源码，也不依赖 handler 数量。
 
 IPC 只是第一层。Renderer 获得的所有 backend HTTP/WS token 都绑定当前 auth scope 的 `(runtime_instance_id, epoch)` 和短 TTL：
 
@@ -325,7 +333,7 @@ Desktop 不把本机 Keychain Session 转发给远端，也不缓存远端 Sessi
 - 当前连接未认证时，只显示该连接的登录壳；不会因为另一连接已认证而放行。
 - 一条连接锁定或 logout 不连带锁死其他仍有效的 local/remote connection。
 - Desktop 切换 connection 时先撤销旧连接在前台窗口的 IPC/HTTP/WS 能力，再验证新连接 scope；后台连接只在自己的 scope 内继续运行。
-- 特权 IPC 按实际执行地点授权，而不是一律跟随窗口 connection：在 Electron 主进程本机执行的 terminal、fs、git、clipboard 等 handler 必须由 local runtime scope 授权；经 backend/SSH 路由到远端执行的请求由对应 connection scope 授权。`guardedIpc` 适配层为每个 handler 显式声明 `execution_scope=local|connection`，未声明即拒绝，且不能引用“当前全局连接”。因此 local locked + remote authenticated 时，本机 terminal/fs 仍必须拒绝。
+- 特权 IPC 按实际执行地点授权，而不是一律跟随窗口 connection：在 Electron 主进程本机执行的 terminal、fs、git、clipboard 等 handler 使用 `local`；经 backend/SSH 路由到远端执行的请求使用 `connection`；同时触及两侧的操作使用 `both`。分类写入同一张 `CHANNEL_AUTH_POLICY`，未声明即拒绝，且不能引用“当前全局连接”。因此 local locked + remote authenticated 时，本机 terminal/fs 仍必须拒绝。
 - 应用首次启动仍是硬门禁：用户必须选择并认证一个目标 connection 后才能进入对应工作区。
 
 ## 12. CLI、TUI、ACP 与后台入口
@@ -341,6 +349,8 @@ Desktop 不把本机 Keychain Session 转发给远端，也不缓存远端 Sessi
 服务安装命令本身受登录门禁。已安装服务在主机启动后只允许启动对应平台的 runtime owner，并进入 `locked-waiting`；没有新的交互登录时不能启动 Agent 或能力 backend。`locked-waiting` 是正常稳态：使用结构化状态与脱敏日志，不算启动失败、不触发 systemd/launchd/Windows/s6 重启风暴，也不计入 gateway restart-loop guard。cron 到期但未登录时记录脱敏的 `AUTH_REQUIRED`，不执行 job，也不无限重试。
 
 `hermes login` 在有效 owner 上是幂等 status；仅在 signed_out/locked 且为交互入口时采集凭据。`rate_limited` 且 `Retry-After` 超过剩余租约时会按零宽限策略锁定，UI 必须明确显示“认证已锁定，请在限流结束后重新登录”，不能表现为普通连接错误。
+
+`hermes auth status` 是文档和脚本唯一推荐的只读状态查询命令；`hermes login` 的已认证幂等行为只用于避免重复提示，不作为推荐探测接口。
 
 ## 13. Headless Docker
 
@@ -376,6 +386,8 @@ Desktop 登录页只包含固定服务说明、用户名、密码、登录、重
 
 文案同步 `en`、`ja`、`zh`、`zh-hant`；其他 locale 明确 fallback 到 `en` 并测试。
 
+由于客户端没有自助改密和找回，上线前必须确定管理员重置密码后的带外通知与身份核验流程；该运维渠道不进入 Hermes 客户端，也不能通过公开 Django 用户路由暴露。
+
 ## 15. 测试设计
 
 实现必须失败测试先行，至少覆盖以下不变量：
@@ -386,21 +398,21 @@ Desktop 登录页只包含固定服务说明、用户名、密码、登录、重
 4. 未认证执行受保护入口时，无能力模块 import、session 读取、额外网络 socket、Popen 或 exec。
 5. 对 scanner 找到的每一个生产入口执行真实未认证启动测试，逐一证明 fail closed；不能只证明清单相等。
 6. 同一 runtime 协议在 VaultOwner/MemoryOwner 下行为一致：并发合并、单写、咨询锁、活性连接断开、owner 死亡和换代。
-7. 每个消费者使用专用读线程/任务和独占活性连接；热路径执行零超时活性探测，fd/Pipe 不被子进程继承，worker 自建连接。
+7. 每个消费者使用专用读线程/任务和独占活性连接；热路径执行零超时活性探测，worker 自建连接。分别在 POSIX `CLOEXEC`、Windows `bInheritHandle`/`PROC_THREAD_ATTRIBUTE_HANDLE_LIST`、Node `stdio` 与 `node-pty` 路径执行行为断言，证明子进程不持有父活性句柄。
 8. `runtime_instance_id + epoch` 向 worker、MCP、gateway、HTTP/WS token 和工具边界传播；token 本体不可伪造，owner 换代后旧 token 必拒绝。
 9. lease 过期、休眠、墙钟跳变、boot ID 变化、状态损坏和两种 owner 的服务端绝对 Session 到期均锁定且不续期；VaultOwner 删除死 Cookie 记录。
 10. vault 版本化 blob 原子写、Cookie rotation 与本地保持登录。
 11. MemoryOwner 的 core/ptrace/dump/fd 加固、无 Cookie 持久化、空闲退出和 crash report 脱敏。
-12. Linux/macOS Socket 与 Windows Named Pipe 的 owner/mode、peer identity、动词白名单、本地限流和伪造客户端拒绝；同 UID logout DoS 作为显式残余风险。
+12. Linux/macOS Socket、Windows Named Pipe 与 Desktop bridge 的 owner/mode、peer identity、精确 `{status, login, logout}` 动词白名单、本地限流和伪造客户端拒绝；同 UID logout DoS 作为显式残余风险。
 13. Windows `FILE_FLAG_FIRST_PIPE_INSTANCE`、Unix 随机路径/遗留 Socket 竞争、Linux 禁止 abstract namespace 与 macOS 用户临时目录均通过对应原生 runner 的抢占测试。
-14. Desktop IPC 默认拒绝、`AUTH_FREE_CHANNELS` 行为契约、全新安装登录，以及认证前 backend spawn/connect 为零。
-15. IPC 按执行地点授权：local locked + remote authenticated 时本机 terminal/fs 拒绝，远端路由能力只使用对应 connection scope。
+14. Desktop IPC 默认拒绝、单一 `CHANNEL_AUTH_POLICY` 快照/行为契约、未分类 channel 拒绝、全新安装登录，以及认证前 backend spawn/connect 为零。
+15. IPC 按执行地点授权：local locked + remote authenticated 时本机 terminal/fs 拒绝，远端路由能力只使用对应 connection scope，`both` 必须同时有效。
 16. HTTP/WS token 绑定完整 auth scope、锁定断链和旧 token 拒绝。
 17. Desktop local + 多 remote connection scope 隔离、切换/rehome、前台与后台路由，以及一条 connection logout 不影响其他 connection。
 18. Ink TUI 登录、ACP 错误、noninteractive 拒绝与服务 `locked-waiting` 不触发重启循环，且未获授权的待命连接不延长 Broker 生命周期。
 19. SSH 严格 host key、显式 TOFU、凭据仅走 stdin、Broker 脱离登录 fd，且 argv/env/磁盘/日志无密码。
 20. Docker s6 auth runtime、最小控制目录权限、`container_boot.py` 全部能力槽注册 down、登录后按意图启动、失效 down、入口二次门禁和重启清空 Session。
-21. Django CSRF/login/session JSON/Cookie rotation/logout/axes、不可滑动 `session_expires_at` 和验证不续期。
+21. Django CSRF/login/session JSON/Cookie rotation/logout/axes、不可滑动 `session_expires_at` 和验证不续期；signup/password-reset/password-change/invitation 公开路径全部返回 404。
 22. 服务端 memory API 在无 Session 时拒绝。
 23. profiles 共用 OS-user runtime，并在 Linux、macOS、Windows 对应原生 runner 上验证 transport 与服务入口。
 24. 服务器管理员可以创建、停用和重置账户；Hermes 客户端、bridge、Broker 与公开用户路由不存在 signup、account-create、invitation、自助找回或修改密码能力。
@@ -425,7 +437,7 @@ Python 测试通过 `scripts/run_tests.sh` 运行。Desktop/TUI 使用真实模�
 - Desktop 的 local/remote connection scope 相互隔离，切换时不发生跨连接授权或误锁。
 - Desktop 本机特权只接受 local scope；远端已经认证不能放行本机 terminal、fs、git 或 clipboard。
 - memory API 无 Session 时由服务端独立拒绝。
-- 账户分发仅存在于服务器管理员流程；所有客户端 surface 和 Broker 都没有注册、创建账户或自助找回能力。
+- 账户分发仅存在于服务器管理员流程；所有客户端 surface、bridge 和 Broker 都没有注册、创建账户或自助找回能力，公开 Django 账户生命周期路由返回 404。
 
 ## 17. 冗余审计
 
@@ -445,7 +457,7 @@ Python 测试通过 `scripts/run_tests.sh` 运行。Desktop/TUI 使用真实模�
 
 - owner/lease 防止子进程请求风暴与 Cookie 多写。
 - `runtime_instance_id + epoch` 撤销已经发放的 worker 权限，并防止 owner 换代后 token 复活。
-- Desktop `guardedIpc` 保护 Electron 主进程的文件、终端和窗口特权。
+- Desktop `guardedIpc` 与单一 `CHANNEL_AUTH_POLICY` 保护 Electron 主进程的 auth-free/local/connection/both 边界；不维护第二张 `AUTH_FREE_CHANNELS` 真值。
 - backend HTTP/WS epoch 校验保护 Renderer 绕过 IPC 直连 backend 的路径。
 - manifest 与 scanner 分别承担声明和发现，删除任一方都会让新入口静默绕过或让清单腐烂。
 
@@ -453,10 +465,10 @@ Python 测试通过 `scripts/run_tests.sh` 运行。Desktop/TUI 使用真实模�
 
 后续实现计划应拆为可独立验证的阶段：
 
-1. Django Session JSON 端点、不可滑动绝对过期与服务端 memory API 鉴权测试。
+1. Django Session JSON 端点、不可滑动绝对过期、管理员专用账户生命周期/公开路由 404 与服务端 memory API 鉴权测试。
 2. Python `client.py`、统一 `runtime.py`、`guard.py`、VaultOwner/MemoryOwner、每消费者独占活性连接与防抢占跨平台 IPC。
 3. CLI import 期白名单、入口 manifest/scanner 和共享安全边界。
-4. Electron bootstrap、connection-scoped 登录、按执行地点声明的默认拒绝 IPC 与 HTTP/WS token。
+4. Electron bootstrap、connection-scoped 登录、单一 `CHANNEL_AUTH_POLICY`、默认拒绝 IPC 与 HTTP/WS token。
 5. Ink TUI、ACP、后台入口和 `locked-waiting`。
 6. 先审计并收紧 Desktop SSH host key 策略，确认远端主机信任边界，再实现 SSH auth bridge、MemoryOwner 与 remote backend。
 7. 先固定非 root auth runtime 的最小 s6 控制目录权限，再把它接入现有 s6，并修改 `container_boot.py` 禁止未登录 autostart。
