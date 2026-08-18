@@ -381,7 +381,7 @@ Record evidence that:
 
 - [ ] **Step 6: Record and commit the redacted release evidence**
 
-Create `docs/security/remote-auth-release-evidence.md` with the server commit/image identifiers, Hermes commit, exact verification commands, pass/fail totals, native matrix artifact digests, Docker process/port assertions, and the result of every acceptance invariant above. Refer to the administrator-issued test account by a non-identifying label only. Do not record its username, password, Cookie, CSRF value, bearer token, raw Django response, vault metadata, or runtime endpoint path.
+Extend `docs/security/remote-auth-release-evidence.md` with the server commit/image identifiers, Hermes commit, exact verification commands, pass/fail totals, native matrix artifact digests, Docker process/port assertions, and the result of every acceptance invariant above. Refer to the administrator-issued test account by a non-identifying label only. Do not record its username, password, Cookie, CSRF value, bearer token, raw Django response, vault metadata, or runtime endpoint path.
 
 ```bash
 git diff --check
