@@ -35,7 +35,7 @@
 
 ### Task 1: Implement the fixed Django HTTP client
 
-- [ ] **Step 1: Add the pinned vault dependency**
+- [x] **Step 1: Add the pinned vault dependency**
 
 Add to `[project].dependencies` in `pyproject.toml`:
 
@@ -51,7 +51,7 @@ uv lock
 
 Expected: `uv.lock` contains keyring 25.7.0 and its platform dependencies; no authentication code imports keyring before `guard.py` passes.
 
-- [ ] **Step 2: Write failing client contract tests**
+- [x] **Step 2: Write failing client contract tests**
 
 Create `tests/hermes_cli/client_auth/test_client.py` with tests that use `httpx.MockTransport` and assert:
 
@@ -92,7 +92,7 @@ def test_status_rejects_html_cross_origin_and_schema_drift(bad):
 
 The helpers return real `httpx.Response` objects; keep all fixtures in the test file so production code is not shaped around test switches.
 
-- [ ] **Step 3: Run the client test and verify it fails**
+- [x] **Step 3: Run the client test and verify it fails**
 
 Run:
 
@@ -102,7 +102,7 @@ HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/hermes_cli/clien
 
 Expected: FAIL because `hermes_cli.client_auth.client` does not exist.
 
-- [ ] **Step 4: Implement the client public API**
+- [x] **Step 4: Implement the client public API**
 
 Create `hermes_cli/client_auth/client.py` with these fixed public types and methods:
 
@@ -173,7 +173,7 @@ class AuthClient:
 
 Implement `_request`, `_extract_csrf`, `_require_same_origin_redirect`, `_validated_cookie_record`, and `_parse_session_status` in the same module. They must reject non-HTTPS/cross-origin redirects, non-JSON status responses, unknown/missing schema keys, Cookie values without `Secure` and `/agent/` path, and any status other than the documented `200`, `401`, `429`, and service-error classes.
 
-- [ ] **Step 5: Run tests and commit**
+- [x] **Step 5: Run tests and commit**
 
 Run:
 
@@ -188,7 +188,7 @@ Expected: all client tests pass and no password/Cookie appears in exception text
 
 ### Task 2: Define the single runtime protocol and revocation semantics
 
-- [ ] **Step 1: Write failing state-machine tests**
+- [x] **Step 1: Write failing state-machine tests**
 
 Create `tests/hermes_cli/client_auth/test_runtime.py` covering:
 
@@ -218,7 +218,7 @@ def test_expiry_and_epoch_comparison_fail_closed():
         state.require_authorized("worker", expected=state.scope, now=70.0)
 ```
 
-- [ ] **Step 2: Run the test and verify it fails**
+- [x] **Step 2: Run the test and verify it fails**
 
 Run:
 
@@ -228,7 +228,7 @@ HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/hermes_cli/clien
 
 Expected: FAIL because `runtime.py` and its types do not exist.
 
-- [ ] **Step 3: Implement immutable state and one authorization primitive**
+- [x] **Step 3: Implement immutable state and one authorization primitive**
 
 Create `hermes_cli/client_auth/__init__.py` as an empty file (comments/docstring only if necessary; no imports or re-exports). Create `hermes_cli/client_auth/runtime.py` with the shared `AuthState`, `AuthScope`, and `RuntimeSnapshot` types from the master plan, plus:
 
@@ -288,11 +288,11 @@ Add a process-global consumer that keeps an atomic snapshot, a dedicated reader 
 
 When converting the server response to a lease, parse both `server_time` and `session_expires_at` as timezone-aware datetimes, compute `absolute_remaining = session_expires_at - server_time`, and set `valid_until = min(monotonic_now + LEASE_SECONDS, monotonic_now + absolute_remaining)`. Retain the original absolute timestamp for the owner generation; refresh may shorten this deadline but can never extend it past that timestamp. Non-positive remaining time locks immediately. Wall-clock changes after conversion never lengthen the monotonic deadline.
 
-- [ ] **Step 4: Add child-handle non-inheritance tests**
+- [x] **Step 4: Add child-handle non-inheritance tests**
 
 Add behavior tests that spawn a child while the consumer is connected and assert the child cannot keep the owner connection alive after the parent closes it. Use real POSIX `close_fds`, Windows handle-list behavior on a native Windows runner, and a Node/PTY integration case in Plan 3; never fake `sys.platform`.
 
-- [ ] **Step 5: Run and commit**
+- [x] **Step 5: Run and commit**
 
 ```bash
 HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/hermes_cli/client_auth/test_runtime.py -q
@@ -303,7 +303,7 @@ git commit -m "feat: add revocable auth runtime protocol"
 
 ### Task 3: Add VaultOwner, MemoryOwner, native IPC, and hardening
 
-- [ ] **Step 1: Add failing owner parity tests**
+- [x] **Step 1: Add failing owner parity tests**
 
 Extend `test_runtime.py` with a parameterized owner contract:
 
@@ -363,7 +363,7 @@ def test_logout_locks_and_clears_secret_even_when_remote_logout_fails():
     assert secret_backend.read() is None
 ```
 
-- [ ] **Step 2: Run the owner tests and verify they fail**
+- [x] **Step 2: Run the owner tests and verify they fail**
 
 ```bash
 HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/hermes_cli/client_auth/test_runtime.py -q
@@ -371,7 +371,7 @@ HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/hermes_cli/clien
 
 Expected: FAIL because owner and secret-backend behavior is absent.
 
-- [ ] **Step 3: Implement the two private owners inside `runtime.py`**
+- [x] **Step 3: Implement the two private owners inside `runtime.py`**
 
 Use one owner interface:
 
@@ -419,7 +419,7 @@ The owner schedules validation 57–60 seconds after each success using an injec
 
 Owner mode is not a public option. Resolution always tries to connect to any already-live owner for the current OS user first, regardless of whether the caller is graphical, SSH, or container-launched. Only when no live owner exists does the resolver elect a new one: the packaged Desktop local bridge creates `VaultOwner`; an SSH remote bridge, container service, interactive CLI under `SSH_CONNECTION`, or genuinely headless Linux session creates `MemoryOwner`; a local macOS/Windows desktop session and a graphical Linux session create `VaultOwner`. This preserves exactly one owner per OS user and avoids rejecting a valid live `VaultOwner` merely because the newest caller arrived through SSH. If a newly elected graphical owner's vault is locked or unavailable, authentication fails with `vault_unavailable` and never falls back to MemoryOwner or a file. Mode remains fixed for that owner generation and is published in its non-secret state record. Tests cover live-owner-first resolution and every owner-election input without allowing a CLI flag, config key, `HERMES_HOME`, or server URL override.
 
-- [ ] **Step 4: Implement native owner endpoints without fallback transport**
+- [x] **Step 4: Implement native owner endpoints without fallback transport**
 
 Inside `runtime.py`, use:
 
@@ -436,7 +436,7 @@ def runtime_endpoint() -> RuntimeEndpoint:
 
 Unix requirements: `0700` directory, `0600` pointer record and Socket, random Socket name, `SO_PEERCRED` on Linux, `getpeereid()` on macOS, `_CS_DARWIN_USER_TEMP_DIR` on macOS, and stale unlink only while holding the unique owner lock after proving no live peer. Windows requirements: SID-derived name, `FILE_FLAG_FIRST_PIPE_INSTANCE`, DACL restricted to current SID and SYSTEM, server impersonation, and token-SID verification. Any unavailable primitive raises `AuthRequired("runtime_unavailable")`; ordinary files and TCP are forbidden as transport.
 
-- [ ] **Step 5: Implement required MemoryOwner hardening**
+- [x] **Step 5: Implement required MemoryOwner hardening**
 
 Add `ProcessHardener.apply_required()` with native branches that execute before Cookie acquisition:
 
@@ -457,7 +457,7 @@ def apply_required(self) -> None:
 
 All owner/consumer handles use `CLOEXEC` or non-inheritable Windows handle lists. Locking Cookie pages is best-effort and records a redacted diagnostic flag; required hardening failure prevents `authenticated`. Crash/report/log formatters receive only state, reason, username, epoch, and timestamps.
 
-- [ ] **Step 6: Run native and parity tests, then commit**
+- [x] **Step 6: Run native and parity tests, then commit**
 
 ```bash
 HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/hermes_cli/client_auth/test_runtime.py -q
