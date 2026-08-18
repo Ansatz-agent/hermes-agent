@@ -31,6 +31,7 @@ import {
 import nodePty from 'node-pty'
 
 import { classifyActiveRuntime } from './active-runtime-state'
+import { AuthBridgeError, connectionScopeFromStatus, DesktopAuthBridge } from './auth-bridge'
 import { stopBackendChild as stopBackendChildImpl, stopBackendTreesForUpdate } from './backend-child'
 import { dashboardFallbackArgs, sourceDeclaresServe } from './backend-command'
 import { createBackendConnectionState } from './backend-connection-state'
@@ -675,6 +676,34 @@ function pathWithHermesManagedNode(...entries) {
 const ACTIVE_HERMES_ROOT = path.join(HERMES_HOME, 'hermes-agent')
 // VENV_ROOT — venv lives inside the repo, exactly like install.ps1 does it.
 const VENV_ROOT = path.join(ACTIVE_HERMES_ROOT, 'venv')
+let desktopAuthBridge: DesktopAuthBridge | null = null
+
+function createDesktopAuthBridge() {
+  // Resolve Python without starting a Hermes command. Development source
+  // checkouts and installed modules can supply their own interpreter; packaged
+  // installs use the canonical venv created by the signed bootstrap flow.
+  const candidate = resolveHermesBackend([])
+  const pythonExecutable =
+    candidate?.kind === 'python' && candidate.command ? candidate.command : getVenvPython(VENV_ROOT)
+  const candidateRoot =
+    candidate && 'root' in candidate && candidate.root && directoryExists(candidate.root) ? candidate.root : null
+  const cwd = candidateRoot || (directoryExists(ACTIVE_HERMES_ROOT) ? ACTIVE_HERMES_ROOT : app.getPath('home'))
+
+  return new DesktopAuthBridge({
+    cwd,
+    env: { ...process.env, HERMES_HOME },
+    onDiagnostic: rememberLog,
+    pythonExecutable
+  })
+}
+
+async function requireDesktopConnectionScope() {
+  if (!desktopAuthBridge) {
+    throw new AuthBridgeError('runtime_unavailable', 'runtime_unavailable')
+  }
+
+  return connectionScopeFromStatus(await desktopAuthBridge.status())
+}
 // BOOTSTRAP_COMPLETE_MARKER — written by the first-launch bootstrap runner
 // (Phase 1D) after install.ps1 has completed all stages and the user has
 // finished initial configuration. Presence of this marker means the install
@@ -9666,6 +9695,11 @@ async function prepareProfileDeleteRequest(request) {
 }
 
 async function startHermes() {
+  // The account bridge is the first executable boundary for every primary
+  // backend attempt. A cached backend promise is not an authentication bypass:
+  // each caller must still obtain a current owner scope before it can observe
+  // or reuse that connection.
+  const connectionScope = await requireDesktopConnectionScope()
   await reapOrphanedBackendsOnce()
 
   // Latched-failure short-circuit: once bootstrap has failed in this
@@ -9757,6 +9791,7 @@ async function startHermes() {
     }
 
     const setup = await runPrimaryBackendStartup({
+      connectionScope,
       connectRemote,
       ensureLocalRuntime: ensureRuntime,
       prepareLocalBackend: async () => {
@@ -14151,6 +14186,11 @@ app.whenReady().then(() => {
     safeStorageApi: safeStorage
   })
 
+  // Start only the closed account bridge here. No local/remote Hermes backend
+  // command is spawned until startHermes obtains an authenticated scope from
+  // this process. This also precedes global shortcuts and capability windows.
+  desktopAuthBridge = createDesktopAuthBridge()
+
   if (IS_MAC) {
     Menu.setApplicationMenu(buildApplicationMenu())
   } else {
@@ -14277,6 +14317,9 @@ app.on('before-quit', event => {
   if (heldQuitForActiveWork(event)) {
     return
   }
+
+  desktopAuthBridge?.close()
+  desktopAuthBridge = null
 
   if (!backendQuitTeardownDone) {
     event.preventDefault()
