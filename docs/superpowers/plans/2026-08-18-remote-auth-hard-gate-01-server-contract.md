@@ -22,7 +22,7 @@
 
 ### Task 1: Establish a recoverable server baseline
 
-- [ ] **Step 1: Prove the source is unversioned and `.env` is ignored**
+- [x] **Step 1: Prove the source is unversioned and `.env` is ignored**
 
 Run:
 
@@ -32,7 +32,7 @@ ssh root@121.37.182.49 'cd /opt/agent-history-portal && test ! -d .git && grep -
 
 Expected on the first run: `.env` is printed, all checks exit `0`, and no Git repository exists yet. This is a one-time characterization step; if a prior attempt already created `.git`, do not rerun initialization—resume from Step 4 and verify the recorded baseline instead.
 
-- [ ] **Step 2: Create a database backup and verify it before source changes**
+- [x] **Step 2: Create a database backup and verify it before source changes**
 
 Run:
 
@@ -42,7 +42,7 @@ ssh root@121.37.182.49 'cd /opt/agent-history-portal && ./scripts/backup.sh && l
 
 Expected: backup and restore verification both succeed and print the verified backup path.
 
-- [ ] **Step 3: Initialize a private local Git history on the server**
+- [x] **Step 3: Initialize a private local Git history on the server**
 
 Run:
 
@@ -52,7 +52,7 @@ ssh root@121.37.182.49 'cd /opt/agent-history-portal && git init -b main && git 
 
 Expected: the baseline commit succeeds, `.env` is absent from `git ls-files`, and the active branch is `feature/hermes-client-session-api`.
 
-- [ ] **Step 4: Record the backup and baseline commit outside Git**
+- [x] **Step 4: Record the backup and baseline commit outside Git**
 
 Run:
 
@@ -64,7 +64,7 @@ Expected: one commit hash and an empty status. Save the hash and verified backup
 
 ### Task 2: Specify the Session endpoint and absolute expiry
 
-- [ ] **Step 1: Write the failing endpoint tests**
+- [x] **Step 1: Write the failing endpoint tests**
 
 Create `/opt/agent-history-portal/history/tests/test_client_session_api.py` with:
 
@@ -176,7 +176,7 @@ class ClientSessionApiTests(TestCase):
                 self.assertEqual(self.client.get(reverse(name)).status_code, 302)
 ```
 
-- [ ] **Step 2: Run the test and verify the red state**
+- [x] **Step 2: Run the test and verify the red state**
 
 Run on the server:
 
@@ -186,7 +186,7 @@ cd /opt/agent-history-portal && uv run python manage.py test history.tests.test_
 
 Expected: FAIL because `client-session` is not registered and the login view does not stamp the absolute expiry.
 
-- [ ] **Step 3: Add the fixed lifetime setting**
+- [x] **Step 3: Add the fixed lifetime setting**
 
 Append to `config/settings.py` next to the Cookie settings:
 
@@ -200,7 +200,7 @@ if HERMES_SESSION_ABSOLUTE_AGE_SECONDS < 300:
     )
 ```
 
-- [ ] **Step 4: Implement the custom LoginView and endpoint**
+- [x] **Step 4: Implement the custom LoginView and endpoint**
 
 Create `history/auth_views.py` with:
 
@@ -275,7 +275,7 @@ def client_session(request):
 
 Django 5.2.17's `SessionBase.set_expiry(datetime)` converts the datetime to an ISO string before the default JSON serializer saves the Session; the deployed container source was checked explicitly. Keep the datetime form so the framework Cookie/session expiry and `ABSOLUTE_EXPIRY_KEY` share the same fixed instant.
 
-- [ ] **Step 5: Apply absolute expiry to client-facing history and memory views**
+- [x] **Step 5: Apply absolute expiry to client-facing history and memory views**
 
 In `history/views.py`, replace the import of Django's `login_required` with:
 
@@ -285,7 +285,7 @@ from .auth_views import hermes_session_required
 
 Replace every `@login_required` that currently exists in `history/views.py` with `@hermes_session_required`. Leave `healthz` and every view that is currently public unchanged; do not expand the protected-view set by guessing from URL names. Do not apply this decorator to `admin_site`; Django Admin retains its separate administrator Session and never requires the Hermes client timestamp.
 
-- [ ] **Step 6: Register only the fixed login, logout, and session routes**
+- [x] **Step 6: Register only the fixed login, logout, and session routes**
 
 Read the current `config/urls.py`, replace only the existing `accounts/login/` view with `HermesLoginView`, add only `path("api/session/", client_session, name="client-session")`, and retain every unrelated existing route in its current order. The resulting auth imports and three auth routes are:
 
@@ -303,7 +303,7 @@ path("api/session/", client_session, name="client-session"),
 
 Confirm the file does not include `django.contrib.auth.urls`; do not replace the whole `urlpatterns` list.
 
-- [ ] **Step 7: Run the endpoint and existing auth tests**
+- [x] **Step 7: Run the endpoint and existing auth tests**
 
 Run:
 
@@ -313,7 +313,7 @@ cd /opt/agent-history-portal && uv run python manage.py test history.tests.test_
 
 Expected: all tests pass; repeated status calls return the identical `session_expires_at`.
 
-- [ ] **Step 8: Commit the endpoint**
+- [x] **Step 8: Commit the endpoint**
 
 ```bash
 git add config/settings.py config/urls.py history/auth_views.py history/views.py history/tests/test_client_session_api.py
@@ -322,7 +322,7 @@ git commit -m "feat: add absolute client session endpoint"
 
 ### Task 3: Lock account lifecycle to server administrators
 
-- [ ] **Step 1: Add negative-route coverage**
+- [x] **Step 1: Add negative-route coverage**
 
 Add to `history/tests/test_admin_auth.py`:
 
@@ -372,7 +372,7 @@ from datetime import timedelta
 from django.utils import timezone
 ```
 
-- [ ] **Step 2: Run the account lifecycle tests**
+- [x] **Step 2: Run the account lifecycle tests**
 
 Run:
 
@@ -382,7 +382,7 @@ cd /opt/agent-history-portal && uv run python manage.py test history.tests.test_
 
 Expected: PASS with the explicit URL table; including `django.contrib.auth.urls` later makes this regression fail.
 
-- [ ] **Step 3: Verify existing memory and history endpoints still require Session auth**
+- [x] **Step 3: Verify existing memory and history endpoints still require Session auth**
 
 Run:
 
@@ -392,7 +392,7 @@ cd /opt/agent-history-portal && uv run python manage.py test history.tests.test_
 
 Expected: all anonymous memory/history access remains rejected and owner isolation remains green.
 
-- [ ] **Step 4: Document administrator reset notification**
+- [x] **Step 4: Document administrator reset notification**
 
 Add this policy to `OPERATIONS.md` under “门户账号”:
 
@@ -405,7 +405,7 @@ Add this policy to `OPERATIONS.md` under “门户账号”:
 - 用户首次成功登录后仍由管理员负责后续重置；Hermes 客户端不提供账户生命周期操作。
 ```
 
-- [ ] **Step 5: Commit the lifecycle contract**
+- [x] **Step 5: Commit the lifecycle contract**
 
 ```bash
 git add history/tests/test_admin_auth.py OPERATIONS.md
@@ -414,7 +414,7 @@ git commit -m "test: lock account lifecycle to server admins"
 
 ### Task 4: Deploy and prove rollback
 
-- [ ] **Step 1: Run the complete server suite and lint**
+- [x] **Step 1: Run the complete server suite and lint**
 
 Run:
 
@@ -424,7 +424,7 @@ cd /opt/agent-history-portal && uv run python manage.py test && uv run ruff chec
 
 Expected: zero test failures and zero Ruff errors.
 
-- [ ] **Step 2: Build without replacing the live container**
+- [x] **Step 2: Build without replacing the live container**
 
 Run:
 
@@ -434,7 +434,7 @@ cd /opt/agent-history-portal && podman-compose build web
 
 Expected: a new `agent-history-web` image builds successfully.
 
-- [ ] **Step 3: Record the pre-deploy image and create a fresh database backup**
+- [x] **Step 3: Record the pre-deploy image and create a fresh database backup**
 
 Run:
 
@@ -445,7 +445,7 @@ cd /opt/agent-history-portal && ./scripts/backup.sh
 
 Expected: one old image ID and one new verified backup path are captured.
 
-- [ ] **Step 4: Restart through the existing systemd unit**
+- [x] **Step 4: Restart through the existing systemd unit**
 
 Run:
 
@@ -456,11 +456,11 @@ systemctl --no-pager --full status agent-history-portal.service
 
 Expected: unit is active and the container health check becomes healthy.
 
-- [ ] **Step 5: Have an administrator create the disposable smoke-test account**
+- [x] **Step 5: Have an administrator create the disposable smoke-test account**
 
 From `/agent/admin/`, a server superuser creates one uniquely labelled, non-staff, non-superuser account solely for this deployment check. Generate and transfer its initial password through the approved protected channel; never place it in a command argument, transcript, Git, log, or general-purpose chat. Record only the non-identifying test-account label and the responsible administrator.
 
-- [ ] **Step 6: Run anonymous and authenticated HTTPS smoke checks**
+- [x] **Step 6: Run anonymous and authenticated HTTPS smoke checks**
 
 Run anonymous checks:
 
@@ -473,11 +473,11 @@ Expected: first response is `401 application/json` with `{"authenticated":false}
 
 Use a temporary Cookie jar and the administrator-created non-admin account through the documented CSRF form flow, then verify the authenticated endpoint returns exactly four keys and no Cookie value. Credentials must enter through an interactive prompt or protected stdin, never argv or shell history.
 
-- [ ] **Step 7: Disable or delete the disposable account**
+- [x] **Step 7: Disable or delete the disposable account**
 
 Immediately after the smoke checks, the server administrator disables or deletes the temporary account through `/agent/admin/`, confirms that its existing Session now receives `401`, and destroys the temporary Cookie jar. The client gains no endpoint for this lifecycle action.
 
-- [ ] **Step 8: Prove rollback inputs are recorded**
+- [x] **Step 8: Prove rollback inputs are recorded**
 
 Run:
 
@@ -489,3 +489,16 @@ git status --short
 ```
 
 Expected: `feature/hermes-client-session-api`, the baseline and two feature commits, and an empty status. The implementation transcript must also contain the pre-deploy image ID and verified database backup path; a healthy deployment does not execute rollback.
+
+## Execution record — 2026-08-18
+
+- Server baseline: `cdaa230`; active server branch: `feature/hermes-client-session-api`; `.env` remained untracked and mode `600`.
+- Initial verified backup: `/var/backups/agent-history/db-20260818T124432Z.sqlite3`.
+- Deployed server commits: `8ba9cb0`, `23f6d70`, `76619e5`, `d7d25f6`, and `c84b75f`.
+- Verification: 132/132 Django tests passed; Ruff 0.16.3 reported `All checks passed`; the built-image authentication subset passed 23/23.
+- Deployment: old image `a1567c06375704de2c909be3d680bd65f65aaef6c3e3cc91a0c56dff450fad92`; deployed image `b1155df43eb736847b2501e092f4e92cf2d1bf5b99d300521c0e9302310e92a5`.
+- Fresh verified backup: `/var/backups/agent-history/db-20260818T131707Z.sqlite3` (`restore verification: ok`).
+- HTTPS evidence: anonymous Session `401 {"authenticated":false}`; password reset `404`; login page `200`; authenticated Session `200`; protected dashboard `200`; the same Cookie returned `401` immediately after the account was disabled.
+- Cleanup: the disposable non-staff account was deleted, its Cookie jar was destroyed, and the remaining `hermes-smoke-` account count was `0`.
+- Environment deviations: server Git 2.27 required `git init` followed by `git checkout -b main`; the runtime image has no `uv`, so tests used the production image with an isolated `/tmp/db.sqlite3`; Ruff 0.16.3 ran in an ephemeral container with `--no-cache`.
+- Deployment finding: Podman container recreation changed the upstream IP while Nginx retained the old resolution. `nginx -t` and a graceful NPM reload restored routing; the recovery step is now recorded in `OPERATIONS.md`.
