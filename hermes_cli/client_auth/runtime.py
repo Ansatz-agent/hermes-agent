@@ -1163,6 +1163,33 @@ def authorize_entrypoint(boundary: str, *, interactive: bool) -> AuthScope:
     return scope
 
 
+def account_status() -> RuntimeSnapshot:
+    with _entrypoint_owner_lock:
+        owner = _entrypoint_owner
+    if owner is None:
+        return RuntimeSnapshot.signed_out(reason="runtime_unavailable")
+    try:
+        return owner.refresh()
+    except AuthRequired:
+        return owner.snapshot()
+
+
+def account_login(username: str, password: bytearray) -> RuntimeSnapshot:
+    with _entrypoint_owner_lock:
+        owner = _entrypoint_owner
+    if owner is None:
+        raise AuthRequired("runtime_unavailable")
+    return owner.login(username, password)
+
+
+def account_logout() -> RuntimeSnapshot:
+    with _entrypoint_owner_lock:
+        owner = _entrypoint_owner
+    if owner is None:
+        return RuntimeSnapshot.signed_out()
+    return owner.logout()
+
+
 @dataclass(frozen=True)
 class OwnerElectionContext:
     ssh_connection: bool

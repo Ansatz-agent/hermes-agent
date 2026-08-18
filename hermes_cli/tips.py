@@ -90,7 +90,7 @@ TIPS = [
     "hermes skills snapshot export setup.json exports your skill configuration for backup or sharing.",
     "hermes mcp add github --command npx adds MCP servers from the command line.",
     "hermes mcp serve runs Hermes itself as an MCP server for other agents.",
-    "hermes auth add lets you add multiple API keys for credential pool rotation.",
+    "hermes provider add lets you add multiple API keys for credential pool rotation.",
     "hermes completion bash >> ~/.bashrc enables tab completion for all commands and profiles.",
     "hermes logs -f follows agent.log in real time. --level WARNING --since 1h filters output.",
     "hermes backup creates a zip backup of your entire Hermes home directory.",
@@ -263,7 +263,7 @@ TIPS = [
     "Custom providers: save named endpoints in config.yaml under custom_providers.",
     "HERMES_EPHEMERAL_SYSTEM_PROMPT injects a system prompt that's never persisted to history.",
     "credential_pool_strategies supports fill_first, round_robin, least_used, and random rotation.",
-    "hermes auth add nous or hermes auth add openai-codex sets up OAuth-based providers.",
+    "hermes provider add nous or hermes provider add openai-codex sets up OAuth-based providers.",
     "The API server supports both Chat Completions and Responses API with server-side state.",
     "tool_preview_length: 0 in config shows full file paths in the spinner's activity feed.",
     "hermes status --deep runs deeper diagnostic checks across all components.",
@@ -369,7 +369,7 @@ TIPS = [
     'hermes curator rollback restores skills from a pre-run snapshot — backups live under skills/.curator_backups/.',
 
     # --- Credential Pools & Routing ---
-    'hermes auth reset <provider> clears all cooldowns and exhaustion flags on a credential pool.',
+    'hermes provider reset <provider> clears all cooldowns and exhaustion flags on a credential pool.',
     'credential_pool_strategies.<provider>: round_robin cycles keys evenly instead of the fill_first default.',
     'use_gateway: true per-tool routes web, image, tts, or browser through your Nous subscription — no extra keys.',
     'provider_routing.data_collection: deny excludes data-storing providers on OpenRouter.',

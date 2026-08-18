@@ -468,6 +468,7 @@ from hermes_cli.subcommands.slack import build_slack_parser
 from hermes_cli.subcommands.login import build_login_parser
 from hermes_cli.subcommands.logout import build_logout_parser
 from hermes_cli.subcommands.auth import build_auth_parser
+from hermes_cli.subcommands.provider import build_provider_parser
 from hermes_cli.subcommands.status import build_status_parser
 from hermes_cli.subcommands.pause import build_pause_parser
 from hermes_cli.subcommands.webhook import build_webhook_parser
@@ -4867,24 +4868,52 @@ def _run_anthropic_oauth_flow(save_env_value):
 
 
 
-def cmd_login(args):
-    """Authenticate Hermes CLI with a provider."""
-    from hermes_cli.auth import login_command
+def cmd_login(_args):
+    """Sign in to the fixed Hermes remote account server."""
+    from getpass import getpass
 
-    login_command(args)
+    from hermes_cli.client_auth.runtime import (
+        AuthRequired,
+        AuthState,
+        account_login,
+        account_status,
+    )
+
+    if not (sys.stdin.isatty() and sys.stderr.isatty()):
+        raise AuthRequired("interactive_login_required")
+    current = account_status()
+    if current.state is AuthState.AUTHENTICATED:
+        print(f"Authenticated as {current.username}")
+        return
+    username = input("Hermes account: ").strip()
+    password = bytearray(getpass("Password: ").encode("utf-8"))
+    try:
+        result = account_login(username, password)
+    finally:
+        password[:] = b"\0" * len(password)
+    print(f"Authenticated as {result.username}")
 
 
-def cmd_logout(args):
-    """Clear provider authentication."""
-    from hermes_cli.auth import logout_command
+def cmd_logout(_args):
+    """Sign out of the Hermes remote account."""
+    from hermes_cli.client_auth.runtime import account_logout
 
-    logout_command(args)
+    account_logout()
+    print("Remote Hermes account signed out; provider credentials were not modified.")
 
 
-def cmd_auth(args):
-    """Manage pooled credentials."""
+def cmd_auth_status(_args):
+    """Print redacted Hermes remote-account status."""
+    from hermes_cli.client_auth.runtime import account_status
+
+    print(json.dumps(account_status().public_dict(), sort_keys=True))
+
+
+def cmd_provider(args):
+    """Manage inference-provider credentials."""
     from hermes_cli.auth_commands import auth_command
 
+    args.auth_action = getattr(args, "provider_action", "")
     auth_command(args)
 
 
@@ -9581,6 +9610,7 @@ def _coalesce_session_name_args(argv: list) -> list:
         "login",
         "logout",
         "auth",
+        "provider",
         "status",
         "cron",
         "doctor",
@@ -11010,7 +11040,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "dump", "egress", "fallback", "gateway", "hooks", "import", "import-agent", "insights",
         "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate", "moa",
         "journey", "memory-graph", "learning",
-        "model", "monitoring", "pairing", "pause", "pets", "plugins", "portal", "profile",
+        "model", "monitoring", "pairing", "pause", "pets", "plugins", "portal", "profile", "provider",
         "project", "proxy",
         "prompt-size",
         "resume",
@@ -11990,9 +12020,10 @@ def main():
     build_logout_parser(subparsers, cmd_logout=cmd_logout)
 
     # =========================================================================
-    # auth command  (parser built in hermes_cli/subcommands/auth.py)
+    # account auth and inference-provider credential commands
     # =========================================================================
-    build_auth_parser(subparsers, cmd_auth=cmd_auth)
+    build_auth_parser(subparsers, cmd_auth_status=cmd_auth_status)
+    build_provider_parser(subparsers, cmd_provider=cmd_provider)
 
     # =========================================================================
     # status command  (parser built in hermes_cli/subcommands/status.py)
@@ -13169,4 +13200,14 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    from hermes_cli.client_auth.runtime import AuthRequired
+
+    try:
+        main()
+    except AuthRequired as _auth_error:
+        print(
+            f"AUTH_REQUIRED {_auth_error.reason or _auth_error.code}; "
+            "run `hermes login`",
+            file=sys.stderr,
+        )
+        raise SystemExit(20) from None

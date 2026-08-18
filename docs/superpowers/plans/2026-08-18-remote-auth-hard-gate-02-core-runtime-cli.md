@@ -563,7 +563,7 @@ git commit -m "feat: enforce auth before cli startup"
 
 ### Task 5: Repurpose login/logout/status and migrate provider authentication
 
-- [ ] **Step 1: Write failing command-routing tests**
+- [x] **Step 1: Write failing command-routing tests**
 
 Create `tests/hermes_cli/client_auth/test_account_commands.py` that constructs the real parser and asserts:
 
@@ -584,7 +584,7 @@ def test_provider_commands_retain_old_provider_handlers(parser):
 
 Add handler tests with a fake runtime: valid login is idempotent without `getpass`; signed-out login prompts once; logout increments epoch before remote logout; output states provider credentials were not modified. Add a subprocess case for `hermes login </dev/null` and assert structured `AUTH_REQUIRED`, exit `20`, and no traceback.
 
-- [ ] **Step 2: Run and verify the red state**
+- [x] **Step 2: Run and verify the red state**
 
 ```bash
 HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/hermes_cli/client_auth/test_account_commands.py -q
@@ -592,7 +592,7 @@ HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/hermes_cli/clien
 
 Expected: FAIL because current `auth` and `logout` still mean provider authentication.
 
-- [ ] **Step 3: Move provider parser semantics under `hermes provider`**
+- [x] **Step 3: Move provider parser semantics under `hermes provider`**
 
 Create `hermes_cli/subcommands/provider.py` by moving the existing `auth` parser tree and renaming parser destinations to `provider_action`. Keep the existing provider handler function, injected as `cmd_provider`. Replace `hermes_cli/subcommands/auth.py` with only:
 
@@ -606,7 +606,7 @@ def build_auth_parser(subparsers, *, cmd_auth_status):
 
 Replace login/logout parsers with flag-free account commands. Register `provider` in `_SUBCOMMANDS`, completion metadata, generated static help, and the main parser.
 
-- [ ] **Step 4: Implement account command handlers**
+- [x] **Step 4: Implement account command handlers**
 
 In `hermes_cli/main.py`, route handlers to runtime methods:
 
@@ -640,7 +640,7 @@ def cmd_auth_status(_args):
 
 Never log input values. Interactive protected commands may call the same prompt flow before capability initialization; noninteractive commands return structured exit `20` and instruct `hermes login`.
 
-- [ ] **Step 5: Run routing and existing provider tests, then commit**
+- [x] **Step 5: Run routing and existing provider tests, then commit**
 
 ```bash
 HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/hermes_cli/client_auth/test_account_commands.py tests/hermes_cli/test_auth_commands.py tests/hermes_cli/test_commands.py -q

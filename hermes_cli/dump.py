@@ -407,9 +407,9 @@ def run_dump(args):
         # (the actual cause of gated tools like web_search going missing).
         if val and env_var not in dotenv_keys:
             display += " (shell only — not in .env; managed/desktop backend may not see it)"
-        # A credential added via `hermes auth add openrouter` lives in the
+        # A credential added via `hermes provider add openrouter` lives in the
         # credential pool, not as an env var — surface it so the dump doesn't
-        # misleadingly read "not set" while `hermes auth list` shows it (#42130).
+        # misleadingly read "not set" while `hermes provider list` shows it (#42130).
         if not val and label == "openrouter":
             try:
                 from agent.credential_pool import load_pool as _load_pool
