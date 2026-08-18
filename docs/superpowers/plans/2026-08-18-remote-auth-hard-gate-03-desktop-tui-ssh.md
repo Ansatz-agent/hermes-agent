@@ -36,11 +36,11 @@
 
 ### Task 1: Start Desktop with only the local auth bridge
 
-- [ ] **Step 1: Write a failing bridge lifecycle test**
+- [x] **Step 1: Write a failing bridge lifecycle test**
 
 Create `apps/desktop/electron/auth-bridge.test.ts`. Inject a fake child-process factory and assert that startup uses the packaged Python with `-m hermes_cli.client_auth.bridge`, `stdio: ['pipe', 'pipe', 'pipe']`, an empty auth-secret environment, and no Hermes backend command. Cover bounded request IDs, malformed JSON, child exit, timeout, and stderr redaction. The test must assert that neither password nor `agent_history_sessionid` reaches emitted diagnostics.
 
-- [ ] **Step 2: Run the focused test and capture the missing-module failure**
+- [x] **Step 2: Run the focused test and capture the missing-module failure**
 
 ```bash
 cd apps/desktop
@@ -49,7 +49,7 @@ npx vitest run --project electron electron/auth-bridge.test.ts
 
 Expected: FAIL because `auth-bridge.ts` does not exist.
 
-- [ ] **Step 3: Implement the closed bridge client**
+- [x] **Step 3: Implement the closed bridge client**
 
 Create `apps/desktop/electron/auth-bridge.ts` with a `DesktopAuthBridge` class. It may issue only these request shapes:
 
@@ -69,11 +69,11 @@ type BridgeStatus = {
 
 Use newline-delimited JSON version `1`, a 64 KiB response-line cap, monotonically increasing request IDs, a 15-second timeout, and one pending-request map. Reject unknown fields and unknown methods before writing stdin. On child EOF, parse error, timeout, or schema drift, reject all pending calls with redacted `runtime_unavailable`. Do not copy child stderr into Renderer errors.
 
-- [ ] **Step 4: Wire bridge startup ahead of backend startup**
+- [x] **Step 4: Wire bridge startup ahead of backend startup**
 
 In `apps/desktop/electron/main.ts`, construct the bridge after the existing signed bootstrap/install shell is ready but before `runPrimaryBackendStartup`, deep-link dispatch, global shortcuts, terminal registration, HUD, Quick Entry, Pet Overlay, or capability windows. Update `primary-backend-startup.ts` to require an authenticated `ConnectionScope` input before either `ensureLocalRuntime` or `connectRemote` can be called.
 
-- [ ] **Step 5: Run and commit**
+- [x] **Step 5: Run and commit**
 
 ```bash
 cd apps/desktop
@@ -87,7 +87,7 @@ git commit -m "feat: start desktop through auth bridge"
 
 ### Task 2: Replace direct Electron IPC registration with one default-deny policy
 
-- [ ] **Step 1: Write failing policy-table behavior tests**
+- [x] **Step 1: Write failing policy-table behavior tests**
 
 Create `apps/desktop/electron/guarded-ipc.test.ts`. Use a fake `ipcMain` and real handler registration calls to assert:
 
@@ -108,7 +108,7 @@ const requiredCases = [
 
 The full test must enumerate all channels registered by production registration functions, compare that set to `Object.keys(CHANNEL_AUTH_POLICY)`, and invoke representative handlers under authenticated, locked, and stale-scope coordinators. An unclassified channel must throw before its handler runs. Do not read `main.ts` as text and do not assert a hard-coded handler count.
 
-- [ ] **Step 2: Run and verify default-deny behavior is absent**
+- [x] **Step 2: Run and verify default-deny behavior is absent**
 
 ```bash
 cd apps/desktop
@@ -117,7 +117,7 @@ npx vitest run --project electron electron/guarded-ipc.test.ts
 
 Expected: FAIL because handlers register directly through `ipcMain`.
 
-- [ ] **Step 3: Implement the single policy adapter**
+- [x] **Step 3: Implement the single policy adapter**
 
 Create `apps/desktop/electron/guarded-ipc.ts` with one exported `CHANNEL_AUTH_POLICY`, `guardedHandle`, and `guardedOn`. `guardedHandle` and `guardedOn` must determine the actual execution target from validated payload and sender ownership, ask `AuthCoordinator.require(policy, connectionId)`, then invoke the handler. Missing policy, missing connection ID, unknown sender, stale scope, and bridge failure all reject with a redacted `AUTH_REQUIRED` error. Derive any compatibility `AUTH_FREE_CHANNELS` set from `CHANNEL_AUTH_POLICY`; do not maintain a second list.
 
@@ -130,11 +130,11 @@ Auth-free policy is limited to:
 
 Every channel that reads files, sessions, logs, config, clipboard, network state, secrets, profiles, or starts a process remains protected. `hermes:version` is not an Electron capability exception; the login shell displays its packaged build metadata without an IPC call.
 
-- [ ] **Step 4: Route every `ipcMain.handle/on` call through the adapter**
+- [x] **Step 4: Route every `ipcMain.handle/on` call through the adapter**
 
 Refactor `main.ts` registration into callable registration functions and pass the adapter into them. Remove direct `ipcMain.handle/on` usage outside `guarded-ipc.ts`. Keep real behavior tests for channel authorization; add ESLint `no-restricted-imports` configuration scoped to Electron files so only `guarded-ipc.ts` may import `ipcMain` for handler registration.
 
-- [ ] **Step 5: Run and commit**
+- [x] **Step 5: Run and commit**
 
 ```bash
 cd apps/desktop
@@ -149,11 +149,11 @@ git commit -m "feat: default deny desktop ipc"
 
 ### Task 3: Render the hard login gate and propagate lock events
 
-- [ ] **Step 1: Write failing Renderer and startup tests**
+- [x] **Step 1: Write failing Renderer and startup tests**
 
 Create `apps/desktop/src/components/auth-gate.test.tsx` and `apps/desktop/e2e/auth-hard-gate.spec.ts`. Assert that a signed-out first launch renders only fixed server text, username, password, login, retry, and an administrator-contact message. Assert absence of registration, invitation, password reset/change, server URL, insecure TLS, offline, and skip controls. Instrument Electron startup and assert zero backend spawn/connect, WebSocket, terminal PTY, deep-link delivery, HUD, Quick Entry, and Pet Overlay activity before authentication.
 
-- [ ] **Step 2: Run and record the failure**
+- [x] **Step 2: Run and record the failure**
 
 ```bash
 cd apps/desktop
@@ -163,17 +163,17 @@ npx vitest run --project electron electron/auth-coordinator.test.ts
 
 Expected: FAIL because the auth gate and coordinator do not exist.
 
-- [ ] **Step 3: Implement `AuthCoordinator` and `AuthGate`**
+- [x] **Step 3: Implement `AuthCoordinator` and `AuthGate`**
 
 Create `auth-coordinator.ts` with a map keyed by `connection_id`; `local` is a reserved ID. Each entry stores the full runtime scope, never a boolean. It subscribes to bridge/runtime status changes, invalidates the prior scope before logout, and emits `locked` before cleanup.
 
 Create `auth-gate.tsx` and wrap `apps/desktop/src/app/index.tsx` from `main.tsx`. Password remains component-local only until `window.hermes.auth.login` resolves, then the input state is cleared. Renderer stores no password, Cookie, CSRF, or vault record. On lock, unmount protected app trees and ask the main process to close backend connections and capability windows before returning to the login shell.
 
-- [ ] **Step 4: Add complete locale messages**
+- [x] **Step 4: Add complete locale messages**
 
 Add the same auth message keys to `en`, `ja`, `zh`, and `zh-hant`. Map reason codes to user-safe text. All other locales fall back to English. Add a catalog test proving the required catalogs contain every key, explicitly load `ar.ts` and prove each missing Arabic auth key resolves to the English fallback, and prove no message suggests self-registration or self-service reset; the password-reset instruction must be “contact the server administrator”.
 
-- [ ] **Step 5: Run and commit**
+- [x] **Step 5: Run and commit**
 
 ```bash
 cd apps/desktop
@@ -188,11 +188,11 @@ git commit -m "feat: add desktop account hard gate"
 
 ### Task 4: Bind backend HTTP and WebSocket access to unforgeable auth scope tokens
 
-- [ ] **Step 1: Write failing token and direct-connect tests**
+- [x] **Step 1: Write failing token and direct-connect tests**
 
 Create `auth-scope-token.test.ts` and Python tests in `tests/hermes_cli/client_auth/test_runtime.py`. Assert that issued bearer tokens contain at least 256 bits of randomness, are stored hashed in the backend, expire within 60 seconds, and bind exact `connection_id`, `runtime_instance_id`, and `epoch`. Test HTTP request, WS upgrade, and every WS message. A copied tuple without the random bearer, a token from another connection, a token issued before logout, and a token issued by a previous owner instance must all fail before route work.
 
-- [ ] **Step 2: Run the focused tests and observe old-token acceptance**
+- [x] **Step 2: Run the focused tests and observe old-token acceptance**
 
 ```bash
 cd apps/desktop
@@ -201,17 +201,17 @@ cd ../..
 HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/hermes_cli/client_auth/test_runtime.py tests/gateway/test_api_server.py -q
 ```
 
-- [ ] **Step 3: Implement issuance and backend verification**
+- [x] **Step 3: Implement issuance and backend verification**
 
 Create `auth-scope-token.ts`. Generate the bearer with `crypto.randomBytes(32)`, transmit it to the chosen backend over its already protected child stdin/control channel, and expose only the connection-specific bearer to the owning Renderer window. Extend `runtime.py` with token registration/revocation inside the existing runtime protocol; do not create a fifth auth module. `web_server.py` and `api_server.py` verify the bearer digest, exact tuple, connection ID, TTL, and current owner liveness at request start and per WS message.
 
 On `locked`, `logout`, bridge EOF, or connection switch, revoke all tokens for that scope and close corresponding WS connections. Never put a token in a URL, log, crash report, command-line argument, persistent connection registry, or environment variable.
 
-- [ ] **Step 4: Prove Node and PTY children do not inherit auth liveness handles**
+- [x] **Step 4: Prove Node and PTY children do not inherit auth liveness handles**
 
 Add behavior cases around the real `spawn` and `node-pty` helpers in `main.ts`. After a parent connection is closed, a child process must not keep the runtime liveness endpoint open and its next protected request must fail. Pass explicit `stdio` arrays and close every unrelated fd/Windows handle.
 
-- [ ] **Step 5: Run and commit**
+- [x] **Step 5: Run and commit**
 
 ```bash
 cd apps/desktop

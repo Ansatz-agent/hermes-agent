@@ -758,11 +758,11 @@ git commit -m "test: require auth policy for every entrypoint"
 
 ### Task 8: Enforce shared authorization at execution boundaries
 
-- [ ] **Step 1: Add boundary behavior tests**
+- [x] **Step 1: Add boundary behavior tests**
 
 Create `tests/hermes_cli/client_auth/test_boundaries.py` and invoke real boundary functions with authenticated, locked, expired, and stale-scope consumers. Cover Agent turns, concurrent/sequential tool calls, gateway HTTP and WS messages, cron tick/job start, web-server requests, ACP requests, worker/delegate start, terminal spawn, file writes, git/network/message side effects. Exercise direct `model_tools.handle_function_call` callers, the standalone `mcp_serve.py` request surface, and `agent/transports/hermes_tools_mcp_server.py`. Each locked case must fail before SessionDB/history access, tool lookup, or the mocked irreversible operation is called.
 
-- [ ] **Step 2: Insert the single primitive at central dispatch points**
+- [x] **Step 2: Insert the single primitive at central dispatch points**
 
 Use only:
 
@@ -776,11 +776,11 @@ Insert it at `model_tools.handle_function_call` before any lookup or dispatch, b
 
 Also guard `gateway/platforms/api_server.py` before HTTP/WS handling and each WS message, `cron/scheduler.py` before tick and job execution, `hermes_cli/web_server.py` before protected routes, and `acp_adapter/server.py` before request/session work. Pass `AuthScope` into worker/delegate creation and reject stale scopes in the child before any Agent/tool import.
 
-- [ ] **Step 3: Verify lock propagation and in-flight stopping**
+- [x] **Step 3: Verify lock propagation and in-flight stopping**
 
 Tests must prove owner EOF/epoch change blocks the next tool/message/job boundary, closes backend WS connections, and does not attempt to roll back already completed external effects.
 
-- [ ] **Step 4: Run focused suites and commit**
+- [x] **Step 4: Run focused suites and commit**
 
 ```bash
 HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/hermes_cli/client_auth/test_boundaries.py tests/test_model_tools.py tests/test_mcp_serve.py tests/agent/transports/test_hermes_tools_mcp_server.py tests/integration/test_batch_runner.py tests/test_mini_swe_runner.py tests/agent/test_tool_executor_checkpoint_paths.py tests/run_agent/test_tool_executor_contextvar_propagation.py tests/gateway/test_api_server.py tests/cron/test_scheduler.py tests/acp/test_server.py -q
