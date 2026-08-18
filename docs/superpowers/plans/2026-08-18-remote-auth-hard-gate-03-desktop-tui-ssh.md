@@ -320,7 +320,7 @@ Expected: FAIL because `ssh-connection.ts` currently emits `StrictHostKeyCheckin
 
 Change `baseSshOptions` to `StrictHostKeyChecking=yes`. Add a typed `UnknownHostKey` result containing host, algorithm, and SHA256 fingerprint but no command stderr. Add an Electron confirmation dialog before any credential-bearing operation; its copy must state that `ssh-keyscan` is not proof of identity and require the user to compare the fingerprint with a trusted administrator/out-of-band source. Re-read the effective key immediately before append and reject if it differs from the displayed fingerprint. Use an owner-only temporary file in the same directory, `fsync`, rename, and mode `0600`; preserve existing known-host entries.
 
-- [ ] **Step 4: Implement the remote auth-only bootstrap**
+- [x] **Step 4: Implement the remote auth-only bootstrap**
 
 In `ssh-bootstrap-coordinator.ts`, the ordered remote flow is:
 
@@ -334,7 +334,7 @@ In `ssh-bootstrap-coordinator.ts`, the ordered remote flow is:
 
 The remote bridge detaches the broker from the login TTY and all inherited fds before reporting success. Account password appears only in the bounded stdin frame; add spies proving it is absent from argv, env, filesystem writes, logs, errors, connection registry, and backend command. Local vault records are never read or forwarded for a remote connection. Remote logout affects only that remote OS-user runtime.
 
-- [ ] **Step 5: Run SSH and Desktop integration tests, then commit**
+- [x] **Step 5: Run SSH and Desktop integration tests, then commit**
 
 ```bash
 cd apps/desktop
