@@ -98,6 +98,10 @@ export class AuthCoordinator {
     return status.state === 'authenticated' && status.valid_until > this.clock() && this.scopes.has(connectionId)
   }
 
+  hasConnection(connectionId: string): boolean {
+    return this.bridges.has(connectionId)
+  }
+
   subscribe(listener: StatusListener): () => void {
     this.listeners.add(listener)
 

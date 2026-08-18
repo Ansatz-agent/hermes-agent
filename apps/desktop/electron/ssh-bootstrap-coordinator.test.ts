@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { test } from 'vitest'
 
 import {
+  bootstrapRemoteAuthOnly,
   buildUnknownHostConfirmation,
   createBootstrapCoordinator,
   openSshWithExplicitHostTrust,
@@ -334,4 +335,68 @@ test('key change between confirmation and append fails closed', async () => {
     (error: any) => error.kind === 'host-key-changed'
   )
   assert.equal(appended, false)
+})
+
+test('remote auth-only bootstrap sends password only to bridge login and starts backend after authentication', async () => {
+  const events: string[] = []
+  const password = 'password-sentinel'
+  const locked = { state: 'signed_out' }
+  const authenticated = { epoch: 2, runtime_instance_id: 'runtime', state: 'authenticated' }
+
+  const bridge = {
+    login: async (username, receivedPassword) => {
+      events.push(`login:${username}`)
+      assert.equal(receivedPassword, password)
+
+      return authenticated
+    },
+    status: async () => {
+      events.push('status')
+
+      return locked
+    }
+  }
+
+  const result = await bootstrapRemoteAuthOnly({
+    credentials: { password, username: 'alice' },
+    openBridge: async () => {
+      events.push('bridge')
+
+      return bridge
+    },
+    openTrustedTransport: async () => events.push('strict-transport'),
+    startBackend: async status => {
+      events.push(`backend:${status.epoch}`)
+
+      return { ok: true }
+    }
+  })
+
+  assert.deepEqual(events, ['strict-transport', 'bridge', 'status', 'login:alice', 'backend:2'])
+  assert.deepEqual(result.backend, { ok: true })
+  assert.equal(JSON.stringify(events).includes(password), false)
+})
+
+test('remote auth-only bootstrap leaves a locked bridge ready for UI login and never starts backend', async () => {
+  let backendStarted = false
+
+  const bridge = {
+    login: async () => {
+      throw new Error('login must wait for UI input')
+    },
+    status: async () => ({ reason: 'signed_out', state: 'signed_out' })
+  }
+
+  const result = await bootstrapRemoteAuthOnly({
+    openBridge: async () => bridge,
+    openTrustedTransport: async () => {},
+    startBackend: async () => {
+      backendStarted = true
+    }
+  })
+
+  assert.equal(result.status.state, 'signed_out')
+  assert.equal(result.bridge, bridge)
+  assert.equal(result.backend, null)
+  assert.equal(backendStarted, false)
 })

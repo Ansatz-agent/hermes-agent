@@ -767,6 +767,29 @@ test('runSsh delivers stdinData to the child and does not log it', async () => {
   assert.equal(stdinWritten, 'secret-token-value', 'stdinData must be written to child.stdin')
 })
 
+test('spawnAuthBridge launches only the fixed remote module with piped stdio and no password-bearing env', () => {
+  const calls: any[] = []
+  const child = fakeChild({ hang: true })
+  child.stdin = new EventEmitter()
+
+  const spawnFn: any = (command, args, options) => {
+    calls.push({ args, command, options })
+
+    return child
+  }
+
+  const conn = new SshConnection({ host: 'box', user: 'me' }, { controlDir: '/tmp/d', spawnFn })
+  const remoteCommand = "'/opt/hermes/venv/bin/python' -m hermes_cli.client_auth.bridge"
+
+  assert.equal(conn.spawnAuthBridge('/opt/hermes/venv/bin/python'), child)
+  assert.equal(calls[0].command, 'ssh')
+  assert.deepEqual(calls[0].options.stdio, ['pipe', 'pipe', 'pipe'])
+  assert.equal(Object.hasOwn(calls[0].options, 'env'), false)
+  assert.equal(calls[0].args.at(-1), remoteCommand)
+  assert.ok(calls[0].args.includes('StrictHostKeyChecking=yes'))
+  assert.equal(JSON.stringify(calls).includes('password-sentinel'), false)
+})
+
 test('open() rejects a control-dir that is a symlink', async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ssh-test-'))
   const real = path.join(tmp, 'real')

@@ -201,6 +201,36 @@ function target(user, host) {
   return user ? `${user}@${host}` : host
 }
 
+function buildRemoteAuthBridgeCommand(pythonExecutable, platform = 'posix') {
+  const executable = String(pythonExecutable || '')
+
+  if (
+    !executable ||
+    executable.startsWith('-') ||
+    [...executable].some(character => {
+      const codepoint = character.codePointAt(0) ?? 0
+
+      return codepoint < 0x20 || codepoint === 0x7f
+    })
+  ) {
+    throw new Error('Unsafe remote Python executable.')
+  }
+
+  if (platform === 'windows') {
+    if (executable.includes('"')) {
+      throw new Error('Unsafe remote Python executable.')
+    }
+
+    return `"${executable}" -m hermes_cli.client_auth.bridge`
+  }
+
+  const command = executable.startsWith('~/')
+    ? `"$HOME"'${executable.slice(1).replace(/'/g, `'\\''`)}'`
+    : `'${executable.replace(/'/g, `'\\''`)}'`
+
+  return `${command} -m hermes_cli.client_auth.bridge`
+}
+
 function buildExecArgs(conn, remoteCommand, connectTimeoutMs?) {
   return [
     ...baseSshOptions(conn.controlPath, connectTimeoutMs),
@@ -861,6 +891,15 @@ class SshConnection {
     return result.stdout
   }
 
+  spawnAuthBridge(pythonExecutable, platform = 'posix') {
+    const remoteCommand = buildRemoteAuthBridgeCommand(pythonExecutable, platform)
+    const args = buildExecArgs(this, remoteCommand, this._connectTimeoutMs)
+
+    return this._spawnFn('ssh', args, {
+      stdio: ['pipe', 'pipe', 'pipe']
+    })
+  }
+
   // Establish a local→remote forward. Mux: `-O forward` against the master.
   // No-mux: spawn a persistent `ssh -N -L` child that IS the tunnel; ready when
   // the local port accepts. The child dying = tunnel down (isAlive of the
@@ -1060,6 +1099,7 @@ export {
   buildExecArgs,
   buildInteractiveSshArgs,
   buildMasterArgs,
+  buildRemoteAuthBridgeCommand,
   classifySshError,
   CONTROL_PERSIST_SECONDS,
   controlSocketPath,

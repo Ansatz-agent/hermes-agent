@@ -26,7 +26,7 @@ const authenticated: DesktopAccountStatus = {
 }
 
 function renderGate(overrides: Record<string, unknown> = {}, unauthenticatedOverlay: ReactNode = null) {
-  let changed: ((status: DesktopAccountStatus) => void) | null = null
+  let changed: ((status: DesktopAccountStatus, connectionId?: string) => void) | null = null
 
   const auth = {
     status: vi.fn(async () => signedOut),
@@ -50,7 +50,7 @@ function renderGate(overrides: Record<string, unknown> = {}, unauthenticatedOver
     </I18nProvider>
   )
 
-  return { auth, emit: (status: DesktopAccountStatus) => changed?.(status) }
+  return { auth, emit: (status: DesktopAccountStatus, connectionId?: string) => changed?.(status, connectionId) }
 }
 
 afterEach(() => {
@@ -142,5 +142,20 @@ describe('AuthGate', () => {
     expect(await screen.findByText('The account server is unavailable. Try again.')).not.toBeNull()
     expect(globalThis.document.body.textContent).not.toContain('Traceback')
     expect(globalThis.document.body.textContent).not.toContain('sessionid')
+  })
+
+  it('routes a remote connection lock and login through that exact connection id', async () => {
+    const { auth, emit } = renderGate({
+      status: vi.fn(async connectionId => (connectionId === 'remote-a' ? signedOut : authenticated))
+    })
+
+    expect(await screen.findByText('Protected Hermes application')).not.toBeNull()
+
+    act(() => emit({ ...signedOut, runtime_instance_id: 'remote-runtime' }, 'remote-a'))
+    fireEvent.change(await screen.findByLabelText('Username'), { target: { value: 'alice' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'password-sentinel' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    await waitFor(() => expect(auth.login).toHaveBeenCalledWith('alice', 'password-sentinel', 'remote-a'))
   })
 })

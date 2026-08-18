@@ -15,10 +15,10 @@ declare global {
   interface Window {
     hermesDesktop: {
       auth: {
-        status: () => Promise<DesktopAccountStatus>
-        login: (username: string, password: string) => Promise<DesktopAccountStatus>
-        logout: () => Promise<DesktopAccountStatus>
-        onChanged: (callback: (status: DesktopAccountStatus) => void) => () => void
+        status: (connectionId?: string) => Promise<DesktopAccountStatus>
+        login: (username: string, password: string, connectionId?: string) => Promise<DesktopAccountStatus>
+        logout: (connectionId?: string) => Promise<DesktopAccountStatus>
+        onChanged: (callback: (status: DesktopAccountStatus, connectionId?: string) => void) => () => void
       }
       // Resolve a backend connection. Omit `profile` (or pass the primary) for
       // the window's backend; pass a named profile to lazily spawn/reuse that

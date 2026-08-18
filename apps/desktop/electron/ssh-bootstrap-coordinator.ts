@@ -58,6 +58,29 @@ async function openSshWithExplicitHostTrust({ append, confirm, openStrict, scan 
   await openStrict()
 }
 
+async function bootstrapRemoteAuthOnly({
+  credentials = null,
+  openBridge,
+  openTrustedTransport,
+  startBackend
+}) {
+  await openTrustedTransport()
+  const bridge = await openBridge()
+  let status = await bridge.status()
+
+  if (status?.state !== 'authenticated' && credentials) {
+    status = await bridge.login(credentials.username, credentials.password)
+  }
+
+  if (status?.state !== 'authenticated') {
+    return { backend: null, bridge, status }
+  }
+
+  const backend = await startBackend(status, bridge)
+
+  return { backend, bridge, status }
+}
+
 function sshConfigFingerprint(scope, config) {
   const parts = [
     scope,
@@ -187,6 +210,7 @@ function createBootstrapCoordinator() {
 }
 
 export {
+  bootstrapRemoteAuthOnly,
   buildUnknownHostConfirmation,
   createBootstrapCoordinator,
   openSshWithExplicitHostTrust,

@@ -15,10 +15,10 @@ export type DesktopAccountStatus = {
 }
 
 export type DesktopAuthClient = {
-  status: () => Promise<DesktopAccountStatus>
-  login: (username: string, password: string) => Promise<DesktopAccountStatus>
-  logout: () => Promise<DesktopAccountStatus>
-  onChanged: (callback: (status: DesktopAccountStatus) => void) => () => void
+  status: (connectionId?: string) => Promise<DesktopAccountStatus>
+  login: (username: string, password: string, connectionId?: string) => Promise<DesktopAccountStatus>
+  logout: (connectionId?: string) => Promise<DesktopAccountStatus>
+  onChanged: (callback: (status: DesktopAccountStatus, connectionId?: string) => void) => () => void
 }
 
 const unavailableStatus = (): DesktopAccountStatus => ({
@@ -51,6 +51,7 @@ export function AuthGate({
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [connectionId, setConnectionId] = useState('local')
   const eventRevision = useRef(0)
   const requestRevision = useRef(0)
 
@@ -67,16 +68,17 @@ export function AuthGate({
     const request = ++requestRevision.current
     const observedEvent = eventRevision.current
 
-    const unsubscribe = auth.onChanged(next => {
+    const unsubscribe = auth.onChanged((next, nextConnectionId = 'local') => {
       if (active) {
         eventRevision.current += 1
         requestRevision.current += 1
+        setConnectionId(nextConnectionId)
         setStatus(next)
       }
     })
 
     void auth
-      .status()
+      .status(connectionId === 'local' ? undefined : connectionId)
       .then(next => {
         if (active && request === requestRevision.current && observedEvent === eventRevision.current) {
           setStatus(next)
@@ -93,7 +95,7 @@ export function AuthGate({
       requestRevision.current += 1
       unsubscribe()
     }
-  }, [auth])
+  }, [auth, connectionId])
 
   if (status.state === 'authenticated') {
     return children
@@ -108,7 +110,7 @@ export function AuthGate({
     const observedEvent = eventRevision.current
     setStatus(current => ({ ...current, state: 'checking', reason: null }))
     void auth
-      .status()
+      .status(connectionId === 'local' ? undefined : connectionId)
       .then(next => {
         if (request === requestRevision.current && observedEvent === eventRevision.current) {
           setStatus(next)
@@ -132,7 +134,7 @@ export function AuthGate({
     const request = ++requestRevision.current
     const observedEvent = eventRevision.current
     void auth
-      .login(username.trim(), password)
+      .login(username.trim(), password, ...(connectionId === 'local' ? [] : [connectionId]))
       .then(next => {
         if (request === requestRevision.current && observedEvent === eventRevision.current) {
           setStatus(next)

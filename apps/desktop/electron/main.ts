@@ -250,6 +250,7 @@ import {
 } from './session-windows'
 import { ensureSpawnHelperExecutable } from './spawn-helper-perms'
 import {
+  bootstrapRemoteAuthOnly,
   buildUnknownHostConfirmation,
   createBootstrapCoordinator,
   openSshWithExplicitHostTrust,
@@ -819,13 +820,9 @@ async function startDesktopAuthRuntime() {
     desktopAuthBridge = bridge
     desktopAuthCoordinator = coordinator
     coordinator.subscribe((status, connectionId) => {
-      if (connectionId !== 'local') {
-        return
-      }
+      broadcastDesktopAuthStatus(status, connectionId)
 
-      broadcastDesktopAuthStatus(status)
-
-      if (status.state === 'authenticated' && !desktopCapabilityShellEnabled) {
+      if (connectionId === 'local' && status.state === 'authenticated' && !desktopCapabilityShellEnabled) {
         enableDesktopCapabilityShell()
 
         if (mainWindow && !mainWindow.isDestroyed()) {
@@ -942,14 +939,18 @@ configureGuardedIpcAuthority({
       throw new AuthBridgeError('runtime_unavailable', 'runtime_unavailable')
     }
 
+    if (connectionId && connectionId !== 'local' && policy !== 'local') {
+      await prepareRegistryConnectionAuth(connectionId)
+    }
+
     await desktopAuthCoordinator.require(policy, connectionId)
   }
 })
 
-function broadcastDesktopAuthStatus(status) {
+function broadcastDesktopAuthStatus(status, connectionId = 'local') {
   for (const window of BrowserWindow.getAllWindows()) {
     if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
-      window.webContents.send('hermes:auth:changed', status)
+      window.webContents.send('hermes:auth:changed', status, connectionId)
     }
   }
 }
@@ -8738,6 +8739,7 @@ async function buildRemoteConnection(
 }
 
 const sshConnections = new Map<string, any>()
+const sshAuthBridges = new Map<string, any>()
 const desktopInstallationId = loadOrCreateInstallationId(DESKTOP_INSTALLATION_PATH)
 
 const sshBootstrapCoordinator = createBootstrapCoordinator()
@@ -8755,6 +8757,189 @@ function sshOwnershipKey(profile) {
 
 function sshRememberLog(chunk) {
   rememberLog(redactSecrets(String(chunk == null ? '' : chunk)))
+}
+
+function remoteAuthPythonCandidates(sshConfig) {
+  const candidates: Array<{ executable: string; platform: 'posix' | 'windows' }> = []
+  const explicit = String(sshConfig.remoteHermesPath || '').trim()
+
+  if (explicit) {
+    const windows = /^(?:[A-Za-z]:[\\/]|%[^%]+%[\\/])/.test(explicit) || explicit.includes('\\')
+    const parts = explicit.split(windows ? /[\\/]/ : /\//)
+    parts.pop()
+    const directory = parts.join(windows ? '\\' : '/')
+
+    if (directory) {
+      candidates.push({
+        executable: `${directory}${windows ? '\\python.exe' : '/python'}`,
+        platform: windows ? 'windows' : 'posix'
+      })
+    }
+  }
+
+  candidates.push(
+    { executable: '~/.hermes/hermes-agent/venv/bin/python', platform: 'posix' },
+    { executable: '~/hermes-agent/.venv/bin/python', platform: 'posix' },
+    { executable: 'python3', platform: 'posix' },
+    { executable: 'python', platform: 'posix' },
+    {
+      executable: '%LOCALAPPDATA%\\hermes\\hermes-agent\\venv\\Scripts\\python.exe',
+      platform: 'windows'
+    }
+  )
+
+  return candidates.filter(
+    (candidate, index) =>
+      candidates.findIndex(
+        other => other.executable === candidate.executable && other.platform === candidate.platform
+      ) === index
+  )
+}
+
+async function openRemoteDesktopAuthBridge(ssh, sshConfig) {
+  for (const candidate of remoteAuthPythonCandidates(sshConfig)) {
+    const bridge = new DesktopAuthBridge({
+      cwd: app.getPath('home'),
+      env: {},
+      pythonExecutable: candidate.executable,
+      spawnChild: (command, args) => {
+        if (
+          command !== candidate.executable ||
+          args.length !== 2 ||
+          args[0] !== '-m' ||
+          args[1] !== 'hermes_cli.client_auth.bridge'
+        ) {
+          throw new AuthBridgeError('runtime_unavailable', 'runtime_unavailable')
+        }
+
+        return ssh.spawnAuthBridge(candidate.executable, candidate.platform)
+      }
+    })
+
+    try {
+      await bridge.status()
+
+      return bridge
+    } catch {
+      bridge.close()
+    }
+  }
+
+  throw new AuthBridgeError('runtime_unavailable', 'runtime_unavailable')
+}
+
+async function openSshTransportWithTrust(ssh, sshConfig) {
+  await openSshWithExplicitHostTrust({
+    append: async candidate => appendKnownHostKeyAtomic(candidate.knownHostsEntry),
+    confirm: async candidate => {
+      const copy = buildUnknownHostConfirmation(candidate)
+
+      const options = {
+        buttons: copy.buttons,
+        cancelId: 0,
+        defaultId: 0,
+        detail: copy.detail,
+        message: copy.message,
+        noLink: true,
+        title: copy.title,
+        type: 'warning' as const
+      }
+
+      const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+      const answer = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options)
+
+      return answer.response === 1
+    },
+    openStrict: () => ssh.open(),
+    scan: () => scanSshHostKey({ host: sshConfig.host, port: sshConfig.port })
+  })
+}
+
+async function closeSshAuthConnection(connectionId) {
+  const state = sshAuthBridges.get(connectionId)
+
+  if (!state) {
+    return
+  }
+
+  sshAuthBridges.delete(connectionId)
+  state.bridge.close()
+  await state.ssh.close().catch(() => {})
+}
+
+async function prepareRegistryConnectionAuth(connectionId) {
+  if (!desktopAuthCoordinator || connectionId === 'local' || desktopAuthCoordinator.hasConnection(connectionId)) {
+    return
+  }
+
+  const registry = readDesktopConnectionsRegistry()
+  const source = registry.connections.find(connection => connection.id === connectionId)
+
+  if (!source || source.kind !== 'ssh') {
+    return
+  }
+
+  const sshConfig = normalizeSshConfig({
+    mode: 'ssh',
+    host: source.host,
+    user: source.user,
+    port: source.port,
+    keyPath: source.keyPath,
+    remoteHermesPath: source.remoteHermesPath,
+    remoteProfile: source.remoteProfile
+  })
+
+  if (!sshConfig) {
+    return
+  }
+
+  const effectiveConfigFingerprint = effectiveSshConfigFingerprint(sshConfig)
+  const resolvedConfig = { ...sshConfig, effectiveConfigFingerprint }
+  const authScope = `auth-conn:${connectionId}`
+  const fingerprint = sshConfigFingerprint(authScope, resolvedConfig)
+
+  await sshBootstrapCoordinator.start(authScope, `auth:${fingerprint}`, async lease => {
+    if (desktopAuthCoordinator?.hasConnection(connectionId)) {
+      return
+    }
+
+    const previous = sshAuthBridges.get(connectionId)
+
+    if (previous && previous.fingerprint !== fingerprint) {
+      await closeSshAuthConnection(connectionId)
+    }
+
+    const ssh = new SshConnection(
+      { host: resolvedConfig.host, user: resolvedConfig.user, port: resolvedConfig.port, keyPath: resolvedConfig.keyPath },
+      {
+        rememberLog: sshRememberLog,
+        ownershipId: sshOwnershipId(desktopInstallationId, authScope),
+        scope: authScope,
+        effectiveConfigFingerprint
+      }
+    )
+
+    const removeForceCleanup = lease.onForceCleanup(() => ssh.close())
+    let bridge
+
+    try {
+      const authOnly = await bootstrapRemoteAuthOnly({
+        openBridge: async () => openRemoteDesktopAuthBridge(ssh, resolvedConfig),
+        openTrustedTransport: async () => openSshTransportWithTrust(ssh, resolvedConfig),
+        startBackend: async () => null
+      })
+
+      bridge = authOnly.bridge
+      lease.assertCurrent()
+      sshAuthBridges.set(connectionId, { bridge, fingerprint, ssh })
+      await desktopAuthCoordinator!.registerConnection(connectionId, bridge)
+      removeForceCleanup()
+    } catch (error) {
+      bridge?.close()
+      await ssh.close().catch(() => {})
+      throw error
+    }
+  })
 }
 
 async function sshProbeReuseProof(baseUrl, token, spawnNonce) {
@@ -8906,30 +9091,7 @@ async function bootstrapSshConnectionInner(profile, sshConfig, reuseToken, sourc
       }
     )
     removeForceCleanup = lease.onForceCleanup(() => ssh.close())
-    await openSshWithExplicitHostTrust({
-      append: async candidate => appendKnownHostKeyAtomic(candidate.knownHostsEntry),
-      confirm: async candidate => {
-        const copy = buildUnknownHostConfirmation(candidate)
-
-        const options = {
-          buttons: copy.buttons,
-          cancelId: 0,
-          defaultId: 0,
-          detail: copy.detail,
-          message: copy.message,
-          noLink: true,
-          title: copy.title,
-          type: 'warning' as const
-        }
-
-        const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
-        const answer = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options)
-
-        return answer.response === 1
-      },
-      openStrict: () => ssh.open(),
-      scan: () => scanSshHostKey({ host: sshConfig.host, port: sshConfig.port })
-    })
+    await openSshTransportWithTrust(ssh, sshConfig)
   }
 
   let result
@@ -12263,6 +12425,18 @@ guardedHandle('hermes:connections:list', async () => sanitizeConnectionsRegistry
 guardedHandle('hermes:connections:save', async (_event, payload) => {
   const saved = saveRegistryConnection(payload)
 
+  if (sshAuthBridges.has(saved.id)) {
+    await closeSshAuthConnection(saved.id)
+
+    if (desktopAuthCoordinator?.hasConnection(saved.id)) {
+      await desktopAuthCoordinator.unregisterConnection(saved.id)
+    }
+
+    if (saved.kind === 'ssh') {
+      await prepareRegistryConnectionAuth(saved.id)
+    }
+  }
+
   return { ok: true, connection: saved, registry: sanitizeConnectionsRegistry() }
 })
 guardedHandle('hermes:connections:remove', async (_event, id) => {
@@ -12272,6 +12446,11 @@ guardedHandle('hermes:connections:remove', async (_event, id) => {
   // Tear down anything the removed connection still had running: pooled
   // backends under its composite keys and any ssh tunnel scopes it owned.
   stopRegistryConnectionBackends(key)
+  await closeSshAuthConnection(key)
+
+  if (desktopAuthCoordinator?.hasConnection(key)) {
+    await desktopAuthCoordinator.unregisterConnection(key)
+  }
 
   return { ok: true, registry: sanitizeConnectionsRegistry(registry) }
 })
@@ -14563,11 +14742,36 @@ async function requireDesktopAuthCoordinator() {
   return desktopAuthCoordinator
 }
 
-guardedHandle('hermes:auth:status', async () => (await requireDesktopAuthCoordinator()).refresh())
-guardedHandle('hermes:auth:login', async (_event, username, password) =>
-  (await requireDesktopAuthCoordinator()).login(username, password)
-)
-guardedHandle('hermes:auth:logout', async () => (await requireDesktopAuthCoordinator()).logout())
+async function resolveDesktopAuthConnection(connectionId) {
+  const coordinator = await requireDesktopAuthCoordinator()
+  const id = connectionId == null || connectionId === '' ? 'local' : validatedIpcConnectionId(connectionId)
+
+  if (!id) {
+    throw new AuthBridgeError('runtime_unavailable', 'runtime_unavailable')
+  }
+
+  if (id !== 'local') {
+    await prepareRegistryConnectionAuth(id)
+  }
+
+  return { coordinator, id }
+}
+
+guardedHandle('hermes:auth:status', async (_event, connectionId) => {
+  const { coordinator, id } = await resolveDesktopAuthConnection(connectionId)
+
+  return coordinator.refresh(id)
+})
+guardedHandle('hermes:auth:login', async (_event, username, password, connectionId) => {
+  const { coordinator, id } = await resolveDesktopAuthConnection(connectionId)
+
+  return coordinator.login(username, password, id)
+})
+guardedHandle('hermes:auth:logout', async (_event, connectionId) => {
+  const { coordinator, id } = await resolveDesktopAuthConnection(connectionId)
+
+  return coordinator.logout(id)
+})
 
 // Every production registration exactly matches the sole policy table; a new
 // IPC channel cannot silently inherit permission.
@@ -14766,13 +14970,18 @@ app.on('before-quit', event => {
     })
   }
 
-  if ((sshConnections.size > 0 || sshBootstrapCoordinator.promises().length > 0) && !sshQuitTeardownDone) {
+  if (
+    (sshConnections.size > 0 || sshAuthBridges.size > 0 || sshBootstrapCoordinator.promises().length > 0) &&
+    !sshQuitTeardownDone
+  ) {
     event.preventDefault()
     sshBootstrapCoordinator.cancelAll()
     const scopes = [...sshConnections.keys()]
+    const authConnections = [...sshAuthBridges.keys()]
 
     const pending = Promise.allSettled([
       ...scopes.map(scope => teardownSshConnection(scope || null)),
+      ...authConnections.map(connectionId => closeSshAuthConnection(connectionId)),
       ...sshBootstrapCoordinator.promises()
     ])
 

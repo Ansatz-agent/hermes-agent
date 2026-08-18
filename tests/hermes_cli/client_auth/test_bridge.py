@@ -6,7 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from hermes_cli.client_auth.bridge import dispatch, run_stream
+from hermes_cli.client_auth.bridge import dispatch, main, run_stream
+from hermes_cli.client_auth.runtime import AuthRequired
 
 
 @pytest.mark.parametrize(
@@ -133,3 +134,33 @@ def test_request_id_and_schema_are_bounded():
         "id": None,
         "error": {"code": "INVALID_REQUEST"},
     }
+
+
+def test_bridge_starts_detached_owner_before_serving_stream(monkeypatch):
+    remote = object()
+    events: list[str] = []
+
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.bridge.connect_runtime_owner",
+        lambda: (_ for _ in ()).throw(AuthRequired("runtime_unavailable")),
+    )
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.bridge.start_runtime_owner",
+        lambda: events.append("detached-owner") or remote,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.bridge.install_entrypoint_owner",
+        lambda owner: events.append("install") if owner is remote else None,
+    )
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.bridge.clear_entrypoint_owner",
+        lambda: events.append("clear"),
+    )
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.bridge.run_stream",
+        lambda _source, _target: events.append("stream"),
+    )
+
+    assert main() == 0
+    assert events == ["detached-owner", "install", "stream", "clear"]

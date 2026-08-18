@@ -2,26 +2,19 @@ from __future__ import annotations
 
 import json
 import math
-import os
 import sys
 from collections.abc import Callable, Mapping
 from typing import BinaryIO
 
-from hermes_cli.client_auth.client import AuthClient
 from hermes_cli.client_auth.runtime import (
     AuthRequired,
-    MemoryOwner,
-    OwnerBroker,
-    OwnerElectionContext,
-    ProcessHardener,
-    VaultOwner,
     account_login,
     account_logout,
     account_status,
     clear_entrypoint_owner,
     connect_runtime_owner,
     install_entrypoint_owner,
-    resolve_owner,
+    start_runtime_owner,
 )
 
 
@@ -237,55 +230,16 @@ def _validated_public_result(value: object) -> dict[str, object]:
     return dict(value)
 
 
-def _bridge_owner_context() -> OwnerElectionContext:
-    ssh_connection = bool(os.environ.get("SSH_CONNECTION"))
-    containerized = bool(
-        os.environ.get("container")
-        or os.environ.get("KUBERNETES_SERVICE_HOST")
-        or os.path.exists("/.dockerenv")
-    )
-    graphical_session = not ssh_connection and not containerized and (
-        sys.platform in {"darwin", "win32"}
-        or bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
-    )
-    return OwnerElectionContext(
-        ssh_connection=ssh_connection,
-        containerized=containerized,
-        graphical_session=graphical_session,
-        platform=sys.platform,
-    )
-
-
-def _create_bridge_owner():
-    return resolve_owner(
-        _bridge_owner_context(),
-        live_owner=lambda: None,
-        vault_factory=lambda: VaultOwner(AuthClient()),
-        memory_factory=lambda: MemoryOwner(
-            AuthClient(),
-            hardener=ProcessHardener(),
-        ),
-    )
-
-
 def main() -> int:
-    broker = None
-    owns_runtime = False
     try:
         owner = connect_runtime_owner()
     except AuthRequired:
-        owner = _create_bridge_owner()
-        broker = OwnerBroker.start(owner)
-        owns_runtime = True
+        owner = start_runtime_owner()
     install_entrypoint_owner(owner)
     try:
         run_stream(sys.stdin.buffer, sys.stdout.buffer)
     finally:
         clear_entrypoint_owner()
-        if broker is not None:
-            broker.close()
-        if owns_runtime:
-            owner.close()
     return 0
 
 
