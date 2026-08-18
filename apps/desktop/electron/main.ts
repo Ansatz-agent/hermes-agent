@@ -30,7 +30,8 @@ import {
 import nodePty from 'node-pty'
 
 import { classifyActiveRuntime } from './active-runtime-state'
-import { AuthBridgeError, connectionScopeFromStatus, DesktopAuthBridge } from './auth-bridge'
+import { AuthBridgeError, DesktopAuthBridge } from './auth-bridge'
+import { AuthCoordinator } from './auth-coordinator'
 import { stopBackendChild as stopBackendChildImpl, stopBackendTreesForUpdate } from './backend-child'
 import { dashboardFallbackArgs, sourceDeclaresServe } from './backend-command'
 import { createBackendConnectionState } from './backend-connection-state'
@@ -683,12 +684,16 @@ const ACTIVE_HERMES_ROOT = path.join(HERMES_HOME, 'hermes-agent')
 // VENV_ROOT — venv lives inside the repo, exactly like install.ps1 does it.
 const VENV_ROOT = path.join(ACTIVE_HERMES_ROOT, 'venv')
 let desktopAuthBridge: DesktopAuthBridge | null = null
+let desktopAuthCoordinator: AuthCoordinator | null = null
+let desktopAuthStartupPromise: Promise<void> | null = null
+let desktopCapabilityShellEnabled = false
+let desktopDisplayListenersRegistered = false
 
 function createDesktopAuthBridge() {
   // Resolve Python without starting a Hermes command. Development source
   // checkouts and installed modules can supply their own interpreter; packaged
   // installs use the canonical venv created by the signed bootstrap flow.
-  const candidate = resolveHermesBackend([])
+  const candidate = resolveHermesBackend([], { requirePythonModule: true })
 
   const pythonExecutable =
     candidate?.kind === 'python' && candidate.command ? candidate.command : getVenvPython(VENV_ROOT)
@@ -706,12 +711,83 @@ function createDesktopAuthBridge() {
   })
 }
 
+async function startDesktopAuthRuntime() {
+  if (desktopAuthCoordinator) {
+    return
+  }
+
+  if (desktopAuthStartupPromise) {
+    return desktopAuthStartupPromise
+  }
+
+  const startup = (async () => {
+    const candidate = resolveHermesBackend([], { requirePythonModule: true })
+
+    // A fresh packaged install may not have the canonical Python runtime yet.
+    // The signed bootstrap shell is the sole pre-auth executable exception: it
+    // installs the closed auth bridge, but never starts an Agent/backend.
+    if (candidate?.kind === 'bootstrap-needed') {
+      await ensureRuntime(candidate)
+    }
+
+    if (desktopAuthCoordinator) {
+      return
+    }
+
+    const bridge = createDesktopAuthBridge()
+    const coordinator = new AuthCoordinator(bridge, { cleanup: cleanupDesktopCapabilities })
+    desktopAuthBridge = bridge
+    desktopAuthCoordinator = coordinator
+    coordinator.subscribe(status => {
+      broadcastDesktopAuthStatus(status)
+
+      if (status.state === 'authenticated' && !desktopCapabilityShellEnabled) {
+        enableDesktopCapabilityShell()
+
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          startHermes().catch(error => rememberLog(error.stack || error.message))
+        }
+      }
+    })
+
+    try {
+      await coordinator.start()
+    } catch (error) {
+      if (desktopAuthCoordinator === coordinator) {
+        desktopAuthCoordinator = null
+      }
+
+      if (desktopAuthBridge === bridge) {
+        desktopAuthBridge = null
+      }
+
+      coordinator.stop()
+      bridge.close()
+      throw error
+    }
+  })()
+
+  desktopAuthStartupPromise = startup
+
+  try {
+    await startup
+  } finally {
+    if (desktopAuthStartupPromise === startup) {
+      desktopAuthStartupPromise = null
+    }
+  }
+}
+
 async function requireDesktopConnectionScope() {
-  if (!desktopAuthBridge) {
+  if (!desktopAuthCoordinator) {
     throw new AuthBridgeError('runtime_unavailable', 'runtime_unavailable')
   }
 
-  return connectionScopeFromStatus(await desktopAuthBridge.status())
+  await desktopAuthCoordinator.refresh()
+  const scope = desktopAuthCoordinator.scope('local')
+  await desktopAuthCoordinator.requireScope(scope)
+
+  return scope!
 }
 
 function desktopOwnsIpcSender(event: any) {
@@ -771,17 +847,90 @@ function resolveDesktopIpcConnectionId({ channel, policy, args }: GuardedIpcRequ
 configureGuardedIpcAuthority({
   ownsSender: desktopOwnsIpcSender,
   resolveConnectionId: resolveDesktopIpcConnectionId,
-  require: async policy => {
-    if (policy === 'auth-free') {
-      return
+  require: async (policy, connectionId) => {
+    if (!desktopAuthCoordinator) {
+      if (policy === 'auth-free') {
+        return
+      }
+
+      throw new AuthBridgeError('runtime_unavailable', 'runtime_unavailable')
     }
 
-    // Task 5 replaces this local bridge check with exact per-connection owner
-    // scopes. Until then, every protected policy is still fail-closed behind
-    // the shared account owner and no policy can run while signed out.
-    await requireDesktopConnectionScope()
+    await desktopAuthCoordinator.require(policy, connectionId)
   }
 })
+
+function broadcastDesktopAuthStatus(status) {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
+      window.webContents.send('hermes:auth:changed', status)
+    }
+  }
+}
+
+async function cleanupDesktopCapabilities() {
+  desktopCapabilityShellEnabled = false
+  Menu.setApplicationMenu(null)
+  closeQuickEntryWindow()
+  closePetOverlay()
+  wakeIndicatorController.close()
+
+  if (hudWindow && !hudWindow.isDestroyed()) {
+    hudWindow.removeAllListeners('closed')
+    hudWindow.close()
+    hudWindow = null
+  }
+
+  keepAwake.set(false)
+
+  for (const id of [...terminalSessions.keys()]) {
+    disposeTerminalSession(id)
+  }
+
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window !== mainWindow && !window.isDestroyed()) {
+      window.close()
+    }
+  }
+
+  const poolScopes = [...backendPool.keys()]
+  const sshScopes = [...sshConnections.keys()]
+  await Promise.allSettled([
+    teardownPrimaryBackendAndWait({ soft: true }),
+    ...poolScopes.map(scope => teardownPoolBackendAndWait(scope)),
+    ...sshScopes.map(scope => teardownSshConnection(scope || null))
+  ])
+}
+
+function enableDesktopCapabilityShell() {
+  if (desktopCapabilityShellEnabled) {
+    return
+  }
+
+  desktopCapabilityShellEnabled = true
+
+  if (IS_MAC) {
+    Menu.setApplicationMenu(buildApplicationMenu())
+  }
+
+  registerDeepLinkProtocol()
+  registerPowerResumeListeners()
+  keepAwake.set(readPersistedKeepAwake())
+  f12Blocked = readPersistedDisableF12()
+  applyQuickEntrySettings(readQuickEntrySettings())
+
+  if (IS_MAC) {
+    if (!desktopDisplayListenersRegistered) {
+      desktopDisplayListenersRegistered = true
+      const reposition = () => wakeIndicatorController.reposition()
+
+      screen.on('display-added', reposition)
+      screen.on('display-metrics-changed', reposition)
+      screen.on('display-removed', reposition)
+    }
+  }
+}
+
 // BOOTSTRAP_COMPLETE_MARKER — written by the first-launch bootstrap runner
 // (Phase 1D) after install.ps1 has completed all stages and the user has
 // finished initial configuration. Presence of this marker means the install
@@ -4312,7 +4461,7 @@ function createActiveBackend(backendArgs) {
   }
 }
 
-function resolveHermesBackend(backendArgs) {
+function resolveHermesBackend(backendArgs, options: any = {}) {
   // 1. Explicit override -- HERMES_DESKTOP_HERMES_ROOT points at a developer
   //    checkout. Honour it as-is (no bootstrap; the user is driving).
   const overrideRoot = process.env.HERMES_DESKTOP_HERMES_ROOT && path.resolve(process.env.HERMES_DESKTOP_HERMES_ROOT)
@@ -4398,6 +4547,14 @@ function resolveHermesBackend(backendArgs) {
         return unwrapped
       }
 
+      // The desktop auth bridge must launch a closed Python module directly;
+      // a generic `hermes` shim cannot safely be repurposed for that protocol.
+      // Continue to a Python-module candidate or the signed bootstrap below.
+      if (options.requirePythonModule) {
+        rememberLog(`Ignoring Hermes CLI shim for the auth bridge: ${hermesCommand}`)
+        hermesCommand = null
+      }
+
       // Smoke-test the candidate before trusting it. A `hermes` shim
       // left behind by a half-uninstalled pip install (or a venv
       // entry-point pointing at a deleted interpreter) still resolves
@@ -4405,13 +4562,16 @@ function resolveHermesBackend(backendArgs) {
       // dead backend instead of the first-launch installer. The cheap
       // `--version` probe (see backend-probes.ts) catches that case
       // and lets the resolver fall through to step 6 / bootstrap.
-      const shellForProbe = isCommandScript(hermesCommand)
+      const shellForProbe = hermesCommand ? isCommandScript(hermesCommand) : false
 
       // HERMES_DESKTOP_HERMES is an explicit deployment override (used by
       // the Nix wrapper), not a discovered PATH candidate. It must not fall
       // through to the install-script bootstrap if the optional probe times
       // out under load; the pinned backend is the only valid runtime there.
-      if (shouldTrustHermesOverride(hermesOverride) || verifyHermesCli(hermesCommand, { shell: shellForProbe })) {
+      if (
+        hermesCommand &&
+        (shouldTrustHermesOverride(hermesOverride) || verifyHermesCli(hermesCommand, { shell: shellForProbe }))
+      ) {
         // `unwrapped` above already answered "is this a Windows venv shim?" —
         // it was null (not a shim, or its import probe failed). Do NOT re-run
         // unwrapWindowsVenvHermesCommand here: the second call repeats the
@@ -11376,7 +11536,9 @@ function createWindow() {
   // shared (backendConnectionState), so the renderer's getConnection() joins
   // this in-flight boot instead of duplicating it; early boot-progress events
   // the renderer misses are recovered by its getBootProgress() pull on mount.
-  startHermes().catch(error => rememberLog(error.stack || error.message))
+  if (desktopAuthCoordinator?.isAuthenticated('local')) {
+    startHermes().catch(error => rememberLog(error.stack || error.message))
+  }
 
   mainWindow.webContents.once('did-finish-load', () => {
     // Zoom restore is handled by wireCommonWindowHandlers (shared with session
@@ -14162,7 +14324,12 @@ function handleDeepLink(url) {
   })
   const payload = { kind, name, params }
 
-  if (!_rendererReadyForDeepLink || !mainWindow || mainWindow.isDestroyed()) {
+  if (
+    !desktopAuthCoordinator?.isAuthenticated('local') ||
+    !_rendererReadyForDeepLink ||
+    !mainWindow ||
+    mainWindow.isDestroyed()
+  ) {
     _pendingDeepLink = payload
 
     return
@@ -14198,12 +14365,29 @@ guardedHandle('hermes:deep-link-ready', () => {
   return { ok: true }
 })
 
-// Auth handlers are installed with AuthCoordinator in Task 3. Every current
-// production registration must otherwise exactly match the sole policy table;
-// a new IPC channel cannot silently inherit permission.
-assertGuardedIpcCoverage({
-  allowUnregistered: ['hermes:auth:status', 'hermes:auth:login', 'hermes:auth:logout']
-})
+async function requireDesktopAuthCoordinator() {
+  try {
+    await startDesktopAuthRuntime()
+  } catch {
+    // Renderer receives one safe reason regardless of bootstrap/bridge detail.
+  }
+
+  if (!desktopAuthCoordinator) {
+    throw new AuthBridgeError('runtime_unavailable', 'runtime_unavailable')
+  }
+
+  return desktopAuthCoordinator
+}
+
+guardedHandle('hermes:auth:status', async () => (await requireDesktopAuthCoordinator()).refresh())
+guardedHandle('hermes:auth:login', async (_event, username, password) =>
+  (await requireDesktopAuthCoordinator()).login(username, password)
+)
+guardedHandle('hermes:auth:logout', async () => (await requireDesktopAuthCoordinator()).logout())
+
+// Every production registration exactly matches the sole policy table; a new
+// IPC channel cannot silently inherit permission.
+assertGuardedIpcCoverage()
 
 function registerDeepLinkProtocol() {
   try {
@@ -14251,7 +14435,7 @@ app.on('open-url', (event, url) => {
   handleDeepLink(url)
 })
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   const systemCa = installWindowsSystemCaTrust(tls)
 
   if (systemCa.applied) {
@@ -14271,43 +14455,25 @@ app.whenReady().then(() => {
     safeStorageApi: safeStorage
   })
 
-  // Start only the closed account bridge here. No local/remote Hermes backend
-  // command is spawned until startHermes obtains an authenticated scope from
-  // this process. This also precedes global shortcuts and capability windows.
-  desktopAuthBridge = createDesktopAuthBridge()
-
-  if (IS_MAC) {
-    Menu.setApplicationMenu(buildApplicationMenu())
-  } else {
-    Menu.setApplicationMenu(null)
-  }
+  Menu.setApplicationMenu(null)
 
   installMediaPermissions()
   installDownloadHandling()
   registerMediaProtocol()
   installEmbedReferer()
-  registerDeepLinkProtocol()
   ensureWslWindowsFonts()
   configureSpellChecker()
-  registerPowerResumeListeners()
-  keepAwake.set(readPersistedKeepAwake())
-  f12Blocked = readPersistedDisableF12()
-  // Quick Entry's global chord — registered on ready so a cold launch restores
-  // it without the renderer visiting Settings. A failed registration is logged
-  // here and surfaced in Settings via the IPC state (never silent).
-  applyQuickEntrySettings(readQuickEntrySettings())
 
-  if (IS_MAC) {
-    const reposition = () => wakeIndicatorController.reposition()
-
-    screen.on('display-added', reposition)
-
-    screen.on('display-metrics-changed', reposition)
-
-    screen.on('display-removed', reposition)
-  }
-
+  // Create only the inert renderer shell first so a fresh install can display
+  // signed bootstrap progress. startDesktopAuthRuntime may install/start the
+  // closed auth bridge, but no Hermes backend can cross startHermes before a
+  // validated account scope exists.
   createWindow()
+  await startDesktopAuthRuntime().catch(error => rememberLog(`[auth] runtime startup failed: ${error?.message || error}`))
+
+  if (desktopAuthCoordinator?.isAuthenticated('local')) {
+    enableDesktopCapabilityShell()
+  }
 
   // Win/Linux cold start: the launching hermes:// URL is in our own argv.
   const _coldStartLink = _extractDeepLink(process.argv)
@@ -14405,6 +14571,8 @@ app.on('before-quit', event => {
 
   desktopAuthBridge?.close()
   desktopAuthBridge = null
+  desktopAuthCoordinator?.stop()
+  desktopAuthCoordinator = null
 
   if (!backendQuitTeardownDone) {
     event.preventDefault()

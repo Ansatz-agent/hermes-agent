@@ -50,6 +50,8 @@ interface DesktopInstallOverlayProps {
   /** When false, the overlay never renders -- useful for dev when we want
    * to suppress it entirely. */
   enabled?: boolean
+  /** Pre-auth shell: install only the closed local auth runtime. */
+  authRuntimeOnly?: boolean
 }
 
 interface StageRowProps {
@@ -268,7 +270,7 @@ function applyEvent(state: DesktopBootstrapState, ev: DesktopBootstrapEvent): De
   return state
 }
 
-export function DesktopInstallOverlay({ enabled = true }: DesktopInstallOverlayProps) {
+export function DesktopInstallOverlay({ authRuntimeOnly = false, enabled = true }: DesktopInstallOverlayProps) {
   const { t } = useI18n()
   const copy = t.install
 
@@ -392,7 +394,7 @@ export function DesktopInstallOverlay({ enabled = true }: DesktopInstallOverlayP
     return null
   }
 
-  if (remoteOpen) {
+  if (remoteOpen && !authRuntimeOnly) {
     return <FirstRunRemoteForm onBack={() => setRemoteOpen(false)} />
   }
 
@@ -408,18 +410,20 @@ export function DesktopInstallOverlay({ enabled = true }: DesktopInstallOverlayP
             </div>
           </div>
 
-          <div className="mt-6 grid gap-3 sm:grid-cols-2">
-            <button
-              className="rounded-lg border border-(--ui-stroke-tertiary) bg-(--ui-bg-quinary) p-4 text-left transition hover:bg-(--chrome-action-hover)"
-              onClick={() => setRemoteOpen(true)}
-              type="button"
-            >
-              <div className="flex items-center gap-2 text-sm font-medium">
-                <Globe className="size-4 text-muted-foreground" />
-                <span>{copy.connectExistingTitle}</span>
-              </div>
-              <p className="mt-2 text-sm leading-5 text-muted-foreground">{copy.connectExistingDesc}</p>
-            </button>
+          <div className={cn('mt-6 grid gap-3', !authRuntimeOnly && 'sm:grid-cols-2')}>
+            {!authRuntimeOnly ? (
+              <button
+                className="rounded-lg border border-(--ui-stroke-tertiary) bg-(--ui-bg-quinary) p-4 text-left transition hover:bg-(--chrome-action-hover)"
+                onClick={() => setRemoteOpen(true)}
+                type="button"
+              >
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <Globe className="size-4 text-muted-foreground" />
+                  <span>{copy.connectExistingTitle}</span>
+                </div>
+                <p className="mt-2 text-sm leading-5 text-muted-foreground">{copy.connectExistingDesc}</p>
+              </button>
+            ) : null}
 
             <button
               className="rounded-lg border border-(--ui-stroke-tertiary) bg-(--ui-bg-quinary) p-4 text-left transition hover:bg-(--chrome-action-hover) disabled:cursor-wait disabled:opacity-60"
@@ -488,26 +492,28 @@ export function DesktopInstallOverlay({ enabled = true }: DesktopInstallOverlayP
             <pre className="overflow-x-auto rounded-md border border-(--stroke-nous) px-3 py-2.5 font-mono text-[12px]">
               <code>{ups.installCommand}</code>
             </pre>
-            <div className="mt-2 flex items-center gap-2">
-              <Button
-                onClick={() => {
-                  void navigator.clipboard?.writeText(ups.installCommand).catch(() => {})
-                }}
-                size="sm"
-                variant="secondary"
-              >
-                {copy.copyCommand}
-              </Button>
-              <Button
-                onClick={() => {
-                  window.hermesDesktop?.openExternal?.(ups.docsUrl)
-                }}
-                size="sm"
-                variant="ghost"
-              >
-                {copy.viewDocs}
-              </Button>
-            </div>
+            {!authRuntimeOnly ? (
+              <div className="mt-2 flex items-center gap-2">
+                <Button
+                  onClick={() => {
+                    void navigator.clipboard?.writeText(ups.installCommand).catch(() => {})
+                  }}
+                  size="sm"
+                  variant="secondary"
+                >
+                  {copy.copyCommand}
+                </Button>
+                <Button
+                  onClick={() => {
+                    window.hermesDesktop?.openExternal?.(ups.docsUrl)
+                  }}
+                  size="sm"
+                  variant="ghost"
+                >
+                  {copy.viewDocs}
+                </Button>
+              </div>
+            ) : null}
           </div>
 
           <div className="mt-6 flex items-center justify-between pt-2">
@@ -515,10 +521,12 @@ export function DesktopInstallOverlay({ enabled = true }: DesktopInstallOverlayP
               {copy.installTo} <code className="font-mono text-(--ui-text-secondary)">{ups.activeRoot}</code>
             </span>
             <div className="flex items-center gap-2">
-              <Button onClick={() => setRemoteOpen(true)} size="sm" variant="secondary">
-                <Globe className="size-4" />
-                {copy.connectExistingShort}
-              </Button>
+              {!authRuntimeOnly ? (
+                <Button onClick={() => setRemoteOpen(true)} size="sm" variant="secondary">
+                  <Globe className="size-4" />
+                  {copy.connectExistingShort}
+                </Button>
+              ) : null}
               <Button onClick={() => window.location.reload()} size="sm" variant="default">
                 {copy.retryAfterRun}
               </Button>
@@ -673,27 +681,29 @@ export function DesktopInstallOverlay({ enabled = true }: DesktopInstallOverlayP
                 <code className="font-mono text-(--ui-text-secondary)">%LOCALAPPDATA%\hermes\logs\</code>
               </span>
               <div className="flex gap-2">
-                <Button
-                  onClick={async () => {
-                    const text = state.log
-                      .map(entry => (entry.stage ? `[${entry.stage}] ${entry.line}` : entry.line))
-                      .join('\n')
+                {!authRuntimeOnly ? (
+                  <Button
+                    onClick={async () => {
+                      const text = state.log
+                        .map(entry => (entry.stage ? `[${entry.stage}] ${entry.line}` : entry.line))
+                        .join('\n')
 
-                    const fullText = state.error ? `Error: ${state.error}\n\n${text}` : text
+                      const fullText = state.error ? `Error: ${state.error}\n\n${text}` : text
 
-                    try {
-                      await navigator.clipboard.writeText(fullText)
-                      setCopied(true)
-                      window.setTimeout(() => setCopied(false), 1500)
-                    } catch {
-                      // ignore -- some environments forbid clipboard writes
-                    }
-                  }}
-                  size="sm"
-                  variant="secondary"
-                >
-                  {copied ? copy.copiedOutput : copy.copyOutput}
-                </Button>
+                      try {
+                        await navigator.clipboard.writeText(fullText)
+                        setCopied(true)
+                        window.setTimeout(() => setCopied(false), 1500)
+                      } catch {
+                        // ignore -- some environments forbid clipboard writes
+                      }
+                    }}
+                    size="sm"
+                    variant="secondary"
+                  >
+                    {copied ? copy.copiedOutput : copy.copyOutput}
+                  </Button>
+                ) : null}
                 <Button
                   onClick={async () => {
                     // Tell main.ts to clear its latched failure BEFORE we

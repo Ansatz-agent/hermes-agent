@@ -17,6 +17,7 @@ const SAFE_ENV_KEYS = new Set([
   'LC_CTYPE',
   'LOCALAPPDATA',
   'PATH',
+  'SSH_CONNECTION',
   'SYSTEMROOT',
   'TEMP',
   'TMP',

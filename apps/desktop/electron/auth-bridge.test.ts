@@ -27,13 +27,15 @@ function bridgeFixture(overrides: Record<string, unknown> = {}) {
   const child = new FakeChild()
   const diagnostics: string[] = []
   const spawnChild = vi.fn(() => child as any)
+
   const bridge = new DesktopAuthBridge({
     cwd: '/opt/hermes-agent',
     env: {
       AGENT_HISTORY_SESSIONID: 'agent_history_sessionid=do-not-leak',
       HERMES_HOME: '/home/alice/.hermes',
       PATH: '/usr/bin',
-      PROVIDER_API_KEY: 'provider-secret'
+      PROVIDER_API_KEY: 'provider-secret',
+      SSH_CONNECTION: '127.0.0.1 40000 127.0.0.1 22'
     },
     onDiagnostic: message => diagnostics.push(message),
     pythonExecutable: '/opt/hermes-agent/venv/bin/python',
@@ -69,7 +71,8 @@ test('starts only the closed auth module with bounded stdio and a secret-free en
         cwd: '/opt/hermes-agent',
         env: {
           HERMES_HOME: '/home/alice/.hermes',
-          PATH: '/usr/bin'
+          PATH: '/usr/bin',
+          SSH_CONNECTION: '127.0.0.1 40000 127.0.0.1 22'
         },
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true
@@ -135,6 +138,7 @@ test('malformed json and schema drift fail every request with a redacted runtime
     const { bridge, child, diagnostics } = bridgeFixture()
     const first = bridge.login('alice', 'password-sentinel')
     const second = bridge.status()
+
     const rejections = [first, second].map(pending =>
       assert.rejects(
         pending,
@@ -144,6 +148,7 @@ test('malformed json and schema drift fail every request with a redacted runtime
           !error.message.includes('password-sentinel')
       )
     )
+
     child.stdout.write(response)
 
     await Promise.all(rejections)
@@ -163,6 +168,7 @@ test('oversized response, child exit, and stderr all fail closed without leaking
   ]) {
     const { bridge, child, diagnostics } = bridgeFixture()
     const pending = bridge.login('alice', 'password-sentinel')
+
     const rejected = assert.rejects(
       pending,
       error =>
@@ -170,6 +176,7 @@ test('oversized response, child exit, and stderr all fail closed without leaking
         error.code === 'runtime_unavailable' &&
         !error.message.includes('stderr-secret')
     )
+
     breakChild(child)
 
     await rejected
@@ -183,6 +190,7 @@ test('a request timeout rejects all pending calls and terminates the bridge', as
   const { bridge, child, diagnostics } = bridgeFixture({ timeoutMs: 15_000 })
   const first = bridge.login('alice', 'password-sentinel')
   const second = bridge.status()
+
   const rejections = [first, second].map(pending =>
     assert.rejects(pending, error => error instanceof AuthBridgeError && error.code === 'runtime_unavailable')
   )

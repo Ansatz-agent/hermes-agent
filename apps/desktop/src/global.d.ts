@@ -14,6 +14,12 @@ export {}
 declare global {
   interface Window {
     hermesDesktop: {
+      auth: {
+        status: () => Promise<DesktopAccountStatus>
+        login: (username: string, password: string) => Promise<DesktopAccountStatus>
+        logout: () => Promise<DesktopAccountStatus>
+        onChanged: (callback: (status: DesktopAccountStatus) => void) => () => void
+      }
       // Resolve a backend connection. Omit `profile` (or pass the primary) for
       // the window's backend; pass a named profile to lazily spawn/reuse that
       // profile's backend from the pool.
@@ -400,6 +406,16 @@ declare global {
       onOpenFindBarRequested: (callback: () => void) => () => void
     }
   }
+}
+
+interface DesktopAccountStatus {
+  state: 'checking' | 'authenticated' | 'signed_out' | 'locked'
+  username: string | null
+  runtime_instance_id: string
+  epoch: number
+  valid_until: number
+  session_expires_at: string | null
+  reason: string | null
 }
 
 export interface DesktopMarketplaceSearchItem {

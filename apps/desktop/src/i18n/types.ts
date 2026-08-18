@@ -49,6 +49,30 @@ interface AuxTaskCopy {
 }
 
 export interface Translations {
+  auth: {
+    title: string
+    description: string
+    serverLabel: string
+    username: string
+    password: string
+    signIn: string
+    signingIn: string
+    retry: string
+    checking: string
+    administratorManaged: string
+    reasons: {
+      interactiveLoginRequired: string
+      invalidCredentials: string
+      rateLimited: string
+      runtimeUnavailable: string
+      serverUnavailable: string
+      sessionExpired: string
+      sessionRejected: string
+      signedOut: string
+      vaultUnavailable: string
+    }
+  }
+
   common: {
     apply: string
     back: string

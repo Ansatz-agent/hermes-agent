@@ -3,6 +3,30 @@ import { defineFieldCopy } from '@/app/settings/field-copy'
 import type { Translations } from './types'
 
 export const zh: Translations = {
+  auth: {
+    title: '登录 Hermes',
+    description: '启动任何 Agent 功能前，必须先验证 Hermes 账户。',
+    serverLabel: '账户服务器',
+    username: '用户名',
+    password: '密码',
+    signIn: '登录',
+    signingIn: '正在登录…',
+    retry: '重试',
+    checking: '正在验证账户会话…',
+    administratorManaged: '账户分发和密码协助由服务器管理员统一处理。',
+    reasons: {
+      interactiveLoginRequired: '请输入服务器管理员分配的账户凭据。',
+      invalidCredentials: '用户名或密码不正确。',
+      rateLimited: '登录尝试过于频繁，请稍后重试。',
+      runtimeUnavailable: '安全账户服务暂时不可用，请重试。',
+      serverUnavailable: '账户服务器暂时不可用，请重试。',
+      sessionExpired: '会话已过期，请重新登录。',
+      sessionRejected: '会话已失效，请重新登录。',
+      signedOut: '请使用服务器管理员分配的账户登录。',
+      vaultUnavailable: '当前设备的安全凭据存储不可用。'
+    }
+  },
+
   common: {
     apply: '应用',
     back: '返回',

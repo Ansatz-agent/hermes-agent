@@ -3,6 +3,30 @@ import { defineFieldCopy } from '@/app/settings/field-copy'
 import { defineLocale } from './define-locale'
 
 export const ja = defineLocale({
+  auth: {
+    title: 'Hermes にサインイン',
+    description: 'Agent 機能を起動する前に Hermes アカウントの認証が必要です。',
+    serverLabel: 'アカウントサーバー',
+    username: 'ユーザー名',
+    password: 'パスワード',
+    signIn: 'サインイン',
+    signingIn: 'サインイン中…',
+    retry: '再試行',
+    checking: 'アカウントセッションを確認中…',
+    administratorManaged: 'アカウントの発行とパスワードの支援はサーバー管理者が行います。',
+    reasons: {
+      interactiveLoginRequired: 'サーバー管理者から提供された認証情報を入力してください。',
+      invalidCredentials: 'ユーザー名またはパスワードが正しくありません。',
+      rateLimited: 'サインイン試行が多すぎます。少し待ってから再試行してください。',
+      runtimeUnavailable: '安全なアカウントサービスを利用できません。再試行してください。',
+      serverUnavailable: 'アカウントサーバーを利用できません。再試行してください。',
+      sessionExpired: 'セッションの有効期限が切れました。もう一度サインインしてください。',
+      sessionRejected: 'セッションは無効です。もう一度サインインしてください。',
+      signedOut: 'サーバー管理者から提供されたアカウントでサインインしてください。',
+      vaultUnavailable: 'このデバイスで安全な認証情報ストレージを利用できません。'
+    }
+  },
+
   common: {
     apply: '適用',
     back: '戻る',

@@ -1,6 +1,17 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 contextBridge.exposeInMainWorld('hermesDesktop', {
+  auth: {
+    status: () => ipcRenderer.invoke('hermes:auth:status'),
+    login: (username, password) => ipcRenderer.invoke('hermes:auth:login', username, password),
+    logout: () => ipcRenderer.invoke('hermes:auth:logout'),
+    onChanged: callback => {
+      const listener = (_event, status) => callback(status)
+      ipcRenderer.on('hermes:auth:changed', listener)
+
+      return () => ipcRenderer.removeListener('hermes:auth:changed', listener)
+    }
+  },
   getConnection: profile => ipcRenderer.invoke('hermes:connection', profile),
   // Registry-scoped backend resolution: { connectionId, profile } → descriptor.
   getConnectionFor: payload => ipcRenderer.invoke('hermes:connection:for', payload),
