@@ -257,15 +257,15 @@ git commit -m "feat: isolate desktop auth by connection"
 
 ### Task 6: Add the Ink login shell over existing `tui_gateway` RPC
 
-- [ ] **Step 1: Write failing Python RPC tests**
+- [x] **Step 1: Write failing Python RPC tests**
 
 Create `tests/tui_gateway/test_account_auth.py`. Start `tui_gateway.entry` in auth-shell mode with a locked owner and assert its initial frame is `auth.status`, not `gateway.ready`. Only `auth.status`, `auth.login`, and `auth.logout` are accepted before authentication. `session.*`, prompt submission, history, model, tools, MCP, and file-related RPC return code `20`/`AUTH_REQUIRED` without building an Agent or opening SessionDB.
 
-- [ ] **Step 2: Write failing Ink form tests**
+- [x] **Step 2: Write failing Ink form tests**
 
 Create `ui-tui/src/__tests__/authGate.test.tsx`. Render the form and assert username/password fields, hidden password input, submit/retry behavior, reason-code text, and zero registration/reset/server/offline controls. Assert the main `App` is mounted only after a matching authenticated scope arrives and unmounted immediately on a lock event.
 
-- [ ] **Step 3: Run the red tests**
+- [x] **Step 3: Run the red tests**
 
 ```bash
 HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/tui_gateway/test_account_auth.py -q
@@ -275,13 +275,13 @@ npx vitest run src/__tests__/authGate.test.tsx src/__tests__/gatewayClient.test.
 
 Expected: FAIL because the gateway currently emits capability-ready state before account authentication.
 
-- [ ] **Step 4: Implement auth-only startup and the three RPC methods**
+- [x] **Step 4: Implement auth-only startup and the three RPC methods**
 
 Move Agent/session/MCP imports and startup in `tui_gateway/entry.py` and `server.py` behind `require_authorized("tui.agent")`. Auth-shell startup may import only the guard/runtime transport needed for the three methods. Validate the same fixed request schemas as Desktop bridge and return no secrets. After authentication, publish `auth.changed`, then initialize the existing gateway exactly once. On owner EOF or epoch change, stop accepting prompts, tear down Agent/session workers at the next boundary, and return to auth shell.
 
 Update `GatewayClient` with typed `authStatus`, `authLogin`, and `authLogout` methods. Render `AuthGate` from `entry.tsx` before importing/rendering the full `App`. Password is never included in lifecycle logs or crash breadcrumbs.
 
-- [ ] **Step 5: Run and commit**
+- [x] **Step 5: Run and commit**
 
 ```bash
 HERMES_PYTHON=../../.venv/bin/python scripts/run_tests.sh tests/tui_gateway/test_account_auth.py tests/hermes_cli/client_auth/test_guard.py -q
