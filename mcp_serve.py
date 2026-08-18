@@ -46,6 +46,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from hermes_cli.client_auth.runtime import AuthRequired, require_authorized
+
 logger = logging.getLogger("hermes.mcp_serve")
 
 # ---------------------------------------------------------------------------
@@ -358,6 +360,7 @@ class EventBridge:
 
     def start(self):
         """Start the background polling thread."""
+        require_authorized("mcp.events.start")
         if self._running:
             return
         # Snapshot existing history BEFORE the poll loop starts so pre-existing
@@ -387,6 +390,7 @@ class EventBridge:
         limit: int = 20,
     ) -> dict:
         """Return events since after_cursor, optionally filtered by session_key."""
+        require_authorized("mcp.events.poll")
         with self._lock:
             events = [
                 e for e in self._queue
@@ -411,9 +415,11 @@ class EventBridge:
         timeout_ms: int = 30000,
     ) -> Optional[dict]:
         """Block until a matching event arrives or timeout expires."""
+        require_authorized("mcp.events.wait")
         deadline = time.monotonic() + (timeout_ms / 1000.0)
 
         while time.monotonic() < deadline:
+            require_authorized("mcp.events.wait")
             with self._lock:
                 for e in self._queue:
                     if e.cursor > after_cursor and (
@@ -434,6 +440,7 @@ class EventBridge:
 
     def list_pending_approvals(self) -> List[dict]:
         """List approval requests observed during this bridge session."""
+        require_authorized("mcp.permissions.list")
         with self._lock:
             return sorted(
                 self._pending_approvals.values(),
@@ -442,6 +449,7 @@ class EventBridge:
 
     def respond_to_approval(self, approval_id: str, decision: str) -> dict:
         """Resolve a pending approval (best-effort without gateway IPC)."""
+        require_authorized("mcp.permissions.respond")
         with self._lock:
             approval = self._pending_approvals.pop(approval_id, None)
 
@@ -469,6 +477,7 @@ class EventBridge:
         self._new_event.set()
 
     def _establish_baseline(self) -> None:
+        require_authorized("mcp.events.baseline")
         db = _get_session_db()
         if not db:
             return
@@ -518,6 +527,7 @@ class EventBridge:
                     self._last_poll_timestamps[session_key] = latest
     def _poll_loop(self):
         """Background loop: poll SessionDB for new messages."""
+        require_authorized("mcp.events.poll")
         db = _get_session_db()
         if not db:
             logger.warning("EventBridge: SessionDB unavailable, event polling disabled")
@@ -527,6 +537,12 @@ class EventBridge:
             while self._running:
                 try:
                     self._poll_once(db)
+                except AuthRequired:
+                    self._running = False
+                    logger.warning(
+                        "EventBridge locked because the Hermes login is no longer valid"
+                    )
+                    return
                 except Exception as e:
                     logger.debug("EventBridge poll error: %s", e)
                 time.sleep(POLL_INTERVAL)
@@ -547,6 +563,7 @@ class EventBridge:
         eliminating the old dual-file (sessions.json + state.db) race that
         could drop brand-new conversations (#8925).
         """
+        require_authorized("mcp.events.poll")
         try:
             from hermes_constants import get_hermes_home
             db_file = get_hermes_home() / "state.db"
@@ -659,6 +676,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
             limit: Maximum number of conversations to return (default 50)
             search: Optional text to filter conversations by name
         """
+        require_authorized("mcp.tool.conversations_list")
         limit = _coerce_int(limit, default=50, minimum=1, maximum=200)
         entries = _load_sessions_index()
         conversations = []
@@ -707,6 +725,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
         Args:
             session_key: The session key from conversations_list
         """
+        require_authorized("mcp.tool.conversation_get")
         entries = _load_sessions_index()
         entry = entries.get(session_key)
 
@@ -747,6 +766,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
             session_key: The session key from conversations_list
             limit: Maximum number of messages to return (default 50, most recent)
         """
+        require_authorized("mcp.tool.messages_read")
         limit = _coerce_int(limit, default=50, minimum=1, maximum=200)
         entries = _load_sessions_index()
         entry = entries.get(session_key)
@@ -799,6 +819,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
             session_key: The session key from conversations_list
             message_id: The message ID from messages_read
         """
+        require_authorized("mcp.tool.attachments_fetch")
         entries = _load_sessions_index()
         entry = entries.get(session_key)
         if not entry:
@@ -850,6 +871,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
             session_key: Optional filter to one conversation
             limit: Maximum events to return (default 20)
         """
+        require_authorized("mcp.tool.events_poll")
         after_cursor = _coerce_int(after_cursor, default=0, minimum=0, maximum=10**18)
         limit = _coerce_int(limit, default=20, minimum=1, maximum=200)
         result = bridge.poll_events(
@@ -877,6 +899,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
             session_key: Optional filter to one conversation
             timeout_ms: Maximum wait time in milliseconds (default 30000)
         """
+        require_authorized("mcp.tool.events_wait")
         after_cursor = _coerce_int(after_cursor, default=0, minimum=0, maximum=10**18)
         timeout_ms = _coerce_int(
             timeout_ms,
@@ -915,6 +938,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
             target: Platform target in "platform:identifier" format
             message: The message text to send
         """
+        require_authorized("mcp.tool.messages_send")
         if not target or not message:
             return json.dumps({"error": "Both target and message are required"})
 
@@ -941,6 +965,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
         Args:
             platform: Filter by platform name (telegram, discord, slack, etc.)
         """
+        require_authorized("mcp.tool.channels_list")
         directory = _load_channel_directory()
         if not directory:
             entries = _load_sessions_index()
@@ -993,6 +1018,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
         since it started. Approvals are live-session only — older approvals
         from before the bridge connected are not included.
         """
+        require_authorized("mcp.tool.permissions_list_open")
         approvals = bridge.list_pending_approvals()
         return json.dumps({
             "count": len(approvals),
@@ -1012,6 +1038,7 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
             id: The approval ID from permissions_list_open
             decision: One of "allow-once", "allow-always", or "deny"
         """
+        require_authorized("mcp.tool.permissions_respond")
         if decision not in {"allow-once", "allow-always", "deny"}:
             return json.dumps({
                 "error": f"Invalid decision: {decision}. "

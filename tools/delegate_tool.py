@@ -1486,6 +1486,7 @@ def _build_child_agent(
     # 'leaf' (default) cannot; 'orchestrator' retains the delegation
     # toolset subject to depth/kill-switch bounds applied below.
     role: str = "leaf",
+    expected_auth_scope=None,
 ):
     """
     Build a child AIAgent on the main thread (thread-safe construction).
@@ -1496,6 +1497,9 @@ def _build_child_agent(
     routing subagents to a different provider:model pair (e.g. cheap/fast
     model on OpenRouter while the parent runs on Nous Portal).
     """
+    from hermes_cli.client_auth.runtime import require_authorized
+
+    require_authorized("delegate.child.build", expected=expected_auth_scope)
     from run_agent import AIAgent
     import uuid as _uuid
 
@@ -2313,6 +2317,12 @@ def _run_single_child(
     Run a pre-built child agent. Called from within a thread.
     Returns a structured result dict.
     """
+    from hermes_cli.client_auth.runtime import require_authorized
+
+    require_authorized(
+        "delegate.child.start",
+        expected=_kwargs.get("expected_auth_scope"),
+    )
     child_start = time.monotonic()
 
     # Get the progress callback from the child agent
@@ -3326,7 +3336,16 @@ def _run_child_lifecycle(
     parent_agent=None,
 ) -> Dict[str, Any]:
     """Run one child and apply the same host lifecycle used by delegate_task."""
-    result = _run_single_child(task_index, goal, child, parent_agent)
+    from hermes_cli.client_auth.runtime import require_authorized
+
+    auth_scope = require_authorized("delegate.child.lifecycle")
+    result = _run_single_child(
+        task_index,
+        goal,
+        child,
+        parent_agent,
+        expected_auth_scope=auth_scope,
+    )
     result.setdefault("task_index", task_index)
     task = {"goal": goal}
     _finalize_child_results(
@@ -3459,6 +3478,9 @@ def delegate_task(
 
     Returns JSON with results array, one entry per task.
     """
+    from hermes_cli.client_auth.runtime import require_authorized
+
+    auth_scope = require_authorized("delegate.request")
     if parent_agent is None:
         return tool_error("delegate_task requires a parent agent context.")
 
@@ -3688,6 +3710,7 @@ def delegate_task(
             override_acp_command=creds.get("command"),
             override_acp_args=creds.get("args"),
             role=effective_role,
+            expected_auth_scope=auth_scope,
         )
         # Attach the validated schema for the completion-side validation
         # hook in _run_single_child. Absent (None) on schema-less tasks.
@@ -3730,6 +3753,7 @@ def delegate_task(
                 owner_session_id=_origin_ui_session_id or None,
                 owner_transport=_origin_owner_transport,
                 owner_session_record=_origin_owner_session_record,
+                expected_auth_scope=auth_scope,
             )
             results.append(result)
         else:
@@ -3755,6 +3779,7 @@ def delegate_task(
                         owner_session_id=_origin_ui_session_id or None,
                         owner_transport=_origin_owner_transport,
                         owner_session_record=_origin_owner_session_record,
+                        expected_auth_scope=auth_scope,
                     )
                     futures[future] = i
 

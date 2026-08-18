@@ -95,6 +95,7 @@ from gateway.platforms.base import (
 from agent.redact import redact_sensitive_text
 from agent.interrupt_compat import request_hard_interrupt
 from gateway.readiness import collect_runtime_readiness
+from hermes_cli.client_auth.runtime import AuthRequired, require_authorized
 
 from agent.secret_scope import UnscopedSecretError as _UnscopedSecretError
 from agent.secret_scope import get_secret as _scoped_get_secret
@@ -992,7 +993,29 @@ _CORS_HEADERS = {
 }
 
 
+def _require_client_runtime_request() -> None:
+    """Framework-independent auth boundary shared by every API request."""
+    require_authorized("gateway.api.request")
+
+
 if AIOHTTP_AVAILABLE:
+    @web.middleware
+    async def client_runtime_auth_middleware(request, handler):
+        """Reject every API request when the central Hermes login is locked."""
+        try:
+            _require_client_runtime_request()
+        except AuthRequired:
+            return web.json_response(
+                {
+                    "error": "Hermes login required",
+                    "code": "login_required",
+                    "hint": "Run `hermes login` and retry.",
+                },
+                status=401,
+            )
+        return await handler(request)
+
+
     @web.middleware
     async def cors_middleware(request, handler):
         """Add CORS headers for explicitly allowed origins; handle OPTIONS preflight."""
@@ -1014,6 +1037,7 @@ if AIOHTTP_AVAILABLE:
             response.headers.update(cors_headers)
         return response
 else:
+    client_runtime_auth_middleware = None  # type: ignore[assignment]
     cors_middleware = None  # type: ignore[assignment]
 
 
@@ -6323,6 +6347,7 @@ class APIServerAdapter(BasePlatformAdapter):
         ``_active_run_agents`` while the turn is running so API clients can
         call run-scoped control endpoints such as ``/v1/runs/{run_id}/steer``.
         """
+        require_authorized("gateway.api.agent_turn")
         loop = asyncio.get_running_loop()
         # Capture before hopping to the executor — ContextVars do not follow
         # run_in_executor threads, so the profile scope must be re-entered
@@ -7390,6 +7415,7 @@ class APIServerAdapter(BasePlatformAdapter):
 
     async def connect(self, *, is_reconnect: bool = False) -> bool:
         """Start the aiohttp web server."""
+        require_authorized("gateway.api.connect")
         if not AIOHTTP_AVAILABLE:
             logger.warning("[%s] aiohttp not installed", self.name)
             return False
@@ -7424,6 +7450,7 @@ class APIServerAdapter(BasePlatformAdapter):
             mws = [
                 mw
                 for mw in (
+                    client_runtime_auth_middleware,
                     self._make_profile_prefix_middleware(),
                     cors_middleware,
                     body_limit_middleware,

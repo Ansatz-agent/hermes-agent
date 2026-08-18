@@ -1709,3 +1709,41 @@ def _moa_caches_isolated():
     yield
     moa._preset_cache.clear()
     moa._runtime_cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def _authenticated_client_runtime_for_existing_behavior_tests(request):
+    """Run legacy capability tests inside an explicit authenticated scope.
+
+    Dedicated client-auth tests own their state transitions and are excluded.
+    Production has no environment or pytest bypass; this fixture installs the
+    same RuntimeConsumer an authenticated entrypoint installs.
+    """
+    normalized = str(request.node.path).replace("\\", "/")
+    if "/tests/hermes_cli/client_auth/" in normalized:
+        yield
+        return
+
+    from hermes_cli.client_auth.runtime import (
+        RuntimeConsumer,
+        RuntimeSnapshot,
+        clear_runtime_consumer,
+        install_runtime_consumer,
+    )
+
+    snapshot = RuntimeSnapshot.new_authenticated(
+        "pytest-user",
+        now=0.0,
+        ttl=10**12,
+    )
+    install_runtime_consumer(
+        RuntimeConsumer(
+            snapshot,
+            liveness_probe=lambda: True,
+            clock=lambda: 0.0,
+        )
+    )
+    try:
+        yield
+    finally:
+        clear_runtime_consumer()

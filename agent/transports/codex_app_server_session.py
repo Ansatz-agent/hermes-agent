@@ -485,6 +485,9 @@ class CodexAppServerSession:
         Mirrors openclaw beta.8's post-tool completion watchdog (#81697)
         so a wedged codex doesn't burn the full turn deadline.
         """
+        from hermes_cli.client_auth.runtime import require_authorized
+
+        require_authorized("agent.codex.turn")
         # Pre-create the result so startup failures (codex subprocess can't
         # spawn, initialize handshake rejects, thread/start blows up) surface
         # the same way per-turn failures do — with a TurnResult.error string

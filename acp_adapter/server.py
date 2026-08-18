@@ -11,6 +11,7 @@ import logging
 import os
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
+from functools import wraps
 from pathlib import Path
 from typing import Any, Deque, Optional
 from urllib.parse import unquote, urlparse
@@ -83,8 +84,22 @@ from tools.approval import (
     reset_hermes_interactive_context,
     set_hermes_interactive_context,
 )
+from hermes_cli.client_auth.runtime import require_authorized
 
 logger = logging.getLogger(__name__)
+
+
+def _authenticated_acp_request(boundary: str):
+    """Guard an ACP protocol request before it can touch session state."""
+    def decorate(function):
+        @wraps(function)
+        async def guarded(*args, **kwargs):
+            require_authorized(boundary)
+            return await function(*args, **kwargs)
+
+        return guarded
+
+    return decorate
 
 
 def _named_custom_provider_catalogs() -> list[tuple[str, str, list[tuple[str, str]]]]:
@@ -1136,6 +1151,7 @@ class HermesACPAgent(acp.Agent):
 
     # ---- ACP lifecycle ------------------------------------------------------
 
+    @_authenticated_acp_request("acp.initialize")
     async def initialize(
         self,
         protocol_version: int | None = None,
@@ -1170,6 +1186,7 @@ class HermesACPAgent(acp.Agent):
             auth_methods=auth_methods,
         )
 
+    @_authenticated_acp_request("acp.authenticate")
     async def authenticate(self, method_id: str, **kwargs: Any) -> AuthenticateResponse | None:
         # Only accept authenticate() calls whose method_id matches the
         # provider we advertised in initialize(). Without this check,
@@ -1432,6 +1449,7 @@ class HermesACPAgent(acp.Agent):
                     if plan_update is not None and not await _send(plan_update):
                         return
 
+    @_authenticated_acp_request("acp.session.new")
     async def new_session(
         self,
         cwd: str,
@@ -1453,6 +1471,7 @@ class HermesACPAgent(acp.Agent):
             ),
         )
 
+    @_authenticated_acp_request("acp.session.load")
     async def load_session(
         self,
         cwd: str,
@@ -1501,6 +1520,7 @@ class HermesACPAgent(acp.Agent):
             ),
         )
 
+    @_authenticated_acp_request("acp.session.resume")
     async def resume_session(
         self,
         cwd: str,
@@ -1537,6 +1557,7 @@ class HermesACPAgent(acp.Agent):
             ),
         )
 
+    @_authenticated_acp_request("acp.session.cancel")
     async def cancel(self, session_id: str, **kwargs: Any) -> None:
         state = self.session_manager.get_session(session_id)
         if state and state.cancel_event:
@@ -1558,6 +1579,7 @@ class HermesACPAgent(acp.Agent):
                     )
             logger.info("Cancelled session %s", session_id)
 
+    @_authenticated_acp_request("acp.session.fork")
     async def fork_session(
         self,
         cwd: str,
@@ -1578,6 +1600,7 @@ class HermesACPAgent(acp.Agent):
             modes=self._session_modes(state) if state is not None else None,
         )
 
+    @_authenticated_acp_request("acp.session.list")
     async def list_sessions(
         self,
         cursor: str | None = None,
@@ -1625,6 +1648,7 @@ class HermesACPAgent(acp.Agent):
 
     # ---- Prompt (core) ------------------------------------------------------
 
+    @_authenticated_acp_request("acp.prompt")
     async def prompt(
         self,
         prompt: list[
@@ -2411,6 +2435,7 @@ class HermesACPAgent(acp.Agent):
 
     # ---- Model switching (ACP protocol method) -------------------------------
 
+    @_authenticated_acp_request("acp.session.model")
     async def set_session_model(
         self, model_id: str, session_id: str, **kwargs: Any
     ) -> SetSessionModelResponse | None:
@@ -2445,6 +2470,7 @@ class HermesACPAgent(acp.Agent):
         logger.warning("Session %s: model switch requested for missing session", session_id)
         return None
 
+    @_authenticated_acp_request("acp.session.mode")
     async def set_session_mode(
         self, mode_id: str, session_id: str, **kwargs: Any
     ) -> SetSessionModeResponse | None:
@@ -2461,6 +2487,7 @@ class HermesACPAgent(acp.Agent):
         logger.info("Session %s: mode switched to %s", session_id, normalized_mode)
         return SetSessionModeResponse()
 
+    @_authenticated_acp_request("acp.session.config")
     async def set_config_option(
         self, config_id: str, session_id: str, value: str, **kwargs: Any
     ) -> SetSessionConfigOptionResponse | None:

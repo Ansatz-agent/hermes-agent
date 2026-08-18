@@ -50,6 +50,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from hermes_constants import get_hermes_home
 from hermes_cli._subprocess_compat import windows_hide_flags
+from hermes_cli.client_auth.runtime import require_authorized
 from hermes_cli.config import (
     _expand_env_vars,
     cron_model_drift_axes,
@@ -4202,6 +4203,7 @@ def run_job(
     Returns:
         Tuple of (success, full_output_doc, final_response, error_message)
     """
+    require_authorized("cron.job.run")
     job_id = job["id"]
     job_name = str(job.get("name") or job.get("prompt") or job_id or "cron job")
 
@@ -6340,6 +6342,7 @@ def tick(
     Returns:
         Number of jobs executed (0 if another tick is already running)
     """
+    require_authorized("cron.tick")
     lock_dir, lock_file = _get_lock_paths()
     lock_dir.mkdir(parents=True, exist_ok=True)
 

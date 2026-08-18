@@ -56,6 +56,8 @@ import os
 import sys
 from typing import Any, Optional
 
+from hermes_cli.client_auth.runtime import require_authorized
+
 logger = logging.getLogger(__name__)
 
 # JSON Schema type -> Python type mapping for signature generation
@@ -214,6 +216,7 @@ def _build_server() -> Any:
             sig, annots = _signature_from_schema(schema)
 
             def _dispatch(**kwargs: Any) -> str:
+                require_authorized(f"mcp.hermes_tools.{tool_name}")
                 try:
                     # Filter out None values before dispatch so unset optionals
                     # aren't forwarded to the handler.

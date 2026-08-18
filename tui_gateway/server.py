@@ -32,6 +32,7 @@ from hermes_constants import (
     set_hermes_home_override,
 )
 from hermes_cli.env_loader import load_hermes_dotenv
+from hermes_cli.client_auth.runtime import require_authorized
 from utils import is_truthy_value
 from tools.environments.local import hermes_subprocess_env
 from agent.replay_cleanup import sanitize_replay_history
@@ -2029,6 +2030,7 @@ def _normalize_request(req: Any) -> tuple[Any, str, dict] | dict:
 
 
 def handle_request(req: dict) -> dict | None:
+    require_authorized("tui.rpc.handle")
     normalized = _normalize_request(req)
     if isinstance(normalized, dict):
         return normalized
@@ -2077,6 +2079,7 @@ def dispatch(req: dict, transport: Optional[Transport] = None) -> dict | None:
     Omitting it falls back to the module-level stdio transport, preserving
     the original behaviour for ``tui_gateway.entry``.
     """
+    require_authorized("tui.rpc.dispatch")
     t = transport or _stdio_transport
     token = bind_transport(t)
     try:

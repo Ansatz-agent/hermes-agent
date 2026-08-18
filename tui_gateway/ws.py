@@ -32,6 +32,7 @@ import threading
 from typing import Any
 
 from tui_gateway import server
+from hermes_cli.client_auth.runtime import AuthRequired, require_authorized
 
 _log = logging.getLogger(__name__)
 
@@ -294,6 +295,12 @@ async def handle_ws(ws: Any) -> None:
     disconnect_reason = "not_connected"
 
     try:
+        try:
+            require_authorized("tui.ws.connect")
+        except AuthRequired:
+            disconnect_reason = "hermes_login_required"
+            await ws.close(code=4401, reason="Hermes login required")
+            return
         await ws.accept()
         disconnect_reason = "connected"
         # Push small streamed frames out immediately instead of letting Nagle
@@ -390,6 +397,10 @@ async def handle_ws(ws: Any) -> None:
             req_method = req.get("method") if isinstance(req, dict) else None
             try:
                 resp = await asyncio.to_thread(server.dispatch, req, transport)
+            except AuthRequired:
+                disconnect_reason = "hermes_login_required"
+                await ws.close(code=4401, reason="Hermes login required")
+                break
             except Exception:
                 dispatch_crashes += 1
                 _log.exception(

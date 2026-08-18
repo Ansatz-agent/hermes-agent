@@ -101,6 +101,7 @@ from gateway.status import (
     resolve_gateway_liveness,
 )
 from utils import env_var_enabled
+from hermes_cli.client_auth.runtime import AuthRequired, require_authorized
 
 try:
     from fastapi import (
@@ -890,6 +891,24 @@ class DashboardHealth:
 
 
 DASHBOARD_HEALTH = DashboardHealth()
+
+
+@app.middleware("http")
+async def client_runtime_auth_middleware(request: Request, call_next):
+    """Require the shared remote login for every dashboard API request."""
+    if request.url.path.startswith("/api/"):
+        try:
+            require_authorized("dashboard.api.request")
+        except AuthRequired:
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "detail": "Hermes login required",
+                    "code": "login_required",
+                    "hint": "Run `hermes login` and retry.",
+                },
+            )
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -4965,6 +4984,8 @@ async def speak_stream_ws(ws: "WebSocket") -> None:
       server → ``{"type": "fallback"}`` when the configured provider has no
                chunked API — the client uses the POST endpoint instead.
     """
+    if not await _ws_client_runtime_authorized(ws, "dashboard.ws.audio"):
+        return
     if not _ws_auth_ok(ws):
         await ws.close(code=4401)
         return
@@ -5069,6 +5090,10 @@ async def speak_stream_ws(ws: "WebSocket") -> None:
         try:
             while True:
                 frame = json.loads(await ws.receive_text())
+                if not await _ws_client_runtime_authorized(
+                    ws, "dashboard.ws.audio.message"
+                ):
+                    break
                 if frame.get("text"):
                     text_q.put(str(frame["text"]))
                 if frame.get("stop"):
@@ -15288,6 +15313,10 @@ async def _legacy_pump(ws: "WebSocket", bridge) -> None:
                 break
             if msg.get("type") == "websocket.disconnect":
                 break
+            if not await _ws_client_runtime_authorized(
+                ws, "dashboard.ws.pty.message"
+            ):
+                break
             raw = msg.get("bytes")
             if raw is None:
                 text = msg.get("text")
@@ -15540,6 +15569,17 @@ def _ws_auth_reason(ws: "WebSocket") -> tuple[Optional[str], str]:
 def _ws_auth_ok(ws: "WebSocket") -> bool:
     """True when the WS-upgrade credential is accepted. See _ws_auth_reason."""
     return _ws_auth_reason(ws)[0] is None
+
+
+async def _ws_client_runtime_authorized(ws: "WebSocket", boundary: str) -> bool:
+    """Validate the central login and close a locked WebSocket fail-closed."""
+    try:
+        require_authorized(boundary)
+        return True
+    except AuthRequired:
+        with contextlib.suppress(Exception):
+            await ws.close(code=4401, reason="Hermes login required")
+        return False
 
 # Per-channel subscriber registry used by /api/pub (PTY-side gateway → dashboard)
 # and /api/events (dashboard → browser sidebar).  Keyed by an opaque channel id
@@ -16087,6 +16127,8 @@ def _console_json_payload(msg: Any) -> tuple[Optional[dict[str, Any]], Optional[
 async def console_ws(ws: WebSocket) -> None:
     peer = ws.client.host if ws.client else "?"
 
+    if not await _ws_client_runtime_authorized(ws, "dashboard.ws.console"):
+        return
     if not _DASHBOARD_EMBEDDED_CHAT_ENABLED:
         _log.info("console refused: embedded chat disabled peer=%s", peer)
         await ws.close(code=4404, reason="embedded chat disabled")
@@ -16277,6 +16319,10 @@ async def console_ws(ws: WebSocket) -> None:
             msg_type = msg.get("type")
             if msg_type == "websocket.disconnect":
                 break
+            if not await _ws_client_runtime_authorized(
+                ws, "dashboard.ws.console.message"
+            ):
+                break
 
             payload, error = _console_json_payload(msg)
             if error:
@@ -16437,6 +16483,8 @@ async def console_ws(ws: WebSocket) -> None:
 async def pty_ws(ws: WebSocket) -> None:
     peer = ws.client.host if ws.client else "?"
 
+    if not await _ws_client_runtime_authorized(ws, "dashboard.ws.pty"):
+        return
     if not _DASHBOARD_EMBEDDED_CHAT_ENABLED:
         _log.info("pty refused: embedded chat disabled peer=%s", peer)
         await ws.close(code=4404, reason="embedded chat disabled")
@@ -16590,6 +16638,10 @@ async def pty_ws(ws: WebSocket) -> None:
                 break
             if msg.get("type") == "websocket.disconnect":
                 break
+            if not await _ws_client_runtime_authorized(
+                ws, "dashboard.ws.pty.message"
+            ):
+                break
             raw = msg.get("bytes")
             if raw is None:
                 text = msg.get("text")
@@ -16625,6 +16677,8 @@ async def pty_ws(ws: WebSocket) -> None:
 
 @app.websocket("/api/ws")
 async def gateway_ws(ws: WebSocket) -> None:
+    if not await _ws_client_runtime_authorized(ws, "dashboard.ws.gateway"):
+        return
     if not _DASHBOARD_EMBEDDED_CHAT_ENABLED:
         await ws.close(code=4403)
         return
@@ -16656,6 +16710,8 @@ async def gateway_ws(ws: WebSocket) -> None:
 
 @app.websocket("/api/pub")
 async def pub_ws(ws: WebSocket) -> None:
+    if not await _ws_client_runtime_authorized(ws, "dashboard.ws.pub"):
+        return
     if not _DASHBOARD_EMBEDDED_CHAT_ENABLED:
         await ws.close(code=4403)
         return
@@ -16677,13 +16733,20 @@ async def pub_ws(ws: WebSocket) -> None:
 
     try:
         while True:
-            await _broadcast_event(ws.app, channel, await ws.receive_text())
+            frame = await ws.receive_text()
+            if not await _ws_client_runtime_authorized(
+                ws, "dashboard.ws.pub.message"
+            ):
+                break
+            await _broadcast_event(ws.app, channel, frame)
     except WebSocketDisconnect:
         pass
 
 
 @app.websocket("/api/events")
 async def events_ws(ws: WebSocket) -> None:
+    if not await _ws_client_runtime_authorized(ws, "dashboard.ws.events"):
+        return
     if not _DASHBOARD_EMBEDDED_CHAT_ENABLED:
         await ws.close(code=4403)
         return
@@ -16713,6 +16776,10 @@ async def events_ws(ws: WebSocket) -> None:
             # disconnect so the connection stays open as long as the
             # browser holds it.
             await ws.receive_text()
+            if not await _ws_client_runtime_authorized(
+                ws, "dashboard.ws.events.message"
+            ):
+                break
     except WebSocketDisconnect:
         pass
     finally:
