@@ -25,6 +25,26 @@ export interface GatewayTranscriptMessage {
   text?: string
 }
 
+export interface TuiAuthStatus {
+  epoch: number
+  reason:
+    | 'interactive_login_required'
+    | 'invalid_credentials'
+    | 'rate_limited'
+    | 'runtime_unavailable'
+    | 'server_unavailable'
+    | 'session_expired'
+    | 'session_rejected'
+    | 'signed_out'
+    | 'vault_unavailable'
+    | null
+  runtime_instance_id: string
+  session_expires_at: null | string
+  state: 'authenticated' | 'checking' | 'locked' | 'signed_out'
+  username: null | string
+  valid_until: number
+}
+
 // ── Commands / completion ────────────────────────────────────────────
 
 export interface CommandsCatalogResponse {
@@ -611,6 +631,7 @@ export interface SpawnTreeLoadResponse {
 }
 
 export type GatewayEvent =
+  | { payload: TuiAuthStatus; session_id?: string; type: 'auth.changed' | 'auth.status' }
   | { payload?: { skin?: GatewaySkin }; session_id?: string; type: 'gateway.ready' }
   | { payload?: GatewaySkin; session_id?: string; type: 'skin.changed' }
   | { payload: SessionInfo; session_id?: string; type: 'session.info' }

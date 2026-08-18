@@ -32,7 +32,15 @@ from hermes_constants import (
     set_hermes_home_override,
 )
 from hermes_cli.env_loader import load_hermes_dotenv
-from hermes_cli.client_auth.runtime import require_authorized
+from hermes_cli.client_auth.runtime import (
+    AuthRequired,
+    account_login,
+    account_logout,
+    account_status,
+    authorize_entrypoint,
+    clear_runtime_consumer,
+    require_authorized,
+)
 from utils import is_truthy_value
 from tools.environments.local import hermes_subprocess_env
 from agent.replay_cleanup import sanitize_replay_history
@@ -2002,6 +2010,98 @@ def _err(rid, code: int, msg: str) -> dict:
     return {"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": msg}}
 
 
+_ACCOUNT_AUTH_METHODS = frozenset({"auth.status", "auth.login", "auth.logout"})
+_ACCOUNT_AUTH_PARAMS = {
+    "auth.status": frozenset(),
+    "auth.login": frozenset({"username", "password"}),
+    "auth.logout": frozenset(),
+}
+_ACCOUNT_AUTH_REASONS = frozenset(
+    {
+        "interactive_login_required",
+        "invalid_credentials",
+        "rate_limited",
+        "runtime_unavailable",
+        "server_unavailable",
+        "session_expired",
+        "session_rejected",
+        "signed_out",
+        "vault_unavailable",
+    }
+)
+
+
+def _account_auth_reason(reason: object) -> str:
+    return str(reason) if reason in _ACCOUNT_AUTH_REASONS else "runtime_unavailable"
+
+
+def _account_auth_error(rid, reason: object) -> dict:
+    return {
+        "jsonrpc": "2.0",
+        "id": rid,
+        "error": {
+            "code": 20,
+            "message": "AUTH_REQUIRED",
+            "data": {"reason": _account_auth_reason(reason)},
+        },
+    }
+
+
+def _account_auth_state(snapshot) -> str:
+    state = getattr(snapshot, "state", "locked")
+    return str(getattr(state, "value", state))
+
+
+def _dispatch_account_auth(rid, name: str, params: dict) -> dict:
+    if set(params) != _ACCOUNT_AUTH_PARAMS[name]:
+        return _err(rid, -32602, "invalid params")
+    try:
+        if name == "auth.login":
+            username = params.get("username")
+            password_text = params.get("password")
+            if (
+                not isinstance(username, str)
+                or not username.strip()
+                or len(username) > 150
+                or not isinstance(password_text, str)
+                or not password_text
+                or len(password_text) > 4096
+            ):
+                return _err(rid, -32602, "invalid params")
+            password = bytearray(password_text.encode("utf-8"))
+            password_text = ""
+            try:
+                snapshot = account_login(username.strip(), password)
+            finally:
+                password[:] = b"\0" * len(password)
+        elif name == "auth.logout":
+            clear_runtime_consumer()
+            _shutdown_sessions()
+            snapshot = account_logout()
+        else:
+            snapshot = account_status()
+
+        if _account_auth_state(snapshot) == "authenticated":
+            scope = authorize_entrypoint("tui.agent", interactive=False)
+            if (
+                scope.runtime_instance_id != snapshot.runtime_instance_id
+                or scope.epoch != snapshot.epoch
+            ):
+                clear_runtime_consumer()
+                raise AuthRequired("runtime_unavailable")
+        elif name == "auth.login":
+            raise AuthRequired(getattr(snapshot, "reason", None) or "signed_out")
+    except AuthRequired as error:
+        clear_runtime_consumer()
+        return _account_auth_error(rid, error.reason or "runtime_unavailable")
+    except (TypeError, UnicodeError, ValueError):
+        return _err(rid, -32602, "invalid params")
+
+    if name in {"auth.login", "auth.logout"}:
+        _broadcast_global_event("auth.changed", snapshot.public_dict())
+    return _ok(rid, snapshot.public_dict())
+
+
 def method(name: str):
     def dec(fn):
         _methods[name] = fn
@@ -2030,12 +2130,17 @@ def _normalize_request(req: Any) -> tuple[Any, str, dict] | dict:
 
 
 def handle_request(req: dict) -> dict | None:
-    require_authorized("tui.rpc.handle")
     normalized = _normalize_request(req)
     if isinstance(normalized, dict):
         return normalized
 
     rid, method, params = normalized
+    if method in _ACCOUNT_AUTH_METHODS:
+        return _dispatch_account_auth(rid, method, params)
+    try:
+        require_authorized("tui.rpc.handle")
+    except AuthRequired as error:
+        return _account_auth_error(rid, error.reason or "runtime_unavailable")
     fn = _methods.get(method)
     if not fn:
         return _err(rid, -32601, f"unknown method: {method}")
@@ -2079,7 +2184,6 @@ def dispatch(req: dict, transport: Optional[Transport] = None) -> dict | None:
     Omitting it falls back to the module-level stdio transport, preserving
     the original behaviour for ``tui_gateway.entry``.
     """
-    require_authorized("tui.rpc.dispatch")
     t = transport or _stdio_transport
     token = bind_transport(t)
     try:
@@ -2087,7 +2191,15 @@ def dispatch(req: dict, transport: Optional[Transport] = None) -> dict | None:
         if isinstance(normalized, dict):
             return normalized
 
-        _rid, method, _params = normalized
+        rid, method, params = normalized
+        if method in _ACCOUNT_AUTH_METHODS:
+            return _dispatch_account_auth(rid, method, params)
+        try:
+            require_authorized("tui.rpc.dispatch")
+        except AuthRequired as error:
+            clear_runtime_consumer()
+            _shutdown_sessions()
+            return _account_auth_error(rid, error.reason or "runtime_unavailable")
         if method not in _LONG_HANDLERS:
             return handle_request(req)
 
