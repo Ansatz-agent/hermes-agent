@@ -22,6 +22,7 @@ from hermes_cli.client_auth.runtime import (
     AuthScope,
     AuthState,
     MemoryOwner,
+    OwnerBroker,
     OwnerElectionContext,
     ProcessHardener,
     RuntimeConsumer,
@@ -32,9 +33,11 @@ from hermes_cli.client_auth.runtime import (
     VaultOwner,
     authorize_entrypoint,
     clear_entrypoint_owner,
+    connect_runtime_owner,
     install_entrypoint_owner,
     resolve_owner,
     runtime_endpoint,
+    start_runtime_owner,
 )
 
 
@@ -498,6 +501,62 @@ def test_noninteractive_entrypoint_never_prompts(monkeypatch):
     assert auth_client.login_calls == 0
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Unix runtime protocol")
+def test_unix_broker_shares_login_authorization_and_revocation():
+    owner, _secret_backend, _auth_client, _clock = memory_owner_factory()
+    with tempfile.TemporaryDirectory(prefix="ha-broker-") as temporary:
+        endpoint = UnixEndpoint.for_directory(
+            Path(temporary),
+            random_name="0123456789abcdef0123456789abcdef",
+        )
+        broker = OwnerBroker.start(owner, endpoint=endpoint)
+        try:
+            remote = connect_runtime_owner(endpoint=endpoint)
+            authenticated = remote.login("alice", bytearray(b"secret"))
+            consumer = remote.connect_consumer()
+
+            assert consumer.require_authorized(
+                "child.start",
+                expected=authenticated.scope,
+            ) == authenticated.scope
+
+            owner.logout()
+            with pytest.raises(AuthRequired, match="signed_out"):
+                consumer.require_authorized(
+                    "child.next_boundary",
+                    expected=authenticated.scope,
+                )
+        finally:
+            broker.close()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Unix runtime protocol")
+def test_entrypoint_connects_live_broker_when_no_owner_is_in_process(
+    monkeypatch,
+):
+    owner, _secret_backend, _auth_client, _clock = memory_owner_factory()
+    authenticated = owner.login("alice", bytearray(b"secret"))
+    with tempfile.TemporaryDirectory(prefix="ha-broker-") as temporary:
+        endpoint = UnixEndpoint.for_directory(
+            Path(temporary),
+            random_name="0123456789abcdef0123456789abcdef",
+        )
+        broker = OwnerBroker.start(owner, endpoint=endpoint)
+        monkeypatch.setattr(
+            "hermes_cli.client_auth.runtime.runtime_endpoint",
+            lambda: endpoint,
+        )
+        clear_entrypoint_owner()
+        try:
+            assert authorize_entrypoint(
+                "child.start",
+                interactive=False,
+            ) == authenticated.scope
+        finally:
+            clear_entrypoint_owner()
+            broker.close()
+
+
 def test_entrypoint_service_failure_never_prompts(monkeypatch):
     owner, _secret_backend, auth_client, _clock = vault_owner_factory()
     owner.login("alice", bytearray(b"secret"))
@@ -516,6 +575,48 @@ def test_entrypoint_service_failure_never_prompts(monkeypatch):
             authorize_entrypoint("cli.start", interactive=True)
     finally:
         clear_entrypoint_owner()
+
+
+def test_owner_starter_detaches_without_forwarding_secret_environment(monkeypatch):
+    captured = {}
+    remote = object()
+    attempts = iter([AuthRequired("runtime_unavailable"), remote])
+
+    def connect():
+        result = next(attempts)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+    class Process:
+        pass
+
+    def popen(argv, **kwargs):
+        captured["argv"] = argv
+        captured.update(kwargs)
+        return Process()
+
+    monkeypatch.setenv("OPENAI_API_KEY", "must-not-forward")
+    monkeypatch.setenv("HERMES_ACCOUNT_TOKEN", "must-not-forward")
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.connect_runtime_owner",
+        connect,
+    )
+    monkeypatch.setattr("subprocess.Popen", popen)
+
+    assert start_runtime_owner(timeout=1.0) is remote
+    assert captured["argv"] == [
+        sys.executable,
+        "-m",
+        "hermes_cli.client_auth.runtime",
+        "owner",
+    ]
+    assert captured["stdin"] is subprocess.DEVNULL
+    assert captured["stdout"] is subprocess.DEVNULL
+    assert captured["stderr"] is subprocess.DEVNULL
+    assert captured["close_fds"] is True
+    assert "OPENAI_API_KEY" not in captured["env"]
+    assert "HERMES_ACCOUNT_TOKEN" not in captured["env"]
 
 
 def test_live_owner_is_reused_before_new_mode_election():

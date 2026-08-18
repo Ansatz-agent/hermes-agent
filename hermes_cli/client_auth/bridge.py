@@ -11,12 +11,15 @@ from hermes_cli.client_auth.client import AuthClient
 from hermes_cli.client_auth.runtime import (
     AuthRequired,
     MemoryOwner,
+    OwnerBroker,
     OwnerElectionContext,
     ProcessHardener,
     VaultOwner,
     account_login,
     account_logout,
     account_status,
+    clear_entrypoint_owner,
+    connect_runtime_owner,
     install_entrypoint_owner,
     resolve_owner,
 )
@@ -266,12 +269,23 @@ def _create_bridge_owner():
 
 
 def main() -> int:
-    owner = _create_bridge_owner()
+    broker = None
+    owns_runtime = False
+    try:
+        owner = connect_runtime_owner()
+    except AuthRequired:
+        owner = _create_bridge_owner()
+        broker = OwnerBroker.start(owner)
+        owns_runtime = True
     install_entrypoint_owner(owner)
     try:
         run_stream(sys.stdin.buffer, sys.stdout.buffer)
     finally:
-        owner.close()
+        clear_entrypoint_owner()
+        if broker is not None:
+            broker.close()
+        if owns_runtime:
+            owner.close()
     return 0
 
 

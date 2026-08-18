@@ -8,6 +8,7 @@ import select
 import socket
 import stat
 import struct
+import subprocess
 import sys
 import tempfile
 import threading
@@ -18,7 +19,7 @@ from datetime import datetime
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
-from typing import Protocol, TypeVar
+from typing import Any, Protocol, TypeVar
 
 from hermes_cli.client_auth.client import (
     CSRF_COOKIE,
@@ -329,6 +330,27 @@ class WindowsPipeConnection:
             self._handle.Close()  # type: ignore[attr-defined]
         except Exception:
             return
+
+    def recv(self, size: int) -> bytes:
+        if self._closed or size <= 0:
+            return b""
+        try:
+            import win32file
+
+            _status, data = win32file.ReadFile(self._handle, size)
+            return bytes(data)
+        except Exception:
+            raise AuthRequired("runtime_unavailable") from None
+
+    def sendall(self, data: bytes) -> None:
+        if self._closed:
+            raise AuthRequired("runtime_unavailable")
+        try:
+            import win32file
+
+            win32file.WriteFile(self._handle, data)
+        except Exception:
+            raise AuthRequired("runtime_unavailable") from None
 
 
 class WindowsOwnerServer:
@@ -1099,6 +1121,528 @@ class _EntryPointOwner(Protocol):
     def connect_consumer(self, *, profile: str | None = None) -> RuntimeConsumer: ...
 
 
+_RUNTIME_FRAME_LIMIT = 65_536
+_RUNTIME_PROTOCOL_VERSION = 1
+
+
+class RemoteRuntimeConsumer:
+    def __init__(
+        self,
+        owner: RemoteRuntimeOwner,
+        snapshot: RuntimeSnapshot,
+    ) -> None:
+        self._owner = owner
+        self._snapshot = snapshot
+        self._lock = threading.RLock()
+
+    def snapshot(self) -> RuntimeSnapshot:
+        with self._lock:
+            return self._snapshot
+
+    def publish(self, snapshot: RuntimeSnapshot) -> None:
+        with self._lock:
+            self._snapshot = snapshot
+
+    def require_authorized(
+        self,
+        boundary: str,
+        *,
+        expected: AuthScope | None = None,
+        now: float | None = None,
+    ) -> AuthScope:
+        del now
+        current = self.snapshot()
+        required = expected or current.scope
+        snapshot = self._owner.authorize(boundary, expected=required)
+        self.publish(snapshot)
+        return snapshot.scope
+
+
+class RemoteRuntimeOwner:
+    """A same-OS-user client for the single native auth owner."""
+
+    def __init__(self, endpoint: UnixEndpoint | WindowsNamedPipeEndpoint) -> None:
+        self._endpoint = endpoint
+        self._snapshot = RuntimeSnapshot.signed_out(reason="runtime_unavailable")
+        self._lock = threading.RLock()
+
+    def refresh(self) -> RuntimeSnapshot:
+        return self._request({"operation": "status"})
+
+    def snapshot(self) -> RuntimeSnapshot:
+        with self._lock:
+            return self._snapshot
+
+    def login(self, username: str, password: bytearray) -> RuntimeSnapshot:
+        try:
+            password_text = password.decode("utf-8")
+        except (AttributeError, UnicodeDecodeError):
+            raise AuthRequired("invalid_credentials") from None
+        try:
+            return self._request(
+                {
+                    "operation": "login",
+                    "username": username,
+                    "password": password_text,
+                }
+            )
+        finally:
+            password_text = ""
+
+    def logout(self) -> RuntimeSnapshot:
+        return self._request({"operation": "logout"})
+
+    def connect_consumer(
+        self,
+        *,
+        profile: str | None = None,
+    ) -> RemoteRuntimeConsumer:
+        del profile
+        return RemoteRuntimeConsumer(self, self.snapshot())
+
+    def authorize(
+        self,
+        boundary: str,
+        *,
+        expected: AuthScope,
+    ) -> RuntimeSnapshot:
+        return self._request(
+            {
+                "operation": "authorize",
+                "boundary": boundary,
+                "expected": {
+                    "runtime_instance_id": expected.runtime_instance_id,
+                    "epoch": expected.epoch,
+                },
+            }
+        )
+
+    def _request(self, params: dict[str, object]) -> RuntimeSnapshot:
+        request = {
+            "version": _RUNTIME_PROTOCOL_VERSION,
+            **params,
+        }
+        encoded = (
+            json.dumps(request, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode("utf-8")
+        if len(encoded) > _RUNTIME_FRAME_LIMIT:
+            raise AuthRequired("runtime_unavailable")
+        connection: Any = self._endpoint.connect_current()
+        try:
+            if isinstance(connection, socket.socket):
+                connection.settimeout(15.0)
+            connection.sendall(encoded)
+            raw = _read_runtime_frame(connection)
+        except (AuthRequired, OSError, TimeoutError):
+            raise AuthRequired("runtime_unavailable") from None
+        finally:
+            connection.close()
+        try:
+            response = json.loads(raw)
+        except (UnicodeError, ValueError):
+            raise AuthRequired("runtime_unavailable") from None
+        if not isinstance(response, dict) or response.get("version") != 1:
+            raise AuthRequired("runtime_unavailable")
+        if response.get("ok") is not True:
+            reason = response.get("reason")
+            if not isinstance(reason, str) or not reason:
+                reason = "runtime_unavailable"
+            raise AuthRequired(reason)
+        if set(response) != {"version", "ok", "snapshot"}:
+            raise AuthRequired("runtime_unavailable")
+        snapshot = _snapshot_from_public(response.get("snapshot"))
+        with self._lock:
+            self._snapshot = snapshot
+        return snapshot
+
+
+class OwnerBroker:
+    """Bounded native IPC broker for one VaultOwner or MemoryOwner."""
+
+    def __init__(
+        self,
+        owner: _EntryPointOwner,
+        endpoint: UnixEndpoint | WindowsNamedPipeEndpoint,
+        server: UnixOwnerServer | WindowsOwnerServer,
+        owner_lock: UnixOwnerLock | None,
+    ) -> None:
+        self._owner = owner
+        self._endpoint = endpoint
+        self._server = server
+        self._owner_lock = owner_lock
+        self._stop = threading.Event()
+        self._thread = threading.Thread(
+            target=self._serve,
+            name="hermes-auth-owner",
+            daemon=True,
+        )
+        self._maintenance_thread = threading.Thread(
+            target=self._maintain,
+            name="hermes-auth-maintenance",
+            daemon=True,
+        )
+
+    @classmethod
+    def start(
+        cls,
+        owner: _EntryPointOwner,
+        *,
+        endpoint: UnixEndpoint | WindowsNamedPipeEndpoint | None = None,
+    ) -> OwnerBroker:
+        selected = endpoint or runtime_endpoint()
+        owner_lock: UnixOwnerLock | None = None
+        if isinstance(selected, UnixEndpoint):
+            owner_lock = selected.acquire_owner_lock()
+            try:
+                server = selected.bind_owner(owner_lock)
+            except Exception:
+                owner_lock.close()
+                raise
+        else:
+            server = selected.bind_owner()
+        broker = cls(owner, selected, server, owner_lock)
+        broker._thread.start()
+        broker._maintenance_thread.start()
+        return broker
+
+    @property
+    def endpoint(self) -> UnixEndpoint | WindowsNamedPipeEndpoint:
+        return self._endpoint
+
+    def close(self) -> None:
+        if self._stop.is_set():
+            return
+        self._stop.set()
+        self._server.close()
+        if self._owner_lock is not None:
+            self._owner_lock.close()
+
+    def wait(self) -> None:
+        self._stop.wait()
+
+    def _serve(self) -> None:
+        while not self._stop.is_set():
+            try:
+                connection = self._server.accept()
+            except AuthRequired:
+                if not self._stop.is_set():
+                    self._stop.set()
+                return
+            try:
+                raw = _read_runtime_frame(connection)
+                response = self._dispatch(raw)
+                encoded = (
+                    json.dumps(response, sort_keys=True, separators=(",", ":"))
+                    + "\n"
+                ).encode("utf-8")
+                if len(encoded) > _RUNTIME_FRAME_LIMIT:
+                    raise AuthRequired("runtime_unavailable")
+                connection.sendall(encoded)
+            except Exception:
+                try:
+                    connection.sendall(
+                        b'{"ok":false,"reason":"runtime_unavailable","version":1}\n'
+                    )
+                except Exception:
+                    pass
+            finally:
+                connection.close()
+            if isinstance(self._endpoint, WindowsNamedPipeEndpoint):
+                try:
+                    self._server = self._endpoint.bind_owner()
+                except AuthRequired:
+                    self._stop.set()
+                    return
+
+    def _maintain(self) -> None:
+        maintenance = getattr(self._owner, "maintenance", None)
+        while not self._stop.wait(0.5):
+            if maintenance is None:
+                continue
+            try:
+                if maintenance() is False:
+                    self.close()
+                    return
+            except AuthRequired:
+                continue
+            except Exception:
+                self.close()
+                return
+
+    def _dispatch(self, raw: bytes) -> dict[str, object]:
+        try:
+            request = json.loads(raw)
+        except (UnicodeError, ValueError):
+            return _runtime_error("runtime_unavailable")
+        if not isinstance(request, dict) or request.get("version") != 1:
+            return _runtime_error("runtime_unavailable")
+        operation = request.get("operation")
+        try:
+            if operation == "status" and set(request) == {"version", "operation"}:
+                snapshot = self._owner.refresh()
+            elif operation == "logout" and set(request) == {"version", "operation"}:
+                snapshot = self._owner.logout()  # type: ignore[attr-defined]
+            elif operation == "login" and set(request) == {
+                "version",
+                "operation",
+                "username",
+                "password",
+            }:
+                username = request.get("username")
+                password_text = request.get("password")
+                if not isinstance(username, str) or not isinstance(password_text, str):
+                    raise AuthRequired("invalid_credentials")
+                password = bytearray(password_text.encode("utf-8"))
+                password_text = ""
+                try:
+                    snapshot = self._owner.login(username, password)
+                finally:
+                    password[:] = b"\0" * len(password)
+            elif operation == "authorize" and set(request) == {
+                "version",
+                "operation",
+                "boundary",
+                "expected",
+            }:
+                boundary = request.get("boundary")
+                expected = _scope_from_wire(request.get("expected"))
+                if not isinstance(boundary, str) or not 0 < len(boundary) <= 256:
+                    raise AuthRequired("runtime_unavailable")
+                snapshot = self._owner.snapshot()
+                consumer = self._owner.connect_consumer()
+                consumer.require_authorized(boundary, expected=expected)
+            else:
+                raise AuthRequired("runtime_unavailable")
+        except AuthRequired as error:
+            return _runtime_error(error.reason or error.code)
+        except Exception:
+            return _runtime_error("runtime_unavailable")
+        return {
+            "version": 1,
+            "ok": True,
+            "snapshot": snapshot.public_dict(),
+        }
+
+
+def connect_runtime_owner(
+    *,
+    endpoint: UnixEndpoint | WindowsNamedPipeEndpoint | None = None,
+) -> RemoteRuntimeOwner:
+    remote = RemoteRuntimeOwner(endpoint or runtime_endpoint())
+    remote.refresh()
+    return remote
+
+
+def start_runtime_owner(*, timeout: float = 5.0) -> RemoteRuntimeOwner:
+    """Start the fixed auth-only owner process and wait for its native endpoint."""
+    try:
+        return connect_runtime_owner()
+    except AuthRequired:
+        pass
+    environment = _owner_process_environment()
+    kwargs: dict[str, object] = {
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "close_fds": True,
+        "env": environment,
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = (
+            getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            | getattr(subprocess, "DETACHED_PROCESS", 0)
+        )
+    else:
+        kwargs["start_new_session"] = True
+    try:
+        subprocess.Popen(
+            [
+                sys.executable,
+                "-m",
+                "hermes_cli.client_auth.runtime",
+                "owner",
+            ],
+            **kwargs,
+        )
+    except Exception:
+        raise AuthRequired("runtime_unavailable") from None
+
+    deadline = time.monotonic() + max(0.1, timeout)
+    while time.monotonic() < deadline:
+        try:
+            return connect_runtime_owner()
+        except AuthRequired:
+            time.sleep(0.05)
+    raise AuthRequired("runtime_unavailable")
+
+
+def _owner_process_environment() -> dict[str, str]:
+    exact = {
+        "APPDATA",
+        "DISPLAY",
+        "HOME",
+        "KUBERNETES_SERVICE_HOST",
+        "LANG",
+        "LC_ALL",
+        "LOCALAPPDATA",
+        "LOGNAME",
+        "PATH",
+        "SSH_CONNECTION",
+        "SYSTEMROOT",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "USER",
+        "USERPROFILE",
+        "WAYLAND_DISPLAY",
+        "WINDIR",
+        "XDG_RUNTIME_DIR",
+        "container",
+    }
+    return {
+        key: value
+        for key, value in os.environ.items()
+        if key in exact and isinstance(value, str)
+    }
+
+
+def _owner_election_context() -> OwnerElectionContext:
+    ssh_connection = bool(os.environ.get("SSH_CONNECTION"))
+    containerized = bool(
+        os.environ.get("container")
+        or os.environ.get("KUBERNETES_SERVICE_HOST")
+        or os.path.exists("/.dockerenv")
+    )
+    graphical_session = not ssh_connection and not containerized and (
+        sys.platform in {"darwin", "win32"}
+        or bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    )
+    return OwnerElectionContext(
+        ssh_connection=ssh_connection,
+        containerized=containerized,
+        graphical_session=graphical_session,
+        platform=sys.platform,
+    )
+
+
+def _create_elected_owner() -> VaultOwner | MemoryOwner:
+    return resolve_owner(
+        _owner_election_context(),
+        live_owner=lambda: None,
+        vault_factory=lambda: VaultOwner(AuthClient()),
+        memory_factory=lambda: MemoryOwner(
+            AuthClient(),
+            hardener=ProcessHardener(),
+        ),
+    )
+
+
+def run_owner_service() -> int:
+    try:
+        connect_runtime_owner()
+    except AuthRequired:
+        pass
+    else:
+        return 0
+    owner = _create_elected_owner()
+    try:
+        broker = OwnerBroker.start(owner)
+    except AuthRequired:
+        return 0
+    install_entrypoint_owner(owner)
+    try:
+        broker.wait()
+    finally:
+        clear_entrypoint_owner()
+        broker.close()
+        owner.close()
+    return 0
+
+
+def _read_runtime_frame(connection: Any) -> bytes:
+    data = bytearray()
+    while True:
+        chunk = connection.recv(min(4096, _RUNTIME_FRAME_LIMIT + 1 - len(data)))
+        if not chunk:
+            raise AuthRequired("runtime_unavailable")
+        data.extend(chunk)
+        if len(data) > _RUNTIME_FRAME_LIMIT:
+            raise AuthRequired("runtime_unavailable")
+        newline = data.find(b"\n")
+        if newline >= 0:
+            if newline != len(data) - 1:
+                raise AuthRequired("runtime_unavailable")
+            return bytes(data[:newline])
+
+
+def _scope_from_wire(value: object) -> AuthScope:
+    if not isinstance(value, dict) or set(value) != {
+        "runtime_instance_id",
+        "epoch",
+    }:
+        raise AuthRequired("runtime_unavailable")
+    instance = value.get("runtime_instance_id")
+    epoch = value.get("epoch")
+    if not isinstance(instance, str) or len(instance) != 32:
+        raise AuthRequired("runtime_unavailable")
+    if not isinstance(epoch, int) or isinstance(epoch, bool) or epoch < 0:
+        raise AuthRequired("runtime_unavailable")
+    return AuthScope(instance, epoch)
+
+
+def _snapshot_from_public(value: object) -> RuntimeSnapshot:
+    if not isinstance(value, dict) or set(value) != {
+        "state",
+        "username",
+        "runtime_instance_id",
+        "epoch",
+        "valid_until",
+        "session_expires_at",
+        "reason",
+    }:
+        raise AuthRequired("runtime_unavailable")
+    try:
+        state = AuthState(value["state"])
+    except (KeyError, TypeError, ValueError):
+        raise AuthRequired("runtime_unavailable") from None
+    username = value["username"]
+    instance = value["runtime_instance_id"]
+    epoch = value["epoch"]
+    valid_until = value["valid_until"]
+    expires = value["session_expires_at"]
+    reason = value["reason"]
+    if username is not None and not isinstance(username, str):
+        raise AuthRequired("runtime_unavailable")
+    if not isinstance(instance, str) or len(instance) != 32:
+        raise AuthRequired("runtime_unavailable")
+    if not isinstance(epoch, int) or isinstance(epoch, bool) or epoch < 0:
+        raise AuthRequired("runtime_unavailable")
+    if not isinstance(valid_until, (int, float)) or isinstance(valid_until, bool):
+        raise AuthRequired("runtime_unavailable")
+    if expires is not None and not isinstance(expires, str):
+        raise AuthRequired("runtime_unavailable")
+    if reason is not None and not isinstance(reason, str):
+        raise AuthRequired("runtime_unavailable")
+    return RuntimeSnapshot(
+        state=state,
+        epoch=epoch,
+        valid_until=float(valid_until),
+        runtime_instance_id=instance,
+        boot_id=_read_boot_id(),
+        username=username,
+        session_expires_at=expires,
+        reason=reason,
+    )
+
+
+def _runtime_error(reason: str) -> dict[str, object]:
+    return {
+        "version": 1,
+        "ok": False,
+        "reason": reason,
+    }
+
+
 _entrypoint_owner_lock = threading.RLock()
 _entrypoint_owner: _EntryPointOwner | None = None
 
@@ -1120,7 +1664,12 @@ def authorize_entrypoint(boundary: str, *, interactive: bool) -> AuthScope:
     with _entrypoint_owner_lock:
         owner = _entrypoint_owner
     if owner is None:
-        raise AuthRequired("runtime_unavailable")
+        try:
+            owner = connect_runtime_owner()
+        except AuthRequired:
+            if not interactive:
+                raise
+            owner = start_runtime_owner()
 
     recoverable = {"session_rejected", "session_expired", "signed_out"}
     try:
@@ -1167,7 +1716,10 @@ def account_status() -> RuntimeSnapshot:
     with _entrypoint_owner_lock:
         owner = _entrypoint_owner
     if owner is None:
-        return RuntimeSnapshot.signed_out(reason="runtime_unavailable")
+        try:
+            owner = connect_runtime_owner()
+        except AuthRequired:
+            return RuntimeSnapshot.signed_out(reason="runtime_unavailable")
     try:
         return owner.refresh()
     except AuthRequired:
@@ -1178,7 +1730,10 @@ def account_login(username: str, password: bytearray) -> RuntimeSnapshot:
     with _entrypoint_owner_lock:
         owner = _entrypoint_owner
     if owner is None:
-        raise AuthRequired("runtime_unavailable")
+        try:
+            owner = connect_runtime_owner()
+        except AuthRequired:
+            owner = start_runtime_owner()
     return owner.login(username, password)
 
 
@@ -1186,7 +1741,10 @@ def account_logout() -> RuntimeSnapshot:
     with _entrypoint_owner_lock:
         owner = _entrypoint_owner
     if owner is None:
-        return RuntimeSnapshot.signed_out()
+        try:
+            owner = connect_runtime_owner()
+        except AuthRequired:
+            return RuntimeSnapshot.signed_out()
     return owner.logout()
 
 
@@ -1663,3 +2221,14 @@ def _windows_boot_id() -> str:
         raise AuthRequired("runtime_unavailable") from None
     approximate_boot = int((time.time() - (uptime_ms / 1000.0)) // 10)
     return f"windows:{approximate_boot}"
+
+
+def main(argv: list[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments != ["owner"]:
+        return 2
+    return run_owner_service()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
