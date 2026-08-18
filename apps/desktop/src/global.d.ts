@@ -576,6 +576,11 @@ export interface DesktopUpdateProgress {
 }
 
 export interface HermesConnection {
+  authScope?: {
+    connection_id: string
+    runtime_instance_id: string
+    epoch: number
+  }
   baseUrl: string
   darwinMajor?: number
   isFullscreen: boolean
@@ -976,6 +981,9 @@ export type DesktopBootstrapEvent =
     }
 
 export interface HermesApiRequest {
+  // Exact execution target. Main-process authorization rejects the request if
+  // this connection's current runtime scope is absent or stale.
+  connectionId?: string
   path: string
   method?: string
   body?: unknown

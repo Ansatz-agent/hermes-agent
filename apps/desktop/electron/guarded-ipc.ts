@@ -35,6 +35,7 @@ const CONNECTION_CHANNELS = [
 
 const BOTH_CHANNELS = [
   'hermes:window:openInTerminal',
+  'hermes:connections:set-primary',
   'hermes:connections:update-all',
   'hermes:connection-config:apply'
 ] as const
@@ -66,7 +67,6 @@ const LOCAL_CHANNELS = [
   'hermes:connections:list',
   'hermes:connections:save',
   'hermes:connections:remove',
-  'hermes:connections:set-primary',
   'hermes:connection-config:probe',
   'hermes:connection-config:oauth-login',
   'hermes:connection-config:oauth-logout',

@@ -14,6 +14,7 @@ import {
   agentHandle,
   backendScopeKey,
   backendScopePrefix,
+  bindAuthenticatedBackendRoute,
   buildAgentRoster,
   connectionIdForLabel,
   labelKey,
@@ -125,6 +126,22 @@ test('backendScopeKey: non-local connections get an unambiguous composite', () =
   assert.ok(backendScopeKey('homelab', 'research').startsWith(backendScopePrefix('homelab')))
   assert.ok(!backendScopeKey('homelab-2', 'research').startsWith(backendScopePrefix('homelab')))
   assert.ok(!'research'.startsWith(backendScopePrefix('homelab')))
+})
+
+test('in-memory backend routes bind the exact connection and owner tuple', () => {
+  const scope = {
+    connection_id: 'remote-a',
+    runtime_instance_id: 'remote-a-runtime',
+    epoch: 7
+  }
+
+  assert.deepEqual(bindAuthenticatedBackendRoute('remote-a', 'research', scope), {
+    connectionId: 'remote-a',
+    profile: 'research',
+    scope
+  })
+  assert.throws(() => bindAuthenticatedBackendRoute('remote-b', 'research', scope), /scope/i)
+  assert.throws(() => bindAuthenticatedBackendRoute('remote-a', 'research', { ...scope, epoch: -1 }), /scope/i)
 })
 
 // --- buildAgentRoster (union roster + @name-device rule) ---
@@ -405,6 +422,37 @@ test('normalizeRegistry round-trips a valid registry unchanged in shape', () => 
   )
   assert.deepEqual(registry.connections[1].token, { v: 1 })
   assert.equal(registry.connections[3].port, 2222)
+})
+
+test('normalizeRegistry never persists runtime scopes or short-lived bearers', () => {
+  const registry = normalizeRegistry({
+    version: 2,
+    primary: 'remote-a',
+    connections: [
+      { id: 'local', kind: 'local', label: 'This device' },
+      {
+        id: 'remote-a',
+        kind: 'remote',
+        label: 'Remote A',
+        url: 'https://remote-a.example',
+        authMode: 'oauth',
+        bearer: 'scope-secret',
+        epoch: 7,
+        runtime_instance_id: 'remote-a-runtime',
+        scope: {
+          connection_id: 'remote-a',
+          runtime_instance_id: 'remote-a-runtime',
+          epoch: 7
+        }
+      }
+    ]
+  })
+
+  const serialized = JSON.stringify(registry)
+
+  assert.equal(serialized.includes('scope-secret'), false)
+  assert.equal(serialized.includes('remote-a-runtime'), false)
+  assert.equal('scope' in (registry.connections[1] as object), false)
 })
 
 // --- v1 → v2 migration ---

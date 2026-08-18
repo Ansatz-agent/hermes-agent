@@ -54,6 +54,7 @@ test('the single policy table contains the required account, local, connection, 
   assert.equal(CHANNEL_AUTH_POLICY['hermes:terminal:start'], 'local')
   assert.equal(CHANNEL_AUTH_POLICY['hermes:fs:writeText'], 'local')
   assert.equal(CHANNEL_AUTH_POLICY['hermes:gateway:ws-url-for'], 'connection')
+  assert.equal(CHANNEL_AUTH_POLICY['hermes:connections:set-primary'], 'both')
   assert.equal(CHANNEL_AUTH_POLICY['hermes:connection-config:apply'], 'both')
   assert.deepEqual(
     [...AUTH_FREE_CHANNELS].sort(),
@@ -120,6 +121,26 @@ test('unknown senders and missing connection ids never reach authority or handle
       assert.equal(authority.require.mock.calls.length, 0)
     }
   }
+})
+
+test('an explicitly malformed connection id is rejected instead of falling back to a primary connection', async () => {
+  const { authority, guarded, ipcMain } = fixture({
+    resolveConnectionId: vi.fn(({ args }) => {
+      const value = args[0]?.connectionId
+
+      return typeof value === 'string' && !value.includes('\0') ? value : null
+    })
+  })
+
+  const handler = vi.fn()
+  guarded.handle('hermes:api', handler)
+
+  await assert.rejects(
+    ipcMain.handles.get('hermes:api')?.(knownEvent, { connectionId: 'remote-a\0remote-b', path: '/api/status' }),
+    /AUTH_REQUIRED/
+  )
+  assert.equal(authority.require.mock.calls.length, 0)
+  assert.equal(handler.mock.calls.length, 0)
 })
 
 test('send-style handlers are denied without executing their side effect', async () => {

@@ -47,6 +47,26 @@ function fixture(initial = signedOut, clock = () => 42) {
   }
 }
 
+function statusFor(runtime: string, epoch: number, state: BridgeStatus['state'] = 'authenticated'): BridgeStatus {
+  return {
+    ...authenticated,
+    state,
+    username: state === 'authenticated' ? 'alice' : null,
+    runtime_instance_id: runtime,
+    epoch,
+    valid_until: state === 'authenticated' ? 90 : 0,
+    reason: state === 'authenticated' ? null : 'signed_out'
+  }
+}
+
+function fixedBridge(status: BridgeStatus) {
+  return {
+    status: vi.fn(async () => status),
+    login: vi.fn(async () => status),
+    logout: vi.fn(async () => ({ ...status, state: 'signed_out' as const, username: null, valid_until: 0 }))
+  }
+}
+
 test('stores a full scope only after the bridge reports authenticated', async () => {
   const { coordinator } = fixture()
   await coordinator.start()
@@ -198,4 +218,91 @@ test('never publishes an authenticated scope when the bridge lease is already ex
   assert.equal(status.reason, 'session_expired')
   assert.equal(coordinator.scope('local'), null)
   assert.equal(events.some(event => event.state === 'authenticated'), false)
+})
+
+test('authorizes local, remote A, remote B, and both policies only from their exact scopes', async () => {
+  const local = fixedBridge(statusFor('local-runtime', 1, 'signed_out'))
+  const remoteA = fixedBridge(statusFor('remote-a-runtime', 2))
+  const remoteB = fixedBridge(statusFor('remote-b-runtime', 3))
+  const coordinator = new AuthCoordinator(local, { clock: () => 42, pollIntervalMs: 0 })
+
+  await coordinator.start()
+  await coordinator.registerConnection('remote-a', remoteA)
+  await coordinator.registerConnection('remote-b', remoteB)
+
+  await assert.rejects(coordinator.require('local', 'local'), /AUTH_REQUIRED/)
+  await assert.doesNotReject(coordinator.require('connection', 'remote-a'))
+  await assert.doesNotReject(coordinator.require('connection', 'remote-b'))
+  await assert.rejects(coordinator.require('connection', 'local'), /AUTH_REQUIRED/)
+  await assert.rejects(coordinator.require('both', 'remote-a'), /AUTH_REQUIRED/)
+
+  assert.deepEqual(coordinator.scope('remote-a'), {
+    connection_id: 'remote-a',
+    runtime_instance_id: 'remote-a-runtime',
+    epoch: 2
+  })
+  assert.deepEqual(coordinator.scope('remote-b'), {
+    connection_id: 'remote-b',
+    runtime_instance_id: 'remote-b-runtime',
+    epoch: 3
+  })
+})
+
+test('locking or logging out one remote connection does not mutate local or a peer remote', async () => {
+  const cleanup = vi.fn(async (_connectionId: string) => {})
+
+  const coordinator = new AuthCoordinator(fixedBridge(statusFor('local-runtime', 1)), {
+    cleanup,
+    clock: () => 42,
+    pollIntervalMs: 0
+  })
+
+  const remoteA = fixedBridge(statusFor('remote-a-runtime', 2))
+  const remoteB = fixedBridge(statusFor('remote-b-runtime', 3))
+
+  await coordinator.start()
+  await coordinator.registerConnection('remote-a', remoteA)
+  await coordinator.registerConnection('remote-b', remoteB)
+  const localScope = coordinator.scope('local')
+  const remoteBScope = coordinator.scope('remote-b')
+
+  await coordinator.logout('remote-a')
+
+  assert.equal(coordinator.scope('remote-a'), null)
+  assert.deepEqual(coordinator.scope('local'), localScope)
+  assert.deepEqual(coordinator.scope('remote-b'), remoteBScope)
+  await assert.doesNotReject(coordinator.require('local', 'local'))
+  await assert.doesNotReject(coordinator.require('connection', 'remote-b'))
+  await assert.rejects(coordinator.require('connection', 'remote-a'), /AUTH_REQUIRED/)
+  assert.deepEqual(cleanup.mock.calls.map(call => call[0]), ['remote-a'])
+})
+
+test('replacing a remote bridge revokes its old scope before publishing the new owner', async () => {
+  const events: string[] = []
+
+  const coordinator = new AuthCoordinator(fixedBridge(statusFor('local-runtime', 1)), {
+    cleanup: async connectionId => {
+      assert.equal(coordinator.scope(connectionId), null)
+      events.push(`cleanup:${connectionId}`)
+    },
+    clock: () => 42,
+    pollIntervalMs: 0
+  })
+
+  coordinator.subscribe((status, connectionId) => events.push(`${connectionId}:${status.state}`))
+
+  await coordinator.start()
+  await coordinator.registerConnection('remote-a', fixedBridge(statusFor('remote-a-old', 1)))
+  events.length = 0
+  await coordinator.registerConnection('remote-a', fixedBridge(statusFor('remote-a-new', 1)))
+
+  assert.deepEqual(events, ['remote-a:locked', 'cleanup:remote-a', 'remote-a:authenticated'])
+  assert.equal(coordinator.scope('remote-a')?.runtime_instance_id, 'remote-a-new')
+})
+
+test('remote bridge registration cannot replace local or create ambiguous connection ids', async () => {
+  const coordinator = new AuthCoordinator(fixedBridge(authenticated), { pollIntervalMs: 0 })
+
+  await assert.rejects(coordinator.registerConnection('local', fixedBridge(authenticated)), /local auth connection/)
+  await assert.rejects(coordinator.registerConnection(' remote-a ', fixedBridge(authenticated)), /Invalid/)
 })

@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
 
-import { test } from 'vitest'
+import { expect, test, vi } from 'vitest'
 
 import {
+  fetchConnectionProfileSessions,
   fetchPrimaryProfileSessions,
   fetchRemoteProfileSessions,
   mergeProfileSessionWindow
@@ -174,4 +175,63 @@ test('remote session reads keep small requests on one call', async () => {
 
   assert.deepEqual(calls, [{ profile: 'remote-work', path: '/api/sessions?limit=20&offset=0' }])
   assert.equal(result, expected)
+})
+
+test('connection profile routing authorizes and mints for the exact destination on every request page', async () => {
+  const requireScope = vi.fn(async () => ({
+    connection_id: 'remote-b',
+    runtime_instance_id: 'remote-b-runtime',
+    epoch: 4
+  }))
+
+  const requestFreshToken = vi.fn(async () => 'remote-b-bearer')
+
+  const fetchJson = vi.fn(async (_connectionId, _profile, path, _token) => {
+    const url = new URL(path, 'http://desktop.test')
+    const limit = Number(url.searchParams.get('limit'))
+    const offset = Number(url.searchParams.get('offset'))
+
+    return {
+      sessions: Array.from({ length: Math.min(limit, Math.max(0, 150 - offset)) }, (_, index) => ({
+        id: `session-${offset + index}`
+      })),
+      total: 150
+    }
+  })
+
+  const result = await fetchConnectionProfileSessions(
+    { connectionId: 'remote-b', profile: 'research' },
+    new URLSearchParams({ limit: '150', offset: '0' }),
+    { fetchJson, requestFreshToken, requireScope }
+  )
+
+  expect(result.sessions).toHaveLength(150)
+  expect(requireScope.mock.calls).toEqual([['remote-b'], ['remote-b']])
+  expect(requestFreshToken).toHaveBeenCalledTimes(2)
+  expect(fetchJson.mock.calls.map(call => [call[0], call[1], call[3]])).toEqual([
+    ['remote-b', 'research', 'remote-b-bearer'],
+    ['remote-b', 'research', 'remote-b-bearer']
+  ])
+})
+
+test('connection profile routing rejects a scope from another connection before fetch', async () => {
+  const fetchJson = vi.fn()
+
+  await expect(
+    fetchConnectionProfileSessions(
+      { connectionId: 'remote-a', profile: 'research' },
+      new URLSearchParams({ limit: '20' }),
+      {
+        fetchJson,
+        requestFreshToken: vi.fn(),
+        requireScope: async () => ({
+          connection_id: 'remote-b',
+          runtime_instance_id: 'remote-b-runtime',
+          epoch: 4
+        })
+      }
+    )
+  ).rejects.toThrow('AUTH_REQUIRED')
+
+  expect(fetchJson).not.toHaveBeenCalled()
 })

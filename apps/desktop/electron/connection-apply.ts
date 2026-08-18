@@ -1,3 +1,51 @@
+import { type ConnectionScope, requireAuthenticatedConnectionScope } from './auth-bridge'
+
+export interface ForegroundConnectionGrant {
+  connectionId: string
+  scope: ConnectionScope
+  token: string
+}
+
+interface ForegroundConnectionChangeOptions {
+  current: ForegroundConnectionGrant | null
+  nextConnectionId: string
+  publish: (grant: ForegroundConnectionGrant) => Promise<void> | void
+  requestFreshToken: (scope: ConnectionScope) => Promise<string>
+  requireScope: (connectionId: string) => Promise<ConnectionScope>
+  revokeForeground: (grant: ForegroundConnectionGrant) => Promise<void> | void
+}
+
+async function applyForegroundConnectionChange({
+  current,
+  nextConnectionId,
+  publish,
+  requestFreshToken,
+  requireScope,
+  revokeForeground
+}: ForegroundConnectionChangeOptions): Promise<ForegroundConnectionGrant> {
+  if (current) {
+    await revokeForeground(current)
+  }
+
+  const connectionId = String(nextConnectionId || '').trim()
+  const scope = requireAuthenticatedConnectionScope(await requireScope(connectionId))
+
+  if (!connectionId || scope.connection_id !== connectionId) {
+    throw new Error('AUTH_REQUIRED')
+  }
+
+  const token = await requestFreshToken(scope)
+
+  if (!token) {
+    throw new Error('AUTH_REQUIRED')
+  }
+
+  const grant = { connectionId, scope: { ...scope }, token }
+  await publish(grant)
+
+  return grant
+}
+
 async function applyConnectionChange({
   cancelAndWait,
   isPrimary,
@@ -54,4 +102,4 @@ async function resolveTerminalConnection(getTarget, ensureBackend) {
   return target
 }
 
-export { applyConnectionChange, commitConnectionFailure, resolveTerminalConnection }
+export { applyConnectionChange, applyForegroundConnectionChange, commitConnectionFailure, resolveTerminalConnection }

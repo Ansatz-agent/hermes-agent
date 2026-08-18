@@ -48,7 +48,7 @@ export class CoordinatorAuthRequiredError extends Error {
 }
 
 export class AuthCoordinator {
-  private readonly bridge: AuthBridgeLike
+  private readonly bridges = new Map<string, AuthBridgeLike>()
   private readonly clock: () => number
   private readonly cleanup: (connectionId: string, status: BridgeStatus) => Promise<void> | void
   private readonly listeners = new Set<StatusListener>()
@@ -60,7 +60,7 @@ export class AuthCoordinator {
   private stopped = false
 
   constructor(bridge: AuthBridgeLike, options: AuthCoordinatorOptions = {}) {
-    this.bridge = bridge
+    this.bridges.set(LOCAL_CONNECTION_ID, bridge)
     this.clock = options.clock ?? uptime
     this.cleanup = options.cleanup ?? (() => {})
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
@@ -104,29 +104,40 @@ export class AuthCoordinator {
     return () => this.listeners.delete(listener)
   }
 
-  async refresh(): Promise<BridgeStatus> {
+  async refresh(connectionId = LOCAL_CONNECTION_ID): Promise<BridgeStatus> {
     return this.runExclusive(async () => {
+      const bridge = this.bridges.get(connectionId)
+
+      if (!bridge) {
+        return this.applyFailure(new AuthBridgeError('runtime_unavailable', 'runtime_unavailable'), connectionId)
+      }
+
       try {
-        return await this.applyStatus(await this.bridge.status(), LOCAL_CONNECTION_ID)
+        return await this.applyStatus(await bridge.status(), connectionId)
       } catch (error) {
-        return this.applyFailure(error, LOCAL_CONNECTION_ID)
+        return this.applyFailure(error, connectionId)
       }
     })
   }
 
-  async login(username: string, password: string): Promise<BridgeStatus> {
+  async login(username: string, password: string, connectionId = LOCAL_CONNECTION_ID): Promise<BridgeStatus> {
     return this.runExclusive(async () => {
+      const bridge = this.bridges.get(connectionId)
+
+      if (!bridge) {
+        return this.applyFailure(new AuthBridgeError('runtime_unavailable', 'runtime_unavailable'), connectionId)
+      }
+
       try {
-        return await this.applyStatus(await this.bridge.login(username, password), LOCAL_CONNECTION_ID)
+        return await this.applyStatus(await bridge.login(username, password), connectionId)
       } catch (error) {
-        return this.applyFailure(error, LOCAL_CONNECTION_ID)
+        return this.applyFailure(error, connectionId)
       }
     })
   }
 
-  async logout(): Promise<BridgeStatus> {
+  async logout(connectionId = LOCAL_CONNECTION_ID): Promise<BridgeStatus> {
     return this.runExclusive(async () => {
-      const connectionId = LOCAL_CONNECTION_ID
       const previousScope = this.scopes.get(connectionId)
 
       if (previousScope) {
@@ -137,10 +148,66 @@ export class AuthCoordinator {
         await this.cleanup(connectionId, locked)
       }
 
+      const bridge = this.bridges.get(connectionId)
+
+      if (!bridge) {
+        return this.applyFailure(new AuthBridgeError('runtime_unavailable', 'runtime_unavailable'), connectionId)
+      }
+
       try {
-        return await this.applyStatus(await this.bridge.logout(), connectionId)
+        return await this.applyStatus(await bridge.logout(), connectionId)
       } catch (error) {
         return this.applyFailure(error, connectionId)
+      }
+    })
+  }
+
+  async registerConnection(connectionId: string, bridge: AuthBridgeLike): Promise<BridgeStatus> {
+    requireConnectionId(connectionId)
+
+    if (connectionId === LOCAL_CONNECTION_ID) {
+      throw new TypeError('The local auth connection is owned by the coordinator constructor')
+    }
+
+    return this.runExclusive(async () => {
+      const previousScope = this.scopes.get(connectionId)
+
+      if (previousScope) {
+        const locked = lockFrom(this.status(connectionId), 'session_rejected')
+        this.scopes.delete(connectionId)
+        this.statuses.set(connectionId, locked)
+        this.emit(locked, connectionId)
+        await this.cleanup(connectionId, locked)
+      }
+
+      this.bridges.set(connectionId, bridge)
+      this.statuses.set(connectionId, checkingStatus())
+
+      try {
+        return await this.applyStatus(await bridge.status(), connectionId)
+      } catch (error) {
+        return this.applyFailure(error, connectionId)
+      }
+    })
+  }
+
+  async unregisterConnection(connectionId: string): Promise<void> {
+    requireConnectionId(connectionId)
+
+    if (connectionId === LOCAL_CONNECTION_ID) {
+      throw new TypeError('The local auth connection cannot be unregistered')
+    }
+
+    await this.runExclusive(async () => {
+      const previousScope = this.scopes.get(connectionId)
+      const locked = lockFrom(this.status(connectionId), 'signed_out')
+      this.scopes.delete(connectionId)
+      this.bridges.delete(connectionId)
+      this.statuses.set(connectionId, locked)
+      this.emit(locked, connectionId)
+
+      if (previousScope) {
+        await this.cleanup(connectionId, locked)
       }
     })
   }
@@ -283,9 +350,26 @@ export class AuthCoordinator {
 
     this.pollTimer = setTimeout(() => {
       this.pollTimer = null
-      void this.refresh().finally(() => this.schedulePoll())
+      const refreshes = [...this.bridges.keys()].map(connectionId => this.refresh(connectionId))
+      void Promise.all(refreshes).finally(() => this.schedulePoll())
     }, this.pollIntervalMs)
     this.pollTimer.unref?.()
+  }
+}
+
+function requireConnectionId(connectionId: string): void {
+  if (
+    typeof connectionId !== 'string' ||
+    !connectionId ||
+    connectionId.trim() !== connectionId ||
+    connectionId.length > 128 ||
+    [...connectionId].some(character => {
+      const codepoint = character.codePointAt(0) ?? 0
+
+      return codepoint < 0x20 || codepoint === 0x7f
+    })
+  ) {
+    throw new TypeError('Invalid auth connection id')
   }
 }
 

@@ -91,6 +91,7 @@ import {
 import {
   backendScopeKey,
   backendScopePrefix,
+  bindAuthenticatedBackendRoute,
   buildAgentRoster,
   mergeConnectionInput,
   migrateV1ToRegistry,
@@ -728,7 +729,7 @@ async function ensureFreshDesktopScopeToken(descriptor) {
   }
 
   const state = desktopBackendScopeTokens.get(descriptor.baseUrl)
-  const scope = desktopAuthCoordinator?.scope('local')
+  const scope = desktopAuthCoordinator?.scope(state?.scope?.connection_id || descriptor.connectionId || 'local')
 
   if (!state || !sameConnectionScope(state.scope, scope)) {
     throw new AuthBridgeError('auth_required', 'session_rejected')
@@ -811,7 +812,11 @@ async function startDesktopAuthRuntime() {
     const coordinator = new AuthCoordinator(bridge, { cleanup: cleanupDesktopCapabilities })
     desktopAuthBridge = bridge
     desktopAuthCoordinator = coordinator
-    coordinator.subscribe(status => {
+    coordinator.subscribe((status, connectionId) => {
+      if (connectionId !== 'local') {
+        return
+      }
+
       broadcastDesktopAuthStatus(status)
 
       if (status.state === 'authenticated' && !desktopCapabilityShellEnabled) {
@@ -851,13 +856,13 @@ async function startDesktopAuthRuntime() {
   }
 }
 
-async function requireDesktopConnectionScope() {
+async function requireDesktopConnectionScope(connectionId = 'local') {
   if (!desktopAuthCoordinator) {
     throw new AuthBridgeError('runtime_unavailable', 'runtime_unavailable')
   }
 
-  await desktopAuthCoordinator.refresh()
-  const scope = desktopAuthCoordinator.scope('local')
+  await desktopAuthCoordinator.refresh(connectionId)
+  const scope = desktopAuthCoordinator.scope(connectionId)
   await desktopAuthCoordinator.requireScope(scope)
 
   return scope!
@@ -895,15 +900,17 @@ function resolveDesktopIpcConnectionId({ channel, policy, args }: GuardedIpcRequ
 
   for (const argument of args) {
     if (argument && typeof argument === 'object') {
-      const explicit = validatedIpcConnectionId(argument.connectionId ?? argument.connection_id)
+      const hasExplicitConnection =
+        Object.prototype.hasOwnProperty.call(argument, 'connectionId') ||
+        Object.prototype.hasOwnProperty.call(argument, 'connection_id')
 
-      if (explicit) {
-        return explicit
+      if (hasExplicitConnection) {
+        return validatedIpcConnectionId(argument.connectionId ?? argument.connection_id)
       }
     }
   }
 
-  if (channel === 'hermes:connections:test') {
+  if (channel === 'hermes:connections:test' || channel === 'hermes:connections:set-primary') {
     const explicit = validatedIpcConnectionId(args[0])
 
     if (explicit) {
@@ -941,7 +948,13 @@ function broadcastDesktopAuthStatus(status) {
   }
 }
 
-async function cleanupDesktopCapabilities() {
+async function cleanupDesktopCapabilities(connectionId = 'local') {
+  if (connectionId !== 'local') {
+    stopRegistryConnectionBackends(connectionId)
+
+    return
+  }
+
   desktopCapabilityShellEnabled = false
   Menu.setApplicationMenu(null)
   closeQuickEntryWindow()
@@ -9578,8 +9591,10 @@ async function ensureRegistryBackend(connectionId, profile) {
     throw new Error(`No connection with id "${id}".`)
   }
 
+  const authRoute = bindAuthenticatedBackendRoute(id, profile, await requireDesktopConnectionScope(id))
+
   if (source.kind === 'local') {
-    return ensureBackend(profile)
+    return { ...(await ensureBackend(profile)), authScope: authRoute.scope, connectionId: id }
   }
 
   const key = backendScopeKey(id, profile)
@@ -9587,6 +9602,11 @@ async function ensureRegistryBackend(connectionId, profile) {
 
   if (existing) {
     existing.lastActiveAt = Date.now()
+
+    if (!sameConnectionScope(existing.authRoute?.scope, authRoute.scope)) {
+      stopPoolBackend(key)
+      throw new AuthBridgeError('auth_required', 'session_rejected')
+    }
 
     return existing.connectionPromise
   }
@@ -9599,10 +9619,11 @@ async function ensureRegistryBackend(connectionId, profile) {
     token: null,
     connectionPromise: null,
     lastActiveAt: Date.now(),
-    remoteBaseUrl: null
+    remoteBaseUrl: null,
+    authRoute
   }
 
-  entry.connectionPromise = connectRegistryBackend(source, profile, key, entry).catch(error => {
+  entry.connectionPromise = connectRegistryBackend(source, profile, key, entry, authRoute).catch(error => {
     if (backendPool.get(key) === entry) {
       backendPool.delete(key)
     }
@@ -9618,7 +9639,7 @@ async function ensureRegistryBackend(connectionId, profile) {
 // Dial a non-local registry connection for one profile. Never spawns a local
 // child (entry.process stays null — stopPoolBackend/evict already tolerate
 // that shape from remote per-profile overrides).
-async function connectRegistryBackend(source, profile, key, poolEntry) {
+async function connectRegistryBackend(source, profile, key, poolEntry, authRoute) {
   const profileKey = String(profile ?? '').trim() || 'default'
 
   if (source.kind === 'ssh') {
@@ -9651,6 +9672,7 @@ async function connectRegistryBackend(source, profile, key, poolEntry) {
 
     return {
       ...connection,
+      authScope: authRoute.scope,
       profile: profileKey,
       connectionId: source.id,
       logs: hermesLog.slice(-80),
@@ -9677,6 +9699,7 @@ async function connectRegistryBackend(source, profile, key, poolEntry) {
 
   return {
     ...connection,
+    authScope: authRoute.scope,
     profile: profileKey,
     connectionId: source.id,
     // One host, many profiles: REST paths must carry ?profile= (same contract
@@ -10009,7 +10032,7 @@ async function exitAfterBackendShutdown(code) {
 // returned) lives in the pure decideProfileDeleteAction() in
 // profile-delete-routing.ts; this function only performs the side effects
 // that decision calls for.
-async function prepareProfileDeleteRequest(request) {
+async function prepareProfileDeleteRequest(request, connectionId = null) {
   const profile = profileNameFromDeleteRequest(request)
 
   const decision = decideProfileDeleteAction(profile, {
@@ -10020,6 +10043,12 @@ async function prepareProfileDeleteRequest(request) {
 
   if (decision.action === 'noop') {
     return null
+  }
+
+  if (connectionId && connectionId !== 'local') {
+    await teardownPoolBackendAndWait(backendScopeKey(connectionId, decision.profile))
+
+    return decision.profile
   }
 
   if (decision.action === 'teardown-primary') {
@@ -12896,13 +12925,15 @@ guardedHandle('hermes:api', async (_event, request) => {
   // each profile's on-disk state.db — fine for local profiles, but a remote
   // profile's sessions live on its remote host, so the UI's IDs 404 (or mutations
   // no-op) the moment they run there. Route reads + mutations to the remote.
-  const rerouted = await interceptSessionRequestForRemote(request)
+  const requestedConnectionId = validatedIpcConnectionId(request?.connectionId)
+  const usesRegistryRoute = Boolean(requestedConnectionId)
+  const rerouted = usesRegistryRoute ? undefined : await interceptSessionRequestForRemote(request)
 
   if (rerouted !== undefined) {
     return rerouted
   }
 
-  const tornDownProfile = await prepareProfileDeleteRequest(request)
+  const tornDownProfile = await prepareProfileDeleteRequest(request, requestedConnectionId)
 
   const profile = request?.profile
   // After tearing down a backend for profile deletion, route to the primary
@@ -12910,10 +12941,21 @@ guardedHandle('hermes:api', async (_event, request) => {
   // backend calls ensure_hermes_home() which recreates the profile directory,
   // defeating the deletion and leaving a zombie process.
   const routeProfile = resolveRouteProfile(tornDownProfile, profile)
-  const connection = await ensureBackend(routeProfile)
+
+  const connection = usesRegistryRoute
+    ? await ensureRegistryBackend(requestedConnectionId, routeProfile)
+    : await ensureBackend(routeProfile)
+
+  await ensureFreshDesktopScopeToken(connection)
   const timeoutMs = resolveTimeoutMs(request?.timeoutMs, DEFAULT_FETCH_TIMEOUT_MS)
 
-  const requestPath = pathWithGlobalRemoteProfile(request.path, profile, profileRouteOptions(profile))
+  const requestPath = pathWithGlobalRemoteProfile(
+    request.path,
+    profile,
+    connection.sharedRemote
+      ? { globalRemote: true, primaryProfile: primaryProfileKey(), profileRemoteOverride: false }
+      : profileRouteOptions(profile)
+  )
 
   const url = `${connection.baseUrl}${requestPath}`
 
