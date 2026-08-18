@@ -46,7 +46,7 @@ SSH 与 headless Docker 是支持范围，不因缺少图形系统而禁用；�
 
 ## 3. 已确认的产品约束
 
-1. 账户由服务器管理员创建，客户端不提供注册入口。
+1. 账户只能由服务器管理员通过 Django 管理端或服务器运维流程创建、停用和重置。Desktop、CLI、TUI、Broker 与公开客户端 API 都不提供注册、创建账户、自助找回或修改密码入口。
 2. 本地图形环境保持登录；密码永不持久化，只保存 Django Session/CSRF Cookie。
 3. 本地图形环境只使用 macOS Keychain、Windows Credential Manager 或 Linux Secret Service 保存 Cookie，不提供普通文件回退。
 4. SSH/headless/Docker 的 Cookie 只存在远端认证 Broker 内存中，不写磁盘、配置、环境变量或 Docker layer。
@@ -104,6 +104,8 @@ Django 必须为每个账户 Session 记录不可滑动的绝对过期时间，�
 每次合法响应只接受带 `Secure` 且 Path 与 `/agent/` 匹配的白名单 Cookie。Session 与 CSRF Cookie 作为一条版本化记录原子更新，避免两个 Cookie 在进程中断时失配。
 
 Logout 顺序固定为：先递增 epoch 并锁定本地运行时，再尽力 POST 远端 LogoutView，最后总是清除本地或内存 Session。
+
+客户端认证契约不包含 signup、account-create、password-reset 或 invitation endpoint。Django 管理端可以保留管理员专用账户生命周期能力，但不能通过 Hermes 客户端 bridge、Broker IPC 或公开用户路由暴露。
 
 ## 6. 最小客户端架构
 
@@ -411,6 +413,7 @@ Python 测试通过 `scripts/run_tests.sh` 运行。Desktop/TUI 使用真实模�
 - Linux/macOS/Windows 的 owner IPC 都校验当前 OS 用户身份，没有普通文件/TCP 回退。
 - Desktop 的 local/remote connection scope 相互隔离，切换时不发生跨连接授权或误锁。
 - memory API 无 Session 时由服务端独立拒绝。
+- 账户分发仅存在于服务器管理员流程；所有客户端 surface 和 Broker 都没有注册、创建账户或自助找回能力。
 
 ## 17. 冗余审计
 
