@@ -31,6 +31,11 @@ except ModuleNotFoundError:
     # means UTF-8 stdio setup is skipped on Windows; POSIX is unaffected.
     pass
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.batch_runner")
+
 import json
 import logging
 import os
@@ -1327,4 +1332,3 @@ def main(
 
 if __name__ == "__main__":
     fire.Fire(main)
-

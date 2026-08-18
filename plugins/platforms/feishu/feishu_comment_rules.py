@@ -9,6 +9,11 @@ Pairing store: ~/.hermes/feishu_comment_pairing.json.
 
 from __future__ import annotations
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.plugins.platforms.feishu.feishu_comment_rules")
+
 import json
 import logging
 import time

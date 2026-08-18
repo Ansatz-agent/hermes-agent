@@ -11,6 +11,11 @@ one JSON document on stdout; diagnostics on stderr only.
 
 from __future__ import annotations
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.hermes_cli._scan_venv_blockers")
+
 import json
 import sys
 from typing import NoReturn

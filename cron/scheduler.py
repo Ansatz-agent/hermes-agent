@@ -8,6 +8,11 @@ Uses a file-based lock (~/.hermes/cron/.tick.lock) so only one tick
 runs at a time if multiple processes overlap.
 """
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.cron.scheduler")
+
 import asyncio
 import atexit
 import concurrent.futures

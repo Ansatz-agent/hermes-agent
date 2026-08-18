@@ -19,6 +19,11 @@ Usage:
     all_dists = list_distributions()
 """
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.toolset_distributions")
+
 from typing import Dict, List, Optional
 import random
 from toolsets import validate_toolset
@@ -355,4 +360,3 @@ if __name__ == "__main__":
     print("-" * 40)
     print_distribution_info("image_gen")
     print_distribution_info("research")
-

@@ -29,6 +29,11 @@ else:
     # cwd, including a project that has same-named packages on its path.
     hermes_bootstrap.harden_import_path()
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.acp_adapter.entry")
+
 import argparse
 import asyncio
 import logging

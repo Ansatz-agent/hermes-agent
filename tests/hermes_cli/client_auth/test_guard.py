@@ -5,7 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from hermes_cli.client_auth.guard import classify_raw_argv
+from hermes_cli.client_auth.guard import classify_raw_argv, enforce_direct_entrypoint
+from hermes_cli.client_auth.runtime import AuthRequired
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -143,3 +144,42 @@ def test_runtime_import_failure_is_not_misreported_as_auth_required():
     assert result.returncode == 0
     assert result.stdout == "runtime import broke\n"
     assert "AUTH_REQUIRED" not in result.stderr
+
+
+def test_direct_entrypoint_is_noninteractive_and_exits_with_auth_code(
+    monkeypatch,
+    capsys,
+):
+    calls = []
+
+    def reject(boundary, *, interactive):
+        calls.append((boundary, interactive))
+        raise AuthRequired("signed_out")
+
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.authorize_entrypoint",
+        reject,
+    )
+
+    with pytest.raises(SystemExit) as error:
+        enforce_direct_entrypoint("direct.batch")
+
+    assert error.value.code == 20
+    assert calls == [("direct.batch", False)]
+    assert capsys.readouterr().err == (
+        "AUTH_REQUIRED signed_out; run `hermes login`\n"
+    )
+
+
+def test_direct_entrypoint_does_not_mask_runtime_failure(monkeypatch):
+    def broken(boundary, *, interactive):
+        del boundary, interactive
+        raise RuntimeError("runtime broke")
+
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.authorize_entrypoint",
+        broken,
+    )
+
+    with pytest.raises(RuntimeError, match="runtime broke"):
+        enforce_direct_entrypoint("direct.batch")

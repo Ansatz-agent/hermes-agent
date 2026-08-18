@@ -56,6 +56,11 @@ Token storage layout
 
 from __future__ import annotations
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.plugins.platforms.google_chat.oauth")
+
 import argparse
 import json
 import logging

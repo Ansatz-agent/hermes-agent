@@ -34,6 +34,11 @@ Usage:
     result = text_to_speech_tool(text="Hello world")
 """
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.tools.tts_tool")
+
 import asyncio
 import base64
 import datetime

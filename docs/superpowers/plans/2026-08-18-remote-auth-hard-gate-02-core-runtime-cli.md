@@ -716,11 +716,11 @@ git commit -m "feat: add closed desktop auth bridge"
 
 ### Task 7: Discover, declare, and test every production entrypoint
 
-- [ ] **Step 1: Write scanner behavior tests against fixture trees**
+- [x] **Step 1: Write scanner behavior tests against fixture trees**
 
 Create `tests/hermes_cli/client_auth/test_entrypoints.py` with temporary Python, TS, JS, shell, pyproject, systemd, and s6 fixtures. Assert the scanner finds console scripts, `__main__`, main guards, spawn/exec targets, Electron/TUI backends, Docker entrypoints, and service installers. These tests exercise scanner behavior; they do not read production files and regex-assert source shape.
 
-- [ ] **Step 2: Implement scanner and production manifest comparison**
+- [x] **Step 2: Implement scanner and production manifest comparison**
 
 Create `scripts/check_auth_entrypoints.py` using `tomllib`, Python `ast`, and explicit parsers for package/service descriptors. Its result is a sorted set of stable entry IDs. Create `entrypoints.json` with objects shaped as:
 

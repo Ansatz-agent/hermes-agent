@@ -36,6 +36,11 @@ Usage:
     content = web_extract_tool(["https://example.com"], format="markdown")
 """
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.tools.web_tools")
+
 import json
 import logging
 import os

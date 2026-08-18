@@ -364,8 +364,8 @@ build-backend = "setuptools.build_meta"
 
 [project.scripts]
 hermes = "hermes_cli.main:main"
-hermes-agent = "run_agent:main"
-hermes-acp = "acp_adapter.entry:main"
+hermes-agent = "hermes_cli.client_auth.entrypoint_wrappers:hermes_agent"
+hermes-acp = "hermes_cli.client_auth.entrypoint_wrappers:hermes_acp"
 
 [tool.uv]
 override-dependencies = [

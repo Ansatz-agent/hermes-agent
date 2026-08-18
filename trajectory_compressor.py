@@ -30,6 +30,11 @@ Usage:
     python trajectory_compressor.py --input=data/my_run --sample_percent=10
 """
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.trajectory_compressor")
+
 import json
 import os
 import time

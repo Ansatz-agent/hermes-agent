@@ -34,6 +34,11 @@ SCRIPT_DIR = Path(__file__).parent.resolve()
 PROJECT_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(PROJECT_DIR))
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.scripts.hermes_gateway")
+
 # Load .env file
 from dotenv import load_dotenv
 env_path = PROJECT_DIR / '.env'

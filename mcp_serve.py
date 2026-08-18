@@ -29,6 +29,11 @@ MCP client config (e.g. claude_desktop_config.json):
 
 from __future__ import annotations
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.mcp_serve")
+
 import json
 import logging
 import os
@@ -1055,3 +1060,7 @@ def run_mcp_server(verbose: bool = False) -> None:
         asyncio.run(_run())
     except KeyboardInterrupt:
         bridge.stop()
+
+
+if __name__ == "__main__":
+    run_mcp_server()

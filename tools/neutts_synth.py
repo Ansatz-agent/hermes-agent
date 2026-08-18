@@ -12,6 +12,11 @@ Requires: python -m pip install -U neutts[all]
 System:   apt install espeak-ng  (or brew install espeak-ng)
 """
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.tools.neutts_synth")
+
 import argparse
 import struct
 import sys

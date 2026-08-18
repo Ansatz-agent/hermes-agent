@@ -52,3 +52,21 @@ def enforce_raw_argv(argv: Sequence[str]) -> None:
         authorize_entrypoint("cli.start", interactive=decision.interactive)
     except AuthRequired as error:
         raise GuardRejected(error.reason or error.code) from None
+
+
+def enforce_direct_entrypoint(boundary: str) -> None:
+    """Fail closed before a noninteractive direct entry can import capabilities."""
+    from hermes_cli.client_auth.runtime import (
+        AUTH_EXIT_CODE,
+        AuthRequired,
+        authorize_entrypoint,
+    )
+
+    try:
+        authorize_entrypoint(boundary, interactive=False)
+    except AuthRequired as error:
+        print(
+            f"AUTH_REQUIRED {error.reason or error.code}; run `hermes login`",
+            file=sys.stderr,
+        )
+        raise SystemExit(AUTH_EXIT_CODE) from None

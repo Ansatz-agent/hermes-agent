@@ -15,6 +15,11 @@ Run as a module to print edge-density stats against real data:
 
 from __future__ import annotations
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.agent.learning_graph")
+
 import json
 import re
 from dataclasses import dataclass, field
