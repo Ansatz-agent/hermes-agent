@@ -4,7 +4,13 @@
 import { loadUserWidgets, watchUserWidgets } from '../userWidgets.js'
 
 void loadUserWidgets()
-watchUserWidgets()
+
+// Vitest resets module graphs within long-lived workers. Starting the
+// production hot-loader on every reset leaks native FSEvent watchers and can
+// exhaust macOS's per-process watcher allowance before the suite completes.
+if (!process.env.VITEST && process.env.NODE_ENV !== 'test') {
+  watchUserWidgets()
+}
 
 export { dialogTestApp } from './dialogTest.js'
 export { gridTestApp } from './gridTest.js'
