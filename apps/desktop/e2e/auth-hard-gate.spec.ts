@@ -6,6 +6,7 @@ import { allowErrorBanners, type ElectronApplication, expect, type Page, test } 
 let app: ElectronApplication | null = null
 let page: Page | null = null
 let sandbox: Sandbox | null = null
+let authOwnerPidsBefore = new Set<number>()
 
 // Playwright 1.58 on Node 26 leaves the Electron trace writer's FSEvents
 // handle open after the app has exited. This spec already captures a final
@@ -14,6 +15,10 @@ let sandbox: Sandbox | null = null
 test.use({ trace: 'off' })
 
 test.beforeAll(async () => {
+  if (process.platform !== 'win32') {
+    authOwnerPidsBefore = authOwnerPids()
+  }
+
   sandbox = createSandbox('auth-hard-gate')
   const launched = await launchDesktop(
     buildAppEnv(sandbox, {
@@ -28,37 +33,44 @@ test.beforeAll(async () => {
 })
 
 test.afterAll(async () => {
-  if (app) {
-    const child = app.process()
+  try {
+    if (app) {
+      const child = app.process()
 
-    // Playwright's close path closes renderer windows, which follows the
-    // normal macOS convention of leaving a windowless app alive. Schedule a
-    // production app.quit() after this evaluate RPC has returned, then start
-    // Playwright's close while the transport is still alive so BrowserContext
-    // resources are finalized before the process exits.
-    await app.evaluate(({ app: electronApp }) => {
-      // Leave enough time for the CDP evaluate response to reach Playwright;
-      // setImmediate can win that race and strand the caller during teardown.
-      setTimeout(() => electronApp.quit(), 500)
+      // Playwright's close path closes renderer windows, which follows the
+      // normal macOS convention of leaving a windowless app alive. Schedule a
+      // production app.quit() after this evaluate RPC has returned, then start
+      // Playwright's close while the transport is still alive so BrowserContext
+      // resources are finalized before the process exits.
+      await app.evaluate(({ app: electronApp }) => {
+        // Leave enough time for the CDP evaluate response to reach Playwright;
+        // setImmediate can win that race and strand the caller during teardown.
+        setTimeout(() => electronApp.quit(), 500)
 
-      return true
-    })
+        return true
+      })
 
-    const graceful = await Promise.race([
-      app.close().then(() => true),
-      new Promise<boolean>(resolve => setTimeout(() => resolve(false), 10_000))
-    ])
+      const graceful = await Promise.race([
+        app.close().then(() => true),
+        new Promise<boolean>(resolve => setTimeout(() => resolve(false), 10_000))
+      ])
 
-    if (!graceful) {
-      child.kill('SIGKILL')
-      throw new Error('Playwright did not close Desktop within 10 seconds of app.quit()')
+      if (!graceful) {
+        child.kill('SIGKILL')
+        throw new Error('Playwright did not close Desktop within 10 seconds of app.quit()')
+      }
     }
-  }
+  } finally {
+    if (process.platform !== 'win32') {
+      await stopAuthOwnersStartedBySpec(authOwnerPidsBefore)
+    }
 
-  sandbox?.cleanup()
-  app = null
-  page = null
-  sandbox = null
+    sandbox?.cleanup()
+    app = null
+    page = null
+    sandbox = null
+    authOwnerPidsBefore = new Set<number>()
+  }
 })
 
 test('unauthenticated startup exposes only account login and rejects every capability boundary', async () => {
@@ -189,4 +201,51 @@ function descendantCommands(rootPid: number): string[] {
   }
 
   return rows.filter(row => row.pid !== rootPid && descendants.has(row.pid)).map(row => row.command)
+}
+
+function authOwnerPids(): Set<number> {
+  const result = spawnSync('ps', ['-axo', 'pid=,command='], { encoding: 'utf8' })
+
+  if (result.status !== 0) {
+    throw new Error('Unable to inspect auth owner processes')
+  }
+
+  return new Set(
+    result.stdout
+      .split('\n')
+      .map(line => line.trim().match(/^(\d+)\s+(.+)$/))
+      .filter((match): match is RegExpMatchArray => Boolean(match))
+      .filter(match => /(?:^|\s)-m\s+hermes_cli\.client_auth\.runtime\s+owner(?:\s|$)/.test(match[2]!))
+      .map(match => Number(match[1]))
+  )
+}
+
+async function stopAuthOwnersStartedBySpec(existing: Set<number>): Promise<void> {
+  const created = [...authOwnerPids()].filter(pid => !existing.has(pid))
+
+  for (const pid of created) {
+    try {
+      process.kill(pid, 'SIGTERM')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') {
+        throw error
+      }
+    }
+  }
+
+  const deadline = Date.now() + 5_000
+
+  while (created.some(pid => authOwnerPids().has(pid)) && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 50))
+  }
+
+  const survivors = created.filter(pid => authOwnerPids().has(pid))
+
+  for (const pid of survivors) {
+    process.kill(pid, 'SIGKILL')
+  }
+
+  if (survivors.length > 0) {
+    throw new Error(`Auth owner teardown required SIGKILL for PIDs: ${survivors.join(', ')}`)
+  }
 }
