@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { I18nProvider } from '@/i18n'
 
-import { AuthGate, type DesktopAccountStatus } from './auth-gate'
+import { AuthGate, type DesktopAccountStatus, useDesktopAuth } from './auth-gate'
 
 const signedOut: DesktopAccountStatus = {
   state: 'signed_out',
@@ -25,7 +25,11 @@ const authenticated: DesktopAccountStatus = {
   reason: null
 }
 
-function renderGate(overrides: Record<string, unknown> = {}, unauthenticatedOverlay: ReactNode = null) {
+function renderGate(
+  overrides: Record<string, unknown> = {},
+  unauthenticatedOverlay: ReactNode = null,
+  protectedChild: ReactNode = <div>Protected Hermes application</div>
+) {
   let changed: ((status: DesktopAccountStatus, connectionId?: string) => void) | null = null
 
   const auth = {
@@ -45,7 +49,7 @@ function renderGate(overrides: Record<string, unknown> = {}, unauthenticatedOver
   render(
     <I18nProvider configClient={null} initialLocale="en">
       <AuthGate auth={auth as any} unauthenticatedOverlay={unauthenticatedOverlay}>
-        <div>Protected Hermes application</div>
+        {protectedChild}
       </AuthGate>
     </I18nProvider>
   )
@@ -53,11 +57,38 @@ function renderGate(overrides: Record<string, unknown> = {}, unauthenticatedOver
   return { auth, emit: (status: DesktopAccountStatus, connectionId?: string) => changed?.(status, connectionId) }
 }
 
+function AuthProbe() {
+  const { connectionId, logout, status } = useDesktopAuth()
+
+  return (
+    <button onClick={() => void logout()} type="button">
+      {status.username}:{connectionId}
+    </button>
+  )
+}
+
 afterEach(() => {
   vi.restoreAllMocks()
 })
 
 describe('AuthGate', () => {
+  it('exports the authenticated Desktop auth context hook', async () => {
+    const module = await import('./auth-gate')
+
+    expect(module).toHaveProperty('useDesktopAuth')
+  })
+
+  it('provides the authenticated username and routes logout to the active connection', async () => {
+    const { auth, emit } = renderGate({ status: vi.fn(async () => authenticated) }, null, <AuthProbe />)
+
+    expect(await screen.findByRole('button', { name: 'alice:local' })).not.toBeNull()
+
+    act(() => emit({ ...authenticated, username: 'remote-user' }, 'remote-a'))
+    fireEvent.click(await screen.findByRole('button', { name: 'remote-user:remote-a' }))
+
+    await waitFor(() => expect(auth.logout).toHaveBeenCalledWith('remote-a'))
+  })
+
   it('shows only the fixed account login surface while signed out', async () => {
     renderGate()
 

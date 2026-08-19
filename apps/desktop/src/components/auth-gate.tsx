@@ -1,4 +1,14 @@
-import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
+import {
+  createContext,
+  type FormEvent,
+  type ReactNode,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 
 import { type Translations, useI18n } from '@/i18n'
 
@@ -19,6 +29,24 @@ export type DesktopAuthClient = {
   login: (username: string, password: string, connectionId?: string) => Promise<DesktopAccountStatus>
   logout: (connectionId?: string) => Promise<DesktopAccountStatus>
   onChanged: (callback: (status: DesktopAccountStatus, connectionId?: string) => void) => () => void
+}
+
+export type DesktopAuthContextValue = {
+  connectionId: string
+  logout: () => Promise<DesktopAccountStatus>
+  status: DesktopAccountStatus
+}
+
+const DesktopAuthContext = createContext<DesktopAuthContextValue | null>(null)
+
+export function useDesktopAuth(): DesktopAuthContextValue {
+  const value = useContext(DesktopAuthContext)
+
+  if (!value) {
+    throw new Error('Desktop auth context is only available after authentication')
+  }
+
+  return value
 }
 
 const unavailableStatus = (): DesktopAccountStatus => ({
@@ -98,8 +126,21 @@ export function AuthGate({
     }
   }, [auth, connectionId])
 
+  const logout = useCallback(() => {
+    if (!auth) {
+      return Promise.resolve(unavailableStatus())
+    }
+
+    return auth.logout(connectionId === 'local' ? undefined : connectionId)
+  }, [auth, connectionId])
+
+  const authenticatedContext = useMemo<DesktopAuthContextValue>(
+    () => ({ connectionId, logout, status }),
+    [connectionId, logout, status]
+  )
+
   if (status.state === 'authenticated') {
-    return children
+    return <DesktopAuthContext.Provider value={authenticatedContext}>{children}</DesktopAuthContext.Provider>
   }
 
   const retry = () => {
