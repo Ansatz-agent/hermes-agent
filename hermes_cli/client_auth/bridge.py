@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import sys
+import time
 from collections.abc import Callable, Mapping
 from typing import BinaryIO
 
@@ -227,7 +228,15 @@ def _validated_public_result(value: object) -> dict[str, object]:
         raise RuntimeError("invalid public result")
     if reason is not None and reason not in _SAFE_REASONS:
         raise RuntimeError("invalid public result")
-    return dict(value)
+    result = dict(value)
+    if state == "authenticated":
+        # Runtime leases use a process-local monotonic clock. Convert the
+        # remaining duration to a Unix timestamp before returning it to a
+        # Desktop process (including one reached over SSH), whose monotonic
+        # clock has a different origin.
+        remaining = max(0.0, float(valid_until) - time.monotonic())
+        result["valid_until"] = time.time() + remaining
+    return result
 
 
 def main() -> int:

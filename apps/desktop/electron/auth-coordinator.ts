@@ -1,5 +1,3 @@
-import { uptime } from 'node:os'
-
 import {
   AuthBridgeError,
   type BridgeStatus,
@@ -61,7 +59,11 @@ export class AuthCoordinator {
 
   constructor(bridge: AuthBridgeLike, options: AuthCoordinatorOptions = {}) {
     this.bridges.set(LOCAL_CONNECTION_ID, bridge)
-    this.clock = options.clock ?? uptime
+    // The Python bridge translates its monotonic runtime lease into Unix epoch
+    // seconds before crossing the process (or SSH) boundary. A local uptime is
+    // not comparable to Python's monotonic clock and can also have a different
+    // origin on macOS after sleep.
+    this.clock = options.clock ?? (() => Date.now() / 1000)
     this.cleanup = options.cleanup ?? (() => {})
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
     this.statuses.set(LOCAL_CONNECTION_ID, checkingStatus())

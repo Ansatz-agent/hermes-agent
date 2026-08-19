@@ -220,6 +220,26 @@ test('never publishes an authenticated scope when the bridge lease is already ex
   assert.equal(events.some(event => event.state === 'authenticated'), false)
 })
 
+test('default clock evaluates bridge leases in Unix epoch seconds', async () => {
+  const wallNowMs = 1_800_000_000_000
+  const dateNow = vi.spyOn(Date, 'now').mockReturnValue(wallNowMs)
+  const status = { ...authenticated, valid_until: wallNowMs / 1000 + 60 }
+  const coordinator = new AuthCoordinator(fixedBridge(status), { pollIntervalMs: 0 })
+
+  try {
+    await coordinator.start()
+    assert.equal(coordinator.isAuthenticated(), true)
+
+    dateNow.mockReturnValue(wallNowMs + 60_000)
+    assert.equal(coordinator.isAuthenticated(), false)
+    await assert.rejects(coordinator.require('local', 'local'), /AUTH_REQUIRED/)
+    assert.equal(coordinator.status().reason, 'session_expired')
+  } finally {
+    coordinator.stop()
+    dateNow.mockRestore()
+  }
+})
+
 test('authorizes local, remote A, remote B, and both policies only from their exact scopes', async () => {
   const local = fixedBridge(statusFor('local-runtime', 1, 'signed_out'))
   const remoteA = fixedBridge(statusFor('remote-a-runtime', 2))

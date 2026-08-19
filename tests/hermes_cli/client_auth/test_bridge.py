@@ -86,6 +86,31 @@ def test_login_response_contains_scope_but_no_secret(monkeypatch):
     assert captured == [bytearray(b"\0" * 6)]
 
 
+def test_bridge_translates_runtime_lease_to_unix_epoch(monkeypatch):
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.bridge.account_status",
+        lambda: SimpleNamespace(
+            public_dict=lambda: {
+                "state": "authenticated",
+                "username": "alice",
+                "runtime_instance_id": "runtime-1",
+                "epoch": 2,
+                "valid_until": 160.0,
+                "session_expires_at": "2026-08-18T13:00:00+00:00",
+                "reason": None,
+            }
+        ),
+    )
+    monkeypatch.setattr("hermes_cli.client_auth.bridge.time.monotonic", lambda: 100.0)
+    monkeypatch.setattr("hermes_cli.client_auth.bridge.time.time", lambda: 1_800_000_000.0)
+
+    response = dispatch(
+        {"version": 1, "id": "1", "method": "status", "params": {}}
+    )
+
+    assert response["result"]["valid_until"] == 1_800_000_060.0
+
+
 def test_bridge_redacts_runtime_exception_text(monkeypatch):
     def fail():
         raise RuntimeError("agent_history_sessionid=do-not-leak")
