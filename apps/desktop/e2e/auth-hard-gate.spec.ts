@@ -87,6 +87,8 @@ test('unauthenticated startup exposes only account login and rejects every capab
   await expect(page!.locator('main section button')).toHaveCount(2)
   await expect(page!.locator('main section button[type="submit"]')).toBeVisible()
   await expect(page!.locator('main section > p').last()).toContainText(/administrator|管理员|管理者|管理員/i)
+  await expect(page!.getByRole('button', { name: /account|账户/i })).toHaveCount(0)
+  await expect(page!.getByText(/sign out|退出登录/i)).toHaveCount(0)
 
   const body = page!.locator('body')
 
