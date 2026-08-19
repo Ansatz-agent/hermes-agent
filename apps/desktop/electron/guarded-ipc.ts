@@ -12,11 +12,6 @@ const AUTH_FREE_CHANNELS_SOURCE = [
   'hermes:bootstrap:cancel',
   'hermes:boot-progress:get',
   'hermes:bootstrap:get',
-  'hermes:zoom:get',
-  'hermes:zoom:set-percent',
-  'hermes:titlebar-theme',
-  'hermes:native-theme',
-  'hermes:translucency',
   'hermes:logs:renderer-error'
 ] as const
 
@@ -42,6 +37,11 @@ const BOTH_CHANNELS = [
 
 const LOCAL_CHANNELS = [
   'hermes:get-remote-display-reason',
+  'hermes:zoom:get',
+  'hermes:zoom:set-percent',
+  'hermes:titlebar-theme',
+  'hermes:native-theme',
+  'hermes:translucency',
   'hermes:power-battery:get',
   'hermes:window:openInstance',
   'hermes:wake-indicator:get',

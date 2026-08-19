@@ -11722,7 +11722,7 @@ def _advertise_agent_env() -> None:
     os.environ.setdefault("HERMES_AGENT", "true")
 
 
-def main():
+def _main():
     """Main entry point for hermes CLI."""
     # Cosmetic: make the process show up as 'hermes' instead of 'python3.11'
     # in ps/top/htop.  Non-fatal — just a nicer UX.
@@ -13199,15 +13199,20 @@ def main():
         parser.print_help()
 
 
-if __name__ == "__main__":
+def main():
+    """Installed console-script boundary with stable auth error semantics."""
     from hermes_cli.client_auth.runtime import AuthRequired
 
     try:
-        main()
-    except AuthRequired as _auth_error:
+        return _main()
+    except AuthRequired as auth_error:
         print(
-            f"AUTH_REQUIRED {_auth_error.reason or _auth_error.code}; "
+            f"AUTH_REQUIRED {auth_error.reason or auth_error.code}; "
             "run `hermes login`",
             file=sys.stderr,
         )
         raise SystemExit(20) from None
+
+
+if __name__ == "__main__":
+    main()

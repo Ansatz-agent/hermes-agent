@@ -490,6 +490,21 @@ def test_owner_login_status_logout_and_rotation_are_identical(owner_factory):
     assert secret_backend.read() is None
 
 
+@pytest.mark.parametrize("owner_factory", [vault_owner_factory, memory_owner_factory])
+def test_consumer_from_before_logout_cannot_revive_after_login(owner_factory):
+    owner, _secret_backend, _auth_client, _clock = owner_factory()
+    authenticated = owner.login("alice", bytearray(b"secret"))
+    stale_consumer = owner.connect_consumer()
+
+    signed_out = owner.logout()
+    reauthenticated = owner.login("alice", bytearray(b"secret"))
+
+    assert signed_out.runtime_instance_id != authenticated.runtime_instance_id
+    assert reauthenticated.runtime_instance_id == signed_out.runtime_instance_id
+    with pytest.raises(AuthRequired, match="runtime_unavailable"):
+        stale_consumer.require_authorized("tool.next_boundary")
+
+
 def test_memory_owner_rejects_authentication_when_required_hardening_fails():
     hardener = RecordingHardener(fail=True)
     owner, secret_backend, auth_client, _clock = memory_owner_factory(hardener=hardener)

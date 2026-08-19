@@ -436,6 +436,7 @@ class RuntimeSnapshot:
             state=AuthState.LOCKED,
             epoch=self.epoch + 1,
             valid_until=now,
+            runtime_instance_id=secrets.token_hex(16),
             reason=reason,
         )
 
@@ -1199,7 +1200,6 @@ class _OwnerCore:
             current = self._snapshot
             signed_out = RuntimeSnapshot.signed_out(
                 epoch=current.epoch + 1,
-                runtime_instance_id=current.runtime_instance_id,
             )
             self._record = None
             self._record_loaded = True

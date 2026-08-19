@@ -150,6 +150,29 @@ def test_noninteractive_login_returns_structured_auth_required():
     assert "Traceback" not in result.stderr
 
 
+def test_installed_console_callable_returns_structured_auth_required():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from hermes_cli.main import main; main()",
+            "login",
+        ],
+        cwd=REPO_ROOT,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 20
+    assert result.stdout == ""
+    assert result.stderr == (
+        "AUTH_REQUIRED interactive_login_required; run `hermes login`\n"
+    )
+    assert "Traceback" not in result.stderr
+
+
 def test_account_status_is_auth_free_and_contains_no_secret():
     result = subprocess.run(
         [sys.executable, "-m", "hermes_cli.main", "auth", "status"],
