@@ -7,6 +7,12 @@ let app: ElectronApplication | null = null
 let page: Page | null = null
 let sandbox: Sandbox | null = null
 
+// Playwright 1.58 on Node 26 leaves the Electron trace writer's FSEvents
+// handle open after the app has exited. This spec already captures a final
+// screenshot and asserts every protected surface directly; disabling trace
+// keeps teardown deterministic without reducing the hard-gate assertions.
+test.use({ trace: 'off' })
+
 test.beforeAll(async () => {
   sandbox = createSandbox('auth-hard-gate')
   const launched = await launchDesktop(
@@ -22,7 +28,33 @@ test.beforeAll(async () => {
 })
 
 test.afterAll(async () => {
-  await app?.close().catch(() => undefined)
+  if (app) {
+    const child = app.process()
+
+    // Playwright's close path closes renderer windows, which follows the
+    // normal macOS convention of leaving a windowless app alive. Schedule a
+    // production app.quit() after this evaluate RPC has returned, then start
+    // Playwright's close while the transport is still alive so BrowserContext
+    // resources are finalized before the process exits.
+    await app.evaluate(({ app: electronApp }) => {
+      // Leave enough time for the CDP evaluate response to reach Playwright;
+      // setImmediate can win that race and strand the caller during teardown.
+      setTimeout(() => electronApp.quit(), 500)
+
+      return true
+    })
+
+    const graceful = await Promise.race([
+      app.close().then(() => true),
+      new Promise<boolean>(resolve => setTimeout(() => resolve(false), 10_000))
+    ])
+
+    if (!graceful) {
+      child.kill('SIGKILL')
+      throw new Error('Playwright did not close Desktop within 10 seconds of app.quit()')
+    }
+  }
+
   sandbox?.cleanup()
   app = null
   page = null

@@ -1,0 +1,96 @@
+import assert from 'node:assert/strict'
+import { createHash } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
+import { test } from 'vitest'
+
+import { buildBackendPayload, validateInstallStamp } from './build-backend-payload.mjs'
+
+function git(repoRoot, ...args) {
+  return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trim()
+}
+
+function makeRepository() {
+  const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-backend-payload-repo-'))
+  fs.mkdirSync(path.join(repoRoot, 'scripts'), { recursive: true })
+  fs.writeFileSync(path.join(repoRoot, 'payload.txt'), 'committed payload\n')
+  fs.writeFileSync(path.join(repoRoot, 'scripts', 'install.sh'), '#!/bin/sh\nexit 0\n')
+  git(repoRoot, 'init')
+  git(repoRoot, 'config', 'user.name', 'Hermes Test')
+  git(repoRoot, 'config', 'user.email', 'hermes-test@example.invalid')
+  git(repoRoot, 'add', 'payload.txt', 'scripts/install.sh')
+  git(repoRoot, 'commit', '-m', 'fixture')
+
+  const commit = git(repoRoot, 'rev-parse', 'HEAD')
+  const stampPath = path.join(repoRoot, 'install-stamp.json')
+  const outputDir = path.join(repoRoot, 'output')
+  fs.writeFileSync(
+    stampPath,
+    JSON.stringify({ schemaVersion: 1, commit, branch: 'fixture', dirty: false })
+  )
+
+  return { repoRoot, commit, stampPath, outputDir }
+}
+
+function sha256(filePath) {
+  return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
+}
+
+test('backend payload is generated only from the committed tree with matching checksums', () => {
+  const fixture = makeRepository()
+  try {
+    fs.writeFileSync(path.join(fixture.repoRoot, 'untracked-secret.txt'), 'must not ship\n')
+    const result = buildBackendPayload({
+      repoRoot: fixture.repoRoot,
+      stampPath: fixture.stampPath,
+      outputDir: fixture.outputDir,
+      payloadPaths: ['payload.txt'],
+      payloadExcludes: [],
+      requiredEntries: ['hermes-agent/payload.txt']
+    })
+
+    const archivePath = path.join(fixture.outputDir, result.manifest.archive.file)
+    const installerPath = path.join(fixture.outputDir, result.manifest.installer.file)
+    assert.equal(result.manifest.commit, fixture.commit)
+    assert.equal(result.manifest.archive.sha256, sha256(archivePath))
+    assert.equal(result.manifest.installer.sha256, sha256(installerPath))
+    assert.deepEqual(result.entries, ['hermes-agent/', 'hermes-agent/payload.txt'])
+    assert.equal(result.entries.some(entry => entry.includes('untracked-secret')), false)
+  } finally {
+    fs.rmSync(fixture.repoRoot, { recursive: true, force: true })
+  }
+})
+
+test('backend payload build rejects tracked working-tree changes', () => {
+  const fixture = makeRepository()
+  try {
+    fs.writeFileSync(path.join(fixture.repoRoot, 'payload.txt'), 'dirty payload\n')
+    assert.throws(
+      () => buildBackendPayload({
+        repoRoot: fixture.repoRoot,
+        stampPath: fixture.stampPath,
+        outputDir: fixture.outputDir,
+        payloadPaths: ['payload.txt'],
+        payloadExcludes: [],
+        requiredEntries: ['hermes-agent/payload.txt']
+      }),
+      /tracked working tree is dirty/
+    )
+  } finally {
+    fs.rmSync(fixture.repoRoot, { recursive: true, force: true })
+  }
+})
+
+test('install stamp validation requires a real clean commit', () => {
+  assert.throws(
+    () => validateInstallStamp({ schemaVersion: 1, commit: '0'.repeat(40), branch: null, dirty: false }),
+    /real 40-character Git commit/
+  )
+  assert.throws(
+    () => validateInstallStamp({ schemaVersion: 1, commit: 'a'.repeat(40), branch: null, dirty: true }),
+    /install stamp is dirty/
+  )
+})
