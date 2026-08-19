@@ -23,17 +23,22 @@ function runCheck(version) {
   }
 }
 
-function runPipeline({ produceDmg, builderBinariesMirror, signatureValid = true }) {
+function runPipeline({
+  produceDmg,
+  builderBinariesMirror,
+  signatureValid = true,
+  builderVolumeDenied = false
+}) {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-dmg-pipeline-'))
+  const releaseDir = path.join(tempRoot, 'release')
+  const packagedApp = path.join(releaseDir, 'mac-arm64', 'Hermes.app')
   const fakeNode = path.join(tempRoot, 'node')
   const fakeNpm = path.join(tempRoot, 'npm')
   const fakeCodesign = path.join(tempRoot, 'codesign')
+  const fakeHdiutil = path.join(tempRoot, 'hdiutil')
   const recordPath = path.join(tempRoot, 'npm-record.txt')
   const artifactPath = path.join(
-    repoRoot,
-    'apps',
-    'desktop',
-    'release',
+    releaseDir,
     `Hermes-test-${process.pid}-${Date.now()}-mac-arm64.dmg`
   )
 
@@ -44,12 +49,17 @@ function runPipeline({ produceDmg, builderBinariesMirror, signatureValid = true 
   )
   fs.writeFileSync(
     fakeNpm,
-    `#!/bin/sh\nprintf '%s|%s|%s|%s\\n' "$PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD" "$ELECTRON_MIRROR" "$ELECTRON_BUILDER_BINARIES_MIRROR" "$*" >> "$HERMES_DMG_TEST_RECORD"\nif [ "\${HERMES_DMG_TEST_PRODUCE:-0}" = "1" ] && [ "\${1:-}" = "run" ]; then\n  mkdir -p "$(dirname "$HERMES_DMG_TEST_ARTIFACT")"\n  printf '%s\\n' 'fake dmg' > "$HERMES_DMG_TEST_ARTIFACT"\nfi\n`,
+    `#!/bin/sh\nprintf '%s|%s|%s|%s\\n' "$PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD" "$ELECTRON_MIRROR" "$ELECTRON_BUILDER_BINARIES_MIRROR" "$*" >> "$HERMES_DMG_TEST_RECORD"\nif [ "\${1:-}" = "run" ]; then\n  mkdir -p "$HERMES_DMG_TEST_PACKAGED_APP"\nfi\nif [ "\${HERMES_DMG_TEST_VOLUME_DENIED:-0}" = "1" ] && [ "\${1:-}" = "run" ]; then\n  printf '%s\\n' 'ditto: /Volumes/Install Hermes/Hermes.app: Operation not permitted' >&2\n  exit 1\nfi\nif [ "\${HERMES_DMG_TEST_PRODUCE:-0}" = "1" ] && [ "\${1:-}" = "run" ]; then\n  mkdir -p "$(dirname "$HERMES_DMG_TEST_ARTIFACT")"\n  printf '%s\\n' 'fake dmg' > "$HERMES_DMG_TEST_ARTIFACT"\nfi\n`,
     { mode: 0o755 }
   )
   fs.writeFileSync(
     fakeCodesign,
     `#!/bin/sh\nprintf 'codesign|%s\\n' "$*" >> "$HERMES_DMG_TEST_RECORD"\n[ "$HERMES_DMG_TEST_SIGNATURE_VALID" = "1" ]\n`,
+    { mode: 0o755 }
+  )
+  fs.writeFileSync(
+    fakeHdiutil,
+    `#!/bin/sh\nprintf 'hdiutil|%s\\n' "$*" >> "$HERMES_DMG_TEST_RECORD"\ncase "\${1:-}" in\n  create|convert)\n    for argument in "$@"; do output="$argument"; done\n    mkdir -p "$(dirname "$output")"\n    printf '%s\\n' 'fallback dmg' > "$output"\n    ;;\n  detach)\n    for argument in "$@"; do mount_point="$argument"; done\n    [ -d "$mount_point/Hermes.app" ]\n    [ "$(readlink "$mount_point/Applications")" = "/Applications" ]\n    printf '%s\\n' 'fallback-contents|Hermes.app|Applications->/Applications' >> "$HERMES_DMG_TEST_RECORD"\n    ;;\nesac\n`,
     { mode: 0o755 }
   )
 
@@ -61,7 +71,10 @@ function runPipeline({ produceDmg, builderBinariesMirror, signatureValid = true 
         PATH: `${tempRoot}:/usr/bin:/bin`,
         HERMES_DMG_TEST_RECORD: recordPath,
         HERMES_DMG_TEST_ARTIFACT: artifactPath,
+        HERMES_DMG_RELEASE_DIR: releaseDir,
+        HERMES_DMG_TEST_PACKAGED_APP: packagedApp,
         HERMES_DMG_TEST_PRODUCE: produceDmg ? '1' : '0',
+        HERMES_DMG_TEST_VOLUME_DENIED: builderVolumeDenied ? '1' : '0',
         HERMES_DMG_TEST_SIGNATURE_VALID: signatureValid ? '1' : '0',
         ...(builderBinariesMirror
           ? { ELECTRON_BUILDER_BINARIES_MIRROR: builderBinariesMirror }
@@ -127,4 +140,20 @@ test('pipeline fails when the current build produces no DMG', () => {
 test('pipeline fails when the packaged app signature is invalid', () => {
   const { result } = runPipeline({ produceDmg: true, signatureValid: false })
   assert.notEqual(result.status, 0)
+})
+
+test('pipeline falls back to hdiutil only when dmgbuild cannot write its mounted volume', () => {
+  const { result, record } = runPipeline({
+    produceDmg: false,
+    builderVolumeDenied: true
+  })
+
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(record, /hdiutil\|create -size \d+m -fs HFS\+ -volname Install Hermes -type UDIF /)
+  assert.match(record, /hdiutil\|attach -nobrowse -mountpoint (?!\/Volumes\/)/)
+  assert.match(record, /fallback-contents\|Hermes\.app\|Applications->\/Applications/)
+  assert.match(record, /hdiutil\|convert .* -format UDZO -ov -o .*Hermes-0\.17\.0-mac-arm64\.dmg/)
+  assert.match(record, /hdiutil\|verify .*Hermes-0\.17\.0-mac-arm64\.dmg/)
+  assert.match(result.stdout, /restricted-volume fallback/)
+  assert.match(result.stdout, /Hermes-0\.17\.0-mac-arm64\.dmg/)
 })

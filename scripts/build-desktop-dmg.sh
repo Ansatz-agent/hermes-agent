@@ -34,7 +34,7 @@ fi
 
 [[ $# -eq 0 ]] || fail "unknown argument: $1"
 
-RELEASE_DIR="$REPO_ROOT/apps/desktop/release"
+RELEASE_DIR="${HERMES_DMG_RELEASE_DIR:-$REPO_ROOT/apps/desktop/release}"
 PACKAGED_APP="$RELEASE_DIR/mac-arm64/Hermes.app"
 LOG_DIR="$REPO_ROOT/apps/desktop/build/logs"
 BUILD_LOG="$LOG_DIR/phase1-desktop-dmg-build.log"
@@ -51,7 +51,51 @@ run_logged() {
 
 cd "$REPO_ROOT"
 run_logged npm ci
-run_logged npm run --workspace apps/desktop dist:mac:dmg -- --config.mac.identity=-
+if run_logged npm run --workspace apps/desktop dist:mac:dmg -- --config.mac.identity=-; then
+  BUILDER_STATUS=0
+else
+  BUILDER_STATUS=$?
+fi
+
+if [[ "$BUILDER_STATUS" -ne 0 ]]; then
+  VOLUME_DENIED='ditto: /Volumes/Install Hermes/Hermes.app: Operation not permitted'
+  [[ -d "$PACKAGED_APP" ]] || exit "$BUILDER_STATUS"
+  grep -Fq "$VOLUME_DENIED" "$BUILD_LOG" || exit "$BUILDER_STATUS"
+
+  APP_VERSION="$(node -p "require('./apps/desktop/package.json').version")"
+  FALLBACK_DMG="$RELEASE_DIR/Hermes-$APP_VERSION-mac-arm64.dmg"
+  FALLBACK_WORK="$(mktemp -d "${TMPDIR:-/tmp}/hermes-dmg-fallback.XXXXXX")"
+  FALLBACK_RW="$FALLBACK_WORK/Hermes-rw.dmg"
+  FALLBACK_MOUNT="$FALLBACK_WORK/mount"
+  FALLBACK_ATTACHED=0
+  cleanup_fallback_work() {
+    if [[ "$FALLBACK_ATTACHED" -eq 1 ]]; then
+      hdiutil detach "$FALLBACK_MOUNT" >/dev/null 2>&1 || true
+    fi
+    rm -rf -- "$FALLBACK_WORK"
+  }
+  trap cleanup_fallback_work EXIT
+
+  printf '\n>>> electron-builder could not write its mounted DMG volume; using restricted-volume fallback\n' | tee -a "$BUILD_LOG"
+  APP_KIB="$(du -sk "$PACKAGED_APP" | awk '{print $1}')"
+  IMAGE_MIB="$(( (APP_KIB + 1023) / 1024 + 128 ))"
+  mkdir "$FALLBACK_MOUNT"
+  run_logged hdiutil create \
+    -size "${IMAGE_MIB}m" \
+    -fs 'HFS+' \
+    -volname 'Install Hermes' \
+    -type UDIF \
+    "$FALLBACK_RW"
+  run_logged hdiutil attach -nobrowse -mountpoint "$FALLBACK_MOUNT" "$FALLBACK_RW"
+  FALLBACK_ATTACHED=1
+  run_logged /usr/bin/ditto "$PACKAGED_APP" "$FALLBACK_MOUNT/Hermes.app"
+  run_logged ln -s /Applications "$FALLBACK_MOUNT/Applications"
+  run_logged hdiutil detach "$FALLBACK_MOUNT"
+  FALLBACK_ATTACHED=0
+  run_logged hdiutil convert "$FALLBACK_RW" -format UDZO -ov -o "$FALLBACK_DMG"
+  run_logged hdiutil verify "$FALLBACK_DMG"
+fi
+
 run_logged codesign --verify --deep --strict "$PACKAGED_APP"
 
 node "$CONTRACT_SCRIPT" validate-log "$BUILD_LOG"
