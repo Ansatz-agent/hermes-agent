@@ -13,6 +13,9 @@ export const en: Translations = {
     signingIn: 'Signing in…',
     retry: 'Retry',
     checking: 'Checking your account session…',
+    preparingRuntime: 'Preparing the secure sign-in service…',
+    preparingStage: (current, total, title) =>
+      `Preparing the secure sign-in service (${current}/${total}): ${title}…`,
     administratorManaged: 'Accounts and password assistance are managed by the server administrator.',
     accountMenu: 'Account',
     signOut: 'Sign out',

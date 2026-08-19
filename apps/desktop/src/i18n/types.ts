@@ -59,6 +59,8 @@ export interface Translations {
     signingIn: string
     retry: string
     checking: string
+    preparingRuntime: string
+    preparingStage: (current: number, total: number, title: string) => string
     administratorManaged: string
     accountMenu: string
     signOut: string

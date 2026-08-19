@@ -13,6 +13,8 @@ export const zh: Translations = {
     signingIn: '正在登录…',
     retry: '重试',
     checking: '正在验证账户会话…',
+    preparingRuntime: '正在准备安全登录服务…',
+    preparingStage: (current, total, title) => `正在准备安全登录服务（${current}/${total}）：${title}…`,
     administratorManaged: '账户分发和密码协助由服务器管理员统一处理。',
     accountMenu: '账户',
     signOut: '退出登录',

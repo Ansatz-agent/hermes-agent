@@ -28,7 +28,8 @@ const authenticated: DesktopAccountStatus = {
 function renderGate(
   overrides: Record<string, unknown> = {},
   unauthenticatedOverlay: ReactNode = null,
-  protectedChild: ReactNode = <div>Protected Hermes application</div>
+  protectedChild: ReactNode = <div>Protected Hermes application</div>,
+  bootstrap?: Record<string, unknown>
 ) {
   let changed: ((status: DesktopAccountStatus, connectionId?: string) => void) | null = null
 
@@ -46,11 +47,11 @@ function renderGate(
     ...overrides
   }
 
+  const gateProps = { auth, unauthenticatedOverlay, ...(bootstrap ? { bootstrap } : {}) } as any
+
   render(
     <I18nProvider configClient={null} initialLocale="en">
-      <AuthGate auth={auth as any} unauthenticatedOverlay={unauthenticatedOverlay}>
-        {protectedChild}
-      </AuthGate>
+      <AuthGate {...gateProps}>{protectedChild}</AuthGate>
     </I18nProvider>
   )
 
@@ -196,6 +197,102 @@ describe('AuthGate', () => {
 
     fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'replacement' } })
     expect((screen.getByRole('button', { name: 'Sign in' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('shows signed bootstrap progress inside the locked login surface', async () => {
+    const bootstrap = {
+      getBootstrapState: vi.fn(async () => ({
+        active: true,
+        manifest: {
+          type: 'manifest',
+          protocolVersion: 1,
+          stages: [
+            {
+              name: 'python-auth-deps',
+              title: 'Install authentication dependencies',
+              category: 'runtime',
+              needs_user_input: false
+            },
+            { name: 'runtime', title: 'Full runtime', category: 'runtime', needs_user_input: false },
+            { name: 'gateway', title: 'Gateway', category: 'runtime', needs_user_input: false },
+            { name: 'complete', title: 'Complete', category: 'runtime', needs_user_input: false }
+          ]
+        },
+        stages: {
+          'python-auth-deps': {
+            state: 'running',
+            durationMs: null,
+            startedAt: Date.now(),
+            json: null,
+            error: null
+          }
+        },
+        error: null,
+        log: [],
+        startedAt: Date.now(),
+        completedAt: null,
+        setupChoice: null,
+        unsupportedPlatform: null
+      })),
+      onBootstrapEvent: vi.fn(() => () => {}),
+      resetBootstrap: vi.fn(async () => ({ ok: true }))
+    }
+
+    renderGate(
+      { status: vi.fn(() => new Promise<DesktopAccountStatus>(() => {})) },
+      null,
+      <div>Protected Hermes application</div>,
+      bootstrap
+    )
+
+    expect(
+      await screen.findByText('Preparing the secure sign-in service (1/4): Install authentication dependencies…')
+    ).not.toBeNull()
+    expect(screen.queryByText('Protected Hermes application')).toBeNull()
+    expect(screen.queryByText('Full runtime')).toBeNull()
+  })
+
+  it('turns a bootstrap failure into a safe terminal state and retries through the bridge', async () => {
+    let emitBootstrap: ((event: Record<string, unknown>) => void) | null = null
+    const resetBootstrap = vi.fn(async () => ({ ok: true }))
+
+    const bootstrap = {
+      getBootstrapState: vi.fn(async () => ({
+        active: true,
+        manifest: { type: 'manifest', protocolVersion: 1, stages: [] },
+        stages: {},
+        error: null,
+        log: [],
+        startedAt: Date.now(),
+        completedAt: null,
+        setupChoice: null,
+        unsupportedPlatform: null
+      })),
+      onBootstrapEvent: vi.fn(callback => {
+        emitBootstrap = callback
+
+        return () => {
+          emitBootstrap = null
+        }
+      }),
+      resetBootstrap
+    }
+
+    const status = vi.fn(() => new Promise<DesktopAccountStatus>(() => {}))
+
+    renderGate({ status }, null, <div>Protected Hermes application</div>, bootstrap)
+
+    await act(async () => {
+      emitBootstrap?.({ type: 'failed', error: 'sessionid=secret Traceback private detail' })
+    })
+
+    expect(screen.getByText('The secure account service is unavailable. Try again.')).not.toBeNull()
+    expect(globalThis.document.body.textContent).not.toContain('sessionid')
+    expect(globalThis.document.body.textContent).not.toContain('Traceback')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(resetBootstrap).toHaveBeenCalledTimes(1))
+    expect(status).toHaveBeenCalledTimes(2)
   })
 
   it('keeps signed bootstrap hidden until authentication completes', async () => {
