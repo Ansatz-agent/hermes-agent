@@ -300,7 +300,7 @@ CLI 模块导入期的精确顺序固定为：
 
 ### 11.2 IPC 与 backend 直连
 
-Electron 使用统一 `guardedIpc` 默认拒绝。唯一适配层之外不直接注册 `ipcMain.handle/on`。单张 `CHANNEL_AUTH_POLICY` 为每个 channel 声明 `'auth-free' | 'local' | 'connection' | 'both'`：auth、窗口 close/minimize、主题、脱敏错误报告和前述 bootstrap channel 才能标为 `auth-free`；未列出或未分类一律拒绝。若兼容代码需要 `AUTH_FREE_CHANNELS`，它只能由该表派生，不能成为第二份手工维护的真值。行为契约和快照测试覆盖整张策略表，新增 channel 未分类即失败；测试不读取 `main.ts` 源码，也不依赖 handler 数量。
+Electron 使用统一 `guardedIpc` 默认拒绝。唯一适配层之外不直接注册 `ipcMain.handle/on`。单张 `CHANNEL_AUTH_POLICY` 为每个 channel 声明 `'auth-free' | 'local' | 'connection' | 'both'`；`auth-free` 只保留账户登录/登出/状态、首次安装与修复 bootstrap、启动进度和脱敏 renderer 错误报告。窗口缩放、主题、透明度、窗口控制及所有其他本地 UI/文件/终端能力都使用 `local` 或更严格策略，必须在登录后才能调用。未列出或未分类一律拒绝。若兼容代码需要 `AUTH_FREE_CHANNELS`，它只能由该表派生，不能成为第二份手工维护的真值。行为契约和快照测试覆盖整张策略表，新增 channel 未分类即失败；测试不读取 `main.ts` 源码，也不依赖 handler 数量。
 
 IPC 只是第一层。Renderer 获得的所有 backend HTTP/WS token 都绑定当前 auth scope 的 `(runtime_instance_id, epoch)` 和短 TTL：
 
