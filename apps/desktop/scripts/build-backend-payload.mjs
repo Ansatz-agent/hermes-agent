@@ -49,6 +49,7 @@ export const PAYLOAD_PATHS = Object.freeze([
   "agent",
   "assets",
   "cron",
+  "desktop_auth_runtime",
   "gateway",
   "hermes",
   "hermes_cli",
@@ -99,7 +100,8 @@ export const PAYLOAD_PATHS = Object.freeze([
   "toolsets.py",
   "trajectory_compressor.py",
   "utils.py",
-  "uv.lock"
+  "uv.lock",
+  "uv.toml"
 ])
 
 export const PAYLOAD_EXCLUDES = Object.freeze([
@@ -130,6 +132,10 @@ export const PAYLOAD_EXCLUDES = Object.freeze([
 export const REQUIRED_ARCHIVE_ENTRIES = Object.freeze([
   "hermes-agent/pyproject.toml",
   "hermes-agent/uv.lock",
+  "hermes-agent/uv.toml",
+  "hermes-agent/desktop_auth_runtime/pyproject.toml",
+  "hermes-agent/desktop_auth_runtime/uv.lock",
+  "hermes-agent/desktop_auth_runtime/uv.toml",
   "hermes-agent/hermes_cli/main.py",
   "hermes-agent/tools/sensevoice_stt.py",
   "hermes-agent/web/package.json",

@@ -581,7 +581,14 @@ function buildPinArgs(installStamp, { pinCommit = true } = {}) {
   return args
 }
 
-function buildPosixPinArgs({ installStamp, activeRoot, hermesHome, pinCommit = true, bundledSource = false }) {
+function buildPosixPinArgs({
+  installStamp,
+  activeRoot,
+  hermesHome,
+  pinCommit = true,
+  bundledSource = false,
+  bootstrapScope = null
+}) {
   const args = ['--dir', activeRoot, '--hermes-home', hermesHome]
 
   if (installStamp && installStamp.branch) {
@@ -600,6 +607,10 @@ function buildPosixPinArgs({ installStamp, activeRoot, hermesHome, pinCommit = t
     args.push('--bundled-source', '--skip-computer-use')
   }
 
+  if (bootstrapScope) {
+    args.push('--bootstrap-scope', bootstrapScope)
+  }
+
   return args
 }
 
@@ -615,12 +626,23 @@ async function fetchManifest({
   abortSignal,
   timeoutBudget: processTimeout,
   idleTimeoutMs,
-  killGraceMs
+  killGraceMs,
+  bootstrapScope
 }) {
   const isPosix = installerKind === 'posix'
 
   const args = isPosix
-    ? ['--manifest', ...buildPosixPinArgs({ installStamp, activeRoot, hermesHome, pinCommit, bundledSource })]
+    ? [
+        '--manifest',
+        ...buildPosixPinArgs({
+          installStamp,
+          activeRoot,
+          hermesHome,
+          pinCommit,
+          bundledSource,
+          bootstrapScope
+        })
+      ]
     : ['-Manifest', ...buildPinArgs(installStamp, { pinCommit })]
 
   const result = await (isPosix ? spawnBash : spawnPowerShell)(scriptPath, args, {
@@ -653,6 +675,10 @@ async function fetchManifest({
       const parsed = JSON.parse(lines[i])
 
       if (parsed && Array.isArray(parsed.stages)) {
+        if (isPosix && parsed.bootstrap_scope !== bootstrapScope) {
+          throw new Error('BOOTSTRAP_SCOPE_MISMATCH')
+        }
+
         return parsed
       }
     } catch {
@@ -699,7 +725,8 @@ async function runStage({
   bundledSource,
   timeoutBudget: processTimeout,
   idleTimeoutMs,
-  killGraceMs
+  killGraceMs,
+  bootstrapScope
 }) {
   const startedAt = Date.now()
   emit({ type: 'stage', name: stage.name, state: 'running' })
@@ -712,7 +739,14 @@ async function runStage({
         stage.name,
         '--non-interactive',
         '--json',
-        ...buildPosixPinArgs({ installStamp, activeRoot, hermesHome, pinCommit, bundledSource })
+        ...buildPosixPinArgs({
+          installStamp,
+          activeRoot,
+          hermesHome,
+          pinCommit,
+          bundledSource,
+          bootstrapScope
+        })
       ]
     : ['-Stage', stage.name, '-NonInteractive', '-Json', ...buildPinArgs(installStamp, { pinCommit })]
 
@@ -809,7 +843,7 @@ function bundledRuntimePython(activeRoot) {
     : path.join(activeRoot, 'venv', 'bin', 'python')
 }
 
-function validateBundledRuntime(activeRoot) {
+function validateBundledRuntime(activeRoot, bootstrapScope = 'runtime') {
   const python = bundledRuntimePython(activeRoot)
 
   try {
@@ -823,7 +857,10 @@ function validateBundledRuntime(activeRoot) {
   }
 
   return new Promise((resolve, reject) => {
-    const child = spawn(python, ['-c', 'import hermes_cli'], {
+    const importProbe =
+      bootstrapScope === 'auth' ? 'import httpx, keyring, hermes_cli.client_auth.bridge' : 'import hermes_cli'
+
+    const child = spawn(python, ['-c', importProbe], {
       stdio: ['ignore', 'ignore', 'pipe'],
       env: {
         ...process.env,
@@ -876,8 +913,7 @@ function validateBundledRuntime(activeRoot) {
       } else {
         reject(
           new Error(
-            `Bundled runtime import smoke check failed with exit ${code}` +
-              (stderr.trim() ? `: ${stderr.trim()}` : '')
+            `Bundled runtime import smoke check failed with exit ${code}` + (stderr.trim() ? `: ${stderr.trim()}` : '')
           )
         )
       }
@@ -900,8 +936,13 @@ async function runBootstrap(opts) {
     onEvent,
     abortSignal,
     writeMarker, // callback to write the bootstrap-complete marker; main.ts provides
-    timeouts: timeoutOverrides = {}
+    timeouts: timeoutOverrides = {},
+    scope: bootstrapScope = 'runtime'
   } = opts
+
+  if (bootstrapScope !== 'auth' && bootstrapScope !== 'runtime') {
+    throw new Error(`Unknown bootstrap scope: ${bootstrapScope}`)
+  }
 
   const timeouts = {
     idleMs: positiveTimeout(timeoutOverrides.idleMs, DEFAULT_BOOTSTRAP_TIMEOUTS.idleMs),
@@ -1015,13 +1056,15 @@ async function runBootstrap(opts) {
       abortSignal,
       timeoutBudget: manifestTimeout,
       idleTimeoutMs: timeouts.idleMs,
-      killGraceMs: timeouts.killGraceMs
+      killGraceMs: timeouts.killGraceMs,
+      bootstrapScope
     })
 
     emit({
       type: 'manifest',
       stages: manifest.stages,
-      protocolVersion: manifest.protocol_version || manifest.protocolVersion || null
+      protocolVersion: manifest.protocol_version || manifest.protocolVersion || null,
+      bootstrapScope
     })
 
     // 3. Iterate stages in order. Stages flagged needs_user_input are still
@@ -1064,7 +1107,8 @@ async function runBootstrap(opts) {
         bundledSource,
         timeoutBudget: stageTimeout,
         idleTimeoutMs: timeouts.idleMs,
-        killGraceMs: timeouts.killGraceMs
+        killGraceMs: timeouts.killGraceMs,
+        bootstrapScope
       })
 
       if (ev.state === 'failed') {
@@ -1083,7 +1127,7 @@ async function runBootstrap(opts) {
     }
 
     if (bundledSource) {
-      await validateBundledRuntime(activeRoot)
+      await validateBundledRuntime(activeRoot, bootstrapScope)
     }
 
     // 4. Write the bootstrap-complete marker. Fallback (all-zero) stamps are
@@ -1111,7 +1155,10 @@ async function runBootstrap(opts) {
       pinnedBranch: installStamp ? installStamp.branch : null
     }
 
-    const marker = typeof writeMarker === 'function' ? writeMarker(markerPayload) : markerPayload
+    const marker =
+      bootstrapScope === 'runtime' && typeof writeMarker === 'function'
+        ? writeMarker(markerPayload)
+        : { ...markerPayload, bootstrapScope }
 
     if (sourceTransaction) {
       await sourceTransaction.finalize()

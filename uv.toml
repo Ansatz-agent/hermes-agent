@@ -1,0 +1,15 @@
+exclude-newer = "2026-08-19T00:00:00Z"
+
+[exclude-newer-package]
+vercel = false
+nemo-relay = false
+huggingface-hub = false
+h2 = false
+aiohttp = false
+cryptography = false
+defusedxml = false
+python-olm = false
+unpaddedbase64 = false
+setuptools = false
+pillow = false
+mcp = false

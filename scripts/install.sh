@@ -83,6 +83,7 @@ JSON_OUTPUT=false
 NON_INTERACTIVE=false
 INCLUDE_DESKTOP=false
 BUNDLED_SOURCE=false
+BOOTSTRAP_SCOPE="runtime"
 
 # Detect non-interactive mode (e.g. curl | bash)
 # When stdin is not a terminal, read -p will fail with EOF,
@@ -152,6 +153,14 @@ while [[ $# -gt 0 ]]; do
             BUNDLED_SOURCE=true
             shift
             ;;
+        --bootstrap-scope)
+            BOOTSTRAP_SCOPE="${2:-}"
+            case "$BOOTSTRAP_SCOPE" in
+                auth|runtime) ;;
+                *) echo "Unknown bootstrap scope: ${BOOTSTRAP_SCOPE:-<empty>}" >&2; exit 1 ;;
+            esac
+            shift 2
+            ;;
         --dir)
             INSTALL_DIR="$2"
             INSTALL_DIR_EXPLICIT=true
@@ -190,6 +199,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --include-desktop  Also build the desktop app (apps/desktop -> Hermes.app)"
             echo "  --bundled-source  Use verified Desktop source already present at --dir;"
             echo "                    never clone, fetch, pull, or check out repository data"
+            echo "  --bootstrap-scope SCOPE  Desktop bootstrap scope: auth or runtime"
             echo "  --dir PATH     Installation directory"
             echo "                   default (non-root):  ~/.hermes/hermes-agent"
             echo "                   default (root, Linux): /usr/local/lib/hermes-agent"
@@ -331,11 +341,16 @@ emit_manifest() {
     # a GUI install ends up with a launchable app; the Electron app's own
     # first-launch bootstrap and the CLI one-liner omit it (building the
     # desktop from inside the already-running app would clobber it).
+    if [ "$BOOTSTRAP_SCOPE" = "auth" ]; then
+        printf '%s\n' '{"protocol_version":1,"bootstrap_scope":"auth","stages":[{"name":"auth-prerequisites","title":"Prepare authentication runtime","category":"auth","needs_user_input":false},{"name":"repository","title":"Prepare signed Hermes source","category":"auth","needs_user_input":false},{"name":"venv","title":"Create authentication environment","category":"auth","needs_user_input":false},{"name":"python-auth-deps","title":"Install authentication dependencies","category":"auth","needs_user_input":false},{"name":"auth-complete","title":"Finish authentication runtime","category":"auth","needs_user_input":false}]}'
+        return
+    fi
+
     local desktop_stage=""
     if [ "$INCLUDE_DESKTOP" = true ]; then
         desktop_stage='{"name":"desktop","title":"Build desktop app","category":"runtime","needs_user_input":false},'
     fi
-    printf '%s' '{"protocol_version":1,"stages":[{"name":"prerequisites","title":"System prerequisites","category":"runtime","needs_user_input":false},{"name":"repository","title":"Download Hermes Agent","category":"runtime","needs_user_input":false},{"name":"venv","title":"Create Python virtual environment","category":"runtime","needs_user_input":false},{"name":"python-deps","title":"Install Python dependencies","category":"runtime","needs_user_input":false},{"name":"node-deps","title":"Install browser-tool dependencies","category":"runtime","needs_user_input":false},{"name":"path","title":"Install hermes command","category":"runtime","needs_user_input":false},{"name":"config","title":"Prepare config and skills","category":"configuration","needs_user_input":false},{"name":"setup","title":"Configure API keys and settings","category":"configuration","needs_user_input":true},{"name":"gateway","title":"Configure gateway service","category":"configuration","needs_user_input":true},'"$desktop_stage"'{"name":"complete","title":"Finish install","category":"runtime","needs_user_input":false}]}'
+    printf '%s' '{"protocol_version":1,"bootstrap_scope":"runtime","stages":[{"name":"prerequisites","title":"System prerequisites","category":"runtime","needs_user_input":false},{"name":"repository","title":"Download Hermes Agent","category":"runtime","needs_user_input":false},{"name":"venv","title":"Create Python virtual environment","category":"runtime","needs_user_input":false},{"name":"python-deps","title":"Install Python dependencies","category":"runtime","needs_user_input":false},{"name":"node-deps","title":"Install browser-tool dependencies","category":"runtime","needs_user_input":false},{"name":"path","title":"Install hermes command","category":"runtime","needs_user_input":false},{"name":"config","title":"Prepare config and skills","category":"configuration","needs_user_input":false},{"name":"setup","title":"Configure API keys and settings","category":"configuration","needs_user_input":true},{"name":"gateway","title":"Configure gateway service","category":"configuration","needs_user_input":true},'"$desktop_stage"'{"name":"complete","title":"Finish install","category":"runtime","needs_user_input":false}]}'
     printf '\n'
 }
 
@@ -1521,6 +1536,7 @@ setup_venv() {
 
 install_deps() {
     log_info "Installing dependencies..."
+    local release_uv_config="$INSTALL_DIR/uv.toml"
 
     # Re-pin UV_PYTHON to the venv interpreter. setup_venv already does this,
     # but the bootstrap runs install stages (`venv`, `python-deps`) as separate
@@ -1633,6 +1649,13 @@ install_deps() {
     # lockfile is stale, missing, or out-of-sync with the current
     # extras spec, NOT because they're equivalent in posture.
     if [ -f "uv.lock" ]; then
+        if [ ! -f "$release_uv_config" ]; then
+            if [ "$BUNDLED_SOURCE" = true ]; then
+                log_error "The signed Desktop uv configuration is missing."
+                return 1
+            fi
+            release_uv_config=""
+        fi
         log_info "Trying tier: hash-verified (uv.lock) ..."
         log_info "(this resolves + downloads the curated [all] set — first run on a"
         log_info " fresh venv can take 1-5 minutes; uv prints progress below)"
@@ -1657,13 +1680,29 @@ install_deps() {
         #                  This respects the curation in pyproject.toml.
         # uv's own progress UI handles TTY detection and downgrades
         # gracefully when stdout/stderr aren't terminals.
-        if UV_PROJECT_ENVIRONMENT="$INSTALL_DIR/venv" $UV_CMD sync --extra all --locked; then
+        local -a release_uv_args=()
+        if [ -n "$release_uv_config" ]; then
+            release_uv_args=(--config-file "$release_uv_config")
+        fi
+        if UV_PROJECT_ENVIRONMENT="$INSTALL_DIR/venv" $UV_CMD sync --extra all --locked "${release_uv_args[@]}"; then
             log_success "Main package installed (hash-verified via uv.lock)"
             log_success "All dependencies installed"
             return 0
         fi
+
+        if [ "$BUNDLED_SOURCE" = true ]; then
+            log_error "The signed Desktop dependency lock could not be installed."
+            log_info "Packaged Hermes will not fall back to an unlocked package resolve."
+            return 1
+        fi
+
         log_warn "uv.lock sync failed (see uv output above), falling back to PyPI resolve..."
     else
+        if [ "$BUNDLED_SOURCE" = true ]; then
+            log_error "The signed Desktop dependency lock is missing."
+            return 1
+        fi
+
         log_info "uv.lock not found — falling back to PyPI resolve (no hash verification)"
     fi
 
@@ -1771,6 +1810,56 @@ PY
     log_success "Main package installed"
 
     log_success "All dependencies installed"
+}
+
+install_auth_deps() {
+    local auth_project="$INSTALL_DIR/desktop_auth_runtime"
+    local auth_uv_config="$auth_project/uv.toml"
+    local auth_python="$INSTALL_DIR/venv/bin/python"
+
+    if [ "$DISTRO" = "windows" ]; then
+        auth_python="$INSTALL_DIR/venv/Scripts/python.exe"
+    fi
+
+    if [ ! -f "$auth_project/pyproject.toml" ] || [ ! -f "$auth_project/uv.lock" ] || [ ! -f "$auth_uv_config" ]; then
+        log_error "Signed authentication dependency lock is missing"
+        return 1
+    fi
+    if [ ! -x "$auth_python" ]; then
+        log_error "Authentication Python environment is unavailable at $auth_python"
+        return 1
+    fi
+
+    export VIRTUAL_ENV="$INSTALL_DIR/venv"
+    export UV_PYTHON="$auth_python"
+    log_info "Installing the locked authentication dependency set..."
+
+    # This is deliberately fail-closed. The Desktop authentication bootstrap
+    # never falls back to an unlocked `uv pip install` or another package
+    # index when the release lock is missing, stale, or unavailable.
+    if ! UV_PROJECT_ENVIRONMENT="$INSTALL_DIR/venv" \
+        $UV_CMD sync --project "$auth_project" --locked --no-install-project \
+        --config-file "$auth_uv_config"; then
+        log_error "Locked authentication dependency installation failed"
+        return 1
+    fi
+
+    if ! "$auth_python" -c 'import httpx, keyring, hermes_cli.client_auth.bridge'; then
+        log_error "Authentication runtime import validation failed"
+        return 1
+    fi
+
+    log_success "Authentication dependencies installed"
+}
+
+write_auth_bootstrap_marker() {
+    local marker_path="$INSTALL_DIR/.hermes-auth-bootstrap-complete"
+    local marker_tmp="${marker_path}.tmp.$$"
+
+    printf '%s\n' '{"schemaVersion":1,"scope":"auth"}' > "$marker_tmp"
+    chmod 600 "$marker_tmp" 2>/dev/null || true
+    mv -f "$marker_tmp" "$marker_path"
+    log_success "Authentication runtime ready"
 }
 
 setup_path() {
@@ -3358,6 +3447,13 @@ run_stage_body() {
     local stage="$1"
 
     case "$stage" in
+        auth-prerequisites)
+            print_banner
+            detect_os
+            resolve_install_layout
+            install_uv
+            check_python
+            ;;
         prerequisites)
             print_banner
             detect_os
@@ -3394,6 +3490,14 @@ run_stage_body() {
             install_uv
             check_python
             install_deps
+            ;;
+        python-auth-deps)
+            detect_os
+            resolve_install_layout
+            require_install_dir
+            install_uv
+            check_python
+            install_auth_deps
             ;;
         node-deps)
             detect_os
@@ -3452,6 +3556,12 @@ run_stage_body() {
             # clobbered by the container's 'docker' stamp and wrongly blocks
             # 'hermes update' on this host install. See detect_install_method().
             write_install_method_stamp
+            ;;
+        auth-complete)
+            detect_os
+            resolve_install_layout
+            require_install_dir
+            write_auth_bootstrap_marker
             ;;
         *)
             log_error "Unknown stage: $stage"

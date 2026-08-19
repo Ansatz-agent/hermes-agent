@@ -32,11 +32,7 @@ import nodePty from 'node-pty'
 import { classifyActiveRuntime } from './active-runtime-state'
 import { AuthBridgeError, DesktopAuthBridge } from './auth-bridge'
 import { AuthCoordinator } from './auth-coordinator'
-import {
-  encodeScopeTokenRegistration,
-  issueAuthScopeToken,
-  sanitizeAuthChildEnvironment
-} from './auth-scope-token'
+import { encodeScopeTokenRegistration, issueAuthScopeToken, sanitizeAuthChildEnvironment } from './auth-scope-token'
 import { stopBackendChild as stopBackendChildImpl, stopBackendTreesForUpdate } from './backend-child'
 import { dashboardFallbackArgs, sourceDeclaresServe } from './backend-command'
 import { createBackendConnectionState } from './backend-connection-state'
@@ -113,6 +109,7 @@ import { describeCrashReason, installCrashForensics } from './crash-forensics'
 import { adoptServedDashboardToken } from './dashboard-token'
 import { loadOrCreateInstallationId, sshOwnershipId } from './desktop-installation'
 import { formatDesktopLogLine } from './desktop-log-line'
+import { DesktopRuntimeGate } from './desktop-runtime-gate'
 import {
   buildPosixCleanupScript,
   buildWindowsCleanupScript,
@@ -709,9 +706,11 @@ function pathWithHermesManagedNode(...entries) {
 const ACTIVE_HERMES_ROOT = path.join(HERMES_HOME, 'hermes-agent')
 // VENV_ROOT — venv lives inside the repo, exactly like install.ps1 does it.
 const VENV_ROOT = path.join(ACTIVE_HERMES_ROOT, 'venv')
+const AUTH_BOOTSTRAP_COMPLETE_MARKER = path.join(ACTIVE_HERMES_ROOT, '.hermes-auth-bootstrap-complete')
 let desktopAuthBridge: DesktopAuthBridge | null = null
 let desktopAuthCoordinator: AuthCoordinator | null = null
 let desktopAuthStartupPromise: Promise<void> | null = null
+const desktopRuntimeGate = new DesktopRuntimeGate()
 let desktopCapabilityShellEnabled = false
 let desktopDisplayListenersRegistered = false
 const desktopBackendScopeTokens = new Map<string, any>()
@@ -736,10 +735,10 @@ async function writeBackendScopeToken(child, token) {
 function sameConnectionScope(left, right) {
   return Boolean(
     left &&
-      right &&
-      left.connection_id === right.connection_id &&
-      left.runtime_instance_id === right.runtime_instance_id &&
-      left.epoch === right.epoch
+    right &&
+    left.connection_id === right.connection_id &&
+    left.runtime_instance_id === right.runtime_instance_id &&
+    left.epoch === right.epoch
   )
 }
 
@@ -805,6 +804,64 @@ function createDesktopAuthBridge() {
   })
 }
 
+function desktopStatusForRenderer(status, connectionId = 'local') {
+  if (connectionId !== 'local') {
+    return { ...status, runtime_ready: status.state === 'authenticated' }
+  }
+
+  return desktopRuntimeGate.rendererStatus(status)
+}
+
+function fullRuntimeBootstrapRequest(backendArgs = []) {
+  return {
+    kind: 'bootstrap-needed',
+    label: 'Hermes full runtime preparation required',
+    command: null,
+    args: backendArgs,
+    bootstrap: true,
+    env: {},
+    shell: false,
+    activeRoot: ACTIVE_HERMES_ROOT,
+    installStamp: INSTALL_STAMP,
+    isPackaged: IS_PACKAGED,
+    platform: process.platform,
+    reason: 'post-auth-runtime'
+  }
+}
+
+async function prepareAuthenticatedDesktopRuntime(status) {
+  if (status?.state !== 'authenticated' || !desktopAuthCoordinator?.isAuthenticated('local')) {
+    return
+  }
+
+  await desktopRuntimeGate.prepare(async () => {
+    const candidate = resolveHermesBackend([])
+    const runtime = activeRuntimeState()
+    const authOnlyInstall = fs.existsSync(AUTH_BOOTSTRAP_COMPLETE_MARKER) && !runtime.hasValidMarker
+
+    if (candidate?.kind !== 'bootstrap-needed' && runtime.shouldUseActiveRuntime && !authOnlyInstall) {
+      return
+    }
+
+    await ensureRuntime(candidate?.kind === 'bootstrap-needed' ? candidate : fullRuntimeBootstrapRequest(), {
+      scope: 'runtime'
+    })
+  })
+
+  if (!desktopAuthCoordinator?.isAuthenticated('local')) {
+    desktopRuntimeGate.invalidate()
+
+    return
+  }
+
+  enableDesktopCapabilityShell()
+  broadcastDesktopAuthStatus(status, 'local')
+
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    await startHermes()
+  }
+}
+
 async function startDesktopAuthRuntime() {
   if (desktopAuthCoordinator) {
     return
@@ -821,7 +878,7 @@ async function startDesktopAuthRuntime() {
     // The signed bootstrap shell is the sole pre-auth executable exception: it
     // installs the closed auth bridge, but never starts an Agent/backend.
     if (candidate?.kind === 'bootstrap-needed') {
-      await ensureRuntime(candidate)
+      await ensureRuntime(candidate, { scope: 'auth' })
     }
 
     if (desktopAuthCoordinator) {
@@ -835,12 +892,14 @@ async function startDesktopAuthRuntime() {
     coordinator.subscribe((status, connectionId) => {
       broadcastDesktopAuthStatus(status, connectionId)
 
-      if (connectionId === 'local' && status.state === 'authenticated' && !desktopCapabilityShellEnabled) {
-        enableDesktopCapabilityShell()
-
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          startHermes().catch(error => rememberLog(error.stack || error.message))
-        }
+      if (connectionId === 'local' && status.state === 'authenticated') {
+        void prepareAuthenticatedDesktopRuntime(status).catch(error => {
+          const failureCode = error?.failedStage || error?.code || 'runtime-unavailable'
+          rememberLog(`[runtime] authenticated preparation failed: ${failureCode}`)
+          broadcastDesktopAuthStatus(status, connectionId)
+        })
+      } else if (connectionId === 'local') {
+        desktopRuntimeGate.invalidate()
       }
     })
 
@@ -888,8 +947,7 @@ function desktopOwnsIpcSender(event: any) {
   const sender = event?.sender
 
   return Boolean(
-    sender &&
-      BrowserWindow.getAllWindows().some(window => !window.isDestroyed() && window.webContents === sender)
+    sender && BrowserWindow.getAllWindows().some(window => !window.isDestroyed() && window.webContents === sender)
   )
 }
 
@@ -957,13 +1015,24 @@ configureGuardedIpcAuthority({
     }
 
     await desktopAuthCoordinator.require(policy, connectionId)
+
+    const requiresLocalRuntime =
+      policy === 'local' ||
+      policy === 'both' ||
+      (policy === 'connection' && (!connectionId || connectionId === 'local'))
+
+    if (requiresLocalRuntime && !desktopRuntimeGate.ready) {
+      throw new AuthBridgeError('RUNTIME_NOT_READY', 'runtime_unavailable')
+    }
   }
 })
 
 function broadcastDesktopAuthStatus(status, connectionId = 'local') {
+  const rendererStatus = desktopStatusForRenderer(status, connectionId)
+
   for (const window of BrowserWindow.getAllWindows()) {
     if (!window.isDestroyed() && !window.webContents.isDestroyed()) {
-      window.webContents.send('hermes:auth:changed', status, connectionId)
+      window.webContents.send('hermes:auth:changed', rendererStatus, connectionId)
     }
   }
 }
@@ -973,6 +1042,12 @@ async function cleanupDesktopCapabilities(connectionId = 'local') {
     stopRegistryConnectionBackends(connectionId)
 
     return
+  }
+
+  desktopRuntimeGate.invalidate()
+
+  if (bootstrapAbortController) {
+    bootstrapAbortController.abort()
   }
 
   desktopCapabilityShellEnabled = false
@@ -4812,7 +4887,7 @@ function resolveHermesBackend(backendArgs, options: any = {}) {
   }
 }
 
-async function ensureRuntime(backend) {
+async function ensureRuntime(backend, { scope = 'runtime' }: any = {}) {
   if (!backend.bootstrap) {
     await advanceBootProgress('runtime.external', `Using ${backend.label}`, 32)
 
@@ -4852,7 +4927,8 @@ async function ensureRuntime(backend) {
       broadcastBootstrapEvent({
         type: 'manifest',
         stages: [],
-        protocolVersion: null
+        protocolVersion: null,
+        bootstrapScope: scope
       })
     } catch {
       void 0
@@ -4890,7 +4966,8 @@ async function ensureRuntime(backend) {
           void 0
         }
       },
-      writeMarker: writeBootstrapMarker
+      writeMarker: writeBootstrapMarker,
+      scope
     })
 
     bootstrapAbortController = null
@@ -4919,11 +4996,25 @@ async function ensureRuntime(backend) {
       throw bootstrapError
     }
 
-    rememberLog('[bootstrap] bootstrap complete; marker written. Re-resolving backend.')
+    if (scope === 'auth') {
+      rememberLog('[bootstrap] authentication runtime ready; full runtime remains locked.')
+
+      return {
+        kind: 'python',
+        label: 'Hermes authentication runtime',
+        command: getVenvPython(VENV_ROOT),
+        args: [],
+        bootstrap: false,
+        env: {},
+        shell: false
+      }
+    }
+
+    rememberLog('[bootstrap] full runtime complete; marker written. Re-resolving backend.')
 
     // Re-resolve now that the install exists. The new resolution lands in
     // step 3 (bootstrap-complete marker) and we recurse to wire venvPython.
-    return ensureRuntime(resolveHermesBackend(backend.args))
+    return ensureRuntime(resolveHermesBackend(backend.args), { scope })
   }
 
   // bootstrap=true with a real backend (createActiveBackend path) means we
@@ -8981,7 +9072,12 @@ async function prepareRegistryConnectionAuth(connectionId) {
     }
 
     const ssh = new SshConnection(
-      { host: resolvedConfig.host, user: resolvedConfig.user, port: resolvedConfig.port, keyPath: resolvedConfig.keyPath },
+      {
+        host: resolvedConfig.host,
+        user: resolvedConfig.user,
+        port: resolvedConfig.port,
+        keyPath: resolvedConfig.keyPath
+      },
       {
         rememberLog: sshRememberLog,
         ownershipId: sshOwnershipId(desktopInstallationId, authScope),
@@ -12713,12 +12809,7 @@ guardedHandle('hermes:connections:update-all', async () => {
 
         const descriptor: any = await ensureRegistryBackend(connection.id, null)
 
-        const body: any = await postJsonForBackend(
-          descriptor,
-          '/api/hermes/update',
-          {},
-          { timeoutMs: 15_000 }
-        )
+        const body: any = await postJsonForBackend(descriptor, '/api/hermes/update', {}, { timeoutMs: 15_000 })
 
         if (body?.ok === false) {
           // The backend refused (docker/nix/externally-managed installs) —
@@ -14830,18 +14921,21 @@ async function resolveDesktopAuthConnection(connectionId) {
 
 guardedHandle('hermes:auth:status', async (_event, connectionId) => {
   const { coordinator, id } = await resolveDesktopAuthConnection(connectionId)
+  const status = await coordinator.refresh(id)
 
-  return coordinator.refresh(id)
+  return desktopStatusForRenderer(status, id)
 })
 guardedHandle('hermes:auth:login', async (_event, username, password, connectionId) => {
   const { coordinator, id } = await resolveDesktopAuthConnection(connectionId)
+  const status = await coordinator.login(username, password, id)
 
-  return coordinator.login(username, password, id)
+  return desktopStatusForRenderer(status, id)
 })
 guardedHandle('hermes:auth:logout', async (_event, connectionId) => {
   const { coordinator, id } = await resolveDesktopAuthConnection(connectionId)
+  const status = await coordinator.logout(id)
 
-  return coordinator.logout(id)
+  return desktopStatusForRenderer(status, id)
 })
 
 // Every production registration exactly matches the sole policy table; a new
@@ -14928,9 +15022,12 @@ app.whenReady().then(async () => {
   // closed auth bridge, but no Hermes backend can cross startHermes before a
   // validated account scope exists.
   createWindow()
-  await startDesktopAuthRuntime().catch(error => rememberLog(`[auth] runtime startup failed: ${error?.message || error}`))
+  await startDesktopAuthRuntime().catch(error => {
+    const failureCode = error?.failedStage || error?.code || 'auth-runtime-unavailable'
+    rememberLog(`[auth] runtime startup failed: ${failureCode}`)
+  })
 
-  if (desktopAuthCoordinator?.isAuthenticated('local')) {
+  if (desktopAuthCoordinator?.isAuthenticated('local') && desktopRuntimeGate.ready) {
     enableDesktopCapabilityShell()
   }
 

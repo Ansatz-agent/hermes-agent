@@ -61,6 +61,11 @@ export interface Translations {
     checking: string
     preparingRuntime: string
     preparingStage: (current: number, total: number, title: string) => string
+    runtimeTitle: string
+    runtimeDescription: string
+    preparingFullRuntime: string
+    preparingFullStage: (current: number, total: number, title: string) => string
+    runtimePreparationFailed: string
     administratorManaged: string
     accountMenu: string
     signOut: string

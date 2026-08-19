@@ -41,6 +41,7 @@ export type DesktopAccountStatus = {
   valid_until: number
   session_expires_at: string | null
   reason: string | null
+  runtime_ready: boolean
 }
 
 export type DesktopAuthClient = {
@@ -81,7 +82,8 @@ const unavailableStatus = (): DesktopAccountStatus => ({
   epoch: 0,
   valid_until: 0,
   session_expires_at: null,
-  reason: 'runtime_unavailable'
+  reason: 'runtime_unavailable',
+  runtime_ready: false
 })
 
 const emptyBootstrapState = (): DesktopBootstrapState => ({
@@ -291,9 +293,11 @@ export function AuthGate({
     [connectionId, logout, status]
   )
 
-  if (status.state === 'authenticated') {
+  if (status.state === 'authenticated' && status.runtime_ready) {
     return <DesktopAuthContext.Provider value={authenticatedContext}>{children}</DesktopAuthContext.Provider>
   }
+
+  const waitingForRuntime = status.state === 'authenticated'
 
   const retry = () => {
     if (!auth || submitting) {
@@ -353,23 +357,31 @@ export function AuthGate({
   const reason = reasonText(t.auth.reasons, status.reason)
   const bootstrapStage = currentBootstrapStage(bootstrapState)
 
-  const checkingText = bootstrapState?.active
-    ? bootstrapStage
-      ? t.auth.preparingStage(bootstrapStage.current, bootstrapStage.total, bootstrapStage.title)
-      : t.auth.preparingRuntime
-    : t.auth.checking
+  const checkingText = waitingForRuntime
+    ? bootstrapStage && bootstrapState?.manifest?.bootstrapScope === 'runtime'
+      ? t.auth.preparingFullStage(bootstrapStage.current, bootstrapStage.total, bootstrapStage.title)
+      : t.auth.preparingFullRuntime
+    : bootstrapState?.active
+      ? bootstrapStage
+        ? t.auth.preparingStage(bootstrapStage.current, bootstrapStage.total, bootstrapStage.title)
+        : t.auth.preparingRuntime
+      : t.auth.checking
 
   return (
     <main className="fixed inset-0 grid min-h-screen place-items-center bg-(--ui-chat-surface-background) p-6 text-(--dt-foreground)">
       <section
-        aria-busy={status.state === 'checking'}
+        aria-busy={status.state === 'checking' || Boolean(waitingForRuntime && bootstrapState?.active)}
         className="w-full max-w-md rounded-2xl border border-(--dt-border) bg-(--ui-card-surface) p-8 shadow-2xl"
       >
         <div aria-hidden="true" className="mb-6 text-2xl font-semibold tracking-tight">
           Hermes
         </div>
-        <h1 className="text-2xl font-semibold tracking-tight">{t.auth.title}</h1>
-        <p className="mt-2 text-sm leading-6 text-(--dt-muted-foreground)">{t.auth.description}</p>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          {waitingForRuntime ? t.auth.runtimeTitle : t.auth.title}
+        </h1>
+        <p className="mt-2 text-sm leading-6 text-(--dt-muted-foreground)">
+          {waitingForRuntime ? t.auth.runtimeDescription : t.auth.description}
+        </p>
 
         <div className="mt-5 rounded-lg border border-(--dt-border) bg-(--ui-sidebar-surface) px-4 py-3">
           <div className="text-xs font-medium uppercase tracking-wide text-(--dt-muted-foreground)">
@@ -378,10 +390,17 @@ export function AuthGate({
           <code className="mt-1 block break-all text-sm">{ACCOUNT_SERVER}</code>
         </div>
 
-        {status.state === 'checking' ? (
-          <p className="mt-6 text-sm" role="status">
-            {checkingText}
-          </p>
+        {status.state === 'checking' || waitingForRuntime ? (
+          <>
+            <p className="mt-6 text-sm" role="status">
+              {checkingText}
+            </p>
+            {waitingForRuntime && bootstrapState?.error ? (
+              <p className="mt-3 text-sm text-(--dt-destructive)" role="alert">
+                {t.auth.runtimePreparationFailed}
+              </p>
+            ) : null}
+          </>
         ) : (
           <form className="mt-6 space-y-4" onSubmit={submit}>
             <label className="block text-sm font-medium">
@@ -428,12 +447,22 @@ export function AuthGate({
 
         <button
           className="mt-4 text-sm font-medium text-(--dt-muted-foreground) underline underline-offset-4 disabled:opacity-50"
-          disabled={submitting || status.state === 'checking'}
+          disabled={submitting || status.state === 'checking' || Boolean(waitingForRuntime && bootstrapState?.active)}
           onClick={retry}
           type="button"
         >
           {t.auth.retry}
         </button>
+        {waitingForRuntime ? (
+          <button
+            className="ml-4 text-sm font-medium text-(--dt-muted-foreground) underline underline-offset-4 disabled:opacity-50"
+            disabled={submitting}
+            onClick={() => void logout()}
+            type="button"
+          >
+            {t.auth.signOut}
+          </button>
+        ) : null}
         <p className="mt-6 border-t border-(--dt-border) pt-4 text-xs leading-5 text-(--dt-muted-foreground)">
           {t.auth.administratorManaged}
         </p>

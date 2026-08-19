@@ -13,7 +13,8 @@ const signedOut: DesktopAccountStatus = {
   epoch: 1,
   valid_until: 0,
   session_expires_at: null,
-  reason: 'signed_out'
+  reason: 'signed_out',
+  runtime_ready: false
 }
 
 const authenticated: DesktopAccountStatus = {
@@ -22,7 +23,8 @@ const authenticated: DesktopAccountStatus = {
   username: 'alice',
   epoch: 2,
   valid_until: 60,
-  reason: null
+  reason: null,
+  runtime_ready: true
 }
 
 function renderGate(
@@ -89,6 +91,88 @@ describe('AuthGate', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'remote-user:remote-a' }))
 
     await waitFor(() => expect(auth.logout).toHaveBeenCalledWith('remote-a'))
+  })
+
+  it('keeps an authenticated account behind the full-runtime readiness gate', async () => {
+    const bootstrap = {
+      getBootstrapState: vi.fn(async () => ({
+        active: true,
+        manifest: {
+          type: 'manifest',
+          protocolVersion: 1,
+          bootstrapScope: 'runtime',
+          stages: [
+            {
+              name: 'python-deps',
+              title: 'Install Python dependencies',
+              category: 'runtime',
+              needs_user_input: false
+            }
+          ]
+        },
+        stages: {
+          'python-deps': {
+            state: 'running',
+            durationMs: null,
+            startedAt: Date.now(),
+            json: null,
+            error: null
+          }
+        },
+        error: null,
+        log: [],
+        startedAt: Date.now(),
+        completedAt: null,
+        setupChoice: null,
+        unsupportedPlatform: null
+      })),
+      onBootstrapEvent: vi.fn(() => () => {}),
+      resetBootstrap: vi.fn(async () => ({ ok: true }))
+    }
+
+    const { auth } = renderGate(
+      { status: vi.fn(async () => ({ ...authenticated, runtime_ready: false })) },
+      null,
+      <div>Protected Hermes application</div>,
+      bootstrap
+    )
+
+    expect(await screen.findByText('Preparing Hermes runtime (1/1): Install Python dependencies…')).not.toBeNull()
+    expect(screen.queryByText('Protected Hermes application')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
+    await waitFor(() => expect(auth.logout).toHaveBeenCalledTimes(1))
+  })
+
+  it('keeps Retry and Sign out available after authenticated runtime preparation fails', async () => {
+    const bootstrap = {
+      getBootstrapState: vi.fn(async () => ({
+        active: false,
+        manifest: { type: 'manifest', protocolVersion: 1, bootstrapScope: 'runtime', stages: [] },
+        stages: {},
+        error: 'sessionid=secret Traceback private detail',
+        log: [],
+        startedAt: Date.now(),
+        completedAt: null,
+        setupChoice: null,
+        unsupportedPlatform: null
+      })),
+      onBootstrapEvent: vi.fn(() => () => {}),
+      resetBootstrap: vi.fn(async () => ({ ok: true }))
+    }
+
+    renderGate(
+      { status: vi.fn(async () => ({ ...authenticated, runtime_ready: false })) },
+      null,
+      <div>Protected Hermes application</div>,
+      bootstrap
+    )
+
+    expect(await screen.findByText('Hermes could not prepare its local runtime. Retry or sign out.')).not.toBeNull()
+    expect((screen.getByRole('button', { name: 'Retry' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.getByRole('button', { name: 'Sign out' })).not.toBeNull()
+    expect(globalThis.document.body.textContent).not.toContain('sessionid')
+    expect(globalThis.document.body.textContent).not.toContain('Traceback')
   })
 
   it('shows only the fixed account login surface while signed out', async () => {

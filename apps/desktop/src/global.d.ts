@@ -416,6 +416,7 @@ interface DesktopAccountStatus {
   valid_until: number
   session_expires_at: string | null
   reason: string | null
+  runtime_ready: boolean
 }
 
 export interface DesktopMarketplaceSearchItem {
@@ -942,7 +943,12 @@ export interface DesktopBootstrapSetupChoice {
 
 export interface DesktopBootstrapState {
   active: boolean
-  manifest: { type: 'manifest'; stages: DesktopBootstrapStageDescriptor[]; protocolVersion: number | null } | null
+  manifest: {
+    type: 'manifest'
+    stages: DesktopBootstrapStageDescriptor[]
+    protocolVersion: number | null
+    bootstrapScope?: 'auth' | 'runtime'
+  } | null
   stages: Record<string, DesktopBootstrapStageResult>
   error: string | null
   log: Array<{ ts: number; stage: string | null; line: string; stream?: 'stdout' | 'stderr' }>
@@ -960,7 +966,12 @@ export type DesktopBootstrapEvent =
       platform?: string
       activeRoot?: string
     }
-  | { type: 'manifest'; stages: DesktopBootstrapStageDescriptor[]; protocolVersion: number | null }
+  | {
+      type: 'manifest'
+      stages: DesktopBootstrapStageDescriptor[]
+      protocolVersion: number | null
+      bootstrapScope?: 'auth' | 'runtime'
+    }
   | {
       type: 'stage'
       name: string
