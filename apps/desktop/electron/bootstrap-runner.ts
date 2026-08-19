@@ -39,6 +39,7 @@ import https from 'node:https'
 import path from 'node:path'
 
 import { prepareBundledSource, type PreparedBundledSource, resolveBundledPayload } from './bootstrap-payload'
+import { buildBootstrapEnvironment, runBootstrapProcess } from './bootstrap-process'
 import { hiddenWindowsChildOptions } from './windows-child-options'
 
 const IS_WINDOWS = process.platform === 'win32'
@@ -46,6 +47,43 @@ const IS_WINDOWS = process.platform === 'win32'
 const STAMP_COMMIT_RE = /^[0-9a-f]{7,40}$/i
 const FALLBACK_COMMIT_RE = /^0{7,40}$/
 const FALLBACK_BRANCH = 'main'
+
+const DEFAULT_BOOTSTRAP_TIMEOUTS = Object.freeze({
+  idleMs: 90_000,
+  killGraceMs: 2_000,
+  manifestHardMs: 60_000,
+  stageHardMs: 15 * 60_000,
+  totalMs: 30 * 60_000
+})
+
+function positiveTimeout(value, fallback) {
+  return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+function timeoutBudget(totalDeadline, preferredMs) {
+  const remainingMs = Math.max(1, Math.ceil(totalDeadline - performance.now()))
+
+  return {
+    hardTimeoutMs: Math.min(preferredMs, remainingMs),
+    totalLimited: remainingMs <= preferredMs
+  }
+}
+
+function terminationError(result, { totalLimited = false } = {}) {
+  if (result.termination === 'cancelled') {
+    return 'BOOTSTRAP_CANCELLED'
+  }
+
+  if (result.termination === 'idle-timeout') {
+    return 'BOOTSTRAP_IDLE_TIMEOUT'
+  }
+
+  if (result.termination === 'hard-timeout') {
+    return totalLimited ? 'BOOTSTRAP_TOTAL_TIMEOUT' : 'BOOTSTRAP_STAGE_TIMEOUT'
+  }
+
+  return null
+}
 
 function isPinnedCommit(commit) {
   return typeof commit === 'string' && STAMP_COMMIT_RE.test(commit) && !FALLBACK_COMMIT_RE.test(commit)
@@ -482,200 +520,41 @@ function resolveWindowsPowerShell() {
   return 'powershell.exe'
 }
 
-function spawnPowerShell(scriptPath, args, { emit, stageName, abortSignal, hermesHome }: any = {}) {
-  return new Promise<any>((resolve, reject) => {
-    const ps = process.platform === 'win32' ? resolveWindowsPowerShell() : 'pwsh'
-    const fullArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...args]
+function spawnPowerShell(
+  scriptPath,
+  args,
+  { emit, stageName, abortSignal, hermesHome, hardTimeoutMs, idleTimeoutMs, killGraceMs }: any = {}
+) {
+  const ps = process.platform === 'win32' ? resolveWindowsPowerShell() : 'pwsh'
 
-    const child = spawn(
-      ps,
-      fullArgs,
-      hiddenWindowsChildOptions({
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: {
-          ...process.env,
-          // Pass HERMES_HOME through so install.ps1 respects the caller's
-          // choice rather than re-computing the default.
-          HERMES_HOME: hermesHome || process.env.HERMES_HOME || ''
-        }
-      })
-    )
-
-    let stdout = ''
-    let stderr = ''
-    let killed = false
-
-    const onAbort = () => {
-      killed = true
-
-      try {
-        child.kill('SIGTERM')
-      } catch {
-        void 0
-      }
-    }
-
-    if (abortSignal) {
-      if (abortSignal.aborted) {
-        onAbort()
-      } else {
-        abortSignal.addEventListener('abort', onAbort, { once: true })
-      }
-    }
-
-    child.stdout.setEncoding('utf8')
-    child.stderr.setEncoding('utf8')
-
-    // Stream stdout line-by-line so the renderer sees progress in real time.
-    let stdoutBuf = ''
-    child.stdout.on('data', chunk => {
-      stdout += chunk
-      stdoutBuf += chunk
-      let nl
-
-      while ((nl = stdoutBuf.indexOf('\n')) !== -1) {
-        const line = stdoutBuf.slice(0, nl).replace(/\r$/, '')
-        stdoutBuf = stdoutBuf.slice(nl + 1)
-
-        if (line) {
-          emit && emit({ type: 'log', stage: stageName, line, stream: 'stdout' })
-        }
-      }
-    })
-
-    let stderrBuf = ''
-    child.stderr.on('data', chunk => {
-      stderr += chunk
-      stderrBuf += chunk
-      let nl
-
-      while ((nl = stderrBuf.indexOf('\n')) !== -1) {
-        const line = stderrBuf.slice(0, nl).replace(/\r$/, '')
-        stderrBuf = stderrBuf.slice(nl + 1)
-
-        if (line) {
-          emit && emit({ type: 'log', stage: stageName, line, stream: 'stderr' })
-        }
-      }
-    })
-
-    child.on('error', err => {
-      if (abortSignal) {
-        abortSignal.removeEventListener('abort', onAbort)
-      }
-
-      reject(err)
-    })
-
-    child.on('close', (code, signal) => {
-      if (abortSignal) {
-        abortSignal.removeEventListener('abort', onAbort)
-      }
-
-      // Flush any trailing bytes
-      if (stdoutBuf) {
-        emit && emit({ type: 'log', stage: stageName, line: stdoutBuf, stream: 'stdout' } as any)
-      }
-
-      if (stderrBuf) {
-        emit && emit({ type: 'log', stage: stageName, line: stderrBuf, stream: 'stderr' } as any)
-      }
-
-      resolve({ stdout, stderr, code, signal, killed } as any)
-    })
+  return runBootstrapProcess({
+    command: ps,
+    args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...args],
+    abortSignal,
+    emit,
+    env: buildBootstrapEnvironment(process.env, { hermesHome }),
+    hardTimeoutMs,
+    idleTimeoutMs,
+    killGraceMs,
+    stageName
   })
 }
 
-function spawnBash(scriptPath, args, { emit, stageName, abortSignal, hermesHome }: any = {}) {
-  return new Promise<any>((resolve, reject) => {
-    const child = spawn('bash', [scriptPath, ...args], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        HERMES_HOME: hermesHome || process.env.HERMES_HOME || ''
-      }
-    })
-
-    let stdout = ''
-    let stderr = ''
-    let killed = false
-
-    const onAbort = () => {
-      killed = true
-
-      try {
-        child.kill('SIGTERM')
-      } catch {
-        void 0
-      }
-    }
-
-    if (abortSignal) {
-      if (abortSignal.aborted) {
-        onAbort()
-      } else {
-        abortSignal.addEventListener('abort', onAbort, { once: true })
-      }
-    }
-
-    child.stdout.setEncoding('utf8')
-    child.stderr.setEncoding('utf8')
-
-    let stdoutBuf = ''
-    child.stdout.on('data', chunk => {
-      stdout += chunk
-      stdoutBuf += chunk
-      let nl
-
-      while ((nl = stdoutBuf.indexOf('\n')) !== -1) {
-        const line = stdoutBuf.slice(0, nl).replace(/\r$/, '')
-        stdoutBuf = stdoutBuf.slice(nl + 1)
-
-        if (line) {
-          emit && emit({ type: 'log', stage: stageName, line, stream: 'stdout' })
-        }
-      }
-    })
-
-    let stderrBuf = ''
-    child.stderr.on('data', chunk => {
-      stderr += chunk
-      stderrBuf += chunk
-      let nl
-
-      while ((nl = stderrBuf.indexOf('\n')) !== -1) {
-        const line = stderrBuf.slice(0, nl).replace(/\r$/, '')
-        stderrBuf = stderrBuf.slice(nl + 1)
-
-        if (line) {
-          emit && emit({ type: 'log', stage: stageName, line, stream: 'stderr' })
-        }
-      }
-    })
-
-    child.on('error', err => {
-      if (abortSignal) {
-        abortSignal.removeEventListener('abort', onAbort)
-      }
-
-      reject(err)
-    })
-
-    child.on('close', (code, signal) => {
-      if (abortSignal) {
-        abortSignal.removeEventListener('abort', onAbort)
-      }
-
-      if (stdoutBuf) {
-        emit && emit({ type: 'log', stage: stageName, line: stdoutBuf, stream: 'stdout' })
-      }
-
-      if (stderrBuf) {
-        emit && emit({ type: 'log', stage: stageName, line: stderrBuf, stream: 'stderr' })
-      }
-
-      resolve({ stdout, stderr, code, signal, killed })
-    })
+function spawnBash(
+  scriptPath,
+  args,
+  { emit, stageName, abortSignal, hermesHome, hardTimeoutMs, idleTimeoutMs, killGraceMs }: any = {}
+) {
+  return runBootstrapProcess({
+    command: 'bash',
+    args: [scriptPath, ...args],
+    abortSignal,
+    emit,
+    env: buildBootstrapEnvironment(process.env, { hermesHome }),
+    hardTimeoutMs,
+    idleTimeoutMs,
+    killGraceMs,
+    stageName
   })
 }
 
@@ -732,7 +611,11 @@ async function fetchManifest({
   activeRoot,
   installStamp,
   pinCommit,
-  bundledSource
+  bundledSource,
+  abortSignal,
+  timeoutBudget: processTimeout,
+  idleTimeoutMs,
+  killGraceMs
 }) {
   const isPosix = installerKind === 'posix'
 
@@ -741,15 +624,23 @@ async function fetchManifest({
     : ['-Manifest', ...buildPinArgs(installStamp, { pinCommit })]
 
   const result = await (isPosix ? spawnBash : spawnPowerShell)(scriptPath, args, {
+    abortSignal,
     emit,
     stageName: '__manifest__',
-    hermesHome
+    hermesHome,
+    hardTimeoutMs: processTimeout.hardTimeoutMs,
+    idleTimeoutMs,
+    killGraceMs
   })
 
+  const terminalError = terminationError(result, processTimeout)
+
+  if (terminalError) {
+    throw new Error(terminalError)
+  }
+
   if (result.code !== 0) {
-    throw new Error(
-      `${isPosix ? 'install.sh --manifest' : 'install.ps1 -Manifest'} failed: exit ${result.code}\n${result.stderr || result.stdout}`
-    )
+    throw new Error(`${isPosix ? 'install.sh --manifest' : 'install.ps1 -Manifest'} failed: exit ${result.code}`)
   }
 
   // The manifest is the LAST JSON line on stdout (install.ps1 may print
@@ -805,7 +696,10 @@ async function runStage({
   abortSignal,
   installStamp,
   pinCommit,
-  bundledSource
+  bundledSource,
+  timeoutBudget: processTimeout,
+  idleTimeoutMs,
+  killGraceMs
 }) {
   const startedAt = Date.now()
   emit({ type: 'stage', name: stage.name, state: 'running' })
@@ -826,13 +720,26 @@ async function runStage({
     emit,
     stageName: stage.name,
     abortSignal,
-    hermesHome
+    hermesHome,
+    hardTimeoutMs: processTimeout.hardTimeoutMs,
+    idleTimeoutMs,
+    killGraceMs
   })
 
   const durationMs = Date.now() - startedAt
 
-  if (result.killed) {
-    const ev = { type: 'stage', name: stage.name, state: 'failed', durationMs, error: 'cancelled by user' }
+  const terminalError = terminationError(result, processTimeout)
+
+  if (terminalError) {
+    const ev = {
+      type: 'stage',
+      name: stage.name,
+      state: 'failed',
+      durationMs,
+      error: terminalError,
+      cancelled: terminalError === 'BOOTSTRAP_CANCELLED'
+    }
+
     emit(ev)
 
     return ev
@@ -992,8 +899,19 @@ async function runBootstrap(opts) {
     logRoot,
     onEvent,
     abortSignal,
-    writeMarker // callback to write the bootstrap-complete marker; main.ts provides
+    writeMarker, // callback to write the bootstrap-complete marker; main.ts provides
+    timeouts: timeoutOverrides = {}
   } = opts
+
+  const timeouts = {
+    idleMs: positiveTimeout(timeoutOverrides.idleMs, DEFAULT_BOOTSTRAP_TIMEOUTS.idleMs),
+    killGraceMs: positiveTimeout(timeoutOverrides.killGraceMs, DEFAULT_BOOTSTRAP_TIMEOUTS.killGraceMs),
+    manifestHardMs: positiveTimeout(timeoutOverrides.manifestHardMs, DEFAULT_BOOTSTRAP_TIMEOUTS.manifestHardMs),
+    stageHardMs: positiveTimeout(timeoutOverrides.stageHardMs, DEFAULT_BOOTSTRAP_TIMEOUTS.stageHardMs),
+    totalMs: positiveTimeout(timeoutOverrides.totalMs, DEFAULT_BOOTSTRAP_TIMEOUTS.totalMs)
+  }
+
+  const totalDeadline = performance.now() + timeouts.totalMs
 
   // Bail before spawning anything if the user already cancelled — otherwise an
   // already-aborted signal would still fetch the manifest (a spawn) before the
@@ -1083,6 +1001,8 @@ async function runBootstrap(opts) {
     const installerKind = scriptInfo.kind || 'powershell'
 
     // 2. Fetch manifest
+    const manifestTimeout = timeoutBudget(totalDeadline, timeouts.manifestHardMs)
+
     const manifest = await fetchManifest({
       scriptPath: scriptInfo.path,
       installerKind,
@@ -1091,7 +1011,11 @@ async function runBootstrap(opts) {
       activeRoot,
       installStamp,
       pinCommit,
-      bundledSource
+      bundledSource,
+      abortSignal,
+      timeoutBudget: manifestTimeout,
+      idleTimeoutMs: timeouts.idleMs,
+      killGraceMs: timeouts.killGraceMs
     })
 
     emit({
@@ -1115,6 +1039,18 @@ async function runBootstrap(opts) {
         return { ok: false, cancelled: true }
       }
 
+      if (performance.now() >= totalDeadline) {
+        if (sourceTransaction) {
+          await sourceTransaction.rollback()
+        }
+
+        emit({ type: 'failed', stage: stage.name, error: 'BOOTSTRAP_TOTAL_TIMEOUT' })
+
+        return { ok: false, failedStage: stage.name, error: 'BOOTSTRAP_TOTAL_TIMEOUT' }
+      }
+
+      const stageTimeout = timeoutBudget(totalDeadline, timeouts.stageHardMs)
+
       const ev = await runStage({
         scriptPath: scriptInfo.path,
         installerKind,
@@ -1125,7 +1061,10 @@ async function runBootstrap(opts) {
         abortSignal,
         installStamp,
         pinCommit,
-        bundledSource
+        bundledSource,
+        timeoutBudget: stageTimeout,
+        idleTimeoutMs: timeouts.idleMs,
+        killGraceMs: timeouts.killGraceMs
       })
 
       if (ev.state === 'failed') {
@@ -1134,6 +1073,10 @@ async function runBootstrap(opts) {
         }
 
         emit({ type: 'failed', stage: stage.name, error: (ev as any).error || 'stage failed' })
+
+        if ((ev as any).cancelled) {
+          return { ok: false, cancelled: true }
+        }
 
         return { ok: false, failedStage: stage.name, error: (ev as any).error }
       }

@@ -272,3 +272,80 @@ test('resolveInstallScript rethrows when the 404 fallback is unavailable', async
     fs.rmSync(home, { recursive: true, force: true })
   }
 })
+
+test.skipIf(process.platform === 'win32')('runBootstrap reports a stable idle-timeout terminal event', async () => {
+  const home = mkTmpHome()
+
+  try {
+    const sourceRoot = path.join(home, 'source')
+    const scriptsDir = path.join(sourceRoot, 'scripts')
+    const scriptPath = path.join(scriptsDir, 'install.sh')
+    const events = []
+
+    fs.mkdirSync(scriptsDir, { recursive: true })
+    fs.writeFileSync(
+      scriptPath,
+      [
+        '#!/bin/bash',
+        'case "$*" in',
+        '  *--manifest*) printf \'%s\\n\' \'{"protocol_version":1,"stages":[{"name":"stall","title":"Stall"}]}\'; exit 0 ;;',
+        'esac',
+        'printf \'started\\n\'',
+        'while :; do sleep 1; done'
+      ].join('\n')
+    )
+
+    const result = await runBootstrap({
+      installStamp: null,
+      activeRoot: path.join(home, 'agent'),
+      sourceRepoRoot: sourceRoot,
+      hermesHome: home,
+      logRoot: path.join(home, 'logs'),
+      onEvent: event => events.push(event),
+      timeouts: { idleMs: 100, killGraceMs: 50, manifestHardMs: 1_000, stageHardMs: 2_000, totalMs: 3_000 }
+    })
+
+    assert.equal(result.ok, false)
+    assert.equal(result.error, 'BOOTSTRAP_IDLE_TIMEOUT')
+    assert.ok(events.some(event => event.type === 'failed' && event.error === 'BOOTSTRAP_IDLE_TIMEOUT'))
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test.skipIf(process.platform === 'win32')('runBootstrap enforces a hard stage deadline despite active output', async () => {
+  const home = mkTmpHome()
+
+  try {
+    const sourceRoot = path.join(home, 'source')
+    const scriptsDir = path.join(sourceRoot, 'scripts')
+    const scriptPath = path.join(scriptsDir, 'install.sh')
+
+    fs.mkdirSync(scriptsDir, { recursive: true })
+    fs.writeFileSync(
+      scriptPath,
+      [
+        '#!/bin/bash',
+        'case "$*" in',
+        '  *--manifest*) printf \'%s\\n\' \'{"protocol_version":1,"stages":[{"name":"stall","title":"Stall"}]}\'; exit 0 ;;',
+        'esac',
+        'while :; do printf \'progress\\n\'; sleep 0.02; done'
+      ].join('\n')
+    )
+
+    const result = await runBootstrap({
+      installStamp: null,
+      activeRoot: path.join(home, 'agent'),
+      sourceRepoRoot: sourceRoot,
+      hermesHome: home,
+      logRoot: path.join(home, 'logs'),
+      onEvent: () => {},
+      timeouts: { idleMs: 1_000, killGraceMs: 50, manifestHardMs: 1_000, stageHardMs: 150, totalMs: 3_000 }
+    })
+
+    assert.equal(result.ok, false)
+    assert.equal(result.error, 'BOOTSTRAP_STAGE_TIMEOUT')
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
