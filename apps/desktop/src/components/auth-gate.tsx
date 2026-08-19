@@ -13,6 +13,24 @@ import {
 import { type Translations, useI18n } from '@/i18n'
 
 const ACCOUNT_SERVER = 'https://c2sml.cn/agent'
+const AUTH_REQUEST_TIMEOUT_MS = 15_000
+
+function withAuthDeadline<T>(request: Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = globalThis.setTimeout(() => reject(new Error('auth_request_timeout')), AUTH_REQUEST_TIMEOUT_MS)
+
+    request.then(
+      value => {
+        globalThis.clearTimeout(timer)
+        resolve(value)
+      },
+      error => {
+        globalThis.clearTimeout(timer)
+        reject(error)
+      }
+    )
+  })
+}
 
 export type DesktopAccountStatus = {
   state: 'checking' | 'authenticated' | 'signed_out' | 'locked'
@@ -106,8 +124,7 @@ export function AuthGate({
       }
     })
 
-    void auth
-      .status(connectionId === 'local' ? undefined : connectionId)
+    void withAuthDeadline(auth.status(connectionId === 'local' ? undefined : connectionId))
       .then(next => {
         if (active && request === requestRevision.current && observedEvent === eventRevision.current) {
           setStatus(next)
@@ -151,8 +168,7 @@ export function AuthGate({
     const request = ++requestRevision.current
     const observedEvent = eventRevision.current
     setStatus(current => ({ ...current, state: 'checking', reason: null }))
-    void auth
-      .status(connectionId === 'local' ? undefined : connectionId)
+    void withAuthDeadline(auth.status(connectionId === 'local' ? undefined : connectionId))
       .then(next => {
         if (request === requestRevision.current && observedEvent === eventRevision.current) {
           setStatus(next)
@@ -175,8 +191,7 @@ export function AuthGate({
     setSubmitting(true)
     const request = ++requestRevision.current
     const observedEvent = eventRevision.current
-    void auth
-      .login(username.trim(), password, ...(connectionId === 'local' ? [] : [connectionId]))
+    void withAuthDeadline(auth.login(username.trim(), password, ...(connectionId === 'local' ? [] : [connectionId])))
       .then(next => {
         if (request === requestRevision.current && observedEvent === eventRevision.current) {
           setStatus(next)

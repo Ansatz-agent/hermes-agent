@@ -68,6 +68,7 @@ function AuthProbe() {
 }
 
 afterEach(() => {
+  vi.useRealTimers()
   vi.restoreAllMocks()
 })
 
@@ -151,6 +152,50 @@ describe('AuthGate', () => {
 
     expect(screen.queryByText('Protected Hermes application')).toBeNull()
     expect(screen.getByText('Your session expired. Sign in again.')).not.toBeNull()
+  })
+
+  it('turns an unresolved account status request into a terminal retryable state', async () => {
+    vi.useFakeTimers()
+    renderGate({ status: vi.fn(() => new Promise<DesktopAccountStatus>(() => {})) })
+
+    expect(screen.getByText('Checking your account session…')).not.toBeNull()
+    expect(screen.queryByText('Protected Hermes application')).toBeNull()
+    expect((screen.getByRole('button', { name: 'Retry' }) as HTMLButtonElement).disabled).toBe(true)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000)
+    })
+
+    expect(screen.getByText('The secure account service is unavailable. Try again.')).not.toBeNull()
+    expect((screen.getByRole('button', { name: 'Retry' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.queryByText('Protected Hermes application')).toBeNull()
+  })
+
+  it('recovers from an unresolved login request without retaining the password', async () => {
+    vi.useFakeTimers()
+    const { auth } = renderGate({ login: vi.fn(() => new Promise<DesktopAccountStatus>(() => {})) })
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+
+    fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'alice' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'password-sentinel' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    expect(auth.login).toHaveBeenCalledWith('alice', 'password-sentinel')
+    expect((screen.getByRole('button', { name: 'Signing in…' }) as HTMLButtonElement).disabled).toBe(true)
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000)
+    })
+
+    expect(screen.getByText('The secure account service is unavailable. Try again.')).not.toBeNull()
+    expect((screen.getByLabelText('Password') as HTMLInputElement).value).toBe('')
+    expect(globalThis.document.body.textContent).not.toContain('password-sentinel')
+
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'replacement' } })
+    expect((screen.getByRole('button', { name: 'Sign in' }) as HTMLButtonElement).disabled).toBe(false)
   })
 
   it('keeps signed bootstrap hidden until authentication completes', async () => {
