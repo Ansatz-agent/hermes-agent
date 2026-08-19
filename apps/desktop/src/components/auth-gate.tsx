@@ -33,11 +33,12 @@ const unavailableStatus = (): DesktopAccountStatus => ({
 
 export function AuthGate({
   auth = window.hermesDesktop?.auth,
-  children,
-  unauthenticatedOverlay = null
+  children
 }: {
   auth?: DesktopAuthClient
   children: ReactNode
+  // Kept as a defensive compatibility surface: unauthenticated content is
+  // never rendered outside the fixed account login gate.
   unauthenticatedOverlay?: ReactNode
 }) {
   const { t } = useI18n()
@@ -154,88 +155,85 @@ export function AuthGate({
   const reason = reasonText(t.auth.reasons, status.reason)
 
   return (
-    <>
-      <main className="fixed inset-0 grid min-h-screen place-items-center bg-(--ui-chat-surface-background) p-6 text-(--dt-foreground)">
-        <section
-          aria-busy={status.state === 'checking'}
-          className="w-full max-w-md rounded-2xl border border-(--dt-border) bg-(--ui-card-surface) p-8 shadow-2xl"
-        >
-          <div aria-hidden="true" className="mb-6 text-2xl font-semibold tracking-tight">
-            Hermes
+    <main className="fixed inset-0 grid min-h-screen place-items-center bg-(--ui-chat-surface-background) p-6 text-(--dt-foreground)">
+      <section
+        aria-busy={status.state === 'checking'}
+        className="w-full max-w-md rounded-2xl border border-(--dt-border) bg-(--ui-card-surface) p-8 shadow-2xl"
+      >
+        <div aria-hidden="true" className="mb-6 text-2xl font-semibold tracking-tight">
+          Hermes
+        </div>
+        <h1 className="text-2xl font-semibold tracking-tight">{t.auth.title}</h1>
+        <p className="mt-2 text-sm leading-6 text-(--dt-muted-foreground)">{t.auth.description}</p>
+
+        <div className="mt-5 rounded-lg border border-(--dt-border) bg-(--ui-sidebar-surface) px-4 py-3">
+          <div className="text-xs font-medium uppercase tracking-wide text-(--dt-muted-foreground)">
+            {t.auth.serverLabel}
           </div>
-          <h1 className="text-2xl font-semibold tracking-tight">{t.auth.title}</h1>
-          <p className="mt-2 text-sm leading-6 text-(--dt-muted-foreground)">{t.auth.description}</p>
+          <code className="mt-1 block break-all text-sm">{ACCOUNT_SERVER}</code>
+        </div>
 
-          <div className="mt-5 rounded-lg border border-(--dt-border) bg-(--ui-sidebar-surface) px-4 py-3">
-            <div className="text-xs font-medium uppercase tracking-wide text-(--dt-muted-foreground)">
-              {t.auth.serverLabel}
-            </div>
-            <code className="mt-1 block break-all text-sm">{ACCOUNT_SERVER}</code>
-          </div>
-
-          {status.state === 'checking' ? (
-            <p className="mt-6 text-sm" role="status">
-              {t.auth.checking}
-            </p>
-          ) : (
-            <form className="mt-6 space-y-4" onSubmit={submit}>
-              <label className="block text-sm font-medium">
-                <span>{t.auth.username}</span>
-                <input
-                  autoComplete="username"
-                  className="mt-2 w-full rounded-lg border border-(--dt-input) bg-transparent px-3 py-2 outline-none focus:border-(--dt-ring)"
-                  maxLength={150}
-                  name="username"
-                  onChange={event => setUsername(event.target.value)}
-                  required
-                  value={username}
-                />
-              </label>
-              <label className="block text-sm font-medium">
-                <span>{t.auth.password}</span>
-                <input
-                  autoComplete="current-password"
-                  className="mt-2 w-full rounded-lg border border-(--dt-input) bg-transparent px-3 py-2 outline-none focus:border-(--dt-ring)"
-                  maxLength={4096}
-                  name="password"
-                  onChange={event => setPassword(event.target.value)}
-                  required
-                  type="password"
-                  value={password}
-                />
-              </label>
-
-              {reason ? (
-                <p className="text-sm text-(--dt-destructive)" role="alert">
-                  {reason}
-                </p>
-              ) : null}
-
-              <button
-                className="w-full rounded-lg bg-(--dt-primary) px-4 py-2.5 font-semibold text-(--dt-primary-foreground) disabled:opacity-50"
-                disabled={submitting || !username.trim() || !password}
-                type="submit"
-              >
-                {submitting ? t.auth.signingIn : t.auth.signIn}
-              </button>
-            </form>
-          )}
-
-          <button
-            className="mt-4 text-sm font-medium text-(--dt-muted-foreground) underline underline-offset-4 disabled:opacity-50"
-            disabled={submitting || status.state === 'checking'}
-            onClick={retry}
-            type="button"
-          >
-            {t.auth.retry}
-          </button>
-          <p className="mt-6 border-t border-(--dt-border) pt-4 text-xs leading-5 text-(--dt-muted-foreground)">
-            {t.auth.administratorManaged}
+        {status.state === 'checking' ? (
+          <p className="mt-6 text-sm" role="status">
+            {t.auth.checking}
           </p>
-        </section>
-      </main>
-      {unauthenticatedOverlay}
-    </>
+        ) : (
+          <form className="mt-6 space-y-4" onSubmit={submit}>
+            <label className="block text-sm font-medium">
+              <span>{t.auth.username}</span>
+              <input
+                autoComplete="username"
+                className="mt-2 w-full rounded-lg border border-(--dt-input) bg-transparent px-3 py-2 outline-none focus:border-(--dt-ring)"
+                maxLength={150}
+                name="username"
+                onChange={event => setUsername(event.target.value)}
+                required
+                value={username}
+              />
+            </label>
+            <label className="block text-sm font-medium">
+              <span>{t.auth.password}</span>
+              <input
+                autoComplete="current-password"
+                className="mt-2 w-full rounded-lg border border-(--dt-input) bg-transparent px-3 py-2 outline-none focus:border-(--dt-ring)"
+                maxLength={4096}
+                name="password"
+                onChange={event => setPassword(event.target.value)}
+                required
+                type="password"
+                value={password}
+              />
+            </label>
+
+            {reason ? (
+              <p className="text-sm text-(--dt-destructive)" role="alert">
+                {reason}
+              </p>
+            ) : null}
+
+            <button
+              className="w-full rounded-lg bg-(--dt-primary) px-4 py-2.5 font-semibold text-(--dt-primary-foreground) disabled:opacity-50"
+              disabled={submitting || !username.trim() || !password}
+              type="submit"
+            >
+              {submitting ? t.auth.signingIn : t.auth.signIn}
+            </button>
+          </form>
+        )}
+
+        <button
+          className="mt-4 text-sm font-medium text-(--dt-muted-foreground) underline underline-offset-4 disabled:opacity-50"
+          disabled={submitting || status.state === 'checking'}
+          onClick={retry}
+          type="button"
+        >
+          {t.auth.retry}
+        </button>
+        <p className="mt-6 border-t border-(--dt-border) pt-4 text-xs leading-5 text-(--dt-muted-foreground)">
+          {t.auth.administratorManaged}
+        </p>
+      </section>
+    </main>
   )
 }
 

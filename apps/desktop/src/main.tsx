@@ -11,7 +11,6 @@ import { lazy, StrictMode, Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
 
 import { AuthGate } from './components/auth-gate'
-import { DesktopInstallOverlay } from './components/desktop-install-overlay'
 import { RootErrorBoundary } from './components/error-boundary'
 import { I18nProvider } from './i18n'
 
@@ -34,7 +33,7 @@ if (winParam === 'overlay') {
     <StrictMode>
       <RootErrorBoundary>
         <I18nProvider configClient={null} initialLocale={navigator.language}>
-          <AuthGate unauthenticatedOverlay={<DesktopInstallOverlay authRuntimeOnly />}>
+          <AuthGate>
             <Suspense fallback={null}>
               <ProtectedRoot />
             </Suspense>

@@ -122,10 +122,11 @@ describe('AuthGate', () => {
     expect(screen.getByText('Your session expired. Sign in again.')).not.toBeNull()
   })
 
-  it('shows signed bootstrap only before authentication', async () => {
+  it('keeps signed bootstrap hidden until authentication completes', async () => {
     const { emit } = renderGate({}, <div>Signed auth runtime bootstrap</div>)
 
-    expect(await screen.findByText('Signed auth runtime bootstrap')).not.toBeNull()
+    expect(await screen.findByRole('heading', { name: 'Sign in to Hermes' })).not.toBeNull()
+    expect(screen.queryByText('Signed auth runtime bootstrap')).toBeNull()
     expect(screen.queryByText('Protected Hermes application')).toBeNull()
 
     act(() => emit(authenticated))

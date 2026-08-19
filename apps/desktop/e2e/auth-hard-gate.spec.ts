@@ -78,6 +78,8 @@ test('unauthenticated startup exposes only account login and rejects every capab
 
   const body = page!.locator('body')
 
+  await expect(body).not.toContainText('Setting up Hermes Agent')
+
   for (const forbidden of [
     'Register',
     'Create account',
@@ -104,9 +106,7 @@ test('unauthenticated startup exposes only account login and rejects every capab
   await expect(page!.locator('textarea, [contenteditable="true"], [data-terminal-slot]')).toHaveCount(0)
 
   const protectedRendererLoaded = await page!.evaluate(() =>
-    performance
-      .getEntriesByType('resource')
-      .some(entry => /(?:^|\/)protected-root-[^/]+\.js(?:$|\?)/.test(entry.name)),
+    performance.getEntriesByType('resource').some(entry => /(?:^|\/)protected-root-[^/]+\.js(?:$|\?)/.test(entry.name))
   )
   expect(protectedRendererLoaded).toBe(false)
 
