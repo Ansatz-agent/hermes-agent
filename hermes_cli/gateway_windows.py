@@ -394,7 +394,7 @@ def _build_gateway_cmd_script(
     The script:
       - cd's into a stable working directory
       - exports HERMES_HOME, PYTHONIOENCODING, VIRTUAL_ENV
-      - invokes ``python -m hermes_cli.main [--profile X] gateway run``
+      - invokes the fixed noninteractive auth runtime gateway service wrapper
 
     The .cmd is a compatibility/manual-run artifact: service persistence
     (Scheduled Task, Startup folder) routes through the ``.vbs`` launcher,
@@ -421,10 +421,18 @@ def _build_gateway_cmd_script(
     ]
     lines.append(f'set "PYTHONPATH={";".join([*pythonpath_entries, "%PYTHONPATH%"])}"')
 
-    prog_args = [python_exe_path, "-m", "hermes_cli.main"]
+    prog_args = [
+        python_exe_path,
+        "-m",
+        "hermes_cli.client_auth.runtime",
+        "service",
+        "gateway",
+    ]
     if profile_arg:
-        prog_args.extend(profile_arg.split())
-    prog_args.extend(["gateway", "run"])
+        parts = profile_arg.split()
+        if len(parts) != 2 or parts[0] not in {"-p", "--profile"}:
+            raise ValueError("invalid internal profile argument")
+        prog_args.append(parts[1])
     # Do NOT use `start` here; that creates an extra wrapper process and made
     # gateway lifecycle/status harder to reason about.
     # Do NOT use `--replace` for service-managed starts; repeated /Run calls
@@ -801,10 +809,18 @@ def _build_gateway_argv() -> tuple[list[str], str, dict[str, str]]:
     hermes_home = str(Path(get_hermes_home()))
     profile_arg = _profile_arg(hermes_home)
 
-    argv = [python_exe, "-m", "hermes_cli.main"]
+    argv = [
+        python_exe,
+        "-m",
+        "hermes_cli.client_auth.runtime",
+        "service",
+        "gateway",
+    ]
     if profile_arg:
-        argv.extend(profile_arg.split())
-    argv.extend(["gateway", "run"])
+        parts = profile_arg.split()
+        if len(parts) != 2 or parts[0] not in {"-p", "--profile"}:
+            raise ValueError("invalid internal profile argument")
+        argv.append(parts[1])
 
     env_overlay = {
         "HERMES_HOME": hermes_home,

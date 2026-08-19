@@ -108,7 +108,7 @@
     {
       "id": "python:hermes_cli/container_boot.py",
       "interactive": false,
-      "startup": "guarded"
+      "startup": "auth-shell"
     },
     {
       "id": "python:hermes_cli/curator.py",
@@ -267,6 +267,11 @@
     },
     {
       "id": "s6:docker/s6-rc.d/dashboard/run",
+      "interactive": false,
+      "startup": "locked-waiting"
+    },
+    {
+      "id": "s6:docker/s6-rc.d/hermes-auth-runtime/run",
       "interactive": false,
       "startup": "locked-waiting"
     },

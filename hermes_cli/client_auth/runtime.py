@@ -48,6 +48,11 @@ class AuthState(StrEnum):
     LOCKED = "locked"
 
 
+class LockedWaitingResult(StrEnum):
+    AUTHENTICATED = "authenticated"
+    OWNER_STOPPED = "owner_stopped"
+
+
 @dataclass(frozen=True)
 class AuthScope:
     runtime_instance_id: str
@@ -1058,6 +1063,107 @@ class ProcessHardener:
         raise AuthRequired("runtime_unavailable")
 
 
+class S6LifecycleAdapter:
+    """Apply auth transitions to the fixed container capability slots."""
+
+    _STATIC_SERVICES = frozenset({"dashboard", "main-hermes"})
+
+    def __init__(
+        self,
+        *,
+        service_root: Path,
+        hermes_home: Path,
+        environment: dict[str, str],
+        signal_service: Callable[[str, str], None] | None = None,
+    ) -> None:
+        self._service_root = service_root
+        self._hermes_home = hermes_home
+        self._dashboard_enabled = environment.get("HERMES_DASHBOARD", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self._signal_service = signal_service or self._signal_s6_service
+
+    def transition(self, snapshot: RuntimeSnapshot) -> None:
+        authenticated = snapshot.state is AuthState.AUTHENTICATED
+        for service in self._capability_services():
+            desired = authenticated and self._desired_running(service)
+            try:
+                self._signal_service(service, "up" if desired else "down")
+            except Exception:
+                # The in-process and per-request guards remain authoritative.
+                # Lifecycle signaling is best-effort so a broken s6 slot can
+                # never prevent publication of a locked transition.
+                continue
+
+    def _capability_services(self) -> list[str]:
+        services: set[str] = set()
+        try:
+            entries = tuple(self._service_root.iterdir())
+        except OSError:
+            return []
+        for entry in entries:
+            name = entry.name
+            if name in self._STATIC_SERVICES:
+                services.add(name)
+                continue
+            if not name.startswith("gateway-"):
+                continue
+            profile = name.removeprefix("gateway-")
+            try:
+                from hermes_cli.service_manager import validate_profile_name
+
+                validate_profile_name(profile)
+            except (ImportError, ValueError):
+                continue
+            services.add(name)
+        return sorted(services)
+
+    def _desired_running(self, service: str) -> bool:
+        if service == "dashboard":
+            return self._dashboard_enabled
+        if service == "main-hermes":
+            return False
+        profile = service.removeprefix("gateway-")
+        profile_dir = (
+            self._hermes_home
+            if profile == "default"
+            else self._hermes_home / "profiles" / profile
+        )
+        state_file = profile_dir / "gateway_state.json"
+        try:
+            details = state_file.lstat()
+            if not stat.S_ISREG(details.st_mode) or details.st_size > 65_536:
+                return False
+            value = json.loads(state_file.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, ValueError):
+            return False
+        if not isinstance(value, dict):
+            return False
+        desired = value.get("desired_state")
+        if desired is not None:
+            return desired == "running"
+        return value.get("gateway_state") in {"running", "draining", "degraded"}
+
+    def _signal_s6_service(self, service: str, action: str) -> None:
+        flag = {"down": "-d", "up": "-u"}.get(action)
+        if flag is None:
+            raise AuthRequired("runtime_unavailable")
+        result = subprocess.run(
+            ["/command/s6-svc", flag, str(self._service_root / service)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            timeout=5,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise AuthRequired("runtime_unavailable")
+
+
 class _OwnerCore:
     def __init__(
         self,
@@ -1068,6 +1174,7 @@ class _OwnerCore:
         vault_required: bool,
         clock: Callable[[], float],
         jitter: Callable[[float, float], float],
+        on_transition: Callable[[RuntimeSnapshot], None] | None = None,
     ) -> None:
         self._client = client
         self._secret_backend = secret_backend
@@ -1076,6 +1183,7 @@ class _OwnerCore:
         self._clock = clock
         self._jitter = jitter
         self._snapshot = RuntimeSnapshot.signed_out()
+        self._on_transition = on_transition
         self._record: CookieRecord | None = None
         self._record_loaded = False
         self._consumers: list[RuntimeConsumer] = []
@@ -1084,6 +1192,8 @@ class _OwnerCore:
         self._next_refresh_at: float | None = None
         self._failed_login_attempts: list[float] = []
         self._last_authenticated_activity = self._clock()
+        if self._on_transition is not None:
+            self._on_transition(self._snapshot)
 
     @property
     def next_refresh_at(self) -> float | None:
@@ -1307,6 +1417,8 @@ class _OwnerCore:
             return locked
 
     def _publish_locked(self, snapshot: RuntimeSnapshot) -> None:
+        if self._on_transition is not None:
+            self._on_transition(snapshot)
         self._snapshot = snapshot
         retained: list[RuntimeConsumer] = []
         for consumer in self._consumers:
@@ -1353,6 +1465,7 @@ class VaultOwner(_OwnerCore):
             vault_required=True,
             clock=clock,
             jitter=jitter or random_source.uniform,
+            on_transition=None,
         )
 
 
@@ -1365,6 +1478,7 @@ class MemoryOwner(_OwnerCore):
         secret_backend: _SecretBackend | None = None,
         clock: Callable[[], float] = time.monotonic,
         jitter: Callable[[float, float], float] | None = None,
+        on_transition: Callable[[RuntimeSnapshot], None] | None = None,
     ) -> None:
         random_source = secrets.SystemRandom()
         super().__init__(
@@ -1374,6 +1488,7 @@ class MemoryOwner(_OwnerCore):
             vault_required=False,
             clock=clock,
             jitter=jitter or random_source.uniform,
+            on_transition=on_transition,
         )
 
 
@@ -1792,14 +1907,28 @@ def _owner_election_context() -> OwnerElectionContext:
 
 
 def _create_elected_owner() -> VaultOwner | MemoryOwner:
-    return resolve_owner(
-        _owner_election_context(),
-        live_owner=lambda: None,
-        vault_factory=lambda: VaultOwner(AuthClient()),
-        memory_factory=lambda: MemoryOwner(
+    context = _owner_election_context()
+
+    def memory_owner() -> MemoryOwner:
+        transition: Callable[[RuntimeSnapshot], None] | None = None
+        service_root = Path("/run/service")
+        if context.containerized and service_root.is_dir():
+            transition = S6LifecycleAdapter(
+                service_root=service_root,
+                hermes_home=Path(os.environ.get("HERMES_HOME", "/opt/data")),
+                environment=dict(os.environ),
+            ).transition
+        return MemoryOwner(
             AuthClient(),
             hardener=ProcessHardener(),
-        ),
+            on_transition=transition,
+        )
+
+    return resolve_owner(
+        context,
+        live_owner=lambda: None,
+        vault_factory=lambda: VaultOwner(AuthClient()),
+        memory_factory=memory_owner,
     )
 
 
@@ -2126,6 +2255,57 @@ def require_authorized(
     if consumer is None:
         raise AuthRequired("runtime_unavailable")
     return consumer.require_authorized(boundary, expected=expected)
+
+
+def wait_until_authorized(
+    boundary: str,
+    *,
+    stop_event: threading.Event,
+    on_state: Callable[[RuntimeSnapshot], None],
+    poll_seconds: float = 0.5,
+    start_owner_if_missing: bool = False,
+) -> LockedWaitingResult:
+    """Wait without prompting until the shared owner grants a fresh scope."""
+    if not boundary or poll_seconds < 0:
+        raise AuthRequired("runtime_unavailable")
+    owner: RemoteRuntimeOwner | None = None
+    while not stop_event.is_set():
+        if owner is None:
+            try:
+                owner = connect_runtime_owner()
+            except AuthRequired as error:
+                if start_owner_if_missing and error.reason == "runtime_unavailable":
+                    try:
+                        owner = start_runtime_owner()
+                    except AuthRequired as start_error:
+                        snapshot = RuntimeSnapshot.signed_out(
+                            reason=start_error.reason or start_error.code,
+                        )
+                    else:
+                        snapshot = owner.snapshot()
+                else:
+                    snapshot = RuntimeSnapshot.signed_out(
+                        reason=error.reason or error.code,
+                    )
+                on_state(snapshot)
+                stop_event.wait(poll_seconds)
+                continue
+        try:
+            snapshot = owner.refresh()
+        except AuthRequired as error:
+            if error.reason == "runtime_unavailable":
+                owner = None
+            snapshot = RuntimeSnapshot.signed_out(
+                reason=error.reason or error.code,
+            )
+        on_state(snapshot)
+        if snapshot.state is AuthState.AUTHENTICATED and owner is not None:
+            consumer = owner.connect_consumer()
+            consumer.require_authorized(boundary, expected=snapshot.scope)
+            install_runtime_consumer(consumer)  # type: ignore[arg-type]
+            return LockedWaitingResult.AUTHENTICATED
+        stop_event.wait(poll_seconds)
+    return LockedWaitingResult.OWNER_STOPPED
 
 
 backend_scope_tokens = BackendScopeTokenRegistry()
@@ -2551,11 +2731,155 @@ def _windows_boot_id() -> str:
     return f"windows:{approximate_boot}"
 
 
+_LOCKED_WAIT_BOUNDARIES = frozenset(
+    {
+        "container.dashboard.start",
+        "container.gateway.start",
+        "container.main.start",
+        "service.cron.start",
+        "service.gateway.start",
+        "service.kanban.start",
+        "service.web.start",
+    }
+)
+
+
+def _run_locked_wait(boundary: str) -> int:
+    if boundary not in _LOCKED_WAIT_BOUNDARIES:
+        return 2
+    stop = threading.Event()
+    last_state: tuple[AuthState, str | None] | None = None
+
+    def report(snapshot: RuntimeSnapshot) -> None:
+        nonlocal last_state
+        current = (snapshot.state, snapshot.reason)
+        if current == last_state:
+            return
+        last_state = current
+        payload = {
+            "auth_state": (
+                "authenticated"
+                if snapshot.state is AuthState.AUTHENTICATED
+                else "locked-waiting"
+            ),
+            "reason": snapshot.reason,
+            "guidance": "run `hermes login`",
+        }
+        print(json.dumps(payload, sort_keys=True), flush=True)
+
+    try:
+        wait_until_authorized(
+            boundary,
+            stop_event=stop,
+            on_state=report,
+        )
+    except KeyboardInterrupt:
+        stop.set()
+    return 0
+
+
+def _notify_service_manager(snapshot: RuntimeSnapshot) -> None:
+    """Keep a systemd service healthy while its capability is locked."""
+    endpoint = os.environ.get("NOTIFY_SOCKET", "")
+    if not endpoint:
+        return
+    address = ("\0" + endpoint[1:]) if endpoint.startswith("@") else endpoint
+    state = (
+        "authenticated"
+        if snapshot.state is AuthState.AUTHENTICATED
+        else "locked-waiting"
+    )
+    payload = f"READY=1\nWATCHDOG=1\nSTATUS=auth_state={state}".encode("utf-8")
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as notifier:
+            notifier.sendto(payload, address)
+    except OSError:
+        # The request-boundary guard remains authoritative if the optional
+        # service-manager status channel is unavailable.
+        return
+
+
+def _run_locked_service(arguments: list[str]) -> int:
+    profile: str | None = None
+    if len(arguments) in {2, 3} and arguments[:2] == ["service", "gateway"]:
+        profile = arguments[2] if len(arguments) == 3 else None
+        boundary = "service.gateway.start"
+        target = [sys.executable, "-m", "hermes_cli.main"]
+        if profile is not None:
+            target.extend(["-p", profile])
+        target.extend(["gateway", "run"])
+    elif arguments == ["service", "kanban"]:
+        boundary = "service.kanban.start"
+        target = [
+            sys.executable,
+            "-m",
+            "hermes_cli.main",
+            "kanban",
+            "daemon",
+            "--force",
+            "--interval",
+            "60",
+        ]
+    else:
+        return 2
+    if profile is not None:
+        try:
+            from hermes_cli.service_manager import validate_profile_name
+
+            validate_profile_name(profile)
+        except (ImportError, ValueError):
+            return 2
+
+    stop = threading.Event()
+    last: tuple[AuthState, str | None] | None = None
+
+    def report(snapshot: RuntimeSnapshot) -> None:
+        nonlocal last
+        _notify_service_manager(snapshot)
+        current = (snapshot.state, snapshot.reason)
+        if current == last:
+            return
+        last = current
+        print(
+            json.dumps(
+                {
+                    "auth_state": (
+                        "authenticated"
+                        if snapshot.state is AuthState.AUTHENTICATED
+                        else "locked-waiting"
+                    ),
+                    "reason": snapshot.reason,
+                    "guidance": "run `hermes login`",
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+
+    try:
+        result = wait_until_authorized(
+            boundary,
+            stop_event=stop,
+            on_state=report,
+            start_owner_if_missing=True,
+        )
+    except KeyboardInterrupt:
+        return 0
+    if result is not LockedWaitingResult.AUTHENTICATED:
+        return 0
+    os.execv(sys.executable, target)
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
-    if arguments != ["owner"]:
-        return 2
-    return run_owner_service()
+    if arguments == ["owner"]:
+        return run_owner_service()
+    if len(arguments) == 2 and arguments[0] == "wait":
+        return _run_locked_wait(arguments[1])
+    if arguments[:1] == ["service"]:
+        return _run_locked_service(arguments)
+    return 2
 
 
 if __name__ == "__main__":

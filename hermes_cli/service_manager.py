@@ -676,6 +676,15 @@ class S6ServiceManager:
         ]
         for k, v in sorted(extra_env.items()):
             lines.append(f"export {k}={shlex.quote(v)}")
+        lines.extend(
+            [
+                "if [ \"$(id -u)\" = 0 ]; then",
+                "  s6-setuidgid hermes python -m hermes_cli.client_auth.runtime wait container.gateway.start",
+                "else",
+                "  python -m hermes_cli.client_auth.runtime wait container.gateway.start",
+                "fi",
+            ]
+        )
         # Sentinel for the supervised-child path. Prevents recursive
         # redirect when the supervised gateway re-enters
         # `_gateway_command_inner` with subcmd == "run" — without it the

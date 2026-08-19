@@ -191,3 +191,42 @@ def test_legacy_gateway_launcher_exits_locked_before_dotenv_import():
     assert result.stderr == (
         "AUTH_REQUIRED runtime_unavailable; run `hermes login`\n"
     )
+
+
+def test_manifest_auth_shell_and_locked_waiting_entries_are_covered():
+    """New exceptional startup modes must be added to explicit evidence."""
+    root = Path(__file__).resolve().parents[3]
+    manifest = json.loads(
+        (root / "hermes_cli" / "client_auth" / "entrypoints.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    by_mode = {
+        mode: {
+            item["id"]
+            for item in manifest["entrypoints"]
+            if item["startup"] == mode
+        }
+        for mode in ("auth-shell", "locked-waiting")
+    }
+
+    assert by_mode["auth-shell"] == {
+        "electron:primary-backend",
+        "python:hermes_cli/client_auth/bridge.py",
+        "python:hermes_cli/client_auth/runtime.py",
+        "python:hermes_cli/container_boot.py",
+        "python:tui_gateway/entry.py",
+        "tui:tui-gateway",
+    }
+    assert by_mode["locked-waiting"] == {
+        "docker:Dockerfile:cmd",
+        "docker:Dockerfile:entrypoint",
+        "s6:docker/s6-rc.d/dashboard/run",
+        "s6:docker/s6-rc.d/hermes-auth-runtime/run",
+        "s6:docker/s6-rc.d/main-hermes/run",
+        "service:plugins/kanban/systemd/hermes-kanban-dispatcher.service",
+    }
+    kanban_unit = (
+        root / "plugins" / "kanban" / "systemd" / "hermes-kanban-dispatcher.service"
+    ).read_text(encoding="utf-8")
+    assert "hermes_cli.client_auth.runtime service kanban" in kanban_unit

@@ -203,6 +203,7 @@ def _manifest_payload(ids: set[str]) -> dict[str, object]:
             entry_id.startswith(("electron:", "tui:"))
             or entry_id.endswith("hermes_cli/client_auth/bridge.py")
             or entry_id.endswith("hermes_cli/client_auth/runtime.py")
+            or entry_id == "python:hermes_cli/container_boot.py"
             or entry_id == "python:tui_gateway/entry.py"
         ):
             startup = "auth-shell"

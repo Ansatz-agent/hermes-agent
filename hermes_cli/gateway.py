@@ -2037,6 +2037,32 @@ def _profile_arg_for_target_user(hermes_home: str, target_home_dir: str) -> str:
         return _profile_arg(hermes_home)
 
 
+def _locked_gateway_service_command(
+    *,
+    python_path: str | None = None,
+    profile_arg: str = "",
+) -> list[str]:
+    """Return the fixed noninteractive gateway service wrapper argv.
+
+    Installed services must stay alive while signed out without importing or
+    starting gateway capability code.  The wrapper owns that locked-waiting
+    state and execs the ordinary guarded gateway only after authentication.
+    """
+    command = [
+        python_path or get_python_path(),
+        "-m",
+        "hermes_cli.client_auth.runtime",
+        "service",
+        "gateway",
+    ]
+    parts = profile_arg.split()
+    if parts:
+        if len(parts) != 2 or parts[0] not in {"-p", "--profile"}:
+            raise ValueError("invalid internal profile argument")
+        command.append(parts[1])
+    return command
+
+
 def get_service_name() -> str:
     """Derive a systemd service name scoped to this HERMES_HOME.
 
@@ -3207,7 +3233,7 @@ StartLimitIntervalSec=0
 Type={systemd_type}
 {systemd_watchdog_directives}User={username}
 Group={group_name}
-ExecStart={python_path} -m hermes_cli.main{f" {profile_arg}" if profile_arg else ""} gateway run
+ExecStart={" ".join(_locked_gateway_service_command(python_path=python_path, profile_arg=profile_arg))}
 WorkingDirectory={working_dir}
 Environment="HOME={home_dir}"
 Environment="USER={username}"
@@ -3248,7 +3274,7 @@ StartLimitIntervalSec=0
 
 [Service]
 Type={systemd_type}
-{systemd_watchdog_directives}ExecStart={python_path} -m hermes_cli.main{f" {profile_arg}" if profile_arg else ""} gateway run
+{systemd_watchdog_directives}ExecStart={" ".join(_locked_gateway_service_command(python_path=python_path, profile_arg=profile_arg))}
 WorkingDirectory={working_dir}
 Environment="PATH={sane_path}"
 Environment="VIRTUAL_ENV={venv_dir}"
@@ -4426,14 +4452,14 @@ def generate_launchd_plist() -> str:
         )
     )
 
-    err_path = log_dir / "gateway.error.log"
-
-    # Build ProgramArguments array, including --profile when using a named profile.
-    # The stderr wrapper preserves launchd's restart semantics while adding
-    # timestamps to raw stderr lines before they land in gateway.error.log.
+    # The locked-waiting wrapper must be the outermost process so launchd does
+    # not restart-loop while signed out.  It execs the ordinary gateway after
+    # authentication, preserving launchd's process ownership.
     prog_args = [
         f"<string>{part}</string>"
-        for part in _timestamped_stderr_gateway_command(err_path)
+        for part in _locked_gateway_service_command(
+            profile_arg=_profile_arg(hermes_home),
+        )
     ]
     prog_args_xml = "\n        ".join(prog_args)
 

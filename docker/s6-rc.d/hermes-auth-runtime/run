@@ -1,0 +1,8 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+set -e
+export HOME=/opt/data
+export XDG_RUNTIME_DIR=/run/hermes-auth
+cd /opt/data
+. /opt/hermes/.venv/bin/activate
+exec s6-setuidgid hermes python -m hermes_cli.client_auth.runtime owner
