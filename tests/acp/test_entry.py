@@ -1,7 +1,7 @@
 """Tests for acp_adapter.entry startup wiring."""
 
 import sys
-from types import SimpleNamespace
+from types import ModuleType
 
 import acp
 import pytest
@@ -46,14 +46,12 @@ def test_main_skips_configured_mcp_discovery_when_requested(monkeypatch):
 def test_main_setup_offers_browser_install_when_tty(monkeypatch):
     """When stdin is a TTY and the user answers yes, model setup is followed
     by a browser-tools bootstrap call."""
-    # The real hermes_cli.main import is guarded at module load.  This unit test
-    # exercises only the already-authorized ACP setup flow; direct ACP startup
-    # hard-gate coverage lives in client_auth/test_entrypoints.py.
-    monkeypatch.setitem(
-        sys.modules,
-        "hermes_cli.main",
-        SimpleNamespace(main=lambda: None),
-    )
+    # ``hermes_cli.main`` is intentionally import-gated before parser/config
+    # bootstrap.  Stub the internal setup delegate without importing that
+    # protected entrypoint in this wiring-only test.
+    fake_cli_main = ModuleType("hermes_cli.main")
+    fake_cli_main.main = lambda: None
+    monkeypatch.setitem(sys.modules, "hermes_cli.main", fake_cli_main)
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda *_args, **_kwargs: "y")
 
