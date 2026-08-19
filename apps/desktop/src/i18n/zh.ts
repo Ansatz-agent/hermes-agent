@@ -14,6 +14,9 @@ export const zh: Translations = {
     retry: '重试',
     checking: '正在验证账户会话…',
     administratorManaged: '账户分发和密码协助由服务器管理员统一处理。',
+    accountMenu: '账户',
+    signOut: '退出登录',
+    signingOut: '正在退出…',
     reasons: {
       interactiveLoginRequired: '请输入服务器管理员分配的账户凭据。',
       invalidCredentials: '用户名或密码不正确。',

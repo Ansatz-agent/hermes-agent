@@ -60,6 +60,9 @@ export interface Translations {
     retry: string
     checking: string
     administratorManaged: string
+    accountMenu: string
+    signOut: string
+    signingOut: string
     reasons: {
       interactiveLoginRequired: string
       invalidCredentials: string

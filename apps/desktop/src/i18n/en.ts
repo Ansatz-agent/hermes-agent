@@ -14,6 +14,9 @@ export const en: Translations = {
     retry: 'Retry',
     checking: 'Checking your account session…',
     administratorManaged: 'Accounts and password assistance are managed by the server administrator.',
+    accountMenu: 'Account',
+    signOut: 'Sign out',
+    signingOut: 'Signing out…',
     reasons: {
       interactiveLoginRequired: 'Enter the account credentials provided by the server administrator.',
       invalidCredentials: 'The username or password is incorrect.',
