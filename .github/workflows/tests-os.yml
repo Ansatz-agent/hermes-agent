@@ -144,9 +144,11 @@ jobs:
           # exit-5 branch below would be unreachable dead code — the job
           # would still fail red, but the diagnostic would never print.
           status=0
+          mkdir -p .auth-artifacts
           uv run --no-sync python -m pytest \
             "$@" \
             -m "${{ matrix.marker }} and not integration" \
+            --junitxml=".auth-artifacts/native-${{ matrix.platform }}.xml" \
             -v --tb=short || status=$?
           if [ "$status" -eq 5 ]; then
             echo "::error::No tests matched -m ${{ matrix.marker }}. Either the" \
@@ -166,9 +168,13 @@ jobs:
         shell: bash
         run: |
           uv run --no-sync python -m pytest \
-            tests/hermes_cli/client_auth/test_background_modes.py \
             tests/hermes_cli/client_auth/test_entrypoints.py \
+            --junitxml=".auth-artifacts/locked-start-${{ matrix.platform }}.xml" \
+            -q
+          uv run --no-sync python -m pytest \
+            tests/hermes_cli/client_auth/test_background_modes.py \
             tests/hermes_cli/client_auth/test_service_locked_waiting.py \
+            --junitxml=".auth-artifacts/service-${{ matrix.platform }}.xml" \
             -q
 
       - name: Write native auth evidence
@@ -177,8 +183,13 @@ jobs:
           AUTH_PLATFORM: ${{ matrix.platform }}
           AUTH_TRANSPORT: ${{ matrix.owner_transport }}
         run: |
-          mkdir -p .auth-artifacts
-          uv run --no-sync python -c 'import json, os, pathlib; p={"platform":os.environ["AUTH_PLATFORM"],"owner_transport":os.environ["AUTH_TRANSPORT"],"locked_start_passed":True,"handle_noninheritance_passed":True,"service_locked_waiting_passed":True}; pathlib.Path(".auth-artifacts", p["platform"]+".json").write_text(json.dumps(p, sort_keys=True)+"\n", encoding="utf-8")'
+          uv run --no-sync python scripts/write_auth_native_artifact.py \
+            --platform "$AUTH_PLATFORM" \
+            --owner-transport "$AUTH_TRANSPORT" \
+            --locked-start ".auth-artifacts/locked-start-${AUTH_PLATFORM}.xml" \
+            --handle-noninheriting ".auth-artifacts/native-${AUTH_PLATFORM}.xml" \
+            --service-waiting ".auth-artifacts/service-${AUTH_PLATFORM}.xml" \
+            --output ".auth-artifacts/${AUTH_PLATFORM}.json"
 
       - name: Upload native auth evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

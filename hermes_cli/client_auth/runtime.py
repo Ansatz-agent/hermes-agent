@@ -1067,6 +1067,7 @@ class S6LifecycleAdapter:
     """Apply auth transitions to the fixed container capability slots."""
 
     _STATIC_SERVICES = frozenset({"dashboard", "main-hermes"})
+    _TRUE_ENV_VALUES = frozenset({"1", "true", "yes", "on"})
 
     def __init__(
         self,
@@ -1078,12 +1079,14 @@ class S6LifecycleAdapter:
     ) -> None:
         self._service_root = service_root
         self._hermes_home = hermes_home
-        self._dashboard_enabled = environment.get("HERMES_DASHBOARD", "").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }
+        self._dashboard_enabled = (
+            environment.get("HERMES_DASHBOARD", "").strip().lower()
+            in self._TRUE_ENV_VALUES
+        )
+        self._multiplex_profiles = (
+            environment.get("GATEWAY_MULTIPLEX_PROFILES", "").strip().lower()
+            in self._TRUE_ENV_VALUES
+        )
         self._signal_service = signal_service or self._signal_s6_service
 
     def transition(self, snapshot: RuntimeSnapshot) -> None:
@@ -1127,6 +1130,8 @@ class S6LifecycleAdapter:
         if service == "main-hermes":
             return False
         profile = service.removeprefix("gateway-")
+        if self._multiplex_profiles and profile != "default":
+            return False
         profile_dir = (
             self._hermes_home
             if profile == "default"

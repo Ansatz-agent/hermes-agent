@@ -79,6 +79,39 @@ def test_s6_lifecycle_treats_malformed_intent_as_down(tmp_path: Path):
     assert actions == [("gateway-default", "down")]
 
 
+def test_s6_lifecycle_suppresses_named_gateways_when_default_multiplexes(
+    tmp_path: Path,
+):
+    services = tmp_path / "services"
+    home = tmp_path / "home"
+    services.mkdir(); home.mkdir()
+    _slot(services, "gateway-default")
+    _slot(services, "gateway-coder")
+    (home / "gateway_state.json").write_text(
+        json.dumps({"desired_state": "running"}),
+        encoding="utf-8",
+    )
+    coder = home / "profiles" / "coder"
+    coder.mkdir(parents=True)
+    (coder / "gateway_state.json").write_text(
+        json.dumps({"desired_state": "running"}),
+        encoding="utf-8",
+    )
+    actions: list[tuple[str, str]] = []
+
+    S6LifecycleAdapter(
+        service_root=services,
+        hermes_home=home,
+        environment={"GATEWAY_MULTIPLEX_PROFILES": "true"},
+        signal_service=lambda service, action: actions.append((service, action)),
+    ).transition(RuntimeSnapshot.new_authenticated("alice", now=10, ttl=60))
+
+    assert actions == [
+        ("gateway-coder", "down"),
+        ("gateway-default", "up"),
+    ]
+
+
 def test_s6_lifecycle_never_receives_or_persists_secrets(tmp_path: Path):
     services = tmp_path / "services"
     home = tmp_path / "home"
