@@ -225,3 +225,22 @@ export function createBackendShutdownCoordinator(teardown: () => Promise<void> |
     }
   }
 }
+
+/** Resumes a prevented Electron quit on a later event-loop turn. */
+export function resumeQuitAfterShutdown(
+  completion: Promise<void>,
+  deps: {
+    markComplete: () => void
+    quit: () => void
+    schedule?: (callback: () => void) => unknown
+  }
+): void {
+  const schedule = deps.schedule ?? (callback => setImmediate(callback))
+
+  const resume = () => {
+    deps.markComplete()
+    schedule(deps.quit)
+  }
+
+  void completion.then(resume, resume)
+}

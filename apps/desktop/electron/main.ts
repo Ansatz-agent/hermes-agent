@@ -42,7 +42,12 @@ import { dashboardFallbackArgs, sourceDeclaresServe } from './backend-command'
 import { createBackendConnectionState } from './backend-connection-state'
 import { buildDesktopBackendEnv, hermesManagedNodePathEntries, normalizeHermesHomeRoot } from './backend-env'
 import { isReauthRequiredError, waitForHermesReady } from './backend-health'
-import { backendCommandMatches, createBackendOwnership, createBackendShutdownCoordinator } from './backend-ownership'
+import {
+  backendCommandMatches,
+  createBackendOwnership,
+  createBackendShutdownCoordinator,
+  resumeQuitAfterShutdown
+} from './backend-ownership'
 import {
   canImportHermesCli,
   execProbeSync,
@@ -15030,9 +15035,11 @@ app.on('before-quit', event => {
 
   if (!backendQuitTeardownDone) {
     event.preventDefault()
-    void backendShutdown.run().finally(() => {
-      backendQuitTeardownDone = true
-      app.quit()
+    resumeQuitAfterShutdown(backendShutdown.run(), {
+      markComplete: () => {
+        backendQuitTeardownDone = true
+      },
+      quit: () => app.quit()
     })
   }
 
