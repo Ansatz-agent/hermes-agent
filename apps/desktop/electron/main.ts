@@ -898,10 +898,12 @@ async function startDesktopAuthRuntime() {
     }
 
     const bridge = createDesktopAuthBridge()
+
     const coordinator = new AuthCoordinator(bridge, {
       cleanup: cleanupDesktopCapabilities,
       recoverBridge: recoverDesktopAuthBridge
     })
+
     desktopAuthBridge = bridge
     desktopAuthCoordinator = coordinator
     coordinator.subscribe((status, connectionId) => {

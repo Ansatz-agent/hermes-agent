@@ -207,6 +207,7 @@ test('the default bridge deadline leaves room for the Python HTTP timeout to res
   vi.useFakeTimers()
   const { bridge, child } = bridgeFixture()
   const pending = bridge.status()
+
   const rejected = assert.rejects(
     pending,
     error => error instanceof AuthBridgeError && error.code === 'runtime_unavailable'

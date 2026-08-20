@@ -188,10 +188,12 @@ test('explicit local refresh locks and cleans up before one bridge recovery atte
   const replacement = fixedBridge({ ...authenticated, runtime_instance_id: 'runtime-2', epoch: 3 })
   const order: string[] = []
   let coordinator: AuthCoordinator
+
   const cleanup = vi.fn(async () => {
     assert.equal(coordinator.scope('local'), null)
     order.push('cleanup')
   })
+
   const recoverBridge = vi.fn(async (connectionId, failedBridge) => {
     assert.equal(connectionId, 'local')
     assert.equal(failedBridge, bridge)
@@ -225,11 +227,13 @@ test('explicit local refresh locks and cleans up before one bridge recovery atte
 test('ordinary refresh remains locked and never rebuilds an unavailable bridge', async () => {
   const bridge = fixedBridge(authenticated)
   const recoverBridge = vi.fn(async () => fixedBridge(authenticated))
+
   const coordinator = new AuthCoordinator(bridge, {
     clock: () => 42,
     pollIntervalMs: 0,
     recoverBridge
   })
+
   await coordinator.start()
   bridge.status.mockRejectedValueOnce(new AuthBridgeError('runtime_unavailable', 'runtime_unavailable'))
 
@@ -246,11 +250,13 @@ test('failed bridge replacement remains locked without a second recovery attempt
   const replacement = fixedBridge(authenticated)
   replacement.status.mockRejectedValueOnce(new AuthBridgeError('runtime_unavailable', 'runtime_unavailable'))
   const recoverBridge = vi.fn(async () => replacement)
+
   const coordinator = new AuthCoordinator(bridge, {
     clock: () => 42,
     pollIntervalMs: 0,
     recoverBridge
   })
+
   await coordinator.start()
   bridge.status.mockRejectedValueOnce(new AuthBridgeError('runtime_unavailable', 'runtime_unavailable'))
 
