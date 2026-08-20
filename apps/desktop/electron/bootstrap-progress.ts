@@ -114,12 +114,19 @@ export type SafeBootstrapEvent =
 
 const PROGRESS_UNITS = new Set<BootstrapProgressUnit>(['bytes', 'packages', 'items', 'files', 'steps'])
 const SAFE_STAGE_NAME = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/
-const SENSITIVE_ASSIGNMENT = /(?:authorization|bearer|cookie|set-cookie|password|passwd|session|sessionid|csrf|csrftoken|keychain)\s*[:=]/i
+const SENSITIVE_TERM = /\b(?:authorization|bearer|cookie|set-cookie|password|passwd|session|sessionid|csrf|csrftoken|keychain)\b/i
 const LOCAL_OR_REMOTE_PATH = /(?:[a-z]:\\|\/(?:Users|home|private|var|tmp)\/|(?:https?|file):\/\/)/i
-const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/g
 const UNSAFE_LABEL_CHARACTERS = /[^/\p{L}\p{N} .,_:;()\-+%]/gu
 const MAX_LABEL_LENGTH = 80
 const MAX_LOG_LINES = 500
+
+function stripControlCharacters(value: string): string {
+  return Array.from(value, character => {
+    const code = character.charCodeAt(0)
+
+    return code < 0x20 || (code >= 0x7f && code <= 0x9f) ? ' ' : character
+  }).join('')
+}
 
 export function createBootstrapState(): BootstrapState {
   return {
@@ -152,13 +159,11 @@ export function sanitizeBootstrapLabel(value: unknown, fallback: string): string
       return ''
     }
 
-    const normalized = candidate
-      .normalize('NFKC')
-      .replace(CONTROL_CHARACTERS, ' ')
+    const normalized = stripControlCharacters(candidate.normalize('NFKC'))
       .replace(/\s+/g, ' ')
       .trim()
 
-    if (!normalized || SENSITIVE_ASSIGNMENT.test(normalized) || LOCAL_OR_REMOTE_PATH.test(normalized)) {
+    if (!normalized || SENSITIVE_TERM.test(normalized) || LOCAL_OR_REMOTE_PATH.test(normalized)) {
       return ''
     }
 
@@ -195,6 +200,7 @@ export function normalizeBootstrapProgress(
   const descriptor = stage ? descriptorFor(state, stage) : null
   const completed = safeCount(event.completed)
   const total = event.total === null ? null : safeCount(event.total)
+
   const unit = PROGRESS_UNITS.has(event.unit as BootstrapProgressUnit)
     ? (event.unit as BootstrapProgressUnit)
     : null
@@ -395,6 +401,7 @@ export function safeBootstrapState(state: BootstrapState): SafeBootstrapState {
   const descriptors = (state.manifest?.stages || [])
     .map(safeDescriptor)
     .filter((descriptor): descriptor is BootstrapStageDescriptor => descriptor !== null)
+
   const stages: Record<string, SafeBootstrapStageResult> = {}
 
   for (const descriptor of descriptors) {

@@ -15,7 +15,7 @@ export const zh: Translations = {
     checking: '正在验证账户会话…',
     preparingRuntime: '正在准备安全登录服务…',
     preparingStage: (current, total, title) => `正在准备安全登录服务（${current}/${total}）：${title}…`,
-    runtimeTitle: '正在准备 Hermes',
+    runtimeTitle: '账户验证成功，正在准备 Hermes',
     runtimeDescription: '账户验证已通过。本地运行时准备完成前，Hermes 将保持锁定。',
     preparingFullRuntime: '正在准备 Hermes 运行时…',
     preparingFullStage: (current, total, title) => `正在准备 Hermes 运行时（${current}/${total}）：${title}…`,

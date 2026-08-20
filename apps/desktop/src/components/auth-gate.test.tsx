@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import type { ReactNode } from 'react'
+import { type ReactNode, useEffect } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { I18nProvider } from '@/i18n'
@@ -70,6 +70,14 @@ function AuthProbe() {
   )
 }
 
+function ProtectedMountProbe({ onMount }: { onMount: () => void }) {
+  useEffect(() => {
+    onMount()
+  }, [onMount])
+
+  return <div>Protected Hermes application</div>
+}
+
 afterEach(() => {
   vi.useRealTimers()
   vi.restoreAllMocks()
@@ -95,7 +103,7 @@ describe('AuthGate', () => {
 
   it('keeps an authenticated account behind the full-runtime readiness gate', async () => {
     const bootstrap = {
-      getBootstrapState: vi.fn(async () => ({
+      getState: vi.fn(async () => ({
         active: true,
         manifest: {
           type: 'manifest',
@@ -126,8 +134,8 @@ describe('AuthGate', () => {
         setupChoice: null,
         unsupportedPlatform: null
       })),
-      onBootstrapEvent: vi.fn(() => () => {}),
-      resetBootstrap: vi.fn(async () => ({ ok: true }))
+      onChanged: vi.fn(() => () => {}),
+      retry: vi.fn(async () => ({ ok: true }))
     }
 
     const { auth } = renderGate(
@@ -137,7 +145,8 @@ describe('AuthGate', () => {
       bootstrap
     )
 
-    expect(await screen.findByText('Preparing Hermes runtime (1/1): Install Python dependencies…')).not.toBeNull()
+    expect(await screen.findByText('0 of 1 stages complete')).not.toBeNull()
+    expect(screen.getByText('Install Python dependencies')).not.toBeNull()
     expect(screen.queryByText('Protected Hermes application')).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
@@ -146,7 +155,7 @@ describe('AuthGate', () => {
 
   it('keeps Retry and Sign out available after authenticated runtime preparation fails', async () => {
     const bootstrap = {
-      getBootstrapState: vi.fn(async () => ({
+      getState: vi.fn(async () => ({
         active: false,
         manifest: { type: 'manifest', protocolVersion: 1, bootstrapScope: 'runtime', stages: [] },
         stages: {},
@@ -157,8 +166,8 @@ describe('AuthGate', () => {
         setupChoice: null,
         unsupportedPlatform: null
       })),
-      onBootstrapEvent: vi.fn(() => () => {}),
-      resetBootstrap: vi.fn(async () => ({ ok: true }))
+      onChanged: vi.fn(() => () => {}),
+      retry: vi.fn(async () => ({ ok: true }))
     }
 
     renderGate(
@@ -168,7 +177,7 @@ describe('AuthGate', () => {
       bootstrap
     )
 
-    expect(await screen.findByText('Hermes could not prepare its local runtime. Retry or sign out.')).not.toBeNull()
+    expect(await screen.findByText('Hermes could not prepare its local runtime.')).not.toBeNull()
     expect((screen.getByRole('button', { name: 'Retry' }) as HTMLButtonElement).disabled).toBe(false)
     expect(screen.getByRole('button', { name: 'Sign out' })).not.toBeNull()
     expect(globalThis.document.body.textContent).not.toContain('sessionid')
@@ -183,7 +192,7 @@ describe('AuthGate', () => {
     expect(screen.getByLabelText('Username')).not.toBeNull()
     expect(screen.getByLabelText('Password').getAttribute('type')).toBe('password')
     expect(screen.getByRole('button', { name: 'Sign in' })).not.toBeNull()
-    expect(screen.getByRole('button', { name: 'Retry' })).not.toBeNull()
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
     expect(screen.getAllByText(/server administrator/i).length).toBeGreaterThan(0)
     expect(screen.queryByText('Protected Hermes application')).toBeNull()
 
@@ -245,7 +254,7 @@ describe('AuthGate', () => {
 
     expect(screen.getByText('Checking your account session…')).not.toBeNull()
     expect(screen.queryByText('Protected Hermes application')).toBeNull()
-    expect((screen.getByRole('button', { name: 'Retry' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(15_000)
@@ -253,6 +262,65 @@ describe('AuthGate', () => {
 
     expect(screen.getByText('The secure account service is unavailable. Try again.')).not.toBeNull()
     expect((screen.getByRole('button', { name: 'Retry' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.queryByText('Protected Hermes application')).toBeNull()
+  })
+
+  it('keeps an active auth bootstrap visible past 15 seconds without a false Retry', async () => {
+    vi.useFakeTimers()
+
+    const bootstrap = {
+      getState: vi.fn(async () => ({
+        active: true,
+        manifest: {
+          type: 'manifest',
+          protocolVersion: 1,
+          bootstrapScope: 'auth',
+          stages: [{ name: 'python-auth-deps', title: 'Install authentication dependencies' }]
+        },
+        stages: {
+          'python-auth-deps': {
+            state: 'running',
+            durationMs: null,
+            startedAt: 1_000,
+            error: null,
+            progress: {
+              stage: 'python-auth-deps',
+              completed: 5,
+              total: null,
+              unit: 'packages',
+              label: 'Authentication dependencies',
+              updatedAt: 2_000
+            }
+          }
+        },
+        error: null,
+        failedStage: null,
+        startedAt: 500,
+        completedAt: null
+      })),
+      onChanged: vi.fn(() => () => {}),
+      retry: vi.fn(async () => ({ ok: true }))
+    }
+
+    renderGate(
+      { status: vi.fn(() => new Promise<DesktopAccountStatus>(() => {})) },
+      null,
+      <div>Protected Hermes application</div>,
+      bootstrap
+    )
+
+    await act(async () => {
+      await Promise.resolve()
+    })
+    expect(screen.getByText('Preparing the secure sign-in service')).not.toBeNull()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000)
+    })
+
+    expect(screen.getByText('Preparing the secure sign-in service')).not.toBeNull()
+    expect(screen.queryByText('The secure account service is unavailable. Try again.')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
     expect(screen.queryByText('Protected Hermes application')).toBeNull()
   })
 
@@ -285,7 +353,7 @@ describe('AuthGate', () => {
 
   it('shows signed bootstrap progress inside the locked login surface', async () => {
     const bootstrap = {
-      getBootstrapState: vi.fn(async () => ({
+      getState: vi.fn(async () => ({
         active: true,
         manifest: {
           type: 'manifest',
@@ -318,8 +386,8 @@ describe('AuthGate', () => {
         setupChoice: null,
         unsupportedPlatform: null
       })),
-      onBootstrapEvent: vi.fn(() => () => {}),
-      resetBootstrap: vi.fn(async () => ({ ok: true }))
+      onChanged: vi.fn(() => () => {}),
+      retry: vi.fn(async () => ({ ok: true }))
     }
 
     renderGate(
@@ -329,19 +397,192 @@ describe('AuthGate', () => {
       bootstrap
     )
 
-    expect(
-      await screen.findByText('Preparing the secure sign-in service (1/4): Install authentication dependencies…')
-    ).not.toBeNull()
+    expect(await screen.findByText('Preparing the secure sign-in service')).not.toBeNull()
+    expect(screen.getByText('Stage 1 of 4: Install authentication dependencies')).not.toBeNull()
     expect(screen.queryByText('Protected Hermes application')).toBeNull()
     expect(screen.queryByText('Full runtime')).toBeNull()
   })
 
-  it('turns a bootstrap failure into a safe terminal state and retries through the bridge', async () => {
+  it('refreshes auth status once when bootstrap completes and automatically shows the login form', async () => {
     let emitBootstrap: ((event: Record<string, unknown>) => void) | null = null
-    const resetBootstrap = vi.fn(async () => ({ ok: true }))
+
+    const status = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise<DesktopAccountStatus>(() => {}))
+      .mockResolvedValueOnce(signedOut)
 
     const bootstrap = {
-      getBootstrapState: vi.fn(async () => ({
+      getState: vi.fn(async () => ({
+        active: true,
+        manifest: {
+          type: 'manifest',
+          protocolVersion: 1,
+          bootstrapScope: 'auth',
+          stages: [{ name: 'auth-complete', title: 'Finish authentication runtime' }]
+        },
+        stages: {
+          'auth-complete': {
+            state: 'running',
+            durationMs: null,
+            startedAt: 1_000,
+            error: null,
+            progress: null
+          }
+        },
+        error: null,
+        failedStage: null,
+        startedAt: 500,
+        completedAt: null
+      })),
+      onChanged: vi.fn(callback => {
+        emitBootstrap = callback
+
+        return () => {
+          emitBootstrap = null
+        }
+      }),
+      retry: vi.fn(async () => ({ ok: true }))
+    }
+
+    renderGate({ status }, null, <div>Protected Hermes application</div>, bootstrap)
+    await screen.findByText('Preparing the secure sign-in service')
+
+    act(() => emitBootstrap?.({ type: 'complete', completedAt: 2_000 }))
+
+    expect(await screen.findByRole('heading', { name: 'Sign in to Hermes' })).not.toBeNull()
+    expect(status).toHaveBeenCalledTimes(2)
+
+    act(() => emitBootstrap?.({ type: 'complete', completedAt: 2_000 }))
+    await act(async () => Promise.resolve())
+    expect(status).toHaveBeenCalledTimes(2)
+  })
+
+  it('enters the protected root once after full runtime completion without an automatic refresh loop', async () => {
+    let emitBootstrap: ((event: Record<string, unknown>) => void) | null = null
+    const runtimePending = { ...authenticated, runtime_ready: false }
+    const status = vi.fn().mockResolvedValueOnce(runtimePending).mockResolvedValueOnce(authenticated)
+    const onMount = vi.fn()
+
+    const bootstrap = {
+      getState: vi.fn(async () => ({
+        active: true,
+        manifest: {
+          type: 'manifest',
+          protocolVersion: 1,
+          bootstrapScope: 'runtime',
+          stages: [{ name: 'complete', title: 'Finish install' }]
+        },
+        stages: {
+          complete: {
+            state: 'running',
+            durationMs: null,
+            startedAt: 1_000,
+            error: null,
+            progress: null
+          }
+        },
+        error: null,
+        failedStage: null,
+        startedAt: 500,
+        completedAt: null
+      })),
+      onChanged: vi.fn(callback => {
+        emitBootstrap = callback
+
+        return () => {
+          emitBootstrap = null
+        }
+      }),
+      retry: vi.fn(async () => ({ ok: true }))
+    }
+
+    const { auth } = renderGate(
+      { status },
+      null,
+      <ProtectedMountProbe onMount={onMount} />,
+      bootstrap
+    )
+
+    await screen.findByText('Finish install')
+    act(() => emitBootstrap?.({ type: 'complete', completedAt: 2_000 }))
+
+    expect(await screen.findByText('Protected Hermes application')).not.toBeNull()
+    expect(onMount).toHaveBeenCalledTimes(1)
+    expect(auth.status).toHaveBeenCalledTimes(2)
+
+    act(() => emitBootstrap?.({ type: 'complete', completedAt: 2_000 }))
+    await act(async () => Promise.resolve())
+    expect(onMount).toHaveBeenCalledTimes(1)
+    expect(auth.status).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not render hostile live progress text in the auth surface', async () => {
+    let emitBootstrap: ((event: Record<string, unknown>) => void) | null = null
+
+    const bootstrap = {
+      getState: vi.fn(async () => ({
+        active: true,
+        manifest: {
+          type: 'manifest',
+          protocolVersion: 1,
+          bootstrapScope: 'auth',
+          stages: [{ name: 'python-auth-deps', title: 'Install authentication dependencies' }]
+        },
+        stages: {
+          'python-auth-deps': {
+            state: 'running',
+            durationMs: null,
+            startedAt: 1_000,
+            error: null,
+            progress: null
+          }
+        },
+        error: null,
+        failedStage: null,
+        startedAt: 500,
+        completedAt: null
+      })),
+      onChanged: vi.fn(callback => {
+        emitBootstrap = callback
+
+        return () => {
+          emitBootstrap = null
+        }
+      }),
+      retry: vi.fn(async () => ({ ok: true }))
+    }
+
+    renderGate(
+      { status: vi.fn(() => new Promise<DesktopAccountStatus>(() => {})) },
+      null,
+      <div>Protected Hermes application</div>,
+      bootstrap
+    )
+    await screen.findByText('Preparing the secure sign-in service')
+
+    act(() =>
+      emitBootstrap?.({
+        type: 'progress',
+        stage: 'python-auth-deps',
+        completed: 1,
+        total: null,
+        unit: 'packages',
+        label: 'password=secret Cookie: abc /Users/alice/private',
+        updatedAt: 2_000
+      })
+    )
+
+    expect(globalThis.document.body.textContent).not.toContain('secret')
+    expect(globalThis.document.body.textContent).not.toContain('Cookie')
+    expect(globalThis.document.body.textContent).not.toContain('/Users/')
+  })
+
+  it('turns a bootstrap failure into a safe terminal state and retries through the bridge', async () => {
+    let emitBootstrap: ((event: Record<string, unknown>) => void) | null = null
+    const retryBootstrap = vi.fn(async () => ({ ok: true }))
+
+    const bootstrap = {
+      getState: vi.fn(async () => ({
         active: true,
         manifest: { type: 'manifest', protocolVersion: 1, stages: [] },
         stages: {},
@@ -352,14 +593,14 @@ describe('AuthGate', () => {
         setupChoice: null,
         unsupportedPlatform: null
       })),
-      onBootstrapEvent: vi.fn(callback => {
+      onChanged: vi.fn(callback => {
         emitBootstrap = callback
 
         return () => {
           emitBootstrap = null
         }
       }),
-      resetBootstrap
+      retry: retryBootstrap
     }
 
     const status = vi.fn(() => new Promise<DesktopAccountStatus>(() => {}))
@@ -370,12 +611,12 @@ describe('AuthGate', () => {
       emitBootstrap?.({ type: 'failed', error: 'sessionid=secret Traceback private detail' })
     })
 
-    expect(screen.getByText('The secure account service is unavailable. Try again.')).not.toBeNull()
+    expect(screen.getByText('Hermes could not prepare the secure sign-in service.')).not.toBeNull()
     expect(globalThis.document.body.textContent).not.toContain('sessionid')
     expect(globalThis.document.body.textContent).not.toContain('Traceback')
 
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
-    await waitFor(() => expect(resetBootstrap).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(retryBootstrap).toHaveBeenCalledTimes(1))
     expect(status).toHaveBeenCalledTimes(2)
   })
 

@@ -6,7 +6,8 @@ import {
   deriveAuthBootstrapProgress,
   formatBootstrapAmount,
   formatBootstrapElapsed,
-  progressFraction
+  progressFraction,
+  sanitizeAuthBootstrapText
 } from './auth-bootstrap-progress'
 
 const state: DesktopSafeBootstrapState = {
@@ -89,5 +90,26 @@ describe('auth bootstrap progress helpers', () => {
 
     expect(failed.current).toBeNull()
     expect(failed.failed?.descriptor.name).toBe('python-deps')
+  })
+
+  it('rejects secret-like labels, paths, URLs, commands, and control characters', () => {
+    expect(sanitizeAuthBootstrapText('Install Python dependencies', 'Safe fallback')).toBe(
+      'Install Python dependencies'
+    )
+
+    for (const hostile of [
+      'password=secret',
+      'Cookie: abc',
+      'Cookie hidden-value',
+      'Session hidden-value',
+      'sessionid=hidden',
+      '/Users/alice/private',
+      'C:\\Users\\alice\\private',
+      'https://evil.invalid/path',
+      'curl -H Authorization:secret',
+      'safe\u0000password=secret'
+    ]) {
+      expect(sanitizeAuthBootstrapText(hostile, 'Safe fallback')).toBe('Safe fallback')
+    }
   })
 })

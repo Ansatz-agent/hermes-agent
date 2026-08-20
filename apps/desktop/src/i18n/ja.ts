@@ -13,7 +13,19 @@ export const ja = defineLocale({
     signingIn: 'サインイン中…',
     retry: '再試行',
     checking: 'アカウントセッションを確認中…',
+    preparingRuntime: '安全なサインインサービスを準備中…',
+    preparingStage: (current, total, title) =>
+      `安全なサインインサービスを準備中（${current}/${total}）：${title}…`,
+    runtimeTitle: 'アカウントを確認済み、Hermes を準備中',
+    runtimeDescription: 'アカウントの確認が完了しました。ローカルランタイムの準備が完了するまで Hermes はロックされます。',
+    preparingFullRuntime: 'Hermes ランタイムを準備中…',
+    preparingFullStage: (current, total, title) =>
+      `Hermes ランタイムを準備中（${current}/${total}）：${title}…`,
+    runtimePreparationFailed: 'Hermes のローカルランタイムを準備できませんでした。再試行するかサインアウトしてください。',
     administratorManaged: 'アカウントの発行とパスワードの支援はサーバー管理者が行います。',
+    accountMenu: 'アカウント',
+    signOut: 'サインアウト',
+    signingOut: 'サインアウト中…',
     bootstrap: {
       preparingAuthTitle: '安全なサインインサービスを準備中',
       stagesComplete: (completed, total) => `${total} 段階中 ${completed} 段階が完了`,

@@ -15,7 +15,7 @@ export const en: Translations = {
     checking: 'Checking your account session…',
     preparingRuntime: 'Preparing the secure sign-in service…',
     preparingStage: (current, total, title) => `Preparing the secure sign-in service (${current}/${total}): ${title}…`,
-    runtimeTitle: 'Preparing Hermes',
+    runtimeTitle: 'Account verified, preparing Hermes',
     runtimeDescription: 'Your account is verified. Hermes will remain locked until its local runtime is ready.',
     preparingFullRuntime: 'Preparing Hermes runtime…',
     preparingFullStage: (current, total, title) => `Preparing Hermes runtime (${current}/${total}): ${title}…`,

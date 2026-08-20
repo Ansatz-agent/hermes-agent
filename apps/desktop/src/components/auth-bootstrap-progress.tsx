@@ -12,7 +12,8 @@ import {
   deriveAuthBootstrapProgress,
   formatBootstrapAmount,
   formatBootstrapElapsed,
-  progressFraction
+  progressFraction,
+  sanitizeAuthBootstrapText
 } from '@/lib/auth-bootstrap-progress'
 
 interface AuthBootstrapProgressProps {
@@ -56,11 +57,13 @@ function ProgressDetail({ progress }: { progress: DesktopBootstrapProgress }) {
           Math.round(fraction * 100)
         )
 
+  const label = sanitizeAuthBootstrapText(progress.label, progress.stage)
+
   return (
     <div className="mt-2 space-y-1.5">
       <Progress
         animated={fraction === null}
-        aria-label={progress.label}
+        aria-label={label}
         indeterminate={fraction === null}
         value={fraction ?? 0}
       />

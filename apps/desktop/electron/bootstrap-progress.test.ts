@@ -123,6 +123,7 @@ describe('bootstrap progress state', () => {
 
   test('ignores progress for a stage outside the signed manifest', () => {
     const state = reduceBootstrapState(createBootstrapState(), manifest, 1_000)
+
     const next = reduceBootstrapState(
       state,
       {
@@ -193,6 +194,24 @@ describe('bootstrap progress state', () => {
     ]) {
       assert.equal(serialized.includes(forbidden), false, forbidden)
     }
+  })
+
+  test('redacts sensitive labels even when no assignment delimiter is present', () => {
+    let state = reduceBootstrapState(createBootstrapState(), manifest, 1_000)
+    state = reduceBootstrapState(
+      state,
+      {
+        type: 'progress',
+        stage: 'python-deps',
+        completed: 1,
+        total: null,
+        unit: 'packages',
+        label: 'Cookie hidden-value'
+      },
+      1_200
+    )
+
+    assert.equal(state.stages['python-deps']?.progress?.label, 'Install Hermes Python dependencies')
   })
 
   test('sanitizes live events and never forwards logs, result JSON, or raw errors', () => {

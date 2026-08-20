@@ -10,8 +10,15 @@ import {
   useState
 } from 'react'
 
-import type { DesktopBootstrapEvent, DesktopBootstrapState } from '@/global'
+import { AuthBootstrapProgress } from '@/components/auth-bootstrap-progress'
+import { Button } from '@/components/ui/button'
+import type {
+  DesktopBootstrapProgressUnit,
+  DesktopSafeBootstrapEvent,
+  DesktopSafeBootstrapState
+} from '@/global'
 import { type Translations, useI18n } from '@/i18n'
+import { sanitizeAuthBootstrapText } from '@/lib/auth-bootstrap-progress'
 
 const ACCOUNT_SERVER = 'https://c2sml.cn/agent'
 const AUTH_REQUEST_TIMEOUT_MS = 15_000
@@ -51,10 +58,10 @@ export type DesktopAuthClient = {
   onChanged: (callback: (status: DesktopAccountStatus, connectionId?: string) => void) => () => void
 }
 
-type DesktopBootstrapClient = {
-  getBootstrapState: () => Promise<DesktopBootstrapState>
-  onBootstrapEvent: (callback: (event: DesktopBootstrapEvent) => void) => () => void
-  resetBootstrap?: () => Promise<{ ok: boolean }>
+type DesktopAuthBootstrapClient = {
+  getState: () => Promise<DesktopSafeBootstrapState>
+  onChanged: (callback: (event: DesktopSafeBootstrapEvent) => void) => () => void
+  retry: () => Promise<{ ok: boolean }>
 }
 
 export type DesktopAuthContextValue = {
@@ -86,22 +93,20 @@ const unavailableStatus = (): DesktopAccountStatus => ({
   runtime_ready: false
 })
 
-const emptyBootstrapState = (): DesktopBootstrapState => ({
+const emptyBootstrapState = (): DesktopSafeBootstrapState => ({
   active: false,
   manifest: null,
   stages: {},
   error: null,
-  log: [],
+  failedStage: null,
   startedAt: null,
-  completedAt: null,
-  setupChoice: null,
-  unsupportedPlatform: null
+  completedAt: null
 })
 
 function applyAuthBootstrapEvent(
-  state: DesktopBootstrapState | null,
-  event: DesktopBootstrapEvent
-): DesktopBootstrapState | null {
+  state: DesktopSafeBootstrapState | null,
+  event: DesktopSafeBootstrapEvent
+): DesktopSafeBootstrapState | null {
   const current = state || emptyBootstrapState()
 
   if (event.type === 'dismissed') {
@@ -109,15 +114,23 @@ function applyAuthBootstrapEvent(
   }
 
   if (event.type === 'manifest') {
+    const stages = event.stages.slice(0, 64).map(stage => ({
+      ...stage,
+      name: sanitizeAuthBootstrapText(stage.name, 'bootstrap-stage'),
+      title: sanitizeAuthBootstrapText(stage.title, stage.name),
+      category: sanitizeAuthBootstrapText(stage.category, 'runtime')
+    }))
+
     return {
       ...current,
       active: true,
       error: null,
-      manifest: event,
+      failedStage: null,
+      manifest: { ...event, stages },
       stages: Object.fromEntries(
-        event.stages.map(stage => [
+        stages.map(stage => [
           stage.name,
-          { state: 'pending', durationMs: null, startedAt: null, json: null, error: null }
+          { state: 'pending', durationMs: null, startedAt: null, error: null, progress: null }
         ])
       ),
       startedAt: current.startedAt || Date.now()
@@ -135,49 +148,78 @@ function applyAuthBootstrapEvent(
           state: event.state,
           durationMs: event.durationMs ?? null,
           startedAt: event.state === 'running' ? (previous?.startedAt ?? Date.now()) : (previous?.startedAt ?? null),
-          json: event.json ?? null,
-          // Raw installer errors never cross the pre-auth rendering surface.
-          error: event.state === 'failed' ? 'bootstrap_failed' : null
+          error: event.state === 'failed' ? 'bootstrap_failed' : null,
+          progress: previous?.progress ?? null
+        }
+      },
+      failedStage: event.state === 'failed' ? event.name : current.failedStage
+    }
+  }
+
+  if (event.type === 'progress') {
+    const previous = current.stages[event.stage]
+    const units = new Set<DesktopBootstrapProgressUnit>(['bytes', 'packages', 'items', 'files', 'steps'])
+    const completed = Number.isFinite(event.completed) && event.completed >= 0 ? event.completed : 0
+    const total = typeof event.total === 'number' && Number.isFinite(event.total) && event.total > 0 ? event.total : null
+
+    if (!previous || !units.has(event.unit)) {
+      return current
+    }
+
+    return {
+      ...current,
+      stages: {
+        ...current.stages,
+        [event.stage]: {
+          ...previous,
+          progress: {
+            stage: event.stage,
+            completed,
+            total,
+            unit: event.unit,
+            label: sanitizeAuthBootstrapText(event.label, event.stage),
+            updatedAt: typeof event.updatedAt === 'number' ? event.updatedAt : Date.now()
+          }
         }
       }
     }
   }
 
   if (event.type === 'complete') {
-    return { ...current, active: false, error: null, completedAt: Date.now() }
+    return { ...current, active: false, error: null, completedAt: event.completedAt }
   }
 
-  if (event.type === 'failed' || event.type === 'unsupported-platform') {
-    return { ...current, active: false, error: 'bootstrap_failed' }
+  if (event.type === 'failed') {
+    const failedStage = event.stage && current.stages[event.stage] ? event.stage : current.failedStage
+
+    return {
+      ...current,
+      active: false,
+      error: 'bootstrap_failed',
+      failedStage,
+      stages: failedStage
+        ? {
+            ...current.stages,
+            [failedStage]: {
+              ...current.stages[failedStage],
+              state: 'failed',
+              error: 'bootstrap_failed'
+            }
+          }
+        : current.stages
+    }
   }
 
   return current
 }
 
-function currentBootstrapStage(state: DesktopBootstrapState | null) {
-  const descriptors = state?.manifest?.stages || []
-  const index = descriptors.findIndex(descriptor => state?.stages[descriptor.name]?.state === 'running')
-
-  if (index < 0) {
-    return null
-  }
-
-  const descriptor = descriptors[index]
-
-  const title = String(descriptor.title || descriptor.name)
-    .replace(/[^/\p{L}\p{N} ._()-]/gu, '')
-    .slice(0, 80)
-
-  return { current: index + 1, title, total: descriptors.length }
-}
-
 export function AuthGate({
   auth = window.hermesDesktop?.auth,
-  bootstrap = window.hermesDesktop,
+  bootstrap = window.hermesDesktop?.authBootstrap,
   children
 }: {
   auth?: DesktopAuthClient
-  bootstrap?: DesktopBootstrapClient
+  bootstrap?: DesktopAuthBootstrapClient
   children: ReactNode
   // Kept as a defensive compatibility surface: unauthenticated content is
   // never rendered outside the fixed account login gate.
@@ -195,10 +237,76 @@ export function AuthGate({
   const [password, setPassword] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [connectionId, setConnectionId] = useState('local')
-  const [bootstrapState, setBootstrapState] = useState<DesktopBootstrapState | null>(null)
+  const [bootstrapState, setBootstrapState] = useState<DesktopSafeBootstrapState | null>(null)
+  const [now, setNow] = useState(() => Date.now())
   const eventRevision = useRef(0)
   const requestRevision = useRef(0)
   const bootstrapEventRevision = useRef(0)
+  const bootstrapStateRef = useRef<DesktopSafeBootstrapState | null>(null)
+  const refreshedCompletionRef = useRef<string | null>(null)
+
+  const commitBootstrapState = useCallback((next: DesktopSafeBootstrapState | null) => {
+    bootstrapStateRef.current = next
+    setBootstrapState(next)
+  }, [])
+
+  const requestStatus = useCallback(
+    (markChecking = false) => {
+      if (!auth) {
+        requestRevision.current += 1
+        setStatus(unavailableStatus())
+
+        return Promise.resolve(unavailableStatus())
+      }
+
+      const request = ++requestRevision.current
+      const observedEvent = eventRevision.current
+
+      if (markChecking) {
+        setStatus(current => ({ ...current, state: 'checking', reason: null }))
+      }
+
+      return withAuthDeadline(auth.status(connectionId === 'local' ? undefined : connectionId))
+        .then(next => {
+          if (request === requestRevision.current && observedEvent === eventRevision.current) {
+            setStatus(next)
+          }
+
+          return next
+        })
+        .catch(() => {
+          if (request === requestRevision.current && observedEvent === eventRevision.current) {
+            // Bootstrap owns readiness while it is active. Its idle/total
+            // deadlines, not this short auth deadline, decide terminal failure.
+            if (!bootstrapStateRef.current?.active) {
+              setStatus(unavailableStatus())
+            }
+          }
+
+          return unavailableStatus()
+        })
+    },
+    [auth, connectionId]
+  )
+
+  const refreshAfterCompletion = useCallback(
+    (state: DesktopSafeBootstrapState) => {
+      if (state.completedAt === null) {
+        return
+      }
+
+      const scope = state.manifest?.bootstrapScope || 'auth'
+      const key = `${scope}:${state.startedAt ?? 'unknown'}:${state.completedAt}`
+
+      if (refreshedCompletionRef.current === key) {
+        return
+      }
+
+      refreshedCompletionRef.current = key
+      void requestStatus(scope !== 'runtime')
+    },
+    [requestStatus]
+  )
 
   // eslint-disable-next-line no-restricted-syntax -- revision refs are imperative request-order tokens, not atom mirrors
   useEffect(() => {
@@ -210,8 +318,6 @@ export function AuthGate({
     }
 
     let active = true
-    const request = ++requestRevision.current
-    const observedEvent = eventRevision.current
 
     const unsubscribe = auth.onChanged((next, nextConnectionId = 'local') => {
       if (active) {
@@ -222,24 +328,14 @@ export function AuthGate({
       }
     })
 
-    void withAuthDeadline(auth.status(connectionId === 'local' ? undefined : connectionId))
-      .then(next => {
-        if (active && request === requestRevision.current && observedEvent === eventRevision.current) {
-          setStatus(next)
-        }
-      })
-      .catch(() => {
-        if (active && request === requestRevision.current && observedEvent === eventRevision.current) {
-          setStatus(unavailableStatus())
-        }
-      })
+    void requestStatus()
 
     return () => {
       active = false
       requestRevision.current += 1
       unsubscribe()
     }
-  }, [auth, connectionId])
+  }, [auth, requestStatus])
 
   // eslint-disable-next-line no-restricted-syntax -- revision refs order bootstrap snapshot/event delivery
   useEffect(() => {
@@ -250,27 +346,28 @@ export function AuthGate({
     let active = true
     const observedEvent = bootstrapEventRevision.current
     void bootstrap
-      .getBootstrapState()
+      .getState()
       .then(snapshot => {
         if (active && observedEvent === bootstrapEventRevision.current) {
-          setBootstrapState(snapshot)
+          commitBootstrapState(snapshot)
+          refreshAfterCompletion(snapshot)
         }
       })
       .catch(() => {
         // The bounded auth request remains authoritative when no snapshot is available.
       })
 
-    const unsubscribe = bootstrap.onBootstrapEvent(event => {
+    const unsubscribe = bootstrap.onChanged(event => {
       if (!active) {
         return
       }
 
       bootstrapEventRevision.current += 1
-      setBootstrapState(current => applyAuthBootstrapEvent(current, event))
+      const next = applyAuthBootstrapEvent(bootstrapStateRef.current, event)
+      commitBootstrapState(next)
 
-      if (event.type === 'failed' || event.type === 'unsupported-platform') {
-        requestRevision.current += 1
-        setStatus(current => (current.state === 'checking' ? unavailableStatus() : current))
+      if (next && event.type === 'complete') {
+        refreshAfterCompletion(next)
       }
     })
 
@@ -278,14 +375,29 @@ export function AuthGate({
       active = false
       unsubscribe()
     }
-  }, [bootstrap])
+  }, [bootstrap, commitBootstrapState, refreshAfterCompletion])
+
+  useEffect(() => {
+    if (!bootstrapState?.active) {
+      return
+    }
+
+    const timer = globalThis.setInterval(() => setNow(Date.now()), 1_000)
+
+    return () => globalThis.clearInterval(timer)
+  }, [bootstrapState?.active])
 
   const logout = useCallback(() => {
     if (!auth) {
       return Promise.resolve(unavailableStatus())
     }
 
-    return auth.logout(connectionId === 'local' ? undefined : connectionId)
+    return auth.logout(connectionId === 'local' ? undefined : connectionId).then(next => {
+      requestRevision.current += 1
+      setStatus(next)
+
+      return next
+    })
   }, [auth, connectionId])
 
   const authenticatedContext = useMemo<DesktopAuthContextValue>(
@@ -304,27 +416,25 @@ export function AuthGate({
       return
     }
 
-    const request = ++requestRevision.current
-    const observedEvent = eventRevision.current
-    setStatus(current => ({ ...current, state: 'checking', reason: null }))
-    const reset = bootstrapState?.error && bootstrap?.resetBootstrap ? bootstrap.resetBootstrap() : Promise.resolve()
+    if (bootstrapState?.error && bootstrap) {
+      commitBootstrapState({ ...bootstrapState, active: true, error: null, failedStage: null })
+      void bootstrap
+        .retry()
+        .then(result => {
+          if (!result.ok) {
+            throw new Error('bootstrap_retry_failed')
+          }
 
-    void reset
-      .then(() => {
-        setBootstrapState(current => (current ? { ...current, error: null } : current))
+          return requestStatus(!waitingForRuntime)
+        })
+        .catch(() => {
+          commitBootstrapState({ ...bootstrapState, active: false, error: 'bootstrap_failed' })
+        })
 
-        return withAuthDeadline(auth.status(connectionId === 'local' ? undefined : connectionId))
-      })
-      .then(next => {
-        if (request === requestRevision.current && observedEvent === eventRevision.current) {
-          setStatus(next)
-        }
-      })
-      .catch(() => {
-        if (request === requestRevision.current && observedEvent === eventRevision.current) {
-          setStatus(unavailableStatus())
-        }
-      })
+      return
+    }
+
+    void requestStatus(true)
   }
 
   const submit = (event: FormEvent) => {
@@ -355,22 +465,27 @@ export function AuthGate({
   }
 
   const reason = reasonText(t.auth.reasons, status.reason)
-  const bootstrapStage = currentBootstrapStage(bootstrapState)
+  const runtimeSnapshot = bootstrapState?.manifest?.bootstrapScope === 'runtime' ? bootstrapState : null
+  const authSnapshot = bootstrapState?.manifest?.bootstrapScope !== 'runtime' ? bootstrapState : null
 
-  const checkingText = waitingForRuntime
-    ? bootstrapStage && bootstrapState?.manifest?.bootstrapScope === 'runtime'
-      ? t.auth.preparingFullStage(bootstrapStage.current, bootstrapStage.total, bootstrapStage.title)
-      : t.auth.preparingFullRuntime
-    : bootstrapState?.active
-      ? bootstrapStage
-        ? t.auth.preparingStage(bootstrapStage.current, bootstrapStage.total, bootstrapStage.title)
-        : t.auth.preparingRuntime
-      : t.auth.checking
+  const showAuthBootstrap = Boolean(
+    !waitingForRuntime &&
+      authSnapshot &&
+      (authSnapshot.active || authSnapshot.error || (status.state === 'checking' && authSnapshot.manifest))
+  )
+
+  const showRuntimeBootstrap = Boolean(waitingForRuntime && runtimeSnapshot?.manifest)
+  const showBootstrapProgress = showAuthBootstrap || showRuntimeBootstrap
+
+  const showStatusRetry =
+    !showBootstrapProgress &&
+    status.state !== 'checking' &&
+    ['runtime_unavailable', 'server_unavailable', 'vault_unavailable'].includes(status.reason || '')
 
   return (
     <main className="fixed inset-0 grid min-h-screen place-items-center bg-(--ui-chat-surface-background) p-6 text-(--dt-foreground)">
       <section
-        aria-busy={status.state === 'checking' || Boolean(waitingForRuntime && bootstrapState?.active)}
+        aria-busy={status.state === 'checking' || Boolean(bootstrapState?.active)}
         className="w-full max-w-md rounded-2xl border border-(--dt-border) bg-(--ui-card-surface) p-8 shadow-2xl"
       >
         <div aria-hidden="true" className="mb-6 text-2xl font-semibold tracking-tight">
@@ -390,18 +505,34 @@ export function AuthGate({
           <code className="mt-1 block break-all text-sm">{ACCOUNT_SERVER}</code>
         </div>
 
-        {status.state === 'checking' || waitingForRuntime ? (
-          <>
-            <p className="mt-6 text-sm" role="status">
-              {checkingText}
+        {showAuthBootstrap && authSnapshot ? (
+          <AuthBootstrapProgress mode="auth" now={now} onRetry={authSnapshot.error ? retry : undefined} state={authSnapshot} />
+        ) : null}
+
+        {showRuntimeBootstrap && runtimeSnapshot ? (
+          <AuthBootstrapProgress
+            mode="runtime"
+            now={now}
+            onLogout={() => void logout()}
+            onRetry={runtimeSnapshot.error ? retry : undefined}
+            state={runtimeSnapshot}
+          />
+        ) : null}
+
+        {!showBootstrapProgress && (status.state === 'checking' || waitingForRuntime) ? (
+          <div className="mt-6 space-y-4">
+            <p className="text-sm" role="status">
+              {waitingForRuntime ? t.auth.preparingFullRuntime : t.auth.checking}
             </p>
-            {waitingForRuntime && bootstrapState?.error ? (
-              <p className="mt-3 text-sm text-(--dt-destructive)" role="alert">
-                {t.auth.runtimePreparationFailed}
-              </p>
+            {waitingForRuntime ? (
+              <Button onClick={() => void logout()} size="inline" variant="text">
+                {t.auth.signOut}
+              </Button>
             ) : null}
-          </>
-        ) : (
+          </div>
+        ) : null}
+
+        {!showBootstrapProgress && status.state !== 'checking' && !waitingForRuntime ? (
           <form className="mt-6 space-y-4" onSubmit={submit}>
             <label className="block text-sm font-medium">
               <span>{t.auth.username}</span>
@@ -435,33 +566,30 @@ export function AuthGate({
               </p>
             ) : null}
 
-            <button
-              className="w-full rounded-lg bg-(--dt-primary) px-4 py-2.5 font-semibold text-(--dt-primary-foreground) disabled:opacity-50"
+            <Button
+              className="w-full"
               disabled={submitting || !username.trim() || !password}
               type="submit"
             >
               {submitting ? t.auth.signingIn : t.auth.signIn}
-            </button>
+            </Button>
           </form>
-        )}
+        ) : null}
 
-        <button
-          className="mt-4 text-sm font-medium text-(--dt-muted-foreground) underline underline-offset-4 disabled:opacity-50"
-          disabled={submitting || status.state === 'checking' || Boolean(waitingForRuntime && bootstrapState?.active)}
-          onClick={retry}
-          type="button"
-        >
-          {t.auth.retry}
-        </button>
-        {waitingForRuntime ? (
-          <button
-            className="ml-4 text-sm font-medium text-(--dt-muted-foreground) underline underline-offset-4 disabled:opacity-50"
-            disabled={submitting}
-            onClick={() => void logout()}
-            type="button"
-          >
-            {t.auth.signOut}
-          </button>
+        {showStatusRetry ? (
+          <div className="mt-4">
+            <Button disabled={submitting} onClick={retry} size="inline" variant="textStrong">
+              {t.auth.retry}
+            </Button>
+          </div>
+        ) : null}
+
+        {waitingForRuntime && !showBootstrapProgress && status.state !== 'checking' ? (
+          <div className="mt-4">
+            <Button disabled={submitting} onClick={() => void logout()} size="inline" variant="text">
+              {t.auth.signOut}
+            </Button>
+          </div>
         ) : null}
         <p className="mt-6 border-t border-(--dt-border) pt-4 text-xs leading-5 text-(--dt-muted-foreground)">
           {t.auth.administratorManaged}

@@ -29,13 +29,50 @@ const EMPTY_RESULT: DesktopSafeBootstrapStageResult = {
   progress: null
 }
 
+const SENSITIVE_TEXT = /\b(?:authorization|bearer|cookie|set-cookie|password|passwd|session|sessionid|csrf|csrftoken|keychain)\b/i
+const PATH_OR_URL = /(?:[a-z]:\\|\/(?:Users|home|private|var|tmp)\/|(?:https?|file):\/\/)/i
+const UNSAFE_CHARACTERS = /[^/\p{L}\p{N} .,_:;()\-+%]/gu
+
+function stripControlCharacters(value: string): string {
+  return Array.from(value, character => {
+    const code = character.charCodeAt(0)
+
+    return code < 0x20 || (code >= 0x7f && code <= 0x9f) ? ' ' : character
+  }).join('')
+}
+
+export function sanitizeAuthBootstrapText(value: unknown, fallback: string): string {
+  const clean = (candidate: unknown) => {
+    if (typeof candidate !== 'string') {
+      return ''
+    }
+
+    const normalized = stripControlCharacters(candidate.normalize('NFKC'))
+      .replace(/\s+/g, ' ')
+      .trim()
+
+    if (!normalized || SENSITIVE_TEXT.test(normalized) || PATH_OR_URL.test(normalized)) {
+      return ''
+    }
+
+    return normalized.replace(UNSAFE_CHARACTERS, '').trim().slice(0, 80)
+  }
+
+  return clean(value) || clean(fallback) || 'Hermes installation'
+}
+
 export function deriveAuthBootstrapProgress(
   state: DesktopSafeBootstrapState,
   now = Date.now()
 ): AuthBootstrapProgressView {
   const descriptors = state.manifest?.stages || []
 
-  const stages = descriptors.map(descriptor => {
+  const stages = descriptors.map(rawDescriptor => {
+    const descriptor = {
+      ...rawDescriptor,
+      title: sanitizeAuthBootstrapText(rawDescriptor.title, rawDescriptor.name)
+    }
+
     const result = state.stages[descriptor.name] || EMPTY_RESULT
 
     const elapsedMs =
