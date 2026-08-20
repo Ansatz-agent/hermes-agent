@@ -38,7 +38,6 @@ export const RUNTIME_SCRIPT_FILES = Object.freeze([
   "hermes-gateway",
   "install.cmd",
   "install.ps1",
-  "install_psutil_android.py",
   "keystroke_diagnostic.py"
 ])
 
@@ -160,6 +159,8 @@ const TEST_SOURCE_RE =
 const DECLARATION_TEST_RE = /\.(test|spec)-d\.ts$/
 const NESTED_DOCS_RE = /(^|\/)docs(\/|$)/
 const GIT_METADATA_RE = /(^|\/)\.(gitignore|gitattributes|gitmodules)$/
+const CI_ONLY_ENTRY_RE =
+  /(^|\/)\.github\/|^hermes-agent\/scripts\/(?:desktop-dmg-|verify-desktop-dmg-)/
 
 function runtimeScriptEntryIsAllowed(entry) {
   const prefix = "hermes-agent/scripts"
@@ -235,6 +236,10 @@ function entryIsForbidden(entry) {
     GIT_METADATA_RE.test(entry) ||
     !runtimeScriptEntryIsAllowed(entry)
   )
+}
+
+function entryIsCiOnly(entry) {
+  return CI_ONLY_ENTRY_RE.test(entry)
 }
 
 function sourcePathIsExcluded(sourcePath) {
@@ -313,6 +318,10 @@ export function buildBackendPayload({
       if (!entries.includes(required)) {
         throw new Error(`Backend payload is missing required entry ${required}`)
       }
+    }
+    const ciOnly = entries.find(entryIsCiOnly)
+    if (ciOnly) {
+      throw new Error(`Backend payload contains CI-only entry ${ciOnly}`)
     }
     const forbidden = entries.find(entryIsForbidden)
     if (forbidden) {

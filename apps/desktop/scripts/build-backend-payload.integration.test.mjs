@@ -7,21 +7,30 @@ import path from 'node:path'
 
 import { test } from 'vitest'
 
-import { buildBackendPayload, validateInstallStamp } from './build-backend-payload.mjs'
+import {
+  buildBackendPayload,
+  RUNTIME_SCRIPT_FILES,
+  validateInstallStamp
+} from './build-backend-payload.mjs'
 
 function git(repoRoot, ...args) {
   return execFileSync('git', args, { cwd: repoRoot, encoding: 'utf8' }).trim()
 }
 
-function makeRepository() {
+function makeRepository(extraFiles = {}) {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-backend-payload-repo-'))
   fs.mkdirSync(path.join(repoRoot, 'scripts'), { recursive: true })
   fs.writeFileSync(path.join(repoRoot, 'payload.txt'), 'committed payload\n')
   fs.writeFileSync(path.join(repoRoot, 'scripts', 'install.sh'), '#!/bin/sh\nexit 0\n')
+  for (const [relativePath, contents] of Object.entries(extraFiles)) {
+    const target = path.join(repoRoot, relativePath)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target, contents)
+  }
   git(repoRoot, 'init')
   git(repoRoot, 'config', 'user.name', 'Hermes Test')
   git(repoRoot, 'config', 'user.email', 'hermes-test@example.invalid')
-  git(repoRoot, 'add', 'payload.txt', 'scripts/install.sh')
+  git(repoRoot, 'add', '.')
   git(repoRoot, 'commit', '-m', 'fixture')
 
   const commit = git(repoRoot, 'rev-parse', 'HEAD')
@@ -93,4 +102,30 @@ test('install stamp validation requires a real clean commit', () => {
     () => validateInstallStamp({ schemaVersion: 1, commit: 'a'.repeat(40), branch: null, dirty: true }),
     /install stamp is dirty/
   )
+})
+
+test('macOS backend payload excludes the Android-only psutil installer', () => {
+  assert.equal(RUNTIME_SCRIPT_FILES.includes('install_psutil_android.py'), false)
+})
+
+test('backend payload rejects CI-only files even under an allowed runtime path', () => {
+  const fixture = makeRepository({
+    'apps/shared/runtime.txt': 'runtime payload\n',
+    'apps/shared/.github/workflows/remote-login.yml': 'name: source-only login check\n'
+  })
+  try {
+    assert.throws(
+      () => buildBackendPayload({
+        repoRoot: fixture.repoRoot,
+        stampPath: fixture.stampPath,
+        outputDir: fixture.outputDir,
+        payloadPaths: ['apps/shared'],
+        payloadExcludes: [],
+        requiredEntries: ['hermes-agent/apps/shared/runtime.txt']
+      }),
+      /CI-only entry/
+    )
+  } finally {
+    fs.rmSync(fixture.repoRoot, { recursive: true, force: true })
+  }
 })
