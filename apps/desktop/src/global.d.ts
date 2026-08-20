@@ -927,6 +927,18 @@ export interface DesktopBootstrapStageResult {
   startedAt: number | null
   json: { ok: boolean; skipped?: boolean; reason?: string | null; stage: string } | null
   error: string | null
+  progress?: DesktopBootstrapProgress | null
+}
+
+export type DesktopBootstrapProgressUnit = 'bytes' | 'packages' | 'items' | 'files' | 'steps'
+
+export interface DesktopBootstrapProgress {
+  stage: string
+  completed: number
+  total: number | null
+  unit: DesktopBootstrapProgressUnit
+  label: string
+  updatedAt: number
 }
 
 export interface DesktopBootstrapUnsupportedPlatform {
@@ -951,6 +963,7 @@ export interface DesktopBootstrapState {
   } | null
   stages: Record<string, DesktopBootstrapStageResult>
   error: string | null
+  failedStage?: string | null
   log: Array<{ ts: number; stage: string | null; line: string; stream?: 'stdout' | 'stderr' }>
   startedAt: number | null
   completedAt: number | null
@@ -980,6 +993,15 @@ export type DesktopBootstrapEvent =
       json?: DesktopBootstrapStageResult['json']
       error?: string | null
     }
+  | {
+      type: 'progress'
+      stage: string
+      completed: number
+      total: number | null
+      unit: DesktopBootstrapProgressUnit
+      label: string
+      updatedAt?: number
+    }
   | { type: 'log'; stage?: string | null; line: string; stream?: 'stdout' | 'stderr' }
   | { type: 'complete'; marker: Record<string, unknown> }
   | { type: 'failed'; stage?: string | null; error: string }
@@ -990,6 +1012,43 @@ export type DesktopBootstrapEvent =
       installCommand: string
       docsUrl: string
     }
+
+export interface DesktopSafeBootstrapStageResult {
+  state: DesktopBootstrapStageState
+  durationMs: number | null
+  startedAt: number | null
+  error: 'bootstrap_failed' | null
+  progress: DesktopBootstrapProgress | null
+}
+
+export interface DesktopSafeBootstrapState {
+  active: boolean
+  manifest: {
+    type: 'manifest'
+    stages: DesktopBootstrapStageDescriptor[]
+    protocolVersion: number | null
+    bootstrapScope?: 'auth' | 'runtime'
+  } | null
+  stages: Record<string, DesktopSafeBootstrapStageResult>
+  error: 'bootstrap_failed' | null
+  failedStage: string | null
+  startedAt: number | null
+  completedAt: number | null
+}
+
+export type DesktopSafeBootstrapEvent =
+  | { type: 'dismissed' }
+  | NonNullable<DesktopSafeBootstrapState['manifest']>
+  | {
+      type: 'stage'
+      name: string
+      state: DesktopBootstrapStageState
+      durationMs?: number
+      error?: 'bootstrap_failed'
+    }
+  | (DesktopBootstrapProgress & { type: 'progress' })
+  | { type: 'complete'; completedAt: number }
+  | { type: 'failed'; stage?: string; error: 'bootstrap_failed' }
 
 export interface HermesApiRequest {
   // Exact execution target. Main-process authorization rejects the request if
