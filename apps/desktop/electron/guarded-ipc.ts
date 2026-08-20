@@ -6,12 +6,12 @@ const AUTH_FREE_CHANNELS_SOURCE = [
   'hermes:auth:status',
   'hermes:auth:login',
   'hermes:auth:logout',
+  'hermes:auth-bootstrap:get',
   'hermes:bootstrap:reset',
   'hermes:bootstrap:repair',
   'hermes:bootstrap:continue-local',
   'hermes:bootstrap:cancel',
   'hermes:boot-progress:get',
-  'hermes:bootstrap:get',
   'hermes:logs:renderer-error'
 ] as const
 
@@ -36,6 +36,7 @@ const BOTH_CHANNELS = [
 ] as const
 
 const LOCAL_CHANNELS = [
+  'hermes:bootstrap:get',
   'hermes:get-remote-display-reason',
   'hermes:zoom:get',
   'hermes:zoom:set-percent',

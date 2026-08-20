@@ -13,6 +13,16 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
       return () => ipcRenderer.removeListener('hermes:auth:changed', listener)
     }
   },
+  authBootstrap: {
+    getState: () => ipcRenderer.invoke('hermes:auth-bootstrap:get'),
+    retry: () => ipcRenderer.invoke('hermes:bootstrap:reset'),
+    onChanged: callback => {
+      const listener = (_event, payload) => callback(payload)
+      ipcRenderer.on('hermes:auth-bootstrap:event', listener)
+
+      return () => ipcRenderer.removeListener('hermes:auth-bootstrap:event', listener)
+    }
+  },
   getConnection: profile => ipcRenderer.invoke('hermes:connection', profile),
   // Registry-scoped backend resolution: { connectionId, profile } → descriptor.
   getConnectionFor: payload => ipcRenderer.invoke('hermes:connection:for', payload),

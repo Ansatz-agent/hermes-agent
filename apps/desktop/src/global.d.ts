@@ -20,6 +20,11 @@ declare global {
         logout: (connectionId?: string) => Promise<DesktopAccountStatus>
         onChanged: (callback: (status: DesktopAccountStatus, connectionId?: string) => void) => () => void
       }
+      authBootstrap: {
+        getState: () => Promise<DesktopSafeBootstrapState>
+        retry: () => Promise<{ ok: boolean }>
+        onChanged: (callback: (payload: DesktopSafeBootstrapEvent) => void) => () => void
+      }
       // Resolve a backend connection. Omit `profile` (or pass the primary) for
       // the window's backend; pass a named profile to lazily spawn/reuse that
       // profile's backend from the pool.

@@ -61,6 +61,12 @@ import {
   resolveLinuxPasswordStore
 } from './bootstrap-platform'
 import { decideBootstrapRepair } from './bootstrap-repair-guard'
+import {
+  createBootstrapState,
+  reduceBootstrapState,
+  safeBootstrapEvent,
+  safeBootstrapState
+} from './bootstrap-progress'
 import { runBootstrap } from './bootstrap-runner'
 import { classifyBundledRuntime, resolveBundledBootstrapRoot } from './bundled-runtime-state'
 import { applyConnectionChange, resolveTerminalConnection } from './connection-apply'
@@ -2038,85 +2044,14 @@ function broadcastBootProgress() {
 //
 // The snapshot is queryable via the hermes:bootstrap:get IPC handler so a
 // reloaded renderer (e.g. devtools reload during dev) recovers state.
-// Bootstrap log ring: bounded buffer so a long install (npm + playwright
-// downloads can emit thousands of lines) doesn't grow unbounded in memory
-// AND so the renderer's getBootstrapState() reply stays a reasonable size.
-// We keep enough to cover an entire failed stage's transcript so the
-// 'Copy output' button gives the user actually-actionable context, not
-// just the last few lines.
-const BOOTSTRAP_LOG_RING_MAX = 500
-
-let bootstrapState = {
-  active: false,
-  manifest: null,
-  stages: {},
-  error: null,
-  log: [],
-  startedAt: null,
-  completedAt: null,
-  setupChoice: null,
-  unsupportedPlatform: null
-}
+let bootstrapState = createBootstrapState()
 
 let firstRunSetupGate = null
 
 function broadcastBootstrapEvent(ev) {
-  if (ev.type === 'manifest') {
-    bootstrapState.manifest = ev
-    bootstrapState.active = true
-    bootstrapState.setupChoice = null
-    bootstrapState.startedAt = bootstrapState.startedAt || Date.now()
-    bootstrapState.stages = {}
-
-    for (const stage of ev.stages || []) {
-      bootstrapState.stages[stage.name] = { state: 'pending', json: null, durationMs: null, error: null }
-    }
-  } else if (ev.type === 'stage') {
-    bootstrapState.stages[ev.name] = {
-      state: ev.state,
-      durationMs: ev.durationMs ?? null,
-      json: ev.json ?? null,
-      error: ev.error ?? null
-    }
-  } else if (ev.type === 'log') {
-    bootstrapState.log.push({ ts: Date.now(), stage: ev.stage || null, line: ev.line, stream: ev.stream || 'stdout' })
-
-    if (bootstrapState.log.length > BOOTSTRAP_LOG_RING_MAX) {
-      bootstrapState.log.splice(0, bootstrapState.log.length - BOOTSTRAP_LOG_RING_MAX)
-    }
-  } else if (ev.type === 'complete') {
-    bootstrapState.active = false
-    bootstrapState.completedAt = Date.now()
-    bootstrapState.error = null
-    bootstrapState.unsupportedPlatform = null
-  } else if (ev.type === 'failed') {
-    bootstrapState.active = false
-    bootstrapState.error = ev.error || 'unknown error'
-    bootstrapState.setupChoice = null
-  } else if (ev.type === 'unsupported-platform') {
-    bootstrapState.active = false
-    bootstrapState.setupChoice = null
-    bootstrapState.unsupportedPlatform = {
-      platform: ev.platform,
-      activeRoot: ev.activeRoot,
-      installCommand: ev.installCommand,
-      docsUrl: ev.docsUrl
-    }
-  } else if (ev.type === 'setup-choice') {
-    bootstrapState.active = false
-    bootstrapState.error = null
-    bootstrapState.manifest = null
-    bootstrapState.stages = {}
-    bootstrapState.setupChoice = ev.active
-      ? {
-          platform: ev.platform,
-          activeRoot: ev.activeRoot
-        }
-      : null
-    bootstrapState.unsupportedPlatform = null
-  } else if (ev.type === 'dismissed') {
-    resetBootstrapSnapshot()
-  }
+  const now = Date.now()
+  const safeEvent = safeBootstrapEvent(ev, bootstrapState, now)
+  bootstrapState = reduceBootstrapState(bootstrapState, ev, now)
 
   if (!mainWindow || mainWindow.isDestroyed()) {
     return
@@ -2129,24 +2064,22 @@ function broadcastBootstrapEvent(ev) {
   }
 
   webContents.send('hermes:bootstrap:event', ev)
+
+  if (safeEvent) {
+    webContents.send('hermes:auth-bootstrap:event', safeEvent)
+  }
 }
 
 function getBootstrapState() {
   return bootstrapState
 }
 
+function getSafeBootstrapState() {
+  return safeBootstrapState(bootstrapState)
+}
+
 function resetBootstrapSnapshot() {
-  bootstrapState = {
-    active: false,
-    manifest: null,
-    stages: {},
-    error: null,
-    log: [],
-    startedAt: null,
-    completedAt: null,
-    setupChoice: null,
-    unsupportedPlatform: null
-  }
+  bootstrapState = createBootstrapState()
 }
 
 function promptFirstRunSetupChoice(backend) {
@@ -12551,6 +12484,7 @@ guardedHandle('hermes:bootstrap:cancel', async () => {
   return { ok: false, cancelled: false }
 })
 guardedHandle('hermes:boot-progress:get', async () => bootProgressState)
+guardedHandle('hermes:auth-bootstrap:get', async () => getSafeBootstrapState())
 guardedHandle('hermes:bootstrap:get', async () => getBootstrapState())
 guardedHandle('hermes:connection-config:get', async (_event, profile) =>
   sanitizeDesktopConnectionConfig(readDesktopConnectionConfig(), profile)
