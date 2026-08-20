@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -189,3 +190,106 @@ def test_account_status_is_auth_free_and_contains_no_secret():
     assert payload["reason"] == "runtime_unavailable"
     assert "cookie" not in result.stdout.casefold()
     assert "password" not in result.stdout.casefold()
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected_code", "expected_stdout", "expected_stderr"),
+    [
+        (
+            ("auth", "status"),
+            0,
+            '{"epoch": 0, "reason": "runtime_unavailable", "runtime_instance_id": "test", "session_expires_at": null, "state": "signed_out", "username": null, "valid_until": 0.0}\n',
+            "",
+        ),
+        (
+            ("logout",),
+            0,
+            "Remote Hermes account signed out; provider credentials were not modified.\n",
+            "",
+        ),
+        (
+            ("login",),
+            20,
+            "",
+            "AUTH_REQUIRED interactive_login_required; run `hermes login`\n",
+        ),
+    ],
+)
+def test_auth_free_commands_run_with_only_the_auth_runtime(
+    tmp_path: Path,
+    argv: tuple[str, ...],
+    expected_code: int,
+    expected_stdout: str,
+    expected_stderr: str,
+) -> None:
+    site_dir = tmp_path / "site"
+    site_dir.mkdir()
+    site_dir.joinpath("sitecustomize.py").write_text(
+        """
+import importlib.abc
+import sys
+import types
+from enum import StrEnum
+
+class _NoHeavyImports(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "yaml":
+            raise ModuleNotFoundError("No module named 'yaml'")
+        return None
+
+sys.meta_path.insert(0, _NoHeavyImports())
+
+runtime = types.ModuleType("hermes_cli.client_auth.runtime")
+
+class AuthState(StrEnum):
+    AUTHENTICATED = "authenticated"
+    SIGNED_OUT = "signed_out"
+
+class AuthRequired(RuntimeError):
+    code = "AUTH_REQUIRED"
+    def __init__(self, reason=None):
+        super().__init__(reason or self.code)
+        self.reason = reason
+
+class Snapshot:
+    state = AuthState.SIGNED_OUT
+    username = None
+    def public_dict(self):
+        return {
+            "state": "signed_out",
+            "username": None,
+            "runtime_instance_id": "test",
+            "epoch": 0,
+            "valid_until": 0.0,
+            "session_expires_at": None,
+            "reason": "runtime_unavailable",
+        }
+
+runtime.AuthState = AuthState
+runtime.AuthRequired = AuthRequired
+runtime.account_status = lambda: Snapshot()
+runtime.account_logout = lambda: Snapshot()
+runtime.account_login = lambda username, password: Snapshot()
+sys.modules["hermes_cli.client_auth.runtime"] = runtime
+""",
+        encoding="utf-8",
+    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(site_dir), str(REPO_ROOT), env.get("PYTHONPATH", "")]
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-m", "hermes_cli.main", *argv],
+        cwd=REPO_ROOT,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == expected_code
+    assert result.stdout == expected_stdout
+    assert result.stderr == expected_stderr
+    assert "Traceback" not in result.stderr

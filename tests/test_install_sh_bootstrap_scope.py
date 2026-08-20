@@ -75,6 +75,53 @@ def test_unknown_bootstrap_scope_is_rejected() -> None:
     assert "unknown bootstrap scope" in result.stderr.lower()
 
 
+def test_auth_complete_publishes_cli_launchers_in_a_clean_home(tmp_path: Path) -> None:
+    install_dir = tmp_path / "hermes-agent"
+    hermes_home = tmp_path / "hermes-home"
+    shell_home = tmp_path / "shell-home"
+    venv_python = install_dir / "venv" / "bin" / "python"
+
+    venv_python.parent.mkdir(parents=True)
+    shell_home.mkdir()
+    os.symlink(sys.executable, venv_python)
+    install_dir.joinpath("hermes").write_text(
+        "#!/usr/bin/env python3\nraise SystemExit(0)\n",
+        encoding="utf-8",
+    )
+
+    env = os.environ.copy()
+    env.update({"HOME": str(shell_home), "SHELL": "/bin/zsh"})
+    result = subprocess.run(
+        [
+            "bash",
+            str(INSTALL_SH),
+            "--stage",
+            "auth-complete",
+            "--bundled-source",
+            "--bootstrap-scope",
+            "auth",
+            "--non-interactive",
+            "--json",
+            "--dir",
+            str(install_dir),
+            "--hermes-home",
+            str(hermes_home),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    command_dir = shell_home / ".local" / "bin"
+    for command in ("hermes", "hermes-agent", "hermes-acp"):
+        launcher = command_dir / command
+        assert launcher.is_file(), f"auth bootstrap did not publish {command}"
+        assert str(install_dir) in launcher.read_text(encoding="utf-8")
+    assert install_dir.joinpath(".hermes-auth-bootstrap-complete").is_file()
+
+
 def test_bundled_runtime_lock_failure_never_falls_back_to_unlocked_pip(tmp_path: Path) -> None:
     install_dir = tmp_path / "hermes-agent"
     hermes_home = tmp_path / "home"

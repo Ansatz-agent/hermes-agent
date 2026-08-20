@@ -3561,6 +3561,11 @@ run_stage_body() {
             detect_os
             resolve_install_layout
             require_install_dir
+            # Publish the guarded CLI launchers while only the authentication
+            # environment exists. The exact auth-free commands are handled
+            # before the full CLI import wall; every protected entrypoint still
+            # fails closed until online authentication and runtime install.
+            setup_path
             write_auth_bootstrap_marker
             ;;
         *)

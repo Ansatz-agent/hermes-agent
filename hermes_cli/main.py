@@ -114,6 +114,15 @@ except GuardRejected as _auth_error:
     )
     raise SystemExit(20) from None
 
+# The Desktop auth-only environment intentionally installs only httpx,
+# keyring, and their locked transitive dependencies. Keep the three auth-free
+# account commands ahead of config/YAML and the full CLI import wall so a fresh
+# Desktop install can log in before the protected runtime is installed.
+from hermes_cli.client_auth.cli import try_handle as _try_handle_account_command
+
+if _try_handle_account_command(_raw_startup_argv):
+    raise SystemExit(0)
+
 # Early venv self-heal remains ahead of every third-party import, but only
 # after the central authentication gate. Protected invocations must not touch
 # recovery markers, configuration, profiles, sessions, or subprocesses before
@@ -4870,43 +4879,23 @@ def _run_anthropic_oauth_flow(save_env_value):
 
 def cmd_login(_args):
     """Sign in to the fixed Hermes remote account server."""
-    from getpass import getpass
+    from hermes_cli.client_auth.cli import login
 
-    from hermes_cli.client_auth.runtime import (
-        AuthRequired,
-        AuthState,
-        account_login,
-        account_status,
-    )
-
-    if not (sys.stdin.isatty() and sys.stderr.isatty()):
-        raise AuthRequired("interactive_login_required")
-    current = account_status()
-    if current.state is AuthState.AUTHENTICATED:
-        print(f"Authenticated as {current.username}")
-        return
-    username = input("Hermes account: ").strip()
-    password = bytearray(getpass("Password: ").encode("utf-8"))
-    try:
-        result = account_login(username, password)
-    finally:
-        password[:] = b"\0" * len(password)
-    print(f"Authenticated as {result.username}")
+    login()
 
 
 def cmd_logout(_args):
     """Sign out of the Hermes remote account."""
-    from hermes_cli.client_auth.runtime import account_logout
+    from hermes_cli.client_auth.cli import logout
 
-    account_logout()
-    print("Remote Hermes account signed out; provider credentials were not modified.")
+    logout()
 
 
 def cmd_auth_status(_args):
     """Print redacted Hermes remote-account status."""
-    from hermes_cli.client_auth.runtime import account_status
+    from hermes_cli.client_auth.cli import status
 
-    print(json.dumps(account_status().public_dict(), sort_keys=True))
+    status()
 
 
 def cmd_provider(args):
