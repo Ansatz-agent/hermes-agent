@@ -15,7 +15,10 @@ function sha256(filePath: string): string {
   return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
 }
 
-function makePayloadFixture({ symlink = false }: { symlink?: boolean } = {}) {
+function makePayloadFixture({
+  symlink = false,
+  androidHelper = false
+}: { symlink?: boolean; androidHelper?: boolean } = {}) {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-bootstrap-payload-'))
   const sourceRoot = path.join(tempRoot, 'source', 'hermes-agent')
   const bootstrapRoot = path.join(tempRoot, 'bootstrap')
@@ -30,6 +33,9 @@ function makePayloadFixture({ symlink = false }: { symlink?: boolean } = {}) {
 
   if (symlink) {
     fs.symlinkSync('pyproject.toml', path.join(sourceRoot, 'linked-project'))
+  }
+  if (androidHelper) {
+    fs.writeFileSync(path.join(sourceRoot, 'scripts', 'install_psutil_android.py'), 'raise SystemExit(0)\n')
   }
 
   const archivePath = path.join(bootstrapRoot, 'hermes-backend.tar.gz')
@@ -98,6 +104,19 @@ test('payload archives containing symbolic links are rejected', async () => {
     await assert.rejects(
       resolveBundledPayload({ bootstrapRoot: fixture.bootstrapRoot, installStamp: { commit: COMMIT } }),
       /unsupported link or entry type/
+    )
+  } finally {
+    fs.rmSync(fixture.tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('payload archives containing the Android-only installer are rejected on Desktop', async () => {
+  const fixture = makePayloadFixture({ androidHelper: true })
+
+  try {
+    await assert.rejects(
+      resolveBundledPayload({ bootstrapRoot: fixture.bootstrapRoot, installStamp: { commit: COMMIT } }),
+      /unsafe entry.*install_psutil_android\.py/
     )
   } finally {
     fs.rmSync(fixture.tempRoot, { recursive: true, force: true })

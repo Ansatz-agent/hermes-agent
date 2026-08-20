@@ -20,7 +20,6 @@ const RUNTIME_SCRIPT_FILES = [
   'hermes-gateway',
   'install.cmd',
   'install.ps1',
-  'install_psutil_android.py',
   'keystroke_diagnostic.py'
 ]
 
