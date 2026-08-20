@@ -14,6 +14,28 @@ export const ja = defineLocale({
     retry: '再試行',
     checking: 'アカウントセッションを確認中…',
     administratorManaged: 'アカウントの発行とパスワードの支援はサーバー管理者が行います。',
+    bootstrap: {
+      preparingAuthTitle: '安全なサインインサービスを準備中',
+      stagesComplete: (completed, total) => `${total} 段階中 ${completed} 段階が完了`,
+      stagePosition: (current, total, title) => `${total} 段階中 ${current}：${title}`,
+      elapsed: elapsed => `現在の段階 · ${elapsed}`,
+      overallProgressLabel: 'Hermes ランタイムのインストール',
+      authPreparationFailed: '安全なサインインサービスを準備できませんでした。',
+      runtimePreparationFailed: 'Hermes のローカルランタイムを準備できませんでした。',
+      failedAt: title => `失敗した段階：${title}`,
+      runningWithElapsed: (state, elapsed) => `${state} · ${elapsed}`,
+      knownProgress: (completed, total, unit, percent) =>
+        `${completed} / ${total}${unit ? ` ${unit}` : ''}、${percent}%`,
+      unknownProgress: (completed, unit) => `${completed}${unit ? ` ${unit}` : ''}`,
+      stageStates: {
+        pending: '待機中',
+        running: '実行中',
+        succeeded: '完了',
+        skipped: '完了',
+        failed: '失敗'
+      },
+      units: { packages: 'パッケージ', items: '項目', files: 'ファイル', steps: '段階' }
+    },
     reasons: {
       interactiveLoginRequired: 'サーバー管理者から提供された認証情報を入力してください。',
       invalidCredentials: 'ユーザー名またはパスワードが正しくありません。',

@@ -70,6 +70,21 @@ export interface Translations {
     accountMenu: string
     signOut: string
     signingOut: string
+    bootstrap: {
+      preparingAuthTitle: string
+      stagesComplete: (completed: number, total: number) => string
+      stagePosition: (current: number, total: number, title: string) => string
+      elapsed: (elapsed: string) => string
+      overallProgressLabel: string
+      authPreparationFailed: string
+      runtimePreparationFailed: string
+      failedAt: (title: string) => string
+      runningWithElapsed: (state: string, elapsed: string) => string
+      knownProgress: (completed: string, total: string, unit: string, percent: number) => string
+      unknownProgress: (completed: string, unit: string) => string
+      stageStates: Record<'pending' | 'running' | 'succeeded' | 'skipped' | 'failed', string>
+      units: Record<'packages' | 'items' | 'files' | 'steps', string>
+    }
     reasons: {
       interactiveLoginRequired: string
       invalidCredentials: string

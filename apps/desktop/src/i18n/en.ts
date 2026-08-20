@@ -24,6 +24,28 @@ export const en: Translations = {
     accountMenu: 'Account',
     signOut: 'Sign out',
     signingOut: 'Signing out…',
+    bootstrap: {
+      preparingAuthTitle: 'Preparing the secure sign-in service',
+      stagesComplete: (completed, total) => `${completed} of ${total} stages complete`,
+      stagePosition: (current, total, title) => `Stage ${current} of ${total}: ${title}`,
+      elapsed: elapsed => `Current stage · ${elapsed}`,
+      overallProgressLabel: 'Hermes runtime installation',
+      authPreparationFailed: 'Hermes could not prepare the secure sign-in service.',
+      runtimePreparationFailed: 'Hermes could not prepare its local runtime.',
+      failedAt: title => `Failed at: ${title}`,
+      runningWithElapsed: (state, elapsed) => `${state} · ${elapsed}`,
+      knownProgress: (completed, total, unit, percent) =>
+        `${completed} / ${total}${unit ? ` ${unit}` : ''}, ${percent}%`,
+      unknownProgress: (completed, unit) => `${completed}${unit ? ` ${unit}` : ''}`,
+      stageStates: {
+        pending: 'Waiting',
+        running: 'Running',
+        succeeded: 'Completed',
+        skipped: 'Completed',
+        failed: 'Failed'
+      },
+      units: { packages: 'packages', items: 'items', files: 'files', steps: 'steps' }
+    },
     reasons: {
       interactiveLoginRequired: 'Enter the account credentials provided by the server administrator.',
       invalidCredentials: 'The username or password is incorrect.',

@@ -24,6 +24,28 @@ export const zh: Translations = {
     accountMenu: '账户',
     signOut: '退出登录',
     signingOut: '正在退出…',
+    bootstrap: {
+      preparingAuthTitle: '正在准备安全登录服务',
+      stagesComplete: (completed, total) => `已完成 ${completed}/${total} 个阶段`,
+      stagePosition: (current, total, title) => `第 ${current}/${total} 阶段：${title}`,
+      elapsed: elapsed => `当前阶段 · ${elapsed}`,
+      overallProgressLabel: 'Hermes 运行时安装',
+      authPreparationFailed: '无法准备安全登录服务。',
+      runtimePreparationFailed: '无法完成 Hermes 本地运行时准备。',
+      failedAt: title => `失败阶段：${title}`,
+      runningWithElapsed: (state, elapsed) => `${state} · ${elapsed}`,
+      knownProgress: (completed, total, unit, percent) =>
+        `${completed} / ${total}${unit ? ` ${unit}` : ''}，${percent}%`,
+      unknownProgress: (completed, unit) => `${completed}${unit ? ` ${unit}` : ''}`,
+      stageStates: {
+        pending: '等待中',
+        running: '进行中',
+        succeeded: '已完成',
+        skipped: '已完成',
+        failed: '失败'
+      },
+      units: { packages: '个软件包', items: '项', files: '个文件', steps: '个步骤' }
+    },
     reasons: {
       interactiveLoginRequired: '请输入服务器管理员分配的账户凭据。',
       invalidCredentials: '用户名或密码不正确。',

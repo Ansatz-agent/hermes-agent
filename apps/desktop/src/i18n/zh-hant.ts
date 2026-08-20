@@ -14,6 +14,28 @@ export const zhHant = defineLocale({
     retry: '重試',
     checking: '正在驗證帳戶工作階段…',
     administratorManaged: '帳戶發放與密碼協助由伺服器管理員統一處理。',
+    bootstrap: {
+      preparingAuthTitle: '正在準備安全登入服務',
+      stagesComplete: (completed, total) => `已完成 ${completed}/${total} 個階段`,
+      stagePosition: (current, total, title) => `第 ${current}/${total} 階段：${title}`,
+      elapsed: elapsed => `目前階段 · ${elapsed}`,
+      overallProgressLabel: 'Hermes 執行環境安裝',
+      authPreparationFailed: '無法準備安全登入服務。',
+      runtimePreparationFailed: '無法完成 Hermes 本機執行環境準備。',
+      failedAt: title => `失敗階段：${title}`,
+      runningWithElapsed: (state, elapsed) => `${state} · ${elapsed}`,
+      knownProgress: (completed, total, unit, percent) =>
+        `${completed} / ${total}${unit ? ` ${unit}` : ''}，${percent}%`,
+      unknownProgress: (completed, unit) => `${completed}${unit ? ` ${unit}` : ''}`,
+      stageStates: {
+        pending: '等待中',
+        running: '進行中',
+        succeeded: '已完成',
+        skipped: '已完成',
+        failed: '失敗'
+      },
+      units: { packages: '個套件', items: '項', files: '個檔案', steps: '個步驟' }
+    },
     reasons: {
       interactiveLoginRequired: '請輸入伺服器管理員提供的帳戶憑證。',
       invalidCredentials: '使用者名稱或密碼不正確。',
