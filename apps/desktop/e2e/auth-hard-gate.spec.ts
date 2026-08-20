@@ -20,6 +20,7 @@ test.beforeAll(async () => {
   }
 
   sandbox = createSandbox('auth-hard-gate')
+
   const launched = await launchDesktop(
     buildAppEnv(sandbox, {
       // The auth runtime deliberately uses its non-persistent MemoryOwner in
@@ -28,6 +29,7 @@ test.beforeAll(async () => {
       SSH_CONNECTION: '127.0.0.1 40000 127.0.0.1 22'
     })
   )
+
   app = launched.app
   page = launched.page
 })
@@ -84,8 +86,9 @@ test('unauthenticated startup exposes only account login and rejects every capab
   // start instead of racing Playwright's default 5s assertion timeout.
   await expect(page!.locator('input[name="username"]')).toBeVisible({ timeout: 15_000 })
   await expect(page!.locator('input[name="password"]')).toHaveAttribute('type', 'password')
-  await expect(page!.locator('main section button')).toHaveCount(2)
+  await expect(page!.locator('main section button')).toHaveCount(1)
   await expect(page!.locator('main section button[type="submit"]')).toBeVisible()
+  await expect(page!.getByRole('button', { name: /retry|重试|重試|再試行/i })).toHaveCount(0)
   await expect(page!.locator('main section > p').last()).toContainText(/administrator|管理员|管理者|管理員/i)
   await expect(page!.getByRole('button', { name: /account|账户/i })).toHaveCount(0)
   await expect(page!.getByText(/sign out|退出登录/i)).toHaveCount(0)
@@ -122,10 +125,12 @@ test('unauthenticated startup exposes only account login and rejects every capab
   const protectedRendererLoaded = await page!.evaluate(() =>
     performance.getEntriesByType('resource').some(entry => /(?:^|\/)protected-root-[^/]+\.js(?:$|\?)/.test(entry.name))
   )
+
   expect(protectedRendererLoaded).toBe(false)
 
   const rejections = await page!.evaluate(async () => {
     const desktop = (window as any).hermesDesktop
+
     const attempt = async (operation: () => Promise<unknown>) => {
       try {
         await operation()
@@ -162,6 +167,7 @@ test('unauthenticated startup exposes only account login and rejects every capab
       })
     )
   )
+
   expect(windows).toHaveLength(1)
   expect(windows[0]).toMatchObject({ destroyed: false })
   expect(windows[0]?.url).not.toMatch(/[?&]win=(?:hud|overlay|quick|wake)(?:&|$)/)
@@ -188,6 +194,7 @@ function descendantCommands(rootPid: number): string[] {
     .map(line => line.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/))
     .filter((match): match is RegExpMatchArray => Boolean(match))
     .map(match => ({ command: match[3]!, parent: Number(match[2]), pid: Number(match[1]) }))
+
   const descendants = new Set([rootPid])
   let changed = true
 
