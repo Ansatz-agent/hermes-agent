@@ -804,6 +804,18 @@ function createDesktopAuthBridge() {
   })
 }
 
+async function recoverDesktopAuthBridge(connectionId, failedBridge) {
+  if (connectionId !== 'local' || failedBridge !== desktopAuthBridge) {
+    return null
+  }
+
+  desktopAuthBridge?.close()
+  const replacement = createDesktopAuthBridge()
+  desktopAuthBridge = replacement
+
+  return replacement
+}
+
 function desktopStatusForRenderer(status, connectionId = 'local') {
   if (connectionId !== 'local') {
     return { ...status, runtime_ready: status.state === 'authenticated' }
@@ -886,7 +898,10 @@ async function startDesktopAuthRuntime() {
     }
 
     const bridge = createDesktopAuthBridge()
-    const coordinator = new AuthCoordinator(bridge, { cleanup: cleanupDesktopCapabilities })
+    const coordinator = new AuthCoordinator(bridge, {
+      cleanup: cleanupDesktopCapabilities,
+      recoverBridge: recoverDesktopAuthBridge
+    })
     desktopAuthBridge = bridge
     desktopAuthCoordinator = coordinator
     coordinator.subscribe((status, connectionId) => {
@@ -14921,7 +14936,7 @@ async function resolveDesktopAuthConnection(connectionId) {
 
 guardedHandle('hermes:auth:status', async (_event, connectionId) => {
   const { coordinator, id } = await resolveDesktopAuthConnection(connectionId)
-  const status = await coordinator.refresh(id)
+  const status = await coordinator.refresh(id, { recoverRuntime: id === 'local' })
 
   return desktopStatusForRenderer(status, id)
 })
