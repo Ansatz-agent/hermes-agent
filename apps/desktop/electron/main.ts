@@ -30,9 +30,10 @@ import {
 import nodePty from 'node-pty'
 
 import { classifyActiveRuntime } from './active-runtime-state'
-import { AuthBridgeError, DesktopAuthBridge } from './auth-bridge'
+import { AuthBridgeError, type BridgeStatus, DesktopAuthBridge } from './auth-bridge'
 import { AuthCoordinator } from './auth-coordinator'
 import { encodeScopeTokenRegistration, issueAuthScopeToken, sanitizeAuthChildEnvironment } from './auth-scope-token'
+import { runAuthenticatedRuntimePreparation } from './authenticated-runtime-preparation'
 import { stopBackendChild as stopBackendChildImpl, stopBackendTreesForUpdate } from './backend-child'
 import { dashboardFallbackArgs, sourceDeclaresServe } from './backend-command'
 import { createBackendConnectionState } from './backend-connection-state'
@@ -847,37 +848,41 @@ function fullRuntimeBootstrapRequest(backendArgs = []) {
   }
 }
 
-async function prepareAuthenticatedDesktopRuntime(status) {
-  if (status?.state !== 'authenticated' || !desktopAuthCoordinator?.isAuthenticated('local')) {
-    return
-  }
+async function prepareAuthenticatedDesktopRuntime(status: BridgeStatus) {
+  return runAuthenticatedRuntimePreparation({
+    observedStatus: status,
+    prepare: async () => {
+      await desktopRuntimeGate.prepare(async () => {
+        const candidate = resolveHermesBackend([])
+        const runtime = activeRuntimeState()
+        const authOnlyInstall = fs.existsSync(AUTH_BOOTSTRAP_COMPLETE_MARKER) && !runtime.hasValidMarker
 
-  await desktopRuntimeGate.prepare(async () => {
-    const candidate = resolveHermesBackend([])
-    const runtime = activeRuntimeState()
-    const authOnlyInstall = fs.existsSync(AUTH_BOOTSTRAP_COMPLETE_MARKER) && !runtime.hasValidMarker
+        if (candidate?.kind !== 'bootstrap-needed' && runtime.shouldUseActiveRuntime && !authOnlyInstall) {
+          return
+        }
 
-    if (candidate?.kind !== 'bootstrap-needed' && runtime.shouldUseActiveRuntime && !authOnlyInstall) {
-      return
+        await ensureRuntime(candidate?.kind === 'bootstrap-needed' ? candidate : fullRuntimeBootstrapRequest(), {
+          scope: 'runtime'
+        })
+      })
+    },
+    currentStatus: () => desktopAuthCoordinator?.status('local') ?? null,
+    isAuthenticated: () => Boolean(desktopAuthCoordinator?.isAuthenticated('local')),
+    onCurrentReady: async currentStatus => {
+      enableDesktopCapabilityShell()
+      broadcastDesktopAuthStatus(currentStatus, 'local')
+
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        await startHermes()
+      }
+    },
+    onCurrentFailure: (error, currentStatus) => {
+      const failure = error as { code?: string; failedStage?: string }
+      const failureCode = failure?.failedStage || failure?.code || 'runtime-unavailable'
+      rememberLog(`[runtime] authenticated preparation failed: ${failureCode}`)
+      broadcastDesktopAuthStatus(currentStatus, 'local')
     }
-
-    await ensureRuntime(candidate?.kind === 'bootstrap-needed' ? candidate : fullRuntimeBootstrapRequest(), {
-      scope: 'runtime'
-    })
   })
-
-  if (!desktopAuthCoordinator?.isAuthenticated('local')) {
-    desktopRuntimeGate.invalidate()
-
-    return
-  }
-
-  enableDesktopCapabilityShell()
-  broadcastDesktopAuthStatus(status, 'local')
-
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    await startHermes()
-  }
 }
 
 async function startDesktopAuthRuntime() {
@@ -916,11 +921,7 @@ async function startDesktopAuthRuntime() {
       broadcastDesktopAuthStatus(status, connectionId)
 
       if (connectionId === 'local' && status.state === 'authenticated') {
-        void prepareAuthenticatedDesktopRuntime(status).catch(error => {
-          const failureCode = error?.failedStage || error?.code || 'runtime-unavailable'
-          rememberLog(`[runtime] authenticated preparation failed: ${failureCode}`)
-          broadcastDesktopAuthStatus(status, connectionId)
-        })
+        void prepareAuthenticatedDesktopRuntime(status)
       } else if (connectionId === 'local') {
         desktopRuntimeGate.invalidate()
       }
