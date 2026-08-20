@@ -104,3 +104,100 @@ test('runBootstrapProcess cancellation reaches a terminal result', async () => {
 
   assert.equal(result.termination, 'cancelled')
 })
+
+test('runBootstrapProcess emits reserved structured progress without exposing the frame as a log', async () => {
+  const events: any[] = []
+  const frame = {
+    type: 'progress',
+    stage: 'python-deps',
+    completed: 38_200_000,
+    total: 126_500_000,
+    unit: 'bytes',
+    label: 'Hermes Python dependencies'
+  }
+
+  const result = await runBootstrapProcess({
+    command: process.execPath,
+    args: [
+      '-e',
+      `process.stdout.write(${JSON.stringify(`HERMES_BOOTSTRAP_PROGRESS ${JSON.stringify(frame)}\n`)})`
+    ],
+    emit: event => events.push(event),
+    stageName: 'python-deps',
+    hardTimeoutMs: 2_000,
+    idleTimeoutMs: 1_000,
+    killGraceMs: 50
+  })
+
+  assert.equal(result.code, 0)
+  assert.equal(events.some(event => event.type === 'log' && event.line.includes('HERMES_BOOTSTRAP_PROGRESS')), false)
+  assert.deepEqual(events, [{ ...frame, updatedAt: events[0]?.updatedAt }])
+  assert.equal(typeof events[0]?.updatedAt, 'number')
+})
+
+test('runBootstrapProcess never derives progress from installer prose', async () => {
+  const events: any[] = []
+
+  await runBootstrapProcess({
+    command: process.execPath,
+    args: [
+      '-e',
+      `process.stdout.write(${JSON.stringify(
+        'Downloading 38.2 MB / 126.5 MB (30%)\nuv resolved 47 packages\nnpm progress 80%\n'
+      )})`
+    ],
+    emit: event => events.push(event),
+    stageName: 'python-deps',
+    hardTimeoutMs: 2_000,
+    idleTimeoutMs: 1_000,
+    killGraceMs: 50
+  })
+
+  assert.equal(events.filter(event => event.type === 'progress').length, 0)
+  assert.deepEqual(
+    events.filter(event => event.type === 'log').map(event => event.line),
+    ['Downloading 38.2 MB / 126.5 MB (30%)', 'uv resolved 47 packages', 'npm progress 80%']
+  )
+})
+
+test('runBootstrapProcess swallows malformed or wrong-stage structured frames and sanitizes hostile labels', async () => {
+  const events: any[] = []
+  const lines = [
+    'HERMES_BOOTSTRAP_PROGRESS not-json',
+    `HERMES_BOOTSTRAP_PROGRESS ${JSON.stringify({
+      type: 'progress',
+      stage: 'other-stage',
+      completed: 1,
+      total: 2,
+      unit: 'items',
+      label: 'Wrong stage'
+    })}`,
+    `HERMES_BOOTSTRAP_PROGRESS ${JSON.stringify({
+      type: 'progress',
+      stage: 'python-deps',
+      completed: 47,
+      total: null,
+      unit: 'packages',
+      label: 'password=secret Cookie: abc /Users/alice/private'
+    })}`
+  ]
+
+  await runBootstrapProcess({
+    command: process.execPath,
+    args: ['-e', `process.stdout.write(${JSON.stringify(`${lines.join('\n')}\n`)})`],
+    emit: event => events.push(event),
+    stageName: 'python-deps',
+    hardTimeoutMs: 2_000,
+    idleTimeoutMs: 1_000,
+    killGraceMs: 50
+  })
+
+  assert.equal(events.some(event => event.type === 'log'), false)
+  assert.equal(events.length, 1)
+  assert.equal(events[0].type, 'progress')
+  assert.equal(events[0].stage, 'python-deps')
+  assert.equal(events[0].total, null)
+  assert.equal(events[0].label, 'python-deps')
+  assert.equal(JSON.stringify(events).includes('secret'), false)
+  assert.equal(JSON.stringify(events).includes('/Users/'), false)
+})

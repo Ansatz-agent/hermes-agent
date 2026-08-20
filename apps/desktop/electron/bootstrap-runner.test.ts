@@ -330,6 +330,17 @@ test.skipIf(process.platform === 'win32')('runBootstrap reports a stable idle-ti
 
     assert.equal(result.ok, false)
     assert.equal(result.error, 'BOOTSTRAP_IDLE_TIMEOUT')
+    assert.ok(
+      events.some(
+        event =>
+          event.type === 'progress' &&
+          event.stage === 'stall' &&
+          event.completed === 0 &&
+          event.total === null &&
+          event.unit === 'items'
+      ),
+      'a running stage should emit honest indeterminate progress before installer output arrives'
+    )
     assert.ok(events.some(event => event.type === 'failed' && event.error === 'BOOTSTRAP_IDLE_TIMEOUT'))
   } finally {
     fs.rmSync(home, { recursive: true, force: true })

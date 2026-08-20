@@ -730,6 +730,14 @@ async function runStage({
 }) {
   const startedAt = Date.now()
   emit({ type: 'stage', name: stage.name, state: 'running' })
+  emit({
+    type: 'progress',
+    stage: stage.name,
+    completed: 0,
+    total: null,
+    unit: 'items',
+    label: stage.title || stage.name
+  })
 
   const isPosix = installerKind === 'posix'
 

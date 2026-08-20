@@ -1,10 +1,18 @@
 import { spawn } from 'node:child_process'
 
+import {
+  createBootstrapState,
+  normalizeBootstrapProgress,
+  reduceBootstrapState,
+  type BootstrapProgress
+} from './bootstrap-progress'
+
 const DEFAULT_CAPTURE_LIMIT_BYTES = 256 * 1024
 const DEFAULT_HARD_TIMEOUT_MS = 10 * 60_000
 const DEFAULT_IDLE_TIMEOUT_MS = 90_000
 const DEFAULT_KILL_GRACE_MS = 2_000
 const MAX_EMITTED_LINE_CHARS = 64 * 1024
+const STRUCTURED_PROGRESS_PREFIX = 'HERMES_BOOTSTRAP_PROGRESS '
 
 const SAFE_ENV_KEYS = new Set([
   'APPDATA',
@@ -57,13 +65,17 @@ type RunBootstrapProcessOptions = {
   captureLimitBytes?: number
   command: string
   cwd?: string
-  emit?: (event: { line: string; stage?: string; stream: 'stderr' | 'stdout'; type: 'log' }) => void
+  emit?: (event: BootstrapProcessEvent) => void
   env?: NodeJS.ProcessEnv
   hardTimeoutMs?: number
   idleTimeoutMs?: number
   killGraceMs?: number
   stageName?: string
 }
+
+type BootstrapProcessEvent =
+  | { line: string; stage?: string; stream: 'stderr' | 'stdout'; type: 'log' }
+  | (BootstrapProgress & { type: 'progress' })
 
 export function buildBootstrapEnvironment(
   source: NodeJS.ProcessEnv = process.env,
@@ -162,8 +174,50 @@ export function runBootstrapProcess(options: RunBootstrapProcessOptions): Promis
     let killTimer: ReturnType<typeof setTimeout> | null = null
     let idleTimer: ReturnType<typeof setTimeout> | null = null
 
+    const parseStructuredProgress = (line: string): BootstrapProcessEvent | null => {
+      if (!line.startsWith(STRUCTURED_PROGRESS_PREFIX) || !stageName) {
+        return null
+      }
+
+      try {
+        const parsed = JSON.parse(line.slice(STRUCTURED_PROGRESS_PREFIX.length))
+
+        if (!parsed || parsed.type !== 'progress') {
+          return null
+        }
+
+        const manifestState = reduceBootstrapState(
+          createBootstrapState(),
+          {
+            type: 'manifest',
+            protocolVersion: 1,
+            bootstrapScope: 'runtime',
+            stages: [{ name: stageName, title: stageName }]
+          },
+          Date.now()
+        )
+        const progress = normalizeBootstrapProgress(parsed, manifestState, Date.now())
+
+        return progress ? { type: 'progress', ...progress } : null
+      } catch {
+        return null
+      }
+    }
+
     const emitLine = (line: string, stream: 'stderr' | 'stdout') => {
       if (!line || !emit) {
+        return
+      }
+
+      if (line.startsWith(STRUCTURED_PROGRESS_PREFIX)) {
+        const progress = parseStructuredProgress(line)
+
+        if (progress) {
+          emit(progress)
+        }
+
+        // Reserved frames are machine data. Invalid frames fail closed and
+        // never become pre-auth renderer text.
         return
       }
 
