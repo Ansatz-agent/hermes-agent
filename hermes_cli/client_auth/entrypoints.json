@@ -186,6 +186,16 @@
       "startup": "guarded"
     },
     {
+      "id": "python:scripts/discord-voice-doctor.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:scripts/keystroke_diagnostic.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
       "id": "python:tools/browser_tool.py",
       "interactive": false,
       "startup": "guarded"

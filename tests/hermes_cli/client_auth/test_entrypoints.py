@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -63,6 +64,14 @@ hermes-agent = "run_agent:main"
         "#!/bin/sh\nsystemctl --user enable hermes.service\n",
     )
     _write(
+        tmp_path / "scripts" / "discord-voice-doctor.py",
+        "if __name__ == '__main__':\n    main()\n",
+    )
+    _write(
+        tmp_path / "scripts" / "keystroke_diagnostic.py",
+        "if __name__ == '__main__':\n    main()\n",
+    )
+    _write(
         tmp_path / "cron" / "scripts" / "classify_items.py",
         "if __name__ == '__main__':\n    main()\n",
     )
@@ -81,6 +90,8 @@ hermes-agent = "run_agent:main"
         "electron:primary-backend",
         "spawn:apps/desktop/electron/main.ts:tui_gateway.entry",
         "installer:scripts/install.sh",
+        "python:scripts/discord-voice-doctor.py",
+        "python:scripts/keystroke_diagnostic.py",
         "python:cron/scripts/classify_items.py",
     }.issubset(discovered)
 
@@ -229,6 +240,43 @@ def test_packaged_direct_scripts_reject_before_capability_import(
     assert result.stderr == (
         "AUTH_REQUIRED runtime_unavailable; run `hermes login`\n"
     )
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        "gateway.run",
+        "cron.scripts.classify_items",
+    ],
+)
+def test_module_entrypoints_reject_before_writing_hermes_home(tmp_path, module):
+    root = Path(__file__).resolve().parents[3]
+    hermes_home = tmp_path / "home"
+    runtime_dir = tmp_path / "runtime"
+    hermes_home.mkdir()
+    runtime_dir.mkdir()
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "HERMES_HOME": str(hermes_home),
+            "PYTHONPATH": str(root),
+            "XDG_RUNTIME_DIR": str(runtime_dir),
+        }
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-m", module],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+
+    assert result.returncode == 20
+    assert "AUTH_REQUIRED" in result.stderr
+    assert list(hermes_home.rglob("*")) == []
 
 
 def test_every_guarded_python_entry_exits_locked_before_capability_imports():

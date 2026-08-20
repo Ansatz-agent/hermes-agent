@@ -43,6 +43,12 @@ _INSTALLERS = frozenset(
         "scripts/install.sh",
     }
 )
+_PACKAGED_RUNTIME_SCRIPTS = frozenset(
+    {
+        "scripts/discord-voice-doctor.py",
+        "scripts/keystroke_diagnostic.py",
+    }
+)
 _SPAWN_MODULE = re.compile(
     r"\b(?:spawn|execFile)\(\s*['\"]python(?:3)?['\"]\s*,\s*"
     r"\[\s*['\"]-m['\"]\s*,\s*['\"]([^'\"]+)['\"]"
@@ -210,6 +216,8 @@ def _excluded(relative: Path, *, source_tree: bool) -> bool:
     if any(part in _EXCLUDED_ANYWHERE or part.startswith(".") for part in parts):
         return True
     if not source_tree or not parts:
+        return False
+    if relative.as_posix() in _PACKAGED_RUNTIME_SCRIPTS:
         return False
     if parts[0] in _SOURCE_ONLY_ROOTS:
         return True

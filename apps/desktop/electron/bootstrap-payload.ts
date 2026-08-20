@@ -39,6 +39,7 @@ const FORBIDDEN_ARCHIVE_PREFIXES = [
   'hermes-agent/website/',
   'hermes-agent/apps/desktop/',
   'hermes-agent/apps/bootstrap-installer/',
+  'hermes-agent/.github/',
   'hermes-agent/.git/'
 ]
 

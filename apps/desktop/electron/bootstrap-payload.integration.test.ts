@@ -17,8 +17,9 @@ function sha256(filePath: string): string {
 
 function makePayloadFixture({
   symlink = false,
-  androidHelper = false
-}: { symlink?: boolean; androidHelper?: boolean } = {}) {
+  androidHelper = false,
+  githubWorkflow = false
+}: { symlink?: boolean; androidHelper?: boolean; githubWorkflow?: boolean } = {}) {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-bootstrap-payload-'))
   const sourceRoot = path.join(tempRoot, 'source', 'hermes-agent')
   const bootstrapRoot = path.join(tempRoot, 'bootstrap')
@@ -34,8 +35,14 @@ function makePayloadFixture({
   if (symlink) {
     fs.symlinkSync('pyproject.toml', path.join(sourceRoot, 'linked-project'))
   }
+
   if (androidHelper) {
     fs.writeFileSync(path.join(sourceRoot, 'scripts', 'install_psutil_android.py'), 'raise SystemExit(0)\n')
+  }
+
+  if (githubWorkflow) {
+    fs.mkdirSync(path.join(sourceRoot, '.github', 'workflows'), { recursive: true })
+    fs.writeFileSync(path.join(sourceRoot, '.github', 'workflows', 'desktop-dmg.yml'), 'name: CI only\n')
   }
 
   const archivePath = path.join(bootstrapRoot, 'hermes-backend.tar.gz')
@@ -117,6 +124,19 @@ test('payload archives containing the Android-only installer are rejected on Des
     await assert.rejects(
       resolveBundledPayload({ bootstrapRoot: fixture.bootstrapRoot, installStamp: { commit: COMMIT } }),
       /unsafe entry.*install_psutil_android\.py/
+    )
+  } finally {
+    fs.rmSync(fixture.tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('payload archives containing GitHub metadata are rejected on Desktop', async () => {
+  const fixture = makePayloadFixture({ githubWorkflow: true })
+
+  try {
+    await assert.rejects(
+      resolveBundledPayload({ bootstrapRoot: fixture.bootstrapRoot, installStamp: { commit: COMMIT } }),
+      /unsafe entry.*\.github\//
     )
   } finally {
     fs.rmSync(fixture.tempRoot, { recursive: true, force: true })
