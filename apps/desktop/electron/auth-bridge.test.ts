@@ -202,3 +202,20 @@ test('a request timeout rejects all pending calls and terminates the bridge', as
   assert.equal(diagnostics.join('\n').includes('password-sentinel'), false)
   assert.equal(diagnostics.join('\n').includes('agent_history_sessionid'), false)
 })
+
+test('the default bridge deadline leaves room for the Python HTTP timeout to respond', async () => {
+  vi.useFakeTimers()
+  const { bridge, child } = bridgeFixture()
+  const pending = bridge.status()
+  const rejected = assert.rejects(
+    pending,
+    error => error instanceof AuthBridgeError && error.code === 'runtime_unavailable'
+  )
+
+  await vi.advanceTimersByTimeAsync(15_001)
+  assert.equal(child.kill.mock.calls.length, 0)
+
+  await vi.advanceTimersByTimeAsync(5_000)
+  await rejected
+  assert.deepEqual(child.kill.mock.calls, [[]])
+})

@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process'
 const PROTOCOL_VERSION = 1
 const MAX_LINE_BYTES = 64 * 1024
 const MAX_REQUEST_ID_LENGTH = 64
-const DEFAULT_TIMEOUT_MS = 15_000
+const DEFAULT_TIMEOUT_MS = 20_000
 
 const SAFE_ENV_KEYS = new Set([
   'APPDATA',
