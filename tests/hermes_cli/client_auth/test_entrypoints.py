@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import scripts.check_auth_entrypoints as entrypoint_scanner
 from scripts.check_auth_entrypoints import scan_entrypoints
 
 
@@ -61,6 +62,10 @@ hermes-agent = "run_agent:main"
         tmp_path / "scripts" / "install.sh",
         "#!/bin/sh\nsystemctl --user enable hermes.service\n",
     )
+    _write(
+        tmp_path / "cron" / "scripts" / "classify_items.py",
+        "if __name__ == '__main__':\n    main()\n",
+    )
 
     discovered = scan_entrypoints(tmp_path)
 
@@ -76,6 +81,25 @@ hermes-agent = "run_agent:main"
         "electron:primary-backend",
         "spawn:apps/desktop/electron/main.ts:tui_gateway.entry",
         "installer:scripts/install.sh",
+        "python:cron/scripts/classify_items.py",
+    }.issubset(discovered)
+
+
+def test_distribution_scanner_finds_every_shipped_direct_python_script(tmp_path):
+    _write(
+        tmp_path / "scripts" / "runtime_helper.py",
+        "if __name__ == '__main__':\n    main()\n",
+    )
+    _write(
+        tmp_path / "scripts" / "ci_helper.py",
+        "if __name__ == '__main__':\n    main()\n",
+    )
+
+    discovered = entrypoint_scanner.scan_distribution_entrypoints(tmp_path)
+
+    assert {
+        "python:scripts/runtime_helper.py",
+        "python:scripts/ci_helper.py",
     }.issubset(discovered)
 
 
@@ -91,6 +115,14 @@ def test_scanner_ignores_tests_skills_and_registration_lifecycle(tmp_path):
     _write(
         tmp_path / "registration_lifecycle.py",
         "if __name__ == '__main__':\n    replace_plugin()\n",
+    )
+    _write(
+        tmp_path / "plugins" / "demo" / "tests" / "test_plugin.py",
+        "if __name__ == '__main__':\n    main()\n",
+    )
+    _write(
+        tmp_path / "apps" / "desktop" / "scripts" / "perf_probe.py",
+        "if __name__ == '__main__':\n    main()\n",
     )
 
     discovered = scan_entrypoints(tmp_path)
@@ -124,6 +156,79 @@ def test_console_wrappers_guard_before_capability_target_import(monkeypatch):
     assert guarded == ["console.hermes_agent", "console.hermes_acp"]
     assert "run_agent" not in sys.modules
     assert "acp_adapter.entry" not in sys.modules
+
+
+@pytest.mark.parametrize(
+    ("relative", "argv", "capability_modules"),
+    [
+        (
+            "cron/scripts/classify_items.py",
+            ["--criteria", "probe", "--input-file", "{empty_items}"],
+            ["agent.auxiliary_client"],
+        ),
+        (
+            "scripts/discord-voice-doctor.py",
+            [],
+            ["requests", "discord", "hermes_cli.env_loader"],
+        ),
+        (
+            "scripts/keystroke_diagnostic.py",
+            [],
+            ["prompt_toolkit"],
+        ),
+    ],
+)
+def test_packaged_direct_scripts_reject_before_capability_import(
+    tmp_path,
+    relative,
+    argv,
+    capability_modules,
+):
+    root = Path(__file__).resolve().parents[3]
+    empty_items = tmp_path / "items.json"
+    empty_items.write_text("[]\n", encoding="utf-8")
+    resolved_argv = [value.format(empty_items=empty_items) for value in argv]
+    probe = (
+        "import json,runpy,sys\n"
+        "path=sys.argv[1]\n"
+        "entry_argv=json.loads(sys.argv[2])\n"
+        "capabilities=json.loads(sys.argv[3])\n"
+        "sys.argv=[path,*entry_argv]\n"
+        "code=0\n"
+        "try:\n"
+        " runpy.run_path(path, run_name='__main__')\n"
+        "except SystemExit as error:\n"
+        " code=error.code\n"
+        "loaded=sorted(name for name in sys.modules "
+        "if any(name == item or name.startswith(item + '.') for item in capabilities))\n"
+        "print('CAPABILITY_MODULES=' + ','.join(loaded))\n"
+        "raise SystemExit(code)\n"
+    )
+
+    try:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                probe,
+                str(root / relative),
+                json.dumps(resolved_argv),
+                json.dumps(capability_modules),
+            ],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(f"{relative} did not reject before starting its capability")
+
+    assert result.returncode == 20
+    assert result.stdout == "CAPABILITY_MODULES=\n"
+    assert result.stderr == (
+        "AUTH_REQUIRED runtime_unavailable; run `hermes login`\n"
+    )
 
 
 def test_every_guarded_python_entry_exits_locked_before_capability_imports():

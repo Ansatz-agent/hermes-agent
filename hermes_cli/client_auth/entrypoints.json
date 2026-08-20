@@ -81,6 +81,11 @@
       "startup": "guarded"
     },
     {
+      "id": "python:cron/scripts/classify_items.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
       "id": "python:gateway/cgroup_cleanup.py",
       "interactive": false,
       "startup": "guarded"

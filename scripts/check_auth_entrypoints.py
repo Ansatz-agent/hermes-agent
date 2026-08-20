@@ -13,14 +13,22 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = REPO_ROOT / "hermes_cli" / "client_auth" / "entrypoints.json"
 
-_EXCLUDED_PARTS = frozenset(
+_EXCLUDED_ANYWHERE = frozenset(
     {
         ".git",
         ".venv",
         "build",
         "dist",
-        "evals",
         "node_modules",
+        "test",
+        "tests",
+        "__tests__",
+    }
+)
+_SOURCE_ONLY_PREFIXES = (("apps", "desktop", "scripts"),)
+_SOURCE_ONLY_ROOTS = frozenset(
+    {
+        "evals",
         "optional-skills",
         "scripts",
         "skills",
@@ -42,13 +50,21 @@ _SPAWN_MODULE = re.compile(
 
 
 def scan_entrypoints(root: Path) -> set[str]:
+    return _scan_entrypoints(root, source_tree=True)
+
+
+def scan_distribution_entrypoints(root: Path) -> set[str]:
+    return _scan_entrypoints(root, source_tree=False)
+
+
+def _scan_entrypoints(root: Path, *, source_tree: bool) -> set[str]:
     root = root.resolve()
     found: set[str] = set()
     found.update(_scan_pyproject(root))
-    found.update(_scan_python(root))
-    found.update(_scan_shell_and_services(root))
-    found.update(_scan_dockerfiles(root))
-    found.update(_scan_ui(root))
+    found.update(_scan_python(root, source_tree=source_tree))
+    found.update(_scan_shell_and_services(root, source_tree=source_tree))
+    found.update(_scan_dockerfiles(root, source_tree=source_tree))
+    found.update(_scan_ui(root, source_tree=source_tree))
     return found
 
 
@@ -70,11 +86,11 @@ def _scan_pyproject(root: Path) -> set[str]:
     }
 
 
-def _scan_python(root: Path) -> set[str]:
+def _scan_python(root: Path, *, source_tree: bool) -> set[str]:
     found: set[str] = set()
     for path in root.rglob("*.py"):
         relative = path.relative_to(root)
-        if _excluded(relative) or path.name == "registration_lifecycle.py":
+        if _excluded(relative, source_tree=source_tree) or path.name == "registration_lifecycle.py":
             continue
         if path.name == "__main__.py" or _has_main_guard(path):
             found.add(f"python:{relative.as_posix()}")
@@ -106,7 +122,7 @@ def _has_main_guard(path: Path) -> bool:
     return False
 
 
-def _scan_shell_and_services(root: Path) -> set[str]:
+def _scan_shell_and_services(root: Path, *, source_tree: bool) -> set[str]:
     found: set[str] = set()
     for path in root.rglob("*"):
         if not path.is_file():
@@ -116,7 +132,7 @@ def _scan_shell_and_services(root: Path) -> set[str]:
         if normalized in _INSTALLERS:
             found.add(f"installer:{normalized}")
             continue
-        if _excluded(relative):
+        if _excluded(relative, source_tree=source_tree):
             continue
         if path.suffix == ".service":
             try:
@@ -143,10 +159,12 @@ def _scan_shell_and_services(root: Path) -> set[str]:
     return found
 
 
-def _scan_dockerfiles(root: Path) -> set[str]:
+def _scan_dockerfiles(root: Path, *, source_tree: bool) -> set[str]:
     found: set[str] = set()
     for path in root.rglob("Dockerfile*"):
-        if not path.is_file() or _excluded(path.relative_to(root)):
+        if not path.is_file() or _excluded(
+            path.relative_to(root), source_tree=source_tree
+        ):
             continue
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
@@ -159,7 +177,7 @@ def _scan_dockerfiles(root: Path) -> set[str]:
     return found
 
 
-def _scan_ui(root: Path) -> set[str]:
+def _scan_ui(root: Path, *, source_tree: bool) -> set[str]:
     found: set[str] = set()
     desktop_package = root / "apps" / "desktop" / "package.json"
     if desktop_package.is_file():
@@ -176,7 +194,7 @@ def _scan_ui(root: Path) -> set[str]:
     for suffix in ("*.ts", "*.js", "*.mjs", "*.cjs"):
         for path in root.rglob(suffix):
             relative = path.relative_to(root)
-            if _excluded(relative):
+            if _excluded(relative, source_tree=source_tree):
                 continue
             try:
                 text = path.read_text(encoding="utf-8")
@@ -187,8 +205,15 @@ def _scan_ui(root: Path) -> set[str]:
     return found
 
 
-def _excluded(relative: Path) -> bool:
-    return any(part in _EXCLUDED_PARTS or part.startswith(".") for part in relative.parts)
+def _excluded(relative: Path, *, source_tree: bool) -> bool:
+    parts = relative.parts
+    if any(part in _EXCLUDED_ANYWHERE or part.startswith(".") for part in parts):
+        return True
+    if not source_tree or not parts:
+        return False
+    if parts[0] in _SOURCE_ONLY_ROOTS:
+        return True
+    return any(parts[: len(prefix)] == prefix for prefix in _SOURCE_ONLY_PREFIXES)
 
 
 def _manifest_payload(ids: set[str]) -> dict[str, object]:
@@ -256,7 +281,12 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--check", action="store_true")
     mode.add_argument("--write", action="store_true")
+    mode.add_argument("--scan-distribution", metavar="ROOT", type=Path)
     args = parser.parse_args()
+    if args.scan_distribution is not None:
+        for entry_id in sorted(scan_distribution_entrypoints(args.scan_distribution)):
+            print(entry_id)
+        return 0
     if args.write:
         payload = _manifest_payload(scan_entrypoints(REPO_ROOT))
         MANIFEST.write_text(
