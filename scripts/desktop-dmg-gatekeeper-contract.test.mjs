@@ -64,11 +64,17 @@ test('verifier rejects identity drift and never bypasses Gatekeeper', () => {
   assert.match(verifier, /bootstrap\/install\.sh/)
   assert.match(verifier, /payload-manifest\.json/)
   assert.match(verifier, /install-stamp\.json/)
+  assert.match(verifier, /plutil -convert xml1 -o \/dev\/null --/)
   assert.match(verifier, /codesign --verify --deep --strict/)
   assert.match(verifier, /spctl --assess --type open --context context:primary-signature/)
   assert.match(verifier, /spctl --assess --type execute/)
   assert.match(verifier, /open -n "\$INSTALL_APP"/)
   assert.match(verifier, /NOT_RUN/)
+  assert.doesNotMatch(
+    verifier,
+    /-x "\$RESOURCES\/bootstrap\/install\.sh"/,
+    'the app invokes the bundled installer through bash, so an executable bit is not required'
+  )
 
   const hashCheck = verifier.indexOf('shasum -a 256')
   const sizeCheck = verifier.indexOf("stat -f '%z'")

@@ -245,15 +245,15 @@ for payload in \
     PAYLOAD_FAILURES=$((PAYLOAD_FAILURES + 1))
   fi
 done
-if [[ "$PAYLOAD_FAILURES" -eq 0 && -x "$RESOURCES/bootstrap/install.sh" ]]; then
+if [[ "$PAYLOAD_FAILURES" -eq 0 ]]; then
   record 'Bundled bootstrap payload' 'PASS' 'backend archive, installer, manifest, and install stamp are present'
 else
-  record 'Bundled bootstrap payload' 'FAIL' "$PAYLOAD_FAILURES payload files missing/empty or installer not executable"
+  record 'Bundled bootstrap payload' 'FAIL' "$PAYLOAD_FAILURES payload files missing or empty"
 fi
 
 if tar -tzf "$RESOURCES/bootstrap/hermes-backend.tar.gz" >/dev/null 2>&1 && \
-  plutil -lint "$RESOURCES/bootstrap/payload-manifest.json" >/dev/null 2>&1 && \
-  plutil -lint "$RESOURCES/install-stamp.json" >/dev/null 2>&1; then
+  plutil -convert xml1 -o /dev/null -- "$RESOURCES/bootstrap/payload-manifest.json" >/dev/null 2>&1 && \
+  plutil -convert xml1 -o /dev/null -- "$RESOURCES/install-stamp.json" >/dev/null 2>&1; then
   record 'Bundled payload readability' 'PASS' 'archive and JSON metadata parse successfully'
 else
   record 'Bundled payload readability' 'FAIL' 'archive or JSON metadata is unreadable'
