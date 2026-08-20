@@ -60,13 +60,13 @@ import {
   isWslEnvironment,
   resolveLinuxPasswordStore
 } from './bootstrap-platform'
-import { decideBootstrapRepair } from './bootstrap-repair-guard'
 import {
   createBootstrapState,
   reduceBootstrapState,
   safeBootstrapEvent,
   safeBootstrapState
 } from './bootstrap-progress'
+import { decideBootstrapRepair } from './bootstrap-repair-guard'
 import { runBootstrap } from './bootstrap-runner'
 import { classifyBundledRuntime, resolveBundledBootstrapRoot } from './bundled-runtime-state'
 import { applyConnectionChange, resolveTerminalConnection } from './connection-apply'

@@ -120,7 +120,7 @@ describe('AuthBootstrapProgress', () => {
 
     expect(screen.getByText('Failed at: Install Hermes Python dependencies')).not.toBeNull()
     expect(screen.getByRole('button', { name: 'Retry' })).not.toBeNull()
-    expect(document.body.textContent).not.toContain('Traceback')
-    expect(document.body.textContent).not.toContain('sessionid')
+    expect(globalThis.document.body.textContent).not.toContain('Traceback')
+    expect(globalThis.document.body.textContent).not.toContain('sessionid')
   })
 })

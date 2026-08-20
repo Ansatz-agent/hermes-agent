@@ -107,6 +107,7 @@ test('runBootstrapProcess cancellation reaches a terminal result', async () => {
 
 test('runBootstrapProcess emits reserved structured progress without exposing the frame as a log', async () => {
   const events: any[] = []
+
   const frame = {
     type: 'progress',
     stage: 'python-deps',
@@ -162,6 +163,7 @@ test('runBootstrapProcess never derives progress from installer prose', async ()
 
 test('runBootstrapProcess swallows malformed or wrong-stage structured frames and sanitizes hostile labels', async () => {
   const events: any[] = []
+
   const lines = [
     'HERMES_BOOTSTRAP_PROGRESS not-json',
     `HERMES_BOOTSTRAP_PROGRESS ${JSON.stringify({

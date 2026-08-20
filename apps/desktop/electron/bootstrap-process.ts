@@ -1,10 +1,10 @@
 import { spawn } from 'node:child_process'
 
 import {
+  type BootstrapProgress,
   createBootstrapState,
   normalizeBootstrapProgress,
-  reduceBootstrapState,
-  type BootstrapProgress
+  reduceBootstrapState
 } from './bootstrap-progress'
 
 const DEFAULT_CAPTURE_LIMIT_BYTES = 256 * 1024
@@ -196,6 +196,7 @@ export function runBootstrapProcess(options: RunBootstrapProcessOptions): Promis
           },
           Date.now()
         )
+
         const progress = normalizeBootstrapProgress(parsed, manifestState, Date.now())
 
         return progress ? { type: 'progress', ...progress } : null
