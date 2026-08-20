@@ -28,10 +28,20 @@ type AuthBridgeLike = {
   logout: () => Promise<BridgeStatus>
 }
 
+type AuthBridgeRecovery = (
+  connectionId: string,
+  failedBridge: AuthBridgeLike
+) => Promise<AuthBridgeLike | null> | AuthBridgeLike | null
+
+type AuthRefreshOptions = {
+  recoverRuntime?: boolean
+}
+
 type AuthCoordinatorOptions = {
   clock?: () => number
   cleanup?: (connectionId: string, status: BridgeStatus) => Promise<void> | void
   pollIntervalMs?: number
+  recoverBridge?: AuthBridgeRecovery
 }
 
 type StatusListener = (status: BridgeStatus, connectionId: string) => void
@@ -51,6 +61,7 @@ export class AuthCoordinator {
   private readonly cleanup: (connectionId: string, status: BridgeStatus) => Promise<void> | void
   private readonly listeners = new Set<StatusListener>()
   private readonly pollIntervalMs: number
+  private readonly recoverBridge: AuthBridgeRecovery | null
   private readonly scopes = new Map<string, ConnectionScope>()
   private readonly statuses = new Map<string, BridgeStatus>()
   private operationTail: Promise<void> = Promise.resolve()
@@ -66,6 +77,7 @@ export class AuthCoordinator {
     this.clock = options.clock ?? (() => Date.now() / 1000)
     this.cleanup = options.cleanup ?? (() => {})
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
+    this.recoverBridge = options.recoverBridge ?? null
     this.statuses.set(LOCAL_CONNECTION_ID, checkingStatus())
   }
 
@@ -110,7 +122,7 @@ export class AuthCoordinator {
     return () => this.listeners.delete(listener)
   }
 
-  async refresh(connectionId = LOCAL_CONNECTION_ID): Promise<BridgeStatus> {
+  async refresh(connectionId = LOCAL_CONNECTION_ID, options: AuthRefreshOptions = {}): Promise<BridgeStatus> {
     return this.runExclusive(async () => {
       const bridge = this.bridges.get(connectionId)
 
@@ -121,7 +133,33 @@ export class AuthCoordinator {
       try {
         return await this.applyStatus(await bridge.status(), connectionId)
       } catch (error) {
-        return this.applyFailure(error, connectionId)
+        const failed = await this.applyFailure(error, connectionId)
+
+        if (
+          connectionId !== LOCAL_CONNECTION_ID ||
+          !options.recoverRuntime ||
+          failed.reason !== 'runtime_unavailable' ||
+          !this.recoverBridge
+        ) {
+          return failed
+        }
+
+        try {
+          const replacement = await this.recoverBridge(connectionId, bridge)
+
+          if (!replacement) {
+            return failed
+          }
+
+          this.bridges.set(connectionId, replacement)
+          const checking = checkingStatus()
+          this.statuses.set(connectionId, checking)
+          this.emit(checking, connectionId)
+
+          return await this.applyStatus(await replacement.status(), connectionId)
+        } catch (recoveryError) {
+          return this.applyFailure(recoveryError, connectionId)
+        }
       }
     })
   }

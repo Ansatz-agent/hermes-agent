@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 
 import { test, vi } from 'vitest'
 
-import type { BridgeStatus } from './auth-bridge'
+import { AuthBridgeError, type BridgeStatus } from './auth-bridge'
 import { AuthCoordinator, CoordinatorAuthRequiredError } from './auth-coordinator'
 
 const signedOut: BridgeStatus = {
@@ -181,6 +181,100 @@ test('bridge failures publish only a redacted locked status', async () => {
   assert.equal(coordinator.status().state, 'locked')
   assert.equal(coordinator.status().reason, 'runtime_unavailable')
   assert.equal(JSON.stringify(events).includes('sessionid'), false)
+})
+
+test('explicit local refresh locks and cleans up before one bridge recovery attempt', async () => {
+  const bridge = fixedBridge(authenticated)
+  const replacement = fixedBridge({ ...authenticated, runtime_instance_id: 'runtime-2', epoch: 3 })
+  const order: string[] = []
+  let coordinator: AuthCoordinator
+  const cleanup = vi.fn(async () => {
+    assert.equal(coordinator.scope('local'), null)
+    order.push('cleanup')
+  })
+  const recoverBridge = vi.fn(async (connectionId, failedBridge) => {
+    assert.equal(connectionId, 'local')
+    assert.equal(failedBridge, bridge)
+    assert.equal(coordinator.scope('local'), null)
+    assert.equal(cleanup.mock.calls.length, 1)
+    order.push('recover')
+
+    return replacement
+  })
+
+  coordinator = new AuthCoordinator(bridge, {
+    cleanup,
+    clock: () => 42,
+    pollIntervalMs: 0,
+    recoverBridge
+  })
+  coordinator.subscribe(status => order.push(`event:${status.state}`))
+  await coordinator.start()
+  order.length = 0
+  bridge.status.mockRejectedValueOnce(new AuthBridgeError('runtime_unavailable', 'runtime_unavailable'))
+
+  const result = await coordinator.refresh('local', { recoverRuntime: true })
+
+  assert.equal(result.state, 'authenticated')
+  assert.equal(coordinator.scope('local')?.runtime_instance_id, 'runtime-2')
+  assert.equal(recoverBridge.mock.calls.length, 1)
+  assert.equal(replacement.status.mock.calls.length, 1)
+  assert.deepEqual(order, ['event:locked', 'cleanup', 'recover', 'event:checking', 'event:authenticated'])
+})
+
+test('ordinary refresh remains locked and never rebuilds an unavailable bridge', async () => {
+  const bridge = fixedBridge(authenticated)
+  const recoverBridge = vi.fn(async () => fixedBridge(authenticated))
+  const coordinator = new AuthCoordinator(bridge, {
+    clock: () => 42,
+    pollIntervalMs: 0,
+    recoverBridge
+  })
+  await coordinator.start()
+  bridge.status.mockRejectedValueOnce(new AuthBridgeError('runtime_unavailable', 'runtime_unavailable'))
+
+  const result = await coordinator.refresh()
+
+  assert.equal(result.state, 'locked')
+  assert.equal(result.reason, 'runtime_unavailable')
+  assert.equal(coordinator.scope('local'), null)
+  assert.equal(recoverBridge.mock.calls.length, 0)
+})
+
+test('failed bridge replacement remains locked without a second recovery attempt', async () => {
+  const bridge = fixedBridge(authenticated)
+  const replacement = fixedBridge(authenticated)
+  replacement.status.mockRejectedValueOnce(new AuthBridgeError('runtime_unavailable', 'runtime_unavailable'))
+  const recoverBridge = vi.fn(async () => replacement)
+  const coordinator = new AuthCoordinator(bridge, {
+    clock: () => 42,
+    pollIntervalMs: 0,
+    recoverBridge
+  })
+  await coordinator.start()
+  bridge.status.mockRejectedValueOnce(new AuthBridgeError('runtime_unavailable', 'runtime_unavailable'))
+
+  const result = await coordinator.refresh('local', { recoverRuntime: true })
+
+  assert.equal(result.state, 'locked')
+  assert.equal(result.reason, 'runtime_unavailable')
+  assert.equal(coordinator.scope('local'), null)
+  assert.equal(recoverBridge.mock.calls.length, 1)
+  assert.equal(replacement.status.mock.calls.length, 1)
+})
+
+test('login failure never rebuilds the bridge or replays the password', async () => {
+  const bridge = fixedBridge(signedOut)
+  const recoverBridge = vi.fn(async () => fixedBridge(authenticated))
+  const coordinator = new AuthCoordinator(bridge, { pollIntervalMs: 0, recoverBridge })
+  await coordinator.start()
+  bridge.login.mockRejectedValueOnce(new AuthBridgeError('runtime_unavailable', 'runtime_unavailable'))
+
+  const result = await coordinator.login('alice', 'password-sentinel')
+
+  assert.equal(result.state, 'locked')
+  assert.deepEqual(bridge.login.mock.calls, [['alice', 'password-sentinel']])
+  assert.equal(recoverBridge.mock.calls.length, 0)
 })
 
 test('connection and both policies require exact connection scopes', async () => {
