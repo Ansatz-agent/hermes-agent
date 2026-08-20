@@ -153,6 +153,65 @@ describe('AuthGate', () => {
     await waitFor(() => expect(auth.logout).toHaveBeenCalledTimes(1))
   })
 
+  it('resynchronizes the running-stage elapsed time immediately when focus returns', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-08-20T13:12:50.285Z'))
+    let focused = true
+
+    vi.spyOn(globalThis.document, 'hasFocus').mockImplementation(() => focused)
+
+    const startedAt = new Date('2026-08-20T13:12:34.285Z').getTime()
+
+    const bootstrap = {
+      getState: vi.fn(async () => ({
+        active: true,
+        manifest: {
+          type: 'manifest',
+          protocolVersion: 1,
+          bootstrapScope: 'runtime',
+          stages: [{ name: 'node-deps', title: 'Install browser-tool dependencies' }]
+        },
+        stages: {
+          'node-deps': {
+            state: 'running',
+            durationMs: null,
+            startedAt,
+            error: null,
+            progress: null
+          }
+        },
+        error: null,
+        failedStage: null,
+        startedAt,
+        completedAt: null
+      })),
+      onChanged: vi.fn(() => () => {}),
+      retry: vi.fn(async () => ({ ok: true }))
+    }
+
+    renderGate(
+      { status: vi.fn(async () => ({ ...authenticated, runtime_ready: false })) },
+      null,
+      <div>Protected Hermes application</div>,
+      bootstrap
+    )
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(screen.getByText('Running · 16s')).not.toBeNull()
+    focused = false
+    act(() => window.dispatchEvent(new Event('blur')))
+
+    vi.setSystemTime(new Date('2026-08-20T13:14:47.285Z'))
+    focused = true
+    act(() => window.dispatchEvent(new Event('focus')))
+
+    expect(screen.getByText('Running · 2:13')).not.toBeNull()
+    expect(screen.queryByText('Protected Hermes application')).toBeNull()
+  })
+
   it('keeps Retry and Sign out available after authenticated runtime preparation fails', async () => {
     const bootstrap = {
       getState: vi.fn(async () => ({

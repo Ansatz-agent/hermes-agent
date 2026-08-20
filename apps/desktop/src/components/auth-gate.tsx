@@ -17,6 +17,7 @@ import type {
   DesktopSafeBootstrapEvent,
   DesktopSafeBootstrapState
 } from '@/global'
+import { useViewedInterval } from '@/hooks/use-viewed-interval'
 import { type Translations, useI18n } from '@/i18n'
 import { sanitizeAuthBootstrapText } from '@/lib/auth-bootstrap-progress'
 
@@ -377,15 +378,7 @@ export function AuthGate({
     }
   }, [bootstrap, commitBootstrapState, refreshAfterCompletion])
 
-  useEffect(() => {
-    if (!bootstrapState?.active) {
-      return
-    }
-
-    const timer = globalThis.setInterval(() => setNow(Date.now()), 1_000)
-
-    return () => globalThis.clearInterval(timer)
-  }, [bootstrapState?.active])
+  useViewedInterval(() => setNow(Date.now()), 1_000, Boolean(bootstrapState?.active))
 
   const logout = useCallback(() => {
     if (!auth) {
