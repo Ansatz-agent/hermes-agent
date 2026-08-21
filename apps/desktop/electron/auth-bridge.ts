@@ -4,6 +4,8 @@ const PROTOCOL_VERSION = 1
 const MAX_LINE_BYTES = 64 * 1024
 const MAX_REQUEST_ID_LENGTH = 64
 const DEFAULT_TIMEOUT_MS = 20_000
+const DEFAULT_LOGIN_TIMEOUT_MS = 85_000
+const DEFAULT_LOGOUT_TIMEOUT_MS = 45_000
 
 const SAFE_ENV_KEYS = new Set([
   'APPDATA',
@@ -91,6 +93,8 @@ type DesktopAuthBridgeOptions = {
   pythonExecutable: string
   spawnChild?: SpawnChild
   timeoutMs?: number
+  loginTimeoutMs?: number
+  logoutTimeoutMs?: number
 }
 
 type PendingRequest = {
@@ -166,6 +170,8 @@ export class DesktopAuthBridge {
   private readonly child: ChildLike
   private readonly onDiagnostic: (message: string) => void
   private readonly pending = new Map<string, PendingRequest>()
+  private readonly loginTimeoutMs: number
+  private readonly logoutTimeoutMs: number
   private readonly timeoutMs: number
   private nextRequestId = 0n
   private stdoutBuffer = Buffer.alloc(0)
@@ -173,6 +179,8 @@ export class DesktopAuthBridge {
 
   constructor(options: DesktopAuthBridgeOptions) {
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
+    this.loginTimeoutMs = options.loginTimeoutMs ?? options.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS
+    this.logoutTimeoutMs = options.logoutTimeoutMs ?? options.timeoutMs ?? DEFAULT_LOGOUT_TIMEOUT_MS
     this.onDiagnostic = options.onDiagnostic ?? (() => {})
 
     const spawnChild: SpawnChild =
@@ -230,7 +238,15 @@ export class DesktopAuthBridge {
     }
 
     return new Promise<BridgeStatus>((resolve, reject) => {
-      const timer = setTimeout(() => this.failRuntime(), this.timeoutMs)
+      const timer = setTimeout(
+        () => this.failRuntime(),
+        request.method === 'login'
+          ? this.loginTimeoutMs
+          : request.method === 'logout'
+            ? this.logoutTimeoutMs
+            : this.timeoutMs
+      )
+
       this.pending.set(id, { reject, resolve, timer })
 
       const frame = JSON.stringify({

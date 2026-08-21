@@ -383,9 +383,15 @@ describe('AuthGate', () => {
     expect(screen.queryByText('Protected Hermes application')).toBeNull()
   })
 
-  it('recovers from an unresolved login request without retaining the password', async () => {
+  it('keeps a slow login pending past the short status deadline', async () => {
     vi.useFakeTimers()
-    const { auth } = renderGate({ login: vi.fn(() => new Promise<DesktopAccountStatus>(() => {})) })
+    let resolveLogin: ((status: DesktopAccountStatus) => void) | null = null
+
+    const pendingLogin = new Promise<DesktopAccountStatus>(resolve => {
+      resolveLogin = resolve
+    })
+
+    const { auth } = renderGate({ login: vi.fn(() => pendingLogin) })
 
     await act(async () => {
       await Promise.resolve()
@@ -402,12 +408,40 @@ describe('AuthGate', () => {
       await vi.advanceTimersByTimeAsync(15_000)
     })
 
-    expect(screen.getByText('The secure account service is unavailable. Try again.')).not.toBeNull()
+    expect(screen.queryByText('The secure account service is unavailable. Try again.')).toBeNull()
+    expect((screen.getByRole('button', { name: 'Signing in…' }) as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByLabelText('Password') as HTMLInputElement).value).toBe('')
-    expect(globalThis.document.body.textContent).not.toContain('password-sentinel')
 
-    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'replacement' } })
-    expect((screen.getByRole('button', { name: 'Sign in' }) as HTMLButtonElement).disabled).toBe(false)
+    await act(async () => {
+      resolveLogin?.(authenticated)
+      await pendingLogin
+      await Promise.resolve()
+    })
+
+    expect(screen.getByText('Protected Hermes application')).not.toBeNull()
+    expect(globalThis.document.body.textContent).not.toContain('password-sentinel')
+  })
+
+  it('ends an unresolved login at its longer bounded deadline with no retained password', async () => {
+    vi.useFakeTimers()
+    renderGate({ login: vi.fn(() => new Promise<DesktopAccountStatus>(() => {})) })
+    await act(async () => Promise.resolve())
+
+    fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'alice' } })
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'password-sentinel' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+
+    expect((screen.getByLabelText('Password') as HTMLInputElement).value).toBe('')
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(89_999)
+    })
+    expect(screen.queryByText('The secure account service is unavailable. Try again.')).toBeNull()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1)
+    })
+    expect(screen.getByText('The secure account service is unavailable. Try again.')).not.toBeNull()
+    expect(globalThis.document.body.textContent).not.toContain('password-sentinel')
   })
 
   it('shows signed bootstrap progress inside the locked login surface', async () => {

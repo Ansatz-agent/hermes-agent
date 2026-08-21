@@ -220,3 +220,36 @@ test('the default bridge deadline leaves room for the Python HTTP timeout to res
   await rejected
   assert.deepEqual(child.kill.mock.calls, [[]])
 })
+
+test('login has a longer bounded deadline than credential-free status', async () => {
+  vi.useFakeTimers()
+  const { bridge, child } = bridgeFixture()
+  const pending = bridge.login('alice', 'password-sentinel')
+
+  await vi.advanceTimersByTimeAsync(20_001)
+  assert.equal(child.kill.mock.calls.length, 0)
+
+  const request = JSON.parse(String(child.stdin.read()))
+  respond(child, { version: 1, id: request.id, result: authenticatedStatus })
+  assert.deepEqual(await pending, authenticatedStatus)
+  bridge.close()
+})
+
+test('logout recovery has room to clear the local session after owner restart', async () => {
+  vi.useFakeTimers()
+  const { bridge, child } = bridgeFixture()
+  const pending = bridge.logout()
+  void pending.catch(() => {})
+
+  await vi.advanceTimersByTimeAsync(36_001)
+  assert.equal(child.kill.mock.calls.length, 0)
+
+  const request = JSON.parse(String(child.stdin.read()))
+  respond(child, {
+    version: 1,
+    id: request.id,
+    result: { ...authenticatedStatus, state: 'signed_out', username: null, reason: 'signed_out' }
+  })
+  assert.equal((await pending).state, 'signed_out')
+  bridge.close()
+})

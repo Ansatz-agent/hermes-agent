@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -14,11 +15,13 @@ import pytest
 from hermes_cli.client_auth.client import (
     AuthServiceError,
     CookieRecord,
+    SessionRejected,
     SessionStatus,
 )
 from hermes_cli.client_auth.runtime import (
     LEASE_SECONDS,
     LOGIN_ATTEMPT_LIMIT,
+    LockedWaitingResult,
     OWNER_IDLE_SECONDS,
     AuthRequired,
     AuthScope,
@@ -30,18 +33,26 @@ from hermes_cli.client_auth.runtime import (
     ProcessHardener,
     RuntimeConsumer,
     RuntimeSnapshot,
+    RemoteRuntimeOwner,
     SocketLivenessProbe,
     UnixEndpoint,
     WindowsNamedPipeEndpoint,
     VaultOwner,
+    account_login,
+    account_logout,
+    account_status,
     authorize_entrypoint,
     clear_entrypoint_owner,
     connect_runtime_owner,
     install_entrypoint_owner,
+    install_runtime_consumer,
+    require_authorized,
     resolve_owner,
     parse_backend_scope_token_registration,
     runtime_endpoint,
     start_runtime_owner,
+    wait_until_authorized,
+    _read_runtime_frame,
 )
 
 
@@ -646,6 +657,1174 @@ def test_unauthenticated_consumer_does_not_prevent_owner_idle_exit():
     assert owner.snapshot().state is AuthState.LOCKED
 
 
+class EntryPointOwnerDouble:
+    def __init__(
+        self,
+        snapshot: RuntimeSnapshot,
+        *,
+        refresh_error: AuthRequired | None = None,
+        login_error: AuthRequired | None = None,
+    ) -> None:
+        self._snapshot = snapshot
+        self._refresh_error = refresh_error
+        self._login_error = login_error
+        self.refresh_calls = 0
+        self.login_calls: list[tuple[str, bytes]] = []
+
+    def refresh(self) -> RuntimeSnapshot:
+        self.refresh_calls += 1
+        if self._refresh_error is not None:
+            raise self._refresh_error
+        return self._snapshot
+
+    def snapshot(self) -> RuntimeSnapshot:
+        return self._snapshot
+
+    def login(self, username: str, password: bytearray) -> RuntimeSnapshot:
+        self.login_calls.append((username, bytes(password)))
+        if self._login_error is not None:
+            raise self._login_error
+        return self._snapshot
+
+
+class AuthorizedEntryPointOwnerDouble(EntryPointOwnerDouble):
+    def connect_consumer(self, *, profile=None):
+        del profile
+        snapshot = self.snapshot()
+
+        class Consumer:
+            def require_authorized(self, _boundary, *, expected):
+                assert expected == snapshot.scope
+                return expected
+
+        return Consumer()
+
+def test_account_status_recovers_stale_owner_once(monkeypatch):
+    stale = EntryPointOwnerDouble(
+        RuntimeSnapshot.signed_out(reason="runtime_unavailable"),
+        refresh_error=AuthRequired("runtime_unavailable"),
+    )
+    recovered_snapshot = RuntimeSnapshot.signed_out(reason="signed_out")
+    replacement = EntryPointOwnerDouble(recovered_snapshot)
+    starts: list[str] = []
+    install_entrypoint_owner(stale)
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.connect_runtime_owner",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AuthRequired("runtime_unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.start_runtime_owner",
+        lambda **_kwargs: starts.append("start") or replacement,
+    )
+    try:
+        result = account_status()
+    finally:
+        clear_entrypoint_owner()
+
+    assert result is recovered_snapshot
+    assert stale.refresh_calls == 1
+    assert replacement.refresh_calls == 1
+    assert starts == ["start"]
+
+
+def test_account_status_recovers_owner_that_returns_unavailable_snapshot(monkeypatch):
+    stale = EntryPointOwnerDouble(
+        RuntimeSnapshot.signed_out(reason="runtime_unavailable"),
+    )
+    recovered_snapshot = RuntimeSnapshot.signed_out()
+    replacement = EntryPointOwnerDouble(recovered_snapshot)
+    starts: list[str] = []
+    install_entrypoint_owner(stale)
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.connect_runtime_owner",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AuthRequired("runtime_unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.start_runtime_owner",
+        lambda **_kwargs: starts.append("start") or replacement,
+    )
+    try:
+        result = account_status()
+    finally:
+        clear_entrypoint_owner()
+
+    assert result is recovered_snapshot
+    assert stale.refresh_calls == 1
+    assert replacement.refresh_calls == 1
+    assert starts == ["start"]
+
+
+def test_account_status_recovery_never_overwrites_newer_owner(monkeypatch):
+    stale = EntryPointOwnerDouble(
+        RuntimeSnapshot.signed_out(reason="runtime_unavailable"),
+        refresh_error=AuthRequired("runtime_unavailable"),
+    )
+    candidate = EntryPointOwnerDouble(RuntimeSnapshot.signed_out(reason="signed_out"))
+    current_snapshot = RuntimeSnapshot.signed_out()
+    current = EntryPointOwnerDouble(current_snapshot)
+    install_entrypoint_owner(stale)
+
+    def connect(**_kwargs):
+        install_entrypoint_owner(current)
+        return candidate
+
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.connect_runtime_owner",
+        connect,
+    )
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.start_runtime_owner",
+        lambda **_kwargs: pytest.fail(
+            "a connected owner must prevent owner startup"
+        ),
+    )
+    try:
+        result = account_status()
+    finally:
+        clear_entrypoint_owner()
+
+    assert result is current_snapshot
+    assert stale.refresh_calls == 1
+    assert current.refresh_calls == 1
+    assert candidate.refresh_calls == 0
+
+
+def test_concurrent_status_recovery_resolves_one_replacement(monkeypatch):
+    stale = EntryPointOwnerDouble(
+        RuntimeSnapshot.signed_out(reason="runtime_unavailable"),
+        refresh_error=AuthRequired("runtime_unavailable"),
+    )
+    replacement_snapshot = RuntimeSnapshot.signed_out()
+    replacement = EntryPointOwnerDouble(replacement_snapshot)
+    entered = threading.Event()
+    release = threading.Event()
+    connect_calls: list[str] = []
+    start_calls: list[str] = []
+    install_entrypoint_owner(stale)
+
+    def connect(**_kwargs):
+        connect_calls.append("connect")
+        entered.set()
+        assert release.wait(timeout=2)
+        raise AuthRequired("runtime_unavailable")
+
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.connect_runtime_owner",
+        connect,
+    )
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.start_runtime_owner",
+        lambda **_kwargs: start_calls.append("start") or replacement,
+    )
+    results: list[RuntimeSnapshot] = []
+    failures: list[BaseException] = []
+
+    def status() -> None:
+        try:
+            results.append(account_status())
+        except BaseException as error:
+            failures.append(error)
+
+    threads = [threading.Thread(target=status) for _ in range(2)]
+    try:
+        for thread in threads:
+            thread.start()
+        assert entered.wait(timeout=2)
+        release.set()
+        for thread in threads:
+            thread.join(timeout=2)
+            assert not thread.is_alive()
+    finally:
+        release.set()
+        clear_entrypoint_owner()
+
+    assert failures == []
+    assert results == [replacement_snapshot, replacement_snapshot]
+    assert connect_calls == ["connect"]
+    assert start_calls == ["start"]
+
+
+def test_account_status_stops_after_one_failed_owner_recovery(monkeypatch):
+    stale = EntryPointOwnerDouble(
+        RuntimeSnapshot.signed_out(reason="runtime_unavailable"),
+        refresh_error=AuthRequired("runtime_unavailable"),
+    )
+    replacement = EntryPointOwnerDouble(
+        RuntimeSnapshot.signed_out(reason="runtime_unavailable"),
+        refresh_error=AuthRequired("runtime_unavailable"),
+    )
+    starts: list[str] = []
+    install_entrypoint_owner(stale)
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.connect_runtime_owner",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AuthRequired("runtime_unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.start_runtime_owner",
+        lambda **_kwargs: starts.append("start") or replacement,
+    )
+    try:
+        result = account_status()
+    finally:
+        clear_entrypoint_owner()
+
+    assert result.state is AuthState.SIGNED_OUT
+    assert result.reason == "runtime_unavailable"
+    assert stale.refresh_calls == 1
+    assert replacement.refresh_calls == 1
+    assert starts == ["start"]
+
+
+def test_account_status_preserves_non_runtime_failure_reason(monkeypatch):
+    owner = EntryPointOwnerDouble(
+        RuntimeSnapshot.signed_out(reason="runtime_unavailable"),
+        refresh_error=AuthRequired("server_unavailable"),
+    )
+    install_entrypoint_owner(owner)
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.connect_runtime_owner",
+        lambda **_kwargs: pytest.fail("server failure must not reconnect"),
+    )
+    try:
+        result = account_status()
+    finally:
+        clear_entrypoint_owner()
+
+    assert result.reason == "server_unavailable"
+
+
+def test_account_status_preserves_replacement_refresh_reason(monkeypatch):
+    stale = EntryPointOwnerDouble(
+        RuntimeSnapshot.signed_out(reason="runtime_unavailable"),
+        refresh_error=AuthRequired("runtime_unavailable"),
+    )
+    replacement = EntryPointOwnerDouble(
+        RuntimeSnapshot.signed_out(),
+        refresh_error=AuthRequired("rate_limited"),
+    )
+    install_entrypoint_owner(stale)
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.connect_runtime_owner",
+        lambda **_kwargs: replacement,
+    )
+    try:
+        result = account_status()
+    finally:
+        clear_entrypoint_owner()
+
+    assert result.reason == "rate_limited"
+
+
+def test_account_status_circuit_breaks_repeated_owner_start_failures(monkeypatch):
+    stale = EntryPointOwnerDouble(
+        RuntimeSnapshot.signed_out(reason="runtime_unavailable"),
+        refresh_error=AuthRequired("runtime_unavailable"),
+    )
+    starts: list[str] = []
+    install_entrypoint_owner(stale)
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.connect_runtime_owner",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AuthRequired("runtime_unavailable")
+        ),
+    )
+
+    def fail_start(**_kwargs):
+        starts.append("start")
+        raise AuthRequired("runtime_unavailable")
+
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.start_runtime_owner",
+        fail_start,
+    )
+    try:
+        first = account_status()
+        second = account_status()
+    finally:
+        clear_entrypoint_owner()
+
+    assert first.reason == "runtime_unavailable"
+    assert second.reason == "runtime_unavailable"
+    assert starts == ["start"]
+
+
+def test_account_status_recovery_stays_inside_bridge_deadline(monkeypatch):
+    stale = EntryPointOwnerDouble(
+        RuntimeSnapshot.signed_out(reason="runtime_unavailable"),
+        refresh_error=AuthRequired("runtime_unavailable"),
+    )
+    replacement = EntryPointOwnerDouble(RuntimeSnapshot.signed_out())
+    connect_timeouts: list[float] = []
+    start_options: list[dict[str, object]] = []
+    install_entrypoint_owner(stale)
+
+    def connect(**kwargs):
+        connect_timeouts.append(kwargs["timeout"])
+        raise AuthRequired("runtime_unavailable")
+
+    def start(**kwargs):
+        start_options.append(kwargs)
+        return replacement
+
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.connect_runtime_owner",
+        connect,
+    )
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.start_runtime_owner",
+        start,
+    )
+    try:
+        account_status()
+    finally:
+        clear_entrypoint_owner()
+
+    assert connect_timeouts == [2.0]
+    assert start_options == [{"timeout": 4.0, "probe_first": False}]
+    assert replacement.refresh_calls == 1
+
+
+def test_account_status_recovery_revokes_the_stale_runtime_consumer(monkeypatch):
+    stale = EntryPointOwnerDouble(
+        RuntimeSnapshot.signed_out(reason="runtime_unavailable"),
+        refresh_error=AuthRequired("runtime_unavailable"),
+    )
+    replacement = EntryPointOwnerDouble(RuntimeSnapshot.signed_out())
+    authenticated = RuntimeSnapshot.new_authenticated("alice", now=100.0, ttl=60.0)
+    install_entrypoint_owner(stale)
+    install_runtime_consumer(
+        RuntimeConsumer(
+            authenticated,
+            liveness_probe=lambda: True,
+            clock=lambda: 101.0,
+        )
+    )
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.connect_runtime_owner",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AuthRequired("runtime_unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.start_runtime_owner",
+        lambda **_kwargs: replacement,
+    )
+    try:
+        assert require_authorized("tool.before", expected=authenticated.scope)
+        account_status()
+        with pytest.raises(AuthRequired, match="runtime_unavailable"):
+            require_authorized("tool.after", expected=authenticated.scope)
+    finally:
+        clear_entrypoint_owner()
+
+
+def test_reconnecting_same_runtime_keeps_its_live_consumer(monkeypatch):
+    shared_snapshot = RuntimeSnapshot.signed_out(reason="runtime_unavailable")
+    stale = EntryPointOwnerDouble(
+        shared_snapshot,
+        refresh_error=AuthRequired("runtime_unavailable"),
+    )
+    candidate = EntryPointOwnerDouble(shared_snapshot)
+    authenticated = RuntimeSnapshot.new_authenticated("alice", now=100.0, ttl=60.0)
+    install_entrypoint_owner(stale)
+    install_runtime_consumer(
+        RuntimeConsumer(
+            authenticated,
+            liveness_probe=lambda: True,
+            clock=lambda: 101.0,
+        )
+    )
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.connect_runtime_owner",
+        lambda **_kwargs: candidate,
+    )
+    try:
+        account_status()
+        assert require_authorized(
+            "tool.same-runtime",
+            expected=authenticated.scope,
+        ) == authenticated.scope
+    finally:
+        clear_entrypoint_owner()
+
+
+def test_account_login_recovers_stale_owner_before_submitting_password(monkeypatch):
+    stale = EntryPointOwnerDouble(
+        RuntimeSnapshot.signed_out(reason="runtime_unavailable"),
+        refresh_error=AuthRequired("runtime_unavailable"),
+    )
+    authenticated = RuntimeSnapshot.new_authenticated("alice", now=100.0, ttl=60.0)
+    replacement = EntryPointOwnerDouble(authenticated)
+    starts: list[str] = []
+    install_entrypoint_owner(stale)
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.connect_runtime_owner",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AuthRequired("runtime_unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.start_runtime_owner",
+        lambda **_kwargs: starts.append("start") or replacement,
+    )
+    password = bytearray(b"password-sentinel")
+    try:
+        result = account_login("alice", password)
+    finally:
+        password[:] = b"\0" * len(password)
+        clear_entrypoint_owner()
+
+    assert result is authenticated
+    assert stale.refresh_calls == 1
+    assert stale.login_calls == []
+    assert replacement.login_calls == [("alice", b"password-sentinel")]
+    assert starts == ["start"]
+
+
+def test_account_login_recovers_unavailable_snapshot_before_password(monkeypatch):
+    stale = EntryPointOwnerDouble(
+        RuntimeSnapshot.signed_out(reason="runtime_unavailable"),
+        login_error=AuthRequired("runtime_unavailable"),
+    )
+    authenticated = RuntimeSnapshot.new_authenticated("alice", now=100.0, ttl=60.0)
+    replacement = EntryPointOwnerDouble(authenticated)
+    starts: list[str] = []
+    install_entrypoint_owner(stale)
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.connect_runtime_owner",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AuthRequired("runtime_unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.start_runtime_owner",
+        lambda **_kwargs: starts.append("start") or replacement,
+    )
+    password = bytearray(b"password-sentinel")
+    try:
+        result = account_login("alice", password)
+    finally:
+        password[:] = b"\0" * len(password)
+        clear_entrypoint_owner()
+
+    assert result is authenticated
+    assert stale.refresh_calls == 1
+    assert stale.login_calls == []
+    assert replacement.login_calls == [("alice", b"password-sentinel")]
+    assert starts == ["start"]
+
+
+@pytest.mark.parametrize(
+    "reason",
+    ["invalid_credentials", "rate_limited", "server_unavailable"],
+)
+def test_account_login_never_recovers_non_runtime_failures(monkeypatch, reason):
+    owner = EntryPointOwnerDouble(
+        RuntimeSnapshot.signed_out(reason=reason),
+        login_error=AuthRequired(reason),
+    )
+    install_entrypoint_owner(owner)
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.connect_runtime_owner",
+        lambda: pytest.fail("a non-runtime login failure must not reconnect"),
+    )
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.start_runtime_owner",
+        lambda: pytest.fail("a non-runtime login failure must not start an owner"),
+    )
+    password = bytearray(b"password-sentinel")
+    try:
+        with pytest.raises(AuthRequired, match=reason):
+            account_login("alice", password)
+    finally:
+        password[:] = b"\0" * len(password)
+        clear_entrypoint_owner()
+
+    assert owner.login_calls == [("alice", b"password-sentinel")]
+
+
+def test_account_login_stops_after_one_failed_owner_recovery(monkeypatch):
+    stale = EntryPointOwnerDouble(
+        RuntimeSnapshot.signed_out(reason="runtime_unavailable"),
+        refresh_error=AuthRequired("runtime_unavailable"),
+    )
+    replacement = EntryPointOwnerDouble(
+        RuntimeSnapshot.signed_out(reason="runtime_unavailable"),
+        login_error=AuthRequired("runtime_unavailable"),
+    )
+    starts: list[str] = []
+    install_entrypoint_owner(stale)
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.connect_runtime_owner",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AuthRequired("runtime_unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.start_runtime_owner",
+        lambda **_kwargs: starts.append("start") or replacement,
+    )
+    password = bytearray(b"password-sentinel")
+    try:
+        with pytest.raises(AuthRequired, match="runtime_unavailable"):
+            account_login("alice", password)
+    finally:
+        password[:] = b"\0" * len(password)
+        clear_entrypoint_owner()
+
+    assert stale.refresh_calls == 1
+    assert stale.login_calls == []
+    assert replacement.login_calls == [("alice", b"password-sentinel")]
+    assert starts == ["start"]
+
+
+def test_account_login_uses_its_single_password_attempt_when_recovery_fails(
+    monkeypatch,
+):
+    authenticated = RuntimeSnapshot.new_authenticated("alice", now=100.0, ttl=60.0)
+    owner = EntryPointOwnerDouble(
+        authenticated,
+        refresh_error=AuthRequired("runtime_unavailable"),
+    )
+    install_entrypoint_owner(owner)
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.connect_runtime_owner",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AuthRequired("runtime_unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.start_runtime_owner",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AuthRequired("runtime_unavailable")
+        ),
+    )
+    password = bytearray(b"password-sentinel")
+    try:
+        result = account_login("alice", password)
+    finally:
+        password[:] = b"\0" * len(password)
+        clear_entrypoint_owner()
+
+    assert result is authenticated
+    assert owner.login_calls == [("alice", b"password-sentinel")]
+
+
+def test_account_login_never_replays_an_ambiguous_runtime_failure(monkeypatch):
+    owner = EntryPointOwnerDouble(
+        RuntimeSnapshot.signed_out(),
+        login_error=AuthRequired("runtime_unavailable"),
+    )
+    install_entrypoint_owner(owner)
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.connect_runtime_owner",
+        lambda: pytest.fail("an ambiguous login failure must not reconnect"),
+    )
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.start_runtime_owner",
+        lambda: pytest.fail("an ambiguous login failure must not start an owner"),
+    )
+    password = bytearray(b"password-sentinel")
+    try:
+        with pytest.raises(AuthRequired, match="runtime_unavailable"):
+            account_login("alice", password)
+    finally:
+        password[:] = b"\0" * len(password)
+        clear_entrypoint_owner()
+
+    assert owner.refresh_calls == 1
+    assert owner.login_calls == [("alice", b"password-sentinel")]
+
+
+def test_account_logout_recovers_stale_owner_and_retries_once(monkeypatch):
+    class LogoutOwnerDouble(EntryPointOwnerDouble):
+        def __init__(self, snapshot, *, logout_error=None):
+            super().__init__(snapshot)
+            self.logout_error = logout_error
+            self.logout_calls = 0
+
+        def logout(self):
+            self.logout_calls += 1
+            if self.logout_error is not None:
+                raise self.logout_error
+            return self._snapshot
+
+    stale = LogoutOwnerDouble(
+        RuntimeSnapshot.signed_out(reason="runtime_unavailable"),
+        logout_error=AuthRequired("runtime_unavailable"),
+    )
+    signed_out = RuntimeSnapshot.signed_out()
+    replacement = LogoutOwnerDouble(signed_out)
+    install_entrypoint_owner(stale)
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.connect_runtime_owner",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AuthRequired("runtime_unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.start_runtime_owner",
+        lambda **_kwargs: replacement,
+    )
+    try:
+        result = account_logout()
+    finally:
+        clear_entrypoint_owner()
+
+    assert result is signed_out
+    assert stale.logout_calls == 1
+    assert replacement.logout_calls == 1
+
+
+def test_account_logout_does_not_retry_non_runtime_failure(monkeypatch):
+    class LogoutOwnerDouble(EntryPointOwnerDouble):
+        def logout(self):
+            raise AuthRequired("vault_unavailable")
+
+    owner = LogoutOwnerDouble(RuntimeSnapshot.signed_out())
+    install_entrypoint_owner(owner)
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.connect_runtime_owner",
+        lambda **_kwargs: pytest.fail("non-runtime logout must not reconnect"),
+    )
+    try:
+        with pytest.raises(AuthRequired, match="vault_unavailable"):
+            account_logout()
+    finally:
+        clear_entrypoint_owner()
+
+
+def test_remote_owner_uses_short_timeout_for_recovery_probe():
+    snapshot = RuntimeSnapshot.signed_out()
+
+    class Connection:
+        def __init__(self):
+            self.timeout = None
+            self.sent = b""
+
+        def settimeout(self, timeout):
+            self.timeout = timeout
+
+        def sendall(self, data):
+            self.sent += data
+
+        def recv(self, _size):
+            return (
+                json.dumps(
+                    {
+                        "version": 1,
+                        "ok": True,
+                        "snapshot": snapshot.public_dict(),
+                    }
+                ).encode("utf-8")
+                + b"\n"
+            )
+
+        def close(self):
+            return None
+
+    connection = Connection()
+
+    class Endpoint:
+        def connect_current(self, *, timeout):
+            assert timeout == 2.0
+            return connection
+
+    owner = RemoteRuntimeOwner(Endpoint())
+
+    assert owner.refresh(timeout=2.0) == snapshot
+    assert connection.timeout is not None
+    assert 0 < connection.timeout <= 2.0
+
+
+def test_remote_owner_wipes_serialized_login_frame_after_send():
+    authenticated = RuntimeSnapshot.new_authenticated("alice", now=100.0, ttl=60.0)
+
+    class Connection:
+        def __init__(self):
+            self.sent_reference = None
+
+        def settimeout(self, _timeout):
+            return None
+
+        def sendall(self, data):
+            self.sent_reference = data
+
+        def recv(self, _size):
+            return (
+                json.dumps(
+                    {
+                        "version": 1,
+                        "ok": True,
+                        "snapshot": authenticated.public_dict(),
+                    }
+                ).encode("utf-8")
+                + b"\n"
+            )
+
+        def close(self):
+            return None
+
+    connection = Connection()
+
+    class Endpoint:
+        def connect_current(self, *, timeout):
+            assert timeout > 0
+            return connection
+
+    owner = RemoteRuntimeOwner(Endpoint())
+    password = bytearray(b"password-sentinel")
+    try:
+        assert owner.login("alice", password) == authenticated
+    finally:
+        password[:] = b"\0" * len(password)
+
+    assert connection.sent_reference is not None
+    assert bytes(connection.sent_reference).strip(b"\0") == b""
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Unix runtime protocol")
+def test_stalled_same_user_client_cannot_block_other_owner_requests():
+    owner, _secret_backend, _auth_client, _clock = memory_owner_factory()
+    with tempfile.TemporaryDirectory(prefix="ha-broker-stall-") as temporary:
+        endpoint = UnixEndpoint.for_directory(
+            Path(temporary),
+            random_name="fedcba9876543210fedcba9876543210",
+        )
+        broker = OwnerBroker.start(owner, endpoint=endpoint)
+        stalled = endpoint.connect_current(timeout=1.0)
+        try:
+            remote = RemoteRuntimeOwner(endpoint)
+            assert remote.refresh(timeout=1.0).state is AuthState.SIGNED_OUT
+        finally:
+            stalled.close()
+            broker.close()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Unix runtime protocol")
+def test_owner_serializes_password_submissions_across_unix_clients():
+    class BlockingInvalidClient(FakeAuthClient):
+        def __init__(self):
+            super().__init__()
+            self._active = 0
+            self._active_lock = threading.Lock()
+            self.login_calls = 0
+            self.first_entered = threading.Event()
+            self.concurrent_entered = threading.Event()
+            self.release = threading.Event()
+
+        def login(self, username, password):
+            with self._active_lock:
+                self.login_calls += 1
+                self._active += 1
+                if self._active > 1:
+                    self.concurrent_entered.set()
+            self.first_entered.set()
+            try:
+                assert self.release.wait(timeout=2)
+                raise AuthServiceError("invalid_credentials")
+            finally:
+                with self._active_lock:
+                    self._active -= 1
+
+    client = BlockingInvalidClient()
+    owner = MemoryOwner(
+        client,
+        hardener=RecordingHardener(),
+        secret_backend=FakeSecretBackend(),
+        clock=FakeClock(),
+        jitter=lambda _low, _high: 59.0,
+    )
+    failures: list[BaseException] = []
+    threads: list[threading.Thread] = []
+    with tempfile.TemporaryDirectory(prefix="ha-bls-") as temporary:
+        endpoint = UnixEndpoint.for_directory(
+            Path(temporary),
+            random_name="0123456789abcdef0123456789abcdef",
+        )
+        broker = OwnerBroker.start(owner, endpoint=endpoint)
+
+        def login() -> None:
+            password = bytearray(b"secret")
+            try:
+                RemoteRuntimeOwner(endpoint).login("alice", password)
+            except BaseException as error:
+                failures.append(error)
+            finally:
+                password[:] = b"\0" * len(password)
+
+        try:
+            threads = [threading.Thread(target=login) for _ in range(2)]
+            threads[0].start()
+            assert client.first_entered.wait(timeout=1)
+            threads[1].start()
+            overlapped = client.concurrent_entered.wait(timeout=0.25)
+        finally:
+            client.release.set()
+            for thread in threads:
+                thread.join(timeout=2)
+            broker.close()
+
+    assert overlapped is False
+    assert client.login_calls == 2
+    assert len(failures) == 2
+    assert all(
+        isinstance(error, AuthRequired) and error.reason == "invalid_credentials"
+        for error in failures
+    )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Unix runtime protocol")
+def test_login_waits_for_a_concurrent_logout_instead_of_rejecting_password():
+    class BlockingLogoutClient(FakeAuthClient):
+        def __init__(self):
+            super().__init__()
+            self.logout_entered = threading.Event()
+            self.release_logout = threading.Event()
+
+        def logout(self, cookies):
+            self.logout_calls += 1
+            assert cookies == self.record.cookies
+            self.logout_entered.set()
+            assert self.release_logout.wait(timeout=2)
+
+    client = BlockingLogoutClient()
+    backend = FakeSecretBackend()
+    owner = MemoryOwner(
+        client,
+        hardener=RecordingHardener(),
+        secret_backend=backend,
+        clock=FakeClock(),
+        jitter=lambda _low, _high: 59.0,
+    )
+    owner.login("alice", bytearray(b"secret"))
+    login_done = threading.Event()
+    logout_failures: list[BaseException] = []
+    login_failures: list[BaseException] = []
+    login_results: list[RuntimeSnapshot] = []
+
+    with tempfile.TemporaryDirectory(prefix="ha-bll-") as temporary:
+        endpoint = UnixEndpoint.for_directory(
+            Path(temporary),
+            random_name="00112233445566778899aabbccddeeff",
+        )
+        broker = OwnerBroker.start(owner, endpoint=endpoint)
+        installed = connect_runtime_owner(endpoint=endpoint, timeout=1.0)
+        install_entrypoint_owner(installed)
+
+        def logout() -> None:
+            try:
+                RemoteRuntimeOwner(endpoint).logout()
+            except BaseException as error:
+                logout_failures.append(error)
+
+        def login() -> None:
+            password = bytearray(b"secret")
+            try:
+                login_results.append(account_login("alice", password))
+            except BaseException as error:
+                login_failures.append(error)
+            finally:
+                password[:] = b"\0" * len(password)
+                login_done.set()
+
+        logout_thread = threading.Thread(target=logout)
+        login_thread = threading.Thread(target=login)
+        try:
+            logout_thread.start()
+            assert client.logout_entered.wait(timeout=1)
+            login_thread.start()
+            login_completed_before_release = login_done.wait(timeout=0.25)
+        finally:
+            client.release_logout.set()
+            logout_thread.join(timeout=2)
+            login_thread.join(timeout=2)
+            clear_entrypoint_owner()
+            broker.close()
+
+    assert login_completed_before_release is False
+    assert logout_failures == []
+    assert login_failures == []
+    assert len(login_results) == 1
+    assert login_results[0].state is AuthState.AUTHENTICATED
+    assert client.login_calls == 2
+    assert backend.raw is not None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Unix runtime protocol")
+def test_stale_status_cannot_delete_a_concurrent_successful_login():
+    old_record = CookieRecord(
+        cookies={
+            "agent_history_sessionid": "old-session",
+            "agent_history_csrftoken": "old-csrf",
+        },
+        username="alice",
+        session_expires_at=status_at().session_expires_at,
+    )
+    new_record = CookieRecord(
+        cookies={
+            "agent_history_sessionid": "new-session",
+            "agent_history_csrftoken": "new-csrf",
+        },
+        username="alice",
+        session_expires_at=status_at().session_expires_at,
+    )
+
+    class ReauthenticationRaceClient(FakeAuthClient):
+        def __init__(self):
+            super().__init__()
+            self.record = old_record
+            self.next_record = old_record
+            self.block_old_status = False
+            self.old_status_entered = threading.Event()
+            self.release_old_status = threading.Event()
+
+        def login(self, username, password):
+            assert username == "alice"
+            assert password == bytearray(b"secret")
+            return self.next_record
+
+        def status(self, cookies):
+            if self.block_old_status and cookies == old_record.cookies:
+                self.old_status_entered.set()
+                assert self.release_old_status.wait(timeout=2)
+                raise SessionRejected()
+            assert cookies in (old_record.cookies, new_record.cookies)
+            return status_at()
+
+    client = ReauthenticationRaceClient()
+    backend = FakeSecretBackend()
+    owner = MemoryOwner(
+        client,
+        hardener=RecordingHardener(),
+        secret_backend=backend,
+        clock=FakeClock(),
+        jitter=lambda _low, _high: 59.0,
+    )
+    owner.login("alice", bytearray(b"secret"))
+    client.next_record = new_record
+    login_done = threading.Event()
+    status_failures: list[BaseException] = []
+    login_failures: list[BaseException] = []
+    login_results: list[RuntimeSnapshot] = []
+    with tempfile.TemporaryDirectory(prefix="ha-brl-") as temporary:
+        endpoint = UnixEndpoint.for_directory(
+            Path(temporary),
+            random_name="abcdef0123456789abcdef0123456789",
+        )
+        broker = OwnerBroker.start(owner, endpoint=endpoint)
+        installed = connect_runtime_owner(endpoint=endpoint, timeout=1.0)
+        install_entrypoint_owner(installed)
+        client.block_old_status = True
+
+        def refresh() -> None:
+            try:
+                RemoteRuntimeOwner(endpoint).refresh(timeout=1.0)
+            except BaseException as error:
+                status_failures.append(error)
+
+        def login() -> None:
+            password = bytearray(b"secret")
+            try:
+                login_results.append(account_login("alice", password))
+            except BaseException as error:
+                login_failures.append(error)
+            finally:
+                password[:] = b"\0" * len(password)
+                login_done.set()
+
+        refresh_thread = threading.Thread(target=refresh)
+        login_thread = threading.Thread(target=login)
+        try:
+            refresh_thread.start()
+            assert client.old_status_entered.wait(timeout=1)
+            login_thread.start()
+            login_completed_before_release = login_done.wait(timeout=0.25)
+        finally:
+            client.release_old_status.set()
+            refresh_thread.join(timeout=2)
+            login_thread.join(timeout=2)
+            clear_entrypoint_owner()
+            broker.close()
+
+    assert login_completed_before_release is True
+    assert login_failures == []
+    assert len(login_results) == 1
+    assert login_results[0].state is AuthState.AUTHENTICATED
+    assert status_failures == []
+    assert owner.snapshot().state is AuthState.AUTHENTICATED
+    assert backend.raw is not None and "new-session" in backend.raw
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Unix runtime protocol")
+def test_rejected_unix_peer_does_not_stop_the_owner(monkeypatch):
+    import hermes_cli.client_auth.runtime as runtime_module
+
+    owner, _secret_backend, _auth_client, _clock = memory_owner_factory()
+    original_validate = runtime_module._validate_peer_uid
+    rejected_once = False
+
+    def reject_one_server_peer(connection):
+        nonlocal rejected_once
+        if threading.current_thread().name == "hermes-auth-owner" and not rejected_once:
+            rejected_once = True
+            raise AuthRequired("runtime_unavailable")
+        return original_validate(connection)
+
+    with tempfile.TemporaryDirectory(prefix="ha-peer-") as temporary:
+        endpoint = UnixEndpoint.for_directory(
+            Path(temporary),
+            random_name="11223344556677889900aabbccddeeff",
+        )
+        broker = OwnerBroker.start(owner, endpoint=endpoint)
+        monkeypatch.setattr(runtime_module, "_validate_peer_uid", reject_one_server_peer)
+        rejected = endpoint.connect_current(timeout=1.0)
+        try:
+            assert (
+                RemoteRuntimeOwner(endpoint).refresh(timeout=1.0).state
+                is AuthState.SIGNED_OUT
+            )
+        finally:
+            rejected.close()
+            broker.close()
+
+    assert rejected_once is True
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Unix runtime protocol")
+def test_owner_recovers_when_one_worker_thread_cannot_start(monkeypatch):
+    owner, _secret_backend, _auth_client, _clock = memory_owner_factory()
+    original_start = threading.Thread.start
+    failed = False
+
+    def fail_one_worker(thread):
+        nonlocal failed
+        if thread.name == "hermes-auth-owner-client" and not failed:
+            failed = True
+            raise RuntimeError("thread details must be redacted")
+        return original_start(thread)
+
+    with tempfile.TemporaryDirectory(prefix="ha-bwf-") as temporary:
+        endpoint = UnixEndpoint.for_directory(
+            Path(temporary),
+            random_name="0011aabb2233ccdd4455eeff66778899",
+        )
+        broker = OwnerBroker.start(owner, endpoint=endpoint)
+        monkeypatch.setattr(threading.Thread, "start", fail_one_worker)
+        rejected = endpoint.connect_current(timeout=1.0)
+        try:
+            try:
+                rejected.sendall(b'{"operation":"status","version":1}\n')
+            except OSError:
+                pass
+            assert (
+                RemoteRuntimeOwner(endpoint).refresh(timeout=1.0).state
+                is AuthState.SIGNED_OUT
+            )
+        finally:
+            rejected.close()
+            broker.close()
+
+    assert failed is True
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Unix runtime protocol")
+def test_owner_rejects_clients_above_its_worker_limit(monkeypatch):
+    monkeypatch.setattr(OwnerBroker, "_MAX_WORKERS", 1, raising=False)
+    owner, _secret_backend, _auth_client, _clock = memory_owner_factory()
+    with tempfile.TemporaryDirectory(prefix="ha-bwl-") as temporary:
+        endpoint = UnixEndpoint.for_directory(
+            Path(temporary),
+            random_name="99887766554433221100ffeeddccbbaa",
+        )
+        broker = OwnerBroker.start(owner, endpoint=endpoint)
+        stalled = endpoint.connect_current(timeout=1.0)
+        try:
+            deadline = time.monotonic() + 1.0
+            while len(broker._connections) < 1 and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert len(broker._connections) == 1
+            with pytest.raises(AuthRequired, match="runtime_unavailable"):
+                RemoteRuntimeOwner(endpoint).refresh(timeout=0.5)
+        finally:
+            stalled.close()
+            broker.close()
+
+
+def test_runtime_frame_timeout_is_a_total_deadline():
+    reader, writer = socket.socketpair()
+    stop = threading.Event()
+
+    def drip() -> None:
+        while not stop.wait(0.04):
+            try:
+                writer.sendall(b"x")
+            except OSError:
+                return
+
+    sender = threading.Thread(target=drip)
+    sender.start()
+    started = time.monotonic()
+    try:
+        with pytest.raises(TimeoutError):
+            _read_runtime_frame(reader, timeout=0.15)
+    finally:
+        stop.set()
+        reader.close()
+        writer.close()
+        sender.join(timeout=1)
+
+    assert time.monotonic() - started < 0.5
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Unix runtime protocol")
+def test_account_status_recovers_after_real_broker_disappears(monkeypatch):
+    first_owner, _first_backend, _first_client, _first_clock = memory_owner_factory()
+    second_owner, _second_backend, _second_client, _second_clock = (
+        memory_owner_factory()
+    )
+    replacement_brokers: list[OwnerBroker] = []
+    with tempfile.TemporaryDirectory(prefix="ha-broker-recover-") as temporary:
+        endpoint = UnixEndpoint.for_directory(
+            Path(temporary),
+            random_name="00112233445566778899aabbccddeeff",
+        )
+        first_broker = OwnerBroker.start(first_owner, endpoint=endpoint)
+        stale = connect_runtime_owner(endpoint=endpoint, timeout=1.0)
+        install_entrypoint_owner(stale)
+        first_broker.close()
+
+        def start_replacement(**_kwargs):
+            broker = OwnerBroker.start(second_owner, endpoint=endpoint)
+            replacement_brokers.append(broker)
+            return connect_runtime_owner(endpoint=endpoint, timeout=1.0)
+
+        monkeypatch.setattr(
+            "hermes_cli.client_auth.runtime.runtime_endpoint",
+            lambda: endpoint,
+        )
+        monkeypatch.setattr(
+            "hermes_cli.client_auth.runtime.start_runtime_owner",
+            start_replacement,
+        )
+        try:
+            result = account_status()
+        finally:
+            clear_entrypoint_owner()
+            for broker in replacement_brokers:
+                broker.close()
+
+    assert result.state is AuthState.SIGNED_OUT
+    assert result.reason is None
+    assert len(replacement_brokers) == 1
+
+
 def test_interactive_entrypoint_logs_in_once_and_wipes_password(monkeypatch):
     owner, _secret_backend, auth_client, _clock = memory_owner_factory()
     install_entrypoint_owner(owner)
@@ -681,6 +1860,96 @@ def test_noninteractive_entrypoint_never_prompts(monkeypatch):
     assert auth_client.login_calls == 0
 
 
+def test_interactive_entrypoint_recovers_dead_installed_owner(monkeypatch):
+    stale = AuthorizedEntryPointOwnerDouble(
+        RuntimeSnapshot.signed_out(reason="runtime_unavailable"),
+        refresh_error=AuthRequired("runtime_unavailable"),
+    )
+    authenticated = RuntimeSnapshot.new_authenticated("alice", now=100.0, ttl=60.0)
+    replacement = AuthorizedEntryPointOwnerDouble(authenticated)
+    starts: list[str] = []
+    install_entrypoint_owner(stale)
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.connect_runtime_owner",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AuthRequired("runtime_unavailable")
+        ),
+    )
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.start_runtime_owner",
+        lambda **_kwargs: starts.append("start") or replacement,
+    )
+    try:
+        scope = authorize_entrypoint("cli.start", interactive=True)
+    finally:
+        clear_entrypoint_owner()
+
+    assert scope == authenticated.scope
+    assert starts == ["start"]
+
+
+def test_noninteractive_entrypoint_reconnects_but_never_starts_owner(monkeypatch):
+    stale = AuthorizedEntryPointOwnerDouble(
+        RuntimeSnapshot.signed_out(reason="runtime_unavailable"),
+        refresh_error=AuthRequired("runtime_unavailable"),
+    )
+    authenticated = RuntimeSnapshot.new_authenticated("alice", now=100.0, ttl=60.0)
+    replacement = AuthorizedEntryPointOwnerDouble(authenticated)
+    install_entrypoint_owner(stale)
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.connect_runtime_owner",
+        lambda **_kwargs: replacement,
+    )
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.start_runtime_owner",
+        lambda **_kwargs: pytest.fail("a background entrypoint must not start owner"),
+    )
+    try:
+        scope = authorize_entrypoint("gateway.start", interactive=False)
+    finally:
+        clear_entrypoint_owner()
+
+    assert scope == authenticated.scope
+
+
+def test_wait_until_authorized_attempts_automatic_owner_start_once(monkeypatch):
+    stop = threading.Event()
+    states: list[RuntimeSnapshot] = []
+    starts: list[str] = []
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.connect_runtime_owner",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AuthRequired("runtime_unavailable")
+        ),
+    )
+
+    def fail_start(**_kwargs):
+        starts.append("start")
+        raise AuthRequired("runtime_unavailable")
+
+    def on_state(snapshot):
+        states.append(snapshot)
+        if len(states) == 3:
+            stop.set()
+
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.start_runtime_owner",
+        fail_start,
+    )
+
+    result = wait_until_authorized(
+        "backend.start",
+        stop_event=stop,
+        on_state=on_state,
+        poll_seconds=0,
+        start_owner_if_missing=True,
+    )
+
+    assert result is LockedWaitingResult.OWNER_STOPPED
+    assert len(states) == 3
+    assert starts == ["start"]
+
+
 @pytest.mark.skipif(os.name == "nt", reason="Unix runtime protocol")
 def test_unix_broker_shares_login_authorization_and_revocation():
     owner, _secret_backend, _auth_client, _clock = memory_owner_factory()
@@ -706,6 +1975,23 @@ def test_unix_broker_shares_login_authorization_and_revocation():
                     "child.next_boundary",
                     expected=authenticated.scope,
                 )
+        finally:
+            broker.close()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Unix runtime protocol")
+def test_connect_rejects_owner_already_in_runtime_unavailable_transition():
+    owner, _secret_backend, _auth_client, _clock = memory_owner_factory()
+    owner.close()
+    with tempfile.TemporaryDirectory(prefix="ha-broker-closing-") as temporary:
+        endpoint = UnixEndpoint.for_directory(
+            Path(temporary),
+            random_name="ffeeddccbbaa99887766554433221100",
+        )
+        broker = OwnerBroker.start(owner, endpoint=endpoint)
+        try:
+            with pytest.raises(AuthRequired, match="runtime_unavailable"):
+                connect_runtime_owner(endpoint=endpoint, timeout=1.0)
         finally:
             broker.close()
 
@@ -759,10 +2045,12 @@ def test_entrypoint_service_failure_never_prompts(monkeypatch):
 
 def test_owner_starter_detaches_without_forwarding_secret_environment(monkeypatch):
     captured = {}
+    connect_timeouts: list[float] = []
     remote = object()
     attempts = iter([AuthRequired("runtime_unavailable"), remote])
 
-    def connect():
+    def connect(**kwargs):
+        connect_timeouts.append(kwargs["timeout"])
         result = next(attempts)
         if isinstance(result, BaseException):
             raise result
@@ -797,6 +2085,8 @@ def test_owner_starter_detaches_without_forwarding_secret_environment(monkeypatc
     assert captured["close_fds"] is True
     assert "OPENAI_API_KEY" not in captured["env"]
     assert "HERMES_ACCOUNT_TOKEN" not in captured["env"]
+    assert len(connect_timeouts) == 2
+    assert all(0 < timeout <= 1.0 for timeout in connect_timeouts)
 
 
 def test_live_owner_is_reused_before_new_mode_election():

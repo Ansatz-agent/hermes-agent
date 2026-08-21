@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import errno
 import hashlib
 import json
 import os
@@ -39,6 +40,13 @@ LOGIN_ATTEMPT_WINDOW_SECONDS = 60.0
 OWNER_IDLE_SECONDS = 15.0 * 60.0
 BACKEND_SCOPE_TOKEN_TTL_SECONDS = 60.0
 _BACKEND_SCOPE_TOKEN_BYTES = 32
+_RUNTIME_REQUEST_TIMEOUT_SECONDS = 15.0
+_RUNTIME_LOGIN_TIMEOUT_SECONDS = 70.0
+_RUNTIME_RECOVERY_PROBE_SECONDS = 2.0
+_RUNTIME_RECOVERY_START_SECONDS = 4.0
+_RUNTIME_SERVER_READ_TIMEOUT_SECONDS = 5.0
+_RUNTIME_LOGIN_OPERATION_WAIT_SECONDS = 15.0
+_RUNTIME_LOGOUT_OPERATION_WAIT_SECONDS = 3.0
 
 
 def _test_runtime_suffix() -> str:
@@ -791,11 +799,16 @@ class UnixEndpoint:
             raise
         return UnixOwnerServer(self, listener)
 
-    def connect_current(self) -> socket.socket:
+    def connect_current(
+        self,
+        *,
+        timeout: float = _RUNTIME_REQUEST_TIMEOUT_SECONDS,
+    ) -> socket.socket:
         socket_path = self._read_pointer()
         _validate_socket_file(socket_path)
         connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         connection.set_inheritable(False)
+        connection.settimeout(timeout)
         try:
             connection.connect(str(socket_path))
             _validate_peer_uid(connection)
@@ -896,17 +909,29 @@ class UnixOwnerServer:
         return self._listener.fileno()
 
     def accept(self) -> socket.socket:
-        try:
-            connection, _ = self._listener.accept()
-            connection.set_inheritable(False)
-            _validate_peer_uid(connection)
-            return connection
-        except (AuthRequired, OSError):
+        transient_accept_errors = {
+            errno.EAGAIN,
+            errno.ECONNABORTED,
+            errno.EINTR,
+            errno.EWOULDBLOCK,
+        }
+        while True:
             try:
-                connection.close()
-            except (OSError, UnboundLocalError):
-                pass
-            raise AuthRequired("runtime_unavailable") from None
+                connection, _ = self._listener.accept()
+            except OSError as error:
+                if not self._closed and error.errno in transient_accept_errors:
+                    continue
+                raise AuthRequired("runtime_unavailable") from None
+            try:
+                connection.set_inheritable(False)
+                _validate_peer_uid(connection)
+            except (AuthRequired, OSError):
+                try:
+                    connection.close()
+                except OSError:
+                    pass
+                continue
+            return connection
 
     def close(self) -> None:
         if self._closed:
@@ -1203,6 +1228,7 @@ class _OwnerCore:
         self._consumers: list[RuntimeConsumer] = []
         self._alive = True
         self._lock = threading.RLock()
+        self._refresh_lock = threading.Lock()
         self._next_refresh_at: float | None = None
         self._failed_login_attempts: list[float] = []
         self._last_authenticated_activity = self._clock()
@@ -1245,44 +1271,73 @@ class _OwnerCore:
             self._best_effort_remote_logout(record)
             self._lock_with_reason("session_rejected")
             raise AuthRequired("session_rejected")
-        try:
-            self._secret_backend.write(_encode_cookie_blob(record))
-        except Exception:
-            self._best_effort_remote_logout(record)
-            reason = "vault_unavailable" if self._vault_required else "runtime_unavailable"
-            self._lock_with_reason(reason)
-            raise AuthRequired(reason) from None
-
         now = self._clock()
         with self._lock:
-            self._record = record
-            self._record_loaded = True
-            self._failed_login_attempts.clear()
-            self._last_authenticated_activity = now
-            snapshot = RuntimeSnapshot.from_session_status(
-                status,
-                now=now,
-                runtime_instance_id=self._snapshot.runtime_instance_id,
-                epoch=self._snapshot.epoch + 1,
-            )
-            self._publish_locked(snapshot)
-            self._schedule_locked(now)
-            return snapshot
+            try:
+                self._secret_backend.write(_encode_cookie_blob(record))
+            except Exception:
+                reason = (
+                    "vault_unavailable" if self._vault_required else "runtime_unavailable"
+                )
+                self._publish_locked(self._snapshot.locked(reason, now=now))
+                self._next_refresh_at = None
+            else:
+                reason = None
+            if reason is not None:
+                snapshot = None
+            else:
+                self._record = record
+                self._record_loaded = True
+                self._failed_login_attempts.clear()
+                self._last_authenticated_activity = now
+                snapshot = RuntimeSnapshot.from_session_status(
+                    status,
+                    now=now,
+                    runtime_instance_id=self._snapshot.runtime_instance_id,
+                    epoch=self._snapshot.epoch + 1,
+                )
+                self._publish_locked(snapshot)
+                self._schedule_locked(now)
+        if snapshot is None:
+            self._best_effort_remote_logout(record)
+            raise AuthRequired(reason) from None
+        return snapshot
 
     def refresh(self) -> RuntimeSnapshot:
+        if not self._refresh_lock.acquire(blocking=False):
+            return self.snapshot()
+        try:
+            return self._refresh_once()
+        finally:
+            self._refresh_lock.release()
+
+    def _refresh_once(self) -> RuntimeSnapshot:
         record = self._load_record()
         if record is None:
             return self.snapshot()
         try:
             status = self._client.status(record.cookies)
         except AuthServiceError as error:
-            if isinstance(error, SessionRejected):
-                self._delete_record_best_effort()
-            self._lock_with_reason(error.reason)
+            with self._lock:
+                if self._record is not record:
+                    return self._snapshot
+                if isinstance(error, SessionRejected):
+                    self._record = None
+                    self._record_loaded = True
+                    try:
+                        self._secret_backend.delete()
+                    except Exception:
+                        pass
+                now = self._clock()
+                locked = self._snapshot.locked(error.reason, now=now)
+                self._publish_locked(locked)
+                self._next_refresh_at = None
             raise AuthRequired(error.reason) from None
 
         now = self._clock()
         with self._lock:
+            if self._record is not record:
+                return self._snapshot
             current = self._snapshot
             try:
                 if current.state is AuthState.AUTHENTICATED:
@@ -1329,11 +1384,12 @@ class _OwnerCore:
             self._record_loaded = True
             self._next_refresh_at = None
             self._publish_locked(signed_out)
-        delete_failed = False
-        try:
-            self._secret_backend.delete()
-        except Exception:
-            delete_failed = True
+            try:
+                self._secret_backend.delete()
+            except Exception:
+                delete_failed = True
+            else:
+                delete_failed = False
         if record is not None:
             self._best_effort_remote_logout(record)
         if delete_failed:
@@ -1407,9 +1463,16 @@ class _OwnerCore:
             record = _decode_cookie_blob(raw) if raw else None
         except Exception:
             reason = "vault_unavailable" if self._vault_required else "runtime_unavailable"
-            self._lock_with_reason(reason)
+            with self._lock:
+                if self._record_loaded:
+                    return self._record
+                locked = self._snapshot.locked(reason, now=self._clock())
+                self._publish_locked(locked)
+                self._next_refresh_at = None
             raise AuthRequired(reason) from None
         with self._lock:
+            if self._record_loaded:
+                return self._record
             self._record = record
             self._record_loaded = True
             return record
@@ -1442,15 +1505,6 @@ class _OwnerCore:
                 continue
             retained.append(consumer)
         self._consumers = retained
-
-    def _delete_record_best_effort(self) -> None:
-        with self._lock:
-            self._record = None
-            self._record_loaded = True
-        try:
-            self._secret_backend.delete()
-        except Exception:
-            return
 
     def _best_effort_remote_logout(self, record: CookieRecord) -> None:
         try:
@@ -1511,6 +1565,8 @@ class _EntryPointOwner(Protocol):
 
     def login(self, username: str, password: bytearray) -> RuntimeSnapshot: ...
 
+    def logout(self) -> RuntimeSnapshot: ...
+
     def snapshot(self) -> RuntimeSnapshot: ...
 
     def connect_consumer(self, *, profile: str | None = None) -> RuntimeConsumer: ...
@@ -1561,8 +1617,12 @@ class RemoteRuntimeOwner:
         self._snapshot = RuntimeSnapshot.signed_out(reason="runtime_unavailable")
         self._lock = threading.RLock()
 
-    def refresh(self) -> RuntimeSnapshot:
-        return self._request({"operation": "status"})
+    def refresh(
+        self,
+        *,
+        timeout: float = _RUNTIME_REQUEST_TIMEOUT_SECONDS,
+    ) -> RuntimeSnapshot:
+        return self._request({"operation": "status"}, timeout=timeout)
 
     def snapshot(self) -> RuntimeSnapshot:
         with self._lock:
@@ -1574,7 +1634,7 @@ class RemoteRuntimeOwner:
         except (AttributeError, UnicodeDecodeError):
             raise AuthRequired("invalid_credentials") from None
         try:
-            return self._request(
+            encoded = self._encode_request(
                 {
                     "operation": "login",
                     "username": username,
@@ -1583,6 +1643,13 @@ class RemoteRuntimeOwner:
             )
         finally:
             password_text = ""
+        try:
+            return self._exchange(
+                encoded,
+                timeout=_RUNTIME_LOGIN_TIMEOUT_SECONDS,
+            )
+        finally:
+            encoded[:] = b"\0" * len(encoded)
 
     def logout(self) -> RuntimeSnapshot:
         return self._request({"operation": "logout"})
@@ -1612,25 +1679,61 @@ class RemoteRuntimeOwner:
             }
         )
 
-    def _request(self, params: dict[str, object]) -> RuntimeSnapshot:
+    def _request(
+        self,
+        params: dict[str, object],
+        *,
+        timeout: float = _RUNTIME_REQUEST_TIMEOUT_SECONDS,
+    ) -> RuntimeSnapshot:
+        encoded = self._encode_request(params)
+        return self._exchange(encoded, timeout=timeout)
+
+    def _encode_request(self, params: dict[str, object]) -> bytearray:
         request = {
             "version": _RUNTIME_PROTOCOL_VERSION,
             **params,
         }
-        encoded = (
-            json.dumps(request, sort_keys=True, separators=(",", ":")) + "\n"
-        ).encode("utf-8")
+        encoded = bytearray(
+            (
+                json.dumps(request, sort_keys=True, separators=(",", ":")) + "\n"
+            ).encode("utf-8")
+        )
         if len(encoded) > _RUNTIME_FRAME_LIMIT:
+            encoded[:] = b"\0" * len(encoded)
             raise AuthRequired("runtime_unavailable")
-        connection: Any = self._endpoint.connect_current()
+        return encoded
+
+    def _exchange(
+        self,
+        encoded: bytearray,
+        *,
+        timeout: float,
+    ) -> RuntimeSnapshot:
+        if timeout <= 0:
+            encoded[:] = b"\0" * len(encoded)
+            raise AuthRequired("runtime_unavailable")
+        if isinstance(self._endpoint, WindowsNamedPipeEndpoint):
+            connection = self._endpoint.connect_current()
+        else:
+            connection: Any = self._endpoint.connect_current(timeout=timeout)
         try:
-            if isinstance(connection, socket.socket):
-                connection.settimeout(15.0)
+            set_timeout = getattr(connection, "settimeout", None)
+            if callable(set_timeout):
+                set_timeout(timeout)
             connection.sendall(encoded)
-            raw = _read_runtime_frame(connection)
+            encoded[:] = b"\0" * len(encoded)
+            raw = _read_runtime_frame(
+                connection,
+                timeout=(
+                    None
+                    if isinstance(self._endpoint, WindowsNamedPipeEndpoint)
+                    else timeout
+                ),
+            )
         except (AuthRequired, OSError, TimeoutError):
             raise AuthRequired("runtime_unavailable") from None
         finally:
+            encoded[:] = b"\0" * len(encoded)
             connection.close()
         try:
             response = json.loads(raw)
@@ -1654,6 +1757,8 @@ class RemoteRuntimeOwner:
 class OwnerBroker:
     """Bounded native IPC broker for one VaultOwner or MemoryOwner."""
 
+    _MAX_WORKERS = 32
+
     def __init__(
         self,
         owner: _EntryPointOwner,
@@ -1666,6 +1771,13 @@ class OwnerBroker:
         self._server = server
         self._owner_lock = owner_lock
         self._stop = threading.Event()
+        self._close_lock = threading.Lock()
+        self._closed = False
+        self._server_lock = threading.RLock()
+        self._connections_lock = threading.RLock()
+        self._connections: set[Any] = set()
+        self._operation_lock = threading.Lock()
+        self._worker_slots = threading.BoundedSemaphore(self._MAX_WORKERS)
         self._thread = threading.Thread(
             target=self._serve,
             name="hermes-auth-owner",
@@ -1705,26 +1817,98 @@ class OwnerBroker:
         return self._endpoint
 
     def close(self) -> None:
-        if self._stop.is_set():
-            return
-        self._stop.set()
-        self._server.close()
-        if self._owner_lock is not None:
-            self._owner_lock.close()
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._stop.set()
+            with self._server_lock:
+                self._server.close()
+            with self._connections_lock:
+                connections = tuple(self._connections)
+            for connection in connections:
+                try:
+                    connection.close()
+                except Exception:
+                    continue
+            if self._owner_lock is not None:
+                self._owner_lock.close()
 
     def wait(self) -> None:
         self._stop.wait()
 
     def _serve(self) -> None:
-        while not self._stop.is_set():
+        try:
+            while not self._stop.is_set():
+                with self._server_lock:
+                    server = self._server
+                try:
+                    connection = server.accept()
+                except AuthRequired:
+                    return
+
+                if isinstance(self._endpoint, WindowsNamedPipeEndpoint):
+                    self._serve_connection(connection)
+                    if self._stop.is_set():
+                        return
+                    try:
+                        replacement_server = self._endpoint.bind_owner()
+                    except AuthRequired:
+                        return
+                    with self._server_lock:
+                        if self._stop.is_set():
+                            replacement_server.close()
+                            return
+                        self._server = replacement_server
+                    continue
+
+                if not self._worker_slots.acquire(blocking=False):
+                    try:
+                        connection.sendall(
+                            b'{"ok":false,"reason":"runtime_unavailable","version":1}\n'
+                        )
+                    except Exception:
+                        pass
+                    finally:
+                        connection.close()
+                    continue
+
+                with self._connections_lock:
+                    if self._stop.is_set():
+                        connection.close()
+                        self._worker_slots.release()
+                        return
+                    self._connections.add(connection)
+                try:
+                    worker = threading.Thread(
+                        target=self._serve_connection,
+                        args=(connection, True),
+                        name="hermes-auth-owner-client",
+                        daemon=True,
+                    )
+                    worker.start()
+                except BaseException:
+                    connection.close()
+                    with self._connections_lock:
+                        self._connections.discard(connection)
+                    self._worker_slots.release()
+                    continue
+        finally:
+            self._stop.set()
+
+    def _serve_connection(
+        self,
+        connection: Any,
+        worker_slot_acquired: bool = False,
+    ) -> None:
+        try:
             try:
-                connection = self._server.accept()
-            except AuthRequired:
-                if not self._stop.is_set():
-                    self._stop.set()
-                return
-            try:
-                raw = _read_runtime_frame(connection)
+                timeout = (
+                    _RUNTIME_SERVER_READ_TIMEOUT_SECONDS
+                    if isinstance(self._endpoint, UnixEndpoint)
+                    else None
+                )
+                raw = _read_runtime_frame(connection, timeout=timeout)
                 response = self._dispatch(raw)
                 encoded = (
                     json.dumps(response, sort_keys=True, separators=(",", ":"))
@@ -1740,14 +1924,12 @@ class OwnerBroker:
                     )
                 except Exception:
                     pass
-            finally:
-                connection.close()
-            if isinstance(self._endpoint, WindowsNamedPipeEndpoint):
-                try:
-                    self._server = self._endpoint.bind_owner()
-                except AuthRequired:
-                    self._stop.set()
-                    return
+        finally:
+            connection.close()
+            with self._connections_lock:
+                self._connections.discard(connection)
+            if worker_slot_acquired:
+                self._worker_slots.release()
 
     def _maintain(self) -> None:
         maintenance = getattr(self._owner, "maintenance", None)
@@ -1755,7 +1937,8 @@ class OwnerBroker:
             if maintenance is None:
                 continue
             try:
-                if maintenance() is False:
+                keep_running = maintenance()
+                if keep_running is False:
                     self.close()
                     return
             except AuthRequired:
@@ -1772,6 +1955,21 @@ class OwnerBroker:
         if not isinstance(request, dict) or request.get("version") != 1:
             return _runtime_error("runtime_unavailable")
         operation = request.get("operation")
+        operation_locked = False
+        if (
+            isinstance(self._endpoint, UnixEndpoint)
+            and operation in {"login", "logout"}
+        ):
+            wait_seconds = (
+                _RUNTIME_LOGIN_OPERATION_WAIT_SECONDS
+                if operation == "login"
+                else _RUNTIME_LOGOUT_OPERATION_WAIT_SECONDS
+            )
+            operation_locked = self._operation_lock.acquire(timeout=wait_seconds)
+            if not operation_locked:
+                if operation == "login":
+                    request["password"] = ""
+                return _runtime_error("runtime_unavailable")
         try:
             if operation == "status" and set(request) == {"version", "operation"}:
                 snapshot = self._owner.refresh()
@@ -1788,6 +1986,7 @@ class OwnerBroker:
                 if not isinstance(username, str) or not isinstance(password_text, str):
                     raise AuthRequired("invalid_credentials")
                 password = bytearray(password_text.encode("utf-8"))
+                request["password"] = ""
                 password_text = ""
                 try:
                     snapshot = self._owner.login(username, password)
@@ -1812,6 +2011,9 @@ class OwnerBroker:
             return _runtime_error(error.reason or error.code)
         except Exception:
             return _runtime_error("runtime_unavailable")
+        finally:
+            if operation_locked:
+                self._operation_lock.release()
         return {
             "version": 1,
             "ok": True,
@@ -1822,18 +2024,37 @@ class OwnerBroker:
 def connect_runtime_owner(
     *,
     endpoint: UnixEndpoint | WindowsNamedPipeEndpoint | None = None,
+    timeout: float = _RUNTIME_REQUEST_TIMEOUT_SECONDS,
 ) -> RemoteRuntimeOwner:
     remote = RemoteRuntimeOwner(endpoint or runtime_endpoint())
-    remote.refresh()
+    snapshot = remote.refresh(timeout=timeout)
+    if (
+        snapshot.state is not AuthState.AUTHENTICATED
+        and snapshot.reason == "runtime_unavailable"
+    ):
+        raise AuthRequired("runtime_unavailable")
     return remote
 
 
-def start_runtime_owner(*, timeout: float = 5.0) -> RemoteRuntimeOwner:
+def start_runtime_owner(
+    *,
+    timeout: float = 5.0,
+    probe_first: bool = True,
+) -> RemoteRuntimeOwner:
     """Start the fixed auth-only owner process and wait for its native endpoint."""
-    try:
-        return connect_runtime_owner()
-    except AuthRequired:
-        pass
+    deadline = time.monotonic() + max(0.1, timeout)
+    if probe_first:
+        try:
+            return connect_runtime_owner(
+                timeout=min(
+                    _RUNTIME_RECOVERY_PROBE_SECONDS,
+                    max(0.1, deadline - time.monotonic()),
+                )
+            )
+        except AuthRequired:
+            pass
+    if time.monotonic() >= deadline:
+        raise AuthRequired("runtime_unavailable")
     environment = _owner_process_environment()
     kwargs: dict[str, object] = {
         "stdin": subprocess.DEVNULL,
@@ -1862,12 +2083,17 @@ def start_runtime_owner(*, timeout: float = 5.0) -> RemoteRuntimeOwner:
     except Exception:
         raise AuthRequired("runtime_unavailable") from None
 
-    deadline = time.monotonic() + max(0.1, timeout)
     while time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
         try:
-            return connect_runtime_owner()
+            return connect_runtime_owner(
+                timeout=min(
+                    _RUNTIME_RECOVERY_PROBE_SECONDS,
+                    max(0.05, remaining),
+                )
+            )
         except AuthRequired:
-            time.sleep(0.05)
+            time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
     raise AuthRequired("runtime_unavailable")
 
 
@@ -1948,7 +2174,7 @@ def _create_elected_owner() -> VaultOwner | MemoryOwner:
 
 def run_owner_service() -> int:
     try:
-        connect_runtime_owner()
+        connect_runtime_owner(timeout=_RUNTIME_RECOVERY_PROBE_SECONDS)
     except AuthRequired:
         pass
     else:
@@ -1968,10 +2194,26 @@ def run_owner_service() -> int:
     return 0
 
 
-def _read_runtime_frame(connection: Any) -> bytes:
+def _read_runtime_frame(
+    connection: Any,
+    *,
+    timeout: float | None = None,
+) -> bytes:
+    if timeout is not None and timeout <= 0:
+        raise TimeoutError
+    deadline = time.monotonic() + timeout if timeout is not None else None
     data = bytearray()
     while True:
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError
+            set_timeout = getattr(connection, "settimeout", None)
+            if callable(set_timeout):
+                set_timeout(remaining)
         chunk = connection.recv(min(4096, _RUNTIME_FRAME_LIMIT + 1 - len(data)))
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError
         if not chunk:
             raise AuthRequired("runtime_unavailable")
         data.extend(chunk)
@@ -2054,6 +2296,8 @@ def _runtime_error(reason: str) -> dict[str, object]:
 
 _entrypoint_owner_lock = threading.RLock()
 _entrypoint_owner: _EntryPointOwner | None = None
+_owner_recovery_lock = threading.Lock()
+_automatic_owner_start_allowed = True
 
 
 def install_entrypoint_owner(owner: _EntryPointOwner) -> None:
@@ -2063,10 +2307,94 @@ def install_entrypoint_owner(owner: _EntryPointOwner) -> None:
 
 
 def clear_entrypoint_owner() -> None:
+    global _automatic_owner_start_allowed, _entrypoint_owner
+    # Lock order is recovery -> entrypoint -> consumer throughout this module.
+    with _owner_recovery_lock:
+        with _entrypoint_owner_lock:
+            _entrypoint_owner = None
+            clear_runtime_consumer()
+        _automatic_owner_start_allowed = True
+
+
+def _adopt_entrypoint_owner(owner: _EntryPointOwner) -> _EntryPointOwner:
     global _entrypoint_owner
     with _entrypoint_owner_lock:
-        _entrypoint_owner = None
-    clear_runtime_consumer()
+        if _entrypoint_owner is None:
+            _entrypoint_owner = owner
+        return _entrypoint_owner
+
+
+def _refresh_entrypoint_owner(
+    owner: _EntryPointOwner,
+    *,
+    timeout: float = _RUNTIME_RECOVERY_PROBE_SECONDS,
+) -> RuntimeSnapshot:
+    if isinstance(owner, RemoteRuntimeOwner):
+        return owner.refresh(timeout=timeout)
+    return owner.refresh()
+
+
+def _safe_status_failure(reason: str | None) -> RuntimeSnapshot:
+    safe_reasons = {
+        "invalid_credentials",
+        "rate_limited",
+        "server_unavailable",
+        "session_expired",
+        "session_rejected",
+        "signed_out",
+        "vault_unavailable",
+    }
+    return RuntimeSnapshot.signed_out(
+        reason=reason if reason in safe_reasons else "runtime_unavailable"
+    )
+
+
+def _recover_entrypoint_owner(
+    failed_owner: _EntryPointOwner,
+    *,
+    allow_start: bool = True,
+    force_start: bool = False,
+) -> _EntryPointOwner:
+    global _automatic_owner_start_allowed, _entrypoint_owner
+    with _owner_recovery_lock:
+        with _entrypoint_owner_lock:
+            current = _entrypoint_owner
+            if current is not None and current is not failed_owner:
+                return current
+
+        try:
+            candidate = connect_runtime_owner(
+                timeout=_RUNTIME_RECOVERY_PROBE_SECONDS,
+            )
+        except AuthRequired as error:
+            if error.reason != "runtime_unavailable":
+                raise
+            if (
+                not allow_start
+                or not force_start
+                and not _automatic_owner_start_allowed
+            ):
+                raise
+            try:
+                candidate = start_runtime_owner(
+                    timeout=_RUNTIME_RECOVERY_START_SECONDS,
+                    probe_first=False,
+                )
+            except AuthRequired:
+                _automatic_owner_start_allowed = False
+                raise
+
+        with _entrypoint_owner_lock:
+            current = _entrypoint_owner
+            if current is not None and current is not failed_owner:
+                return current
+            failed_instance = failed_owner.snapshot().runtime_instance_id
+            candidate_instance = candidate.snapshot().runtime_instance_id
+            if candidate_instance != failed_instance:
+                clear_runtime_consumer()
+            _entrypoint_owner = candidate
+            _automatic_owner_start_allowed = True
+            return candidate
 
 
 def authorize_entrypoint(boundary: str, *, interactive: bool) -> AuthScope:
@@ -2074,19 +2402,33 @@ def authorize_entrypoint(boundary: str, *, interactive: bool) -> AuthScope:
         owner = _entrypoint_owner
     if owner is None:
         try:
-            owner = connect_runtime_owner()
+            owner = connect_runtime_owner(
+                timeout=_RUNTIME_RECOVERY_PROBE_SECONDS,
+            )
         except AuthRequired:
             if not interactive:
                 raise
-            owner = start_runtime_owner()
+            owner = start_runtime_owner(
+                timeout=_RUNTIME_RECOVERY_START_SECONDS,
+                probe_first=False,
+            )
+        owner = _adopt_entrypoint_owner(owner)
 
     recoverable = {"session_rejected", "session_expired", "signed_out"}
     try:
-        snapshot = owner.refresh()
+        snapshot = _refresh_entrypoint_owner(owner)
     except AuthRequired as error:
-        if not interactive or error.reason not in recoverable:
+        if error.reason == "runtime_unavailable":
+            owner = _recover_entrypoint_owner(
+                owner,
+                allow_start=interactive,
+                force_start=interactive,
+            )
+            snapshot = _refresh_entrypoint_owner(owner)
+        elif not interactive or error.reason not in recoverable:
             raise
-        snapshot = owner.snapshot()
+        else:
+            snapshot = owner.snapshot()
 
     if snapshot.state is not AuthState.AUTHENTICATED:
         reason = snapshot.reason or "signed_out"
@@ -2117,7 +2459,10 @@ def authorize_entrypoint(boundary: str, *, interactive: bool) -> AuthScope:
         boundary,
         expected=snapshot.scope,
     )
-    install_runtime_consumer(consumer)
+    with _entrypoint_owner_lock:
+        if _entrypoint_owner is not owner:
+            raise AuthRequired("runtime_unavailable")
+        install_runtime_consumer(consumer)
     return scope
 
 
@@ -2126,13 +2471,32 @@ def account_status() -> RuntimeSnapshot:
         owner = _entrypoint_owner
     if owner is None:
         try:
-            owner = connect_runtime_owner()
-        except AuthRequired:
-            return RuntimeSnapshot.signed_out(reason="runtime_unavailable")
+            owner = connect_runtime_owner(
+                timeout=_RUNTIME_RECOVERY_PROBE_SECONDS,
+            )
+        except AuthRequired as error:
+            return _safe_status_failure(error.reason)
+        owner = _adopt_entrypoint_owner(owner)
     try:
-        return owner.refresh()
-    except AuthRequired:
-        return owner.snapshot()
+        snapshot = _refresh_entrypoint_owner(owner)
+    except AuthRequired as error:
+        if error.reason == "runtime_unavailable":
+            try:
+                owner = _recover_entrypoint_owner(owner)
+                return _refresh_entrypoint_owner(owner)
+            except AuthRequired as recovery_error:
+                return _safe_status_failure(recovery_error.reason)
+        return _safe_status_failure(error.reason)
+    if (
+        snapshot.state is not AuthState.AUTHENTICATED
+        and snapshot.reason == "runtime_unavailable"
+    ):
+        try:
+            owner = _recover_entrypoint_owner(owner)
+            return _refresh_entrypoint_owner(owner)
+        except AuthRequired as error:
+            return _safe_status_failure(error.reason)
+    return snapshot
 
 
 def account_login(username: str, password: bytearray) -> RuntimeSnapshot:
@@ -2140,9 +2504,32 @@ def account_login(username: str, password: bytearray) -> RuntimeSnapshot:
         owner = _entrypoint_owner
     if owner is None:
         try:
-            owner = connect_runtime_owner()
+            owner = connect_runtime_owner(
+                timeout=_RUNTIME_RECOVERY_PROBE_SECONDS,
+            )
         except AuthRequired:
-            owner = start_runtime_owner()
+            owner = start_runtime_owner(
+                timeout=_RUNTIME_RECOVERY_START_SECONDS,
+                probe_first=False,
+            )
+        owner = _adopt_entrypoint_owner(owner)
+    try:
+        snapshot = _refresh_entrypoint_owner(owner)
+    except AuthRequired as error:
+        if error.reason == "runtime_unavailable":
+            try:
+                owner = _recover_entrypoint_owner(owner, force_start=True)
+            except AuthRequired:
+                pass
+    else:
+        if (
+            snapshot.state is not AuthState.AUTHENTICATED
+            and snapshot.reason == "runtime_unavailable"
+        ):
+            try:
+                owner = _recover_entrypoint_owner(owner, force_start=True)
+            except AuthRequired:
+                pass
     return owner.login(username, password)
 
 
@@ -2151,10 +2538,19 @@ def account_logout() -> RuntimeSnapshot:
         owner = _entrypoint_owner
     if owner is None:
         try:
-            owner = connect_runtime_owner()
+            owner = connect_runtime_owner(
+                timeout=_RUNTIME_RECOVERY_PROBE_SECONDS,
+            )
         except AuthRequired:
             return RuntimeSnapshot.signed_out()
-    return owner.logout()
+        owner = _adopt_entrypoint_owner(owner)
+    try:
+        return owner.logout()
+    except AuthRequired as error:
+        if error.reason != "runtime_unavailable":
+            raise
+        replacement = _recover_entrypoint_owner(owner, force_start=True)
+        return replacement.logout()
 
 
 @dataclass(frozen=True)
@@ -2283,14 +2679,25 @@ def wait_until_authorized(
     if not boundary or poll_seconds < 0:
         raise AuthRequired("runtime_unavailable")
     owner: RemoteRuntimeOwner | None = None
+    start_attempted = False
     while not stop_event.is_set():
         if owner is None:
             try:
-                owner = connect_runtime_owner()
+                owner = connect_runtime_owner(
+                    timeout=_RUNTIME_RECOVERY_PROBE_SECONDS,
+                )
             except AuthRequired as error:
-                if start_owner_if_missing and error.reason == "runtime_unavailable":
+                if (
+                    start_owner_if_missing
+                    and not start_attempted
+                    and error.reason == "runtime_unavailable"
+                ):
+                    start_attempted = True
                     try:
-                        owner = start_runtime_owner()
+                        owner = start_runtime_owner(
+                            timeout=_RUNTIME_RECOVERY_START_SECONDS,
+                            probe_first=False,
+                        )
                     except AuthRequired as start_error:
                         snapshot = RuntimeSnapshot.signed_out(
                             reason=start_error.reason or start_error.code,
@@ -2304,6 +2711,8 @@ def wait_until_authorized(
                 on_state(snapshot)
                 stop_event.wait(poll_seconds)
                 continue
+            else:
+                start_attempted = False
         try:
             snapshot = owner.refresh()
         except AuthRequired as error:

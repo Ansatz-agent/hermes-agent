@@ -23,10 +23,11 @@ import { sanitizeAuthBootstrapText } from '@/lib/auth-bootstrap-progress'
 
 const ACCOUNT_SERVER = 'https://c2sml.cn/agent'
 const AUTH_REQUEST_TIMEOUT_MS = 15_000
+const AUTH_LOGIN_TIMEOUT_MS = 90_000
 
-function withAuthDeadline<T>(request: Promise<T>): Promise<T> {
+function withAuthDeadline<T>(request: Promise<T>, timeoutMs = AUTH_REQUEST_TIMEOUT_MS): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = globalThis.setTimeout(() => reject(new Error('auth_request_timeout')), AUTH_REQUEST_TIMEOUT_MS)
+    const timer = globalThis.setTimeout(() => reject(new Error('auth_request_timeout')), timeoutMs)
 
     request.then(
       value => {
@@ -440,7 +441,18 @@ export function AuthGate({
     setSubmitting(true)
     const request = ++requestRevision.current
     const observedEvent = eventRevision.current
-    void withAuthDeadline(auth.login(username.trim(), password, ...(connectionId === 'local' ? [] : [connectionId])))
+
+    const loginRequest = auth.login(
+      username.trim(),
+      password,
+      ...(connectionId === 'local' ? [] : [connectionId])
+    )
+
+    setPassword('')
+    void withAuthDeadline(
+      loginRequest,
+      AUTH_LOGIN_TIMEOUT_MS
+    )
       .then(next => {
         if (request === requestRevision.current && observedEvent === eventRevision.current) {
           setStatus(next)
@@ -452,7 +464,6 @@ export function AuthGate({
         }
       })
       .finally(() => {
-        setPassword('')
         setSubmitting(false)
       })
   }

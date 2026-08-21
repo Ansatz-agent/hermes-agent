@@ -53,7 +53,10 @@ _SAFE_REASONS = frozenset(
 
 
 def _status(_params: Mapping[str, object]) -> dict[str, object]:
-    return _validated_public_result(account_status().public_dict())
+    snapshot = account_status()
+    if snapshot.reason == "runtime_unavailable":
+        raise AuthRequired("runtime_unavailable")
+    return _validated_public_result(snapshot.public_dict())
 
 
 def _login(params: Mapping[str, object]) -> dict[str, object]:
@@ -72,6 +75,8 @@ def _login(params: Mapping[str, object]) -> dict[str, object]:
         password = bytearray(password_text.encode("utf-8"))
     except UnicodeEncodeError:
         raise ValueError("invalid login fields") from None
+    if isinstance(params, dict):
+        params["password"] = ""
     password_text = ""
     try:
         snapshot = account_login(username.strip(), password)
@@ -241,9 +246,9 @@ def _validated_public_result(value: object) -> dict[str, object]:
 
 def main() -> int:
     try:
-        owner = connect_runtime_owner()
+        owner = connect_runtime_owner(timeout=2.0)
     except AuthRequired:
-        owner = start_runtime_owner()
+        owner = start_runtime_owner(timeout=4.0, probe_first=False)
     install_entrypoint_owner(owner)
     try:
         run_stream(sys.stdin.buffer, sys.stdout.buffer)

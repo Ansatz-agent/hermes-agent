@@ -60,7 +60,7 @@ def test_locked_waiting_never_prompts_and_authorizes_before_return(monkeypatch):
 
     monkeypatch.setattr(
         "hermes_cli.client_auth.runtime.connect_runtime_owner",
-        lambda: owner,
+        lambda **_kwargs: owner,
     )
     monkeypatch.setattr(
         "hermes_cli.client_auth.runtime.install_runtime_consumer",

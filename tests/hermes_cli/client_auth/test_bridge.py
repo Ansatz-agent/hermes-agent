@@ -90,6 +90,7 @@ def test_bridge_translates_runtime_lease_to_unix_epoch(monkeypatch):
     monkeypatch.setattr(
         "hermes_cli.client_auth.bridge.account_status",
         lambda: SimpleNamespace(
+            reason=None,
             public_dict=lambda: {
                 "state": "authenticated",
                 "username": "alice",
@@ -123,6 +124,27 @@ def test_bridge_redacts_runtime_exception_text(monkeypatch):
 
     assert response["error"] == {"code": "INTERNAL_ERROR"}
     assert "sessionid" not in json.dumps(response).casefold()
+
+
+def test_bridge_escalates_exhausted_local_runtime_recovery(monkeypatch):
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.bridge.account_status",
+        lambda: SimpleNamespace(
+            reason="runtime_unavailable",
+            public_dict=lambda: pytest.fail(
+                "an unavailable snapshot must not look like a successful status"
+            ),
+        ),
+    )
+
+    response = dispatch(
+        {"version": 1, "id": "1", "method": "status", "params": {}}
+    )
+
+    assert response["error"] == {
+        "code": "AUTH_REQUIRED",
+        "reason": "runtime_unavailable",
+    }
 
 
 def test_stream_rejects_malformed_and_oversized_lines_without_echoing_input():
@@ -167,11 +189,13 @@ def test_bridge_starts_detached_owner_before_serving_stream(monkeypatch):
 
     monkeypatch.setattr(
         "hermes_cli.client_auth.bridge.connect_runtime_owner",
-        lambda: (_ for _ in ()).throw(AuthRequired("runtime_unavailable")),
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AuthRequired("runtime_unavailable")
+        ),
     )
     monkeypatch.setattr(
         "hermes_cli.client_auth.bridge.start_runtime_owner",
-        lambda: events.append("detached-owner") or remote,
+        lambda **_kwargs: events.append("detached-owner") or remote,
         raising=False,
     )
     monkeypatch.setattr(
