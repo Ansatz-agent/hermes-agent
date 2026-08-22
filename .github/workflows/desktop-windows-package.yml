@@ -1,0 +1,613 @@
+name: Desktop Windows NSIS package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-windows-package-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Build and smoke Windows x64 NSIS
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          version: "0.9.28"
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      - name: Set up Python 3.11
+        uses: ./.github/actions/retry
+        with:
+          command: uv python install 3.11
+
+      - name: Install auth test dependencies
+        uses: ./.github/actions/retry
+        with:
+          command: uv sync --locked --python 3.11 --extra dev
+
+      - name: Run native Windows auth tests
+        shell: bash
+        run: |
+          mkdir -p .auth-artifacts
+          scripts/run_tests.sh \
+            tests/hermes_cli/client_auth/test_runtime.py \
+            -m "windows_only and not integration" \
+            --junitxml=.auth-artifacts/native-windows.xml \
+            -v --tb=short
+          scripts/run_tests.sh \
+            tests/hermes_cli/client_auth/test_entrypoints.py \
+            --junitxml=.auth-artifacts/locked-start-windows.xml \
+            --file-timeout 900 \
+            -q
+          scripts/run_tests.sh \
+            tests/hermes_cli/client_auth/test_background_modes.py \
+            --junitxml=.auth-artifacts/background-windows.xml \
+            -q
+          scripts/run_tests.sh \
+            tests/hermes_cli/client_auth/test_service_locked_waiting.py \
+            --junitxml=.auth-artifacts/service-windows.xml \
+            -q
+          scripts/run_tests.sh \
+            tests/test_install_ps1_venv_process_tree.py \
+            --junitxml=.auth-artifacts/venv-process-tree-windows.xml \
+            -q
+        env:
+          HERMES_TEST_FILE_RETRIES: "0"
+          OPENROUTER_API_KEY: ""
+          OPENAI_API_KEY: ""
+          NOUS_API_KEY: ""
+
+      - name: Probe Windows Credential Manager
+        shell: pwsh
+        run: |
+          $env:HERMES_KEYRING_PROBE_ACCOUNT = "probe-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          @'
+          import os
+          import keyring
+          from keyring.errors import PasswordDeleteError
+
+          service = "cn.c2sml.hermes.remote-auth.ci-probe"
+          account = os.environ["HERMES_KEYRING_PROBE_ACCOUNT"]
+          try:
+              keyring.set_password(service, account, "probe")
+              if keyring.get_password(service, account) != "probe":
+                  raise SystemExit("Windows Credential Manager round trip failed")
+          finally:
+              try:
+                  keyring.delete_password(service, account)
+              except PasswordDeleteError:
+                  pass
+          '@ | uv run --no-sync python -
+          Remove-Item Env:HERMES_KEYRING_PROBE_ACCOUNT
+
+      - name: Write Windows auth evidence
+        shell: bash
+        run: |
+          uv run --no-sync python scripts/write_auth_native_artifact.py \
+            --platform windows \
+            --owner-transport named-pipe-sid \
+            --locked-start .auth-artifacts/locked-start-windows.xml \
+            --handle-noninheriting .auth-artifacts/native-windows.xml \
+            --service-waiting .auth-artifacts/background-windows.xml \
+            --service-waiting .auth-artifacts/service-windows.xml \
+            --output apps/desktop/build/logs/phase1-desktop-windows-auth-native.json
+
+      - name: Preflight fixed-origin Windows auth host
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass `
+            -File scripts/test-desktop-windows-auth-host.ps1 `
+            -PreflightOnly
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Fixed-origin Windows auth host preflight failed'
+          }
+
+      - name: Set up Node 26.7.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 26.7.0
+          cache: npm
+
+      - name: Use npm 12
+        shell: pwsh
+        run: |
+          if (-not ((npm --version).StartsWith('12.'))) {
+            npm install --global npm@12
+          }
+          node --version
+          npm --version
+
+      - name: Run Windows packaging contract tests
+        run: npm run test:desktop:windows-contract
+
+      - name: Validate native smoke test contract
+        shell: pwsh
+        run: |
+          foreach ($scriptPath in @(
+            'scripts/install.ps1',
+            'scripts/test-desktop-windows-install.ps1',
+            'scripts/test-desktop-windows-auth-host.ps1'
+          )) {
+            $tokens = $null
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $scriptPath).Path,
+              [ref]$tokens,
+              [ref]$errors
+            ) | Out-Null
+            if ($errors.Count -ne 0) {
+              $errors | Format-List -Force
+              throw "$scriptPath has PowerShell parser errors"
+            }
+          }
+          $nonAscii = [System.IO.File]::ReadAllBytes((Resolve-Path 'scripts/install.ps1').Path) |
+            Where-Object { $_ -gt 127 } |
+            Select-Object -First 1
+          if ($null -ne $nonAscii) {
+            throw 'scripts/install.ps1 must remain ASCII for Windows PowerShell 5.1'
+          }
+
+          $authHostHarness = Get-Content 'scripts/test-desktop-windows-auth-host.ps1' -Raw
+          if ($authHostHarness -match '(?i)Import-Certificate|certutil(?:\.exe)?\s+-addstore') {
+            throw 'Windows auth host harness must not import its temporary CA into a Root store'
+          }
+          pwsh -NoProfile -ExecutionPolicy Bypass `
+            -File scripts/test-desktop-windows-auth-host.ps1 `
+            -ContractSelfTest
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Windows auth host contract self-test failed'
+          }
+
+          pwsh -NoProfile -ExecutionPolicy Bypass `
+            -File scripts/tests/test-install-ps1-packaged-lock.ps1
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Packaged PowerShell dependency lock test failed'
+          }
+
+          pwsh -NoProfile -ExecutionPolicy Bypass `
+            -File scripts/tests/test-install-ps1-stage-protocol.ps1
+          if ($LASTEXITCODE -ne 0) {
+            throw 'PowerShell scoped stage protocol test failed'
+          }
+
+          pwsh -NoProfile -ExecutionPolicy Bypass `
+            -File scripts/tests/test-install-ps1-managed-uv.ps1
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Pinned managed uv test failed'
+          }
+
+          New-Item -ItemType Directory -Force -Path 'apps/desktop/build/logs' | Out-Null
+          $ErrorActionPreference = 'Continue'
+          $negativeOutput = & pwsh -NoProfile -ExecutionPolicy Bypass `
+            -File scripts/test-desktop-windows-install.ps1 `
+            -InstallerPath (Join-Path $env:RUNNER_TEMP 'missing-hermes.exe') `
+            -ExpectedCommit deadbeef `
+            -ExpectedVersion 0.0.0 `
+            -LogPath (Join-Path $env:RUNNER_TEMP 'unused-hermes-smoke.log') 2>&1
+          $negativeExitCode = $LASTEXITCODE
+          $ErrorActionPreference = 'Stop'
+          $negativeOutput | Set-Content `
+            -LiteralPath 'apps/desktop/build/logs/phase1-desktop-windows-nsis-negative.log' `
+            -Encoding UTF8
+          if ($negativeExitCode -eq 0) {
+            throw 'Missing-installer contract unexpectedly succeeded'
+          }
+          if (($negativeOutput | Out-String) -notmatch 'Installer not found') {
+            throw 'Missing-installer contract did not report the expected failure'
+          }
+          $global:LASTEXITCODE = 0
+
+      - name: Download pinned PortableGit runtime for the NSIS bundle
+        shell: pwsh
+        run: |
+          $portableGitUrl = 'https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/PortableGit-2.55.0.3-64-bit.7z.exe'
+          $portableGitSha256 = 'ab00566336b5472120f9a52d34f2e79c5406535792acb0548001ffd0bd090e5d'
+          $portableGitDir = 'apps/desktop/build/windows-prereqs'
+          $portableGitPath = Join-Path $portableGitDir 'portable-git-source.7z.exe'
+          New-Item -ItemType Directory -Force -Path $portableGitDir | Out-Null
+          Invoke-WebRequest -Uri $portableGitUrl -OutFile $portableGitPath -UseBasicParsing
+          $actualSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $portableGitPath).Hash.ToLowerInvariant()
+          if ($actualSha256 -ne $portableGitSha256) {
+            throw "PortableGit SHA-256 mismatch: expected $portableGitSha256, got $actualSha256"
+          }
+          node apps/desktop/scripts/prepare-windows-git-runtime.mjs
+
+      - name: Verify bundled PowerShell repository path
+        shell: pwsh
+        run: |
+          $bundleHome = Join-Path $env:RUNNER_TEMP 'hermes-bundled-source-contract'
+          $bundleRoot = Join-Path $bundleHome 'hermes-agent'
+          $bundleBootstrap = Join-Path $bundleHome 'bootstrap'
+          New-Item -ItemType Directory -Force -Path `
+            (Join-Path $bundleRoot 'hermes_cli'), `
+            (Join-Path $bundleRoot 'tools'), `
+            (Join-Path $bundleRoot 'scripts'), `
+            $bundleBootstrap | Out-Null
+          Copy-Item 'pyproject.toml' (Join-Path $bundleRoot 'pyproject.toml')
+          Copy-Item 'uv.toml' (Join-Path $bundleRoot 'uv.toml')
+          Copy-Item 'uv.lock' (Join-Path $bundleRoot 'uv.lock')
+          Copy-Item 'desktop_auth_runtime' $bundleRoot -Recurse
+          Copy-Item 'hermes_cli/main.py' (Join-Path $bundleRoot 'hermes_cli/main.py')
+          Copy-Item 'hermes_cli/client_auth' (Join-Path $bundleRoot 'hermes_cli') -Recurse
+          Copy-Item 'tools/sensevoice_stt.py' (Join-Path $bundleRoot 'tools/sensevoice_stt.py')
+          Copy-Item 'scripts/install.ps1' (Join-Path $bundleRoot 'scripts/install.ps1')
+          $bundleInstaller = Join-Path $bundleBootstrap 'install.ps1'
+          Copy-Item 'scripts/install.ps1' $bundleInstaller
+          $gitRuntimePath = Join-Path $bundleBootstrap 'git-bash-runtime.tar.xz'
+          Copy-Item 'apps/desktop/build/windows-prereqs/git-bash-runtime.tar.xz' $gitRuntimePath
+          Copy-Item '.env.example' (Join-Path $bundleRoot '.env.example')
+          Copy-Item 'cli-config.yaml.example' (Join-Path $bundleRoot 'cli-config.yaml.example')
+
+          $gitRuntimeInfo = Get-Item -LiteralPath $gitRuntimePath
+          $gitRuntimeSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $gitRuntimePath).Hash.ToLowerInvariant()
+          $gitRuntimeProvenance = Get-Content `
+            'apps/desktop/build/windows-prereqs/git-bash-runtime.provenance.json' -Raw | ConvertFrom-Json
+          $payloadManifest = [ordered]@{
+            gitBashRuntime = [ordered]@{
+              file = 'git-bash-runtime.tar.xz'
+              size = $gitRuntimeInfo.Length
+              sha256 = $gitRuntimeSha256
+              entries = $gitRuntimeProvenance.runtime.entries
+              source = $gitRuntimeProvenance.source
+            }
+          } | ConvertTo-Json -Depth 3
+          [System.IO.File]::WriteAllText(
+            (Join-Path $bundleBootstrap 'payload-manifest.json'),
+            $payloadManifest,
+            (New-Object System.Text.UTF8Encoding $false)
+          )
+
+          $marker = [ordered]@{
+            schemaVersion = 1
+            commit = '${{ github.sha }}'
+            archiveSha256 = ('a' * 64)
+            installedAt = [DateTime]::UtcNow.ToString('o')
+          } | ConvertTo-Json
+          [System.IO.File]::WriteAllText(
+            (Join-Path $bundleRoot '.hermes-bundled-source.json'),
+            $marker,
+            (New-Object System.Text.UTF8Encoding $false)
+          )
+
+          function Invoke-BundledStage {
+            param(
+              [Parameter(Mandatory = $true)][string]$StageName,
+              [ValidateSet('auth', 'runtime')][string]$BootstrapScope = 'runtime',
+              [string]$TargetRoot = $bundleRoot,
+              [string]$TargetHome = $bundleHome
+            )
+            $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+            $output = & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass `
+              -File $bundleInstaller `
+              -Stage $StageName `
+              -NonInteractive `
+              -Json `
+              -BundledSource `
+              -BootstrapScope $BootstrapScope `
+              -ForceBundledGitRuntime `
+              -SkipComputerUse `
+              -InstallDir $TargetRoot `
+              -HermesHome $TargetHome `
+              -Commit '${{ github.sha }}' `
+              -Branch 'phase1/desktop-windows' 2>&1
+            if ($LASTEXITCODE -ne 0) {
+              $output | ForEach-Object { Write-Host $_ }
+              throw "Bundled stage $StageName failed with exit $LASTEXITCODE"
+            }
+            $jsonLine = @($output | ForEach-Object { "$_" } | Where-Object { $_.TrimStart().StartsWith('{') })[-1]
+            $frame = $jsonLine | ConvertFrom-Json
+            if (-not $frame.ok -or $frame.stage -ne $StageName) {
+              throw "Bundled stage $StageName returned an invalid result frame: $jsonLine"
+            }
+          }
+
+          function Get-BundledManifest([ValidateSet('auth', 'runtime')][string]$BootstrapScope) {
+            $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+            $output = & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass `
+              -File $bundleInstaller `
+              -Manifest `
+              -NonInteractive `
+              -Json `
+              -BundledSource `
+              -BootstrapScope $BootstrapScope `
+              -InstallDir $bundleRoot `
+              -HermesHome $bundleHome `
+              -Commit '${{ github.sha }}' `
+              -Branch 'phase1/desktop-windows' 2>&1
+            if ($LASTEXITCODE -ne 0) {
+              $output | ForEach-Object { Write-Host $_ }
+              throw "Bundled $BootstrapScope manifest failed with exit $LASTEXITCODE"
+            }
+            $jsonLine = @($output | ForEach-Object { "$_" } | Where-Object { $_.TrimStart().StartsWith('{') })[-1]
+            $frame = $jsonLine | ConvertFrom-Json
+            if ($frame.bootstrap_scope -ne $BootstrapScope) {
+              throw "Bundled $BootstrapScope manifest returned the wrong scope: $jsonLine"
+            }
+
+            return $frame
+          }
+
+          $authManifest = Get-BundledManifest 'auth'
+          $runtimeManifest = Get-BundledManifest 'runtime'
+          $authStageNames = @($authManifest.stages | ForEach-Object { $_.name })
+          $runtimeStageNames = @($runtimeManifest.stages | ForEach-Object { $_.name })
+          if (($authStageNames -join ',') -ne 'auth-prerequisites,repository,venv,python-auth-deps,auth-complete') {
+            throw "Bundled auth manifest exposed unexpected stages: $($authStageNames -join ',')"
+          }
+          if ($runtimeStageNames -notcontains 'dependencies' -or $runtimeStageNames -contains 'python-auth-deps') {
+            throw "Bundled runtime manifest exposed the wrong dependency scope: $($runtimeStageNames -join ',')"
+          }
+
+          $savedPath = $env:Path
+          $hadGitBashPath = Test-Path Env:HERMES_GIT_BASH_PATH
+          $savedGitBashPath = $env:HERMES_GIT_BASH_PATH
+          try {
+            $env:Path = "$env:SystemRoot\System32;$env:SystemRoot"
+            Remove-Item Env:HERMES_GIT_BASH_PATH -ErrorAction SilentlyContinue
+            Invoke-BundledStage 'git'
+          } finally {
+            $env:Path = $savedPath
+            if ($hadGitBashPath) {
+              $env:HERMES_GIT_BASH_PATH = $savedGitBashPath
+            } else {
+              Remove-Item Env:HERMES_GIT_BASH_PATH -ErrorAction SilentlyContinue
+            }
+          }
+          $bashPath = Join-Path $bundleHome 'git\bin\bash.exe'
+          if (-not (Test-Path -LiteralPath $bashPath -PathType Leaf)) {
+            throw "Bundled Git stage did not install bash.exe at $bashPath"
+          }
+          & $bashPath --noprofile --norc -c '/usr/bin/true; /usr/bin/cat --version >/dev/null'
+          if ($LASTEXITCODE -ne 0) {
+            throw "Bundled Git Bash compatibility probe failed with exit $LASTEXITCODE"
+          }
+
+          $gitTrapDir = Join-Path $bundleHome 'git-trap'
+          $gitTrapMarker = Join-Path $bundleHome 'git-was-invoked.txt'
+          New-Item -ItemType Directory -Force -Path $gitTrapDir | Out-Null
+          Set-Content -LiteralPath (Join-Path $gitTrapDir 'git.cmd') `
+            -Value '@echo off', 'echo invoked>"%GIT_TRAP_MARKER%"', 'exit /b 97' `
+            -Encoding ASCII
+          try {
+            $env:GIT_TRAP_MARKER = $gitTrapMarker
+            $env:Path = "$gitTrapDir;$savedPath"
+            Invoke-BundledStage 'repository'
+          } finally {
+            $env:Path = $savedPath
+            Remove-Item Env:GIT_TRAP_MARKER -ErrorAction SilentlyContinue
+          }
+          if (Test-Path -LiteralPath $gitTrapMarker) {
+            throw 'Bundled repository stage invoked Git instead of using the packaged source'
+          }
+          if ((Get-Content (Join-Path $bundleRoot '.install_method') -Raw).Trim() -ne 'desktop-bundle') {
+            throw 'Bundled repository stage did not stamp desktop-bundle install method'
+          }
+          if (Test-Path (Join-Path $bundleRoot '.git')) {
+            throw 'Bundled repository stage unexpectedly initialized or cloned Git'
+          }
+
+          Invoke-BundledStage 'config-templates'
+          $configPath = Join-Path $bundleHome 'config.yaml'
+          if ((Get-Content $configPath -Raw) -notmatch '(?m)^  provider: "sensevoice"') {
+            throw 'Fresh bundled Desktop config did not select SenseVoice'
+          }
+          [System.IO.File]::WriteAllText(
+            $configPath,
+            "sentinel: keep`n",
+            (New-Object System.Text.UTF8Encoding $false)
+          )
+          Invoke-BundledStage 'config-templates'
+          if ((Get-Content $configPath -Raw) -ne "sentinel: keep`n") {
+            throw 'Bundled config stage overwrote an existing user config'
+          }
+
+          Invoke-BundledStage 'auth-prerequisites' 'auth'
+          Invoke-BundledStage 'repository' 'auth'
+          Invoke-BundledStage 'venv' 'auth'
+
+          function Invoke-NegativeAuthDependencyStage {
+            param(
+              [Parameter(Mandatory = $true)][string]$TargetRoot,
+              [Parameter(Mandatory = $true)][string]$TargetHome,
+              [Parameter(Mandatory = $true)][string]$CaseName
+            )
+            $windowsPowerShell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+            $output = & $windowsPowerShell -NoProfile -ExecutionPolicy Bypass `
+              -File $bundleInstaller `
+              -Stage 'python-auth-deps' `
+              -NonInteractive `
+              -Json `
+              -BundledSource `
+              -BootstrapScope 'auth' `
+              -ForceBundledGitRuntime `
+              -SkipComputerUse `
+              -InstallDir $TargetRoot `
+              -HermesHome $TargetHome `
+              -Commit '${{ github.sha }}' `
+              -Branch 'phase1/desktop-windows' 2>&1
+            $exitCode = $LASTEXITCODE
+            $text = $output | Out-String
+            if ($exitCode -eq 0) {
+              throw "$CaseName auth dependency stage unexpectedly succeeded"
+            }
+            if ($text -match '(?i)falling back to PyPI|unlocked PyPI|uv pip install') {
+              throw "$CaseName auth dependency stage attempted an unlocked fallback: $text"
+            }
+            if (Test-Path -LiteralPath (Join-Path $TargetRoot '.hermes-auth-bootstrap-complete')) {
+              throw "$CaseName auth dependency stage published an auth marker"
+            }
+
+            return $text
+          }
+
+          $missingLockHome = Join-Path $env:RUNNER_TEMP 'hermes-auth-missing-lock-contract'
+          $missingLockRoot = Join-Path $missingLockHome 'hermes-agent'
+          New-Item -ItemType Directory -Force -Path $missingLockHome | Out-Null
+          Copy-Item -LiteralPath $bundleRoot -Destination $missingLockRoot -Recurse
+          Remove-Item -LiteralPath (Join-Path $missingLockRoot 'desktop_auth_runtime\uv.lock') -Force
+          $missingLockOutput = Invoke-NegativeAuthDependencyStage `
+            $missingLockRoot $missingLockHome 'missing-lock'
+          if ($missingLockOutput -notmatch '(?i)missing required file.*uv\.lock') {
+            throw "Missing-lock auth dependency stage failed for the wrong reason: $missingLockOutput"
+          }
+
+          $mismatchedLockHome = Join-Path $env:RUNNER_TEMP 'hermes-auth-mismatched-lock-contract'
+          $mismatchedLockRoot = Join-Path $mismatchedLockHome 'hermes-agent'
+          New-Item -ItemType Directory -Force -Path $mismatchedLockHome | Out-Null
+          Copy-Item -LiteralPath $bundleRoot -Destination $mismatchedLockRoot -Recurse
+          $mismatchedPyproject = Join-Path $mismatchedLockRoot 'desktop_auth_runtime\pyproject.toml'
+          $mismatchedContents = (Get-Content -LiteralPath $mismatchedPyproject -Raw) `
+            -replace 'httpx\[socks\]==0\.28\.1', 'httpx[socks]==0.28.0'
+          if ($mismatchedContents -notmatch 'httpx\[socks\]==0\.28\.0') {
+            throw 'Mismatched-lock fixture did not change the auth dependency contract'
+          }
+          [System.IO.File]::WriteAllText(
+            $mismatchedPyproject,
+            $mismatchedContents,
+            (New-Object System.Text.UTF8Encoding $false)
+          )
+          $mismatchedLockOutput = Invoke-NegativeAuthDependencyStage `
+            $mismatchedLockRoot $mismatchedLockHome 'mismatched-lock'
+          if ($mismatchedLockOutput -notmatch '(?i)locked authentication dependency sync failed|lock.*needs.*update') {
+            throw "Mismatched-lock auth dependency stage failed for the wrong reason: $mismatchedLockOutput"
+          }
+
+          Invoke-BundledStage 'python-auth-deps' 'auth'
+          Invoke-BundledStage 'auth-complete' 'auth'
+          foreach ($authArtifact in @(
+            (Join-Path $bundleRoot '.hermes-auth-bootstrap-complete'),
+            (Join-Path $bundleRoot 'auth-venv\Scripts\python.exe'),
+            (Join-Path $bundleRoot 'bin\hermes.cmd')
+          )) {
+            if (-not (Test-Path -LiteralPath $authArtifact -PathType Leaf)) {
+              throw "Bundled auth stages did not publish $authArtifact"
+            }
+          }
+          if (Test-Path -LiteralPath (Join-Path $bundleRoot '.hermes-bootstrap-complete')) {
+            throw 'Bundled auth stages published the full runtime marker'
+          }
+          if (Test-Path -LiteralPath (Join-Path $bundleRoot 'venv')) {
+            throw 'Bundled auth stages created the full runtime venv'
+          }
+
+      - name: Build Windows NSIS installer
+        run: npm run build:desktop:windows
+
+      - name: Run Windows-compatible Electron main-process tests
+        working-directory: apps/desktop
+        run: >-
+          npx vitest run --project electron --no-file-parallelism
+          electron/auth-bridge.test.ts
+          electron/auth-coordinator.test.ts
+          electron/authenticated-runtime-preparation.test.ts
+          electron/bootstrap-platform.test.ts
+          electron/bootstrap-process.test.ts
+          electron/bootstrap-progress.test.ts
+          electron/bootstrap-repair-guard.test.ts
+          electron/bootstrap-runner.test.ts
+          electron/desktop-runtime-gate.test.ts
+          electron/desktop-electron-pin.test.ts
+          electron/desktop-uninstall.test.ts
+          electron/external-open-policy.test.ts
+          electron/find-git-bash.test.ts
+          electron/guarded-ipc.test.ts
+          electron/media-permission-policy.test.ts
+          electron/media-protocol.test.ts
+          electron/native-auth-decisions.test.ts
+          electron/preview-webview-policy.test.ts
+          electron/renderer-log.test.ts
+          electron/trusted-renderer.test.ts
+          electron/windows-child-options.test.ts
+          electron/windows-sandbox-fallback.test.ts
+          electron/windows-system-ca.test.ts
+          electron/windows-user-env.test.ts
+
+      - name: Run Windows auth gate renderer tests
+        working-directory: apps/desktop
+        run: >-
+          npx vitest run --project ui
+          src/components/auth-gate.test.tsx
+          src/components/auth-bootstrap-progress.test.tsx
+
+      - name: Run exact Windows process selection tests
+        working-directory: apps/desktop
+        run: npx playwright test e2e/windows-process-tree.spec.ts --reporter=list
+
+      - name: Resolve package metadata
+        id: package
+        shell: pwsh
+        run: |
+          $installer = (Get-Content 'apps/desktop/build/logs/phase1-desktop-windows-nsis-artifact.txt' -Raw).Trim()
+          if (-not (Test-Path -LiteralPath $installer -PathType Leaf)) {
+            throw "Installer pointer does not resolve: $installer"
+          }
+          $version = node -p "require('./apps/desktop/package.json').version"
+          $checksumPath = "$installer.sha256"
+          $checksum = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLowerInvariant()
+          "$checksum  $([System.IO.Path]::GetFileName($installer))" | Set-Content `
+            -LiteralPath $checksumPath -Encoding ASCII
+          "installer=$installer" >> $env:GITHUB_OUTPUT
+          "checksum=$checksumPath" >> $env:GITHUB_OUTPUT
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Install, launch, and uninstall NSIS package
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass -File scripts/test-desktop-windows-auth-host.ps1 `
+            -InstallerPath '${{ steps.package.outputs.installer }}' `
+            -ExpectedCommit '${{ github.sha }}' `
+            -ExpectedVersion '${{ steps.package.outputs.version }}' `
+            -SmokeLogPath 'apps/desktop/build/logs/phase1-desktop-windows-nsis-smoke.log' `
+            -AuthLogPath 'apps/desktop/build/logs/phase1-desktop-windows-nsis-auth-e2e.log'
+
+      - name: Verify real account login and protected runtime
+        shell: pwsh
+        env:
+          HERMES_E2E_USERNAME: ${{ secrets.HERMES_E2E_USERNAME }}
+          HERMES_E2E_PASSWORD: ${{ secrets.HERMES_E2E_PASSWORD }}
+        run: |
+          pwsh -NoProfile -ExecutionPolicy Bypass `
+            -File scripts/test-desktop-windows-install.ps1 `
+            -InstallerPath '${{ steps.package.outputs.installer }}' `
+            -ExpectedCommit '${{ github.sha }}' `
+            -ExpectedVersion '${{ steps.package.outputs.version }}' `
+            -LogPath 'apps/desktop/build/logs/phase1-desktop-windows-nsis-credential-smoke.log' `
+            -RunCredentialE2E `
+            -AuthLogPath 'apps/desktop/build/logs/phase1-desktop-windows-nsis-credential-e2e.log'
+
+      - name: Upload validated NSIS installer
+        if: success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hermes-windows-nsis-${{ github.sha }}
+          path: |
+            apps/desktop/release/Hermes-*-win-x64.exe
+            apps/desktop/release/Hermes-*-win-x64.exe.sha256
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: true
+
+      - name: Upload Windows packaging logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hermes-windows-nsis-logs-${{ github.sha }}
+          path: |
+            apps/desktop/build/logs/phase1-desktop-windows-nsis-*.log
+            apps/desktop/build/logs/phase1-desktop-windows-auth-native.json
+          if-no-files-found: warn
+          retention-days: 14
+          overwrite: true
