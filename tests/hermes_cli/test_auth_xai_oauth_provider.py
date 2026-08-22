@@ -529,7 +529,7 @@ def test_xai_oauth_discovery_validates_endpoints(monkeypatch):
 
 def test_credential_pool_seeds_xai_oauth_from_singleton(tmp_path, monkeypatch):
     """After `hermes model` -> xai-oauth, the singleton holds tokens.  load_pool
-    must surface that as a pool entry so `hermes auth list` reflects truth and
+    must surface that as a pool entry so `hermes provider list` reflects truth and
     refreshes route through the pool consistently with codex.
 
     Device code is the only supported xAI OAuth flow, so the singleton is
@@ -572,7 +572,7 @@ def test_credential_pool_device_code_seed_respects_suppression(tmp_path, monkeyp
 
 
 def test_auth_remove_xai_oauth_clears_singleton_and_sticks(tmp_path, monkeypatch):
-    """End-to-end regression: ``hermes auth remove xai-oauth 1`` for a
+    """End-to-end regression: ``hermes provider remove xai-oauth 1`` for a
     singleton-seeded entry must clear auth.json providers.xai-oauth AND
     suppress further re-seeding — otherwise the next ``load_pool`` call
     silently resurrects the entry from the still-present singleton, making
@@ -600,7 +600,7 @@ def test_auth_remove_xai_oauth_clears_singleton_and_sticks(tmp_path, monkeypatch
     raw = json.loads((hermes_home / "auth.json").read_text())
     assert "xai-oauth" in raw.get("providers", {})
 
-    # Act: the user runs `hermes auth remove xai-oauth 1`.
+    # Act: the user runs `hermes provider remove xai-oauth 1`.
     auth_remove_command(SimpleNamespace(provider="xai-oauth", target="1"))
 
     # Post-state: auth.json singleton must be cleared so a re-seed has
@@ -817,7 +817,7 @@ def test_pool_refresh_recovers_when_other_process_already_refreshed(tmp_path, mo
 
 
 def test_pool_manual_entry_does_not_sync_back_to_singleton(tmp_path, monkeypatch):
-    """`hermes auth add xai-oauth` entries (source='manual:xai_pkce') are
+    """`hermes provider add xai-oauth` entries (source='manual:xai_pkce') are
     independent credentials and must NOT write to the singleton.  Sync-back
     is restricted to entries seeded from the singleton.  Otherwise adding a
     second pool credential would silently overwrite the user's main login."""

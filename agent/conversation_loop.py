@@ -1649,6 +1649,9 @@ def run_conversation(
     Returns:
         Dict: Complete conversation result with final response and message history
     """
+    from hermes_cli.client_auth.runtime import require_authorized
+
+    require_authorized("agent.turn.loop")
     if moa_config is None:
         try:
             from hermes_cli.moa_config import decode_moa_turn

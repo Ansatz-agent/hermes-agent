@@ -3,6 +3,30 @@ import { FIELD_DESCRIPTIONS, FIELD_LABELS } from '@/app/settings/constants'
 import type { Translations } from './types'
 
 export const en: Translations = {
+  auth: {
+    title: 'Sign in to Hermes',
+    description: 'Your Hermes account is required before any agent feature can start.',
+    serverLabel: 'Account server',
+    username: 'Username',
+    password: 'Password',
+    signIn: 'Sign in',
+    signingIn: 'Signing in…',
+    retry: 'Retry',
+    checking: 'Checking your account session…',
+    administratorManaged: 'Accounts and password assistance are managed by the server administrator.',
+    reasons: {
+      interactiveLoginRequired: 'Enter the account credentials provided by the server administrator.',
+      invalidCredentials: 'The username or password is incorrect.',
+      rateLimited: 'Too many sign-in attempts. Wait a moment and try again.',
+      runtimeUnavailable: 'The secure account service is unavailable. Try again.',
+      serverUnavailable: 'The account server is unavailable. Try again.',
+      sessionExpired: 'Your session expired. Sign in again.',
+      sessionRejected: 'Your session is no longer valid. Sign in again.',
+      signedOut: 'Sign in with the account provided by the server administrator.',
+      vaultUnavailable: 'Secure credential storage is unavailable on this device.'
+    }
+  },
+
   common: {
     apply: 'Apply',
     back: 'Back',

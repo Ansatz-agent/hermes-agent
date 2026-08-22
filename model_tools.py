@@ -1230,6 +1230,10 @@ def handle_function_call(
     Returns:
         Function result as a JSON string.
     """
+    from hermes_cli.client_auth.runtime import require_authorized
+
+    require_authorized("tool.execute")
+
     # Coerce string arguments to their schema-declared types (e.g. "42"→42)
     function_args = coerce_tool_args(function_name, function_args)
     if not isinstance(function_args, dict):

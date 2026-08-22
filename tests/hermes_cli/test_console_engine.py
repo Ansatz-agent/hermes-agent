@@ -102,15 +102,16 @@ EXPECTED_CONSOLE_COMMANDS = {
     ("memory", "status"),
     ("memory", "off"),
     ("memory", "reset"),
-    ("auth", "list"),
     ("auth", "status"),
-    ("auth", "reset"),
-    ("auth", "add"),
-    ("auth", "remove"),
-    ("auth", "logout"),
-    ("auth", "spotify", "status"),
-    ("auth", "spotify", "login"),
-    ("auth", "spotify", "logout"),
+    ("provider", "list"),
+    ("provider", "status"),
+    ("provider", "reset"),
+    ("provider", "add"),
+    ("provider", "remove"),
+    ("provider", "logout"),
+    ("provider", "spotify", "status"),
+    ("provider", "spotify", "login"),
+    ("provider", "spotify", "logout"),
     ("pairing", "list"),
     ("pairing", "approve"),
     ("pairing", "revoke"),
@@ -218,7 +219,7 @@ MUTATING_CONFIRMATION_SMOKE_COMMANDS = [
     "import /tmp/hermes-console-test.zip",
     "send --to telegram hello",
     "memory reset --target memory",
-    "auth remove openrouter 1",
+    "provider remove openrouter 1",
     "pairing approve abc123",
     "webhook subscribe test --prompt hello",
     "hooks test pre_tool_call",
@@ -499,7 +500,7 @@ def test_capture_output_preserves_integer_exit_code_message():
 
 def test_execute_handler_string_exit_returns_error_not_crash(_isolate_hermes_home):
     result = HermesConsoleEngine().execute(
-        "auth remove openrouter __no_such_credential__", confirmed=True
+        "provider remove openrouter __no_such_credential__", confirmed=True
     )
 
     assert result.status == "error"

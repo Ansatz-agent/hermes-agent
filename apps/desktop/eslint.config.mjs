@@ -41,6 +41,29 @@ export default [
     }
   },
   {
+    files: ['electron/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: 'electron',
+              importNames: ['ipcMain'],
+              message: 'Register Electron IPC only through guarded-ipc.ts.'
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    files: ['electron/guarded-ipc.ts'],
+    rules: {
+      'no-restricted-imports': 'off'
+    }
+  },
+  {
     // Ban mirroring reactive values into refs via useEffect — the "atom-mirrored
     // ref" antipattern. A ref synced from a nanostores atom via useEffect lags the
     // atom by one render, which creates stale-read bugs in callbacks that read the

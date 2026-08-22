@@ -82,18 +82,42 @@ if _bootstrap_root not in sys.path:
     sys.path.insert(0, _bootstrap_root)
 from hermes_cli import _startup_fast  # noqa: E402
 
-# Early venv self-heal — MUST run before any third-party import below.  When
-# a prior ``hermes update`` left a recovery marker and a core package's import
-# files were wiped (#57828 — failed lazy backend refresh), the module-level
-# ``from hermes_cli.env_loader import ...`` / ``from hermes_cli.config import
-# ...`` imports further down would crash before ``main()`` ever reaches
-# ``_recover_from_interrupted_install()``.  ``_early_recovery`` is stdlib-only
-# (safe to import on a corrupted venv), repairs just enough for this module to
-# finish importing, and leaves the marker lifecycle to the full recovery path.
-# The module import itself is unguarded on purpose: it lives in this same
-# package directory, so if IT can't import, nothing else in hermes_cli can
-# either. It is also the canonical home of the probe/repair tables reused by
-# the full recovery path below.
+_startup_fast.ensure_project_root_on_path()
+_raw_startup_argv = tuple(sys.argv[1:])
+
+if _startup_fast.try_fast_version(list(_raw_startup_argv)):
+    raise SystemExit(0)
+
+if _raw_startup_argv in {("--help",), ("-h",)}:
+    _static_help_path = os.path.join(
+        os.path.dirname(__file__),
+        "client_auth",
+        "static_help.txt",
+    )
+    try:
+        with open(_static_help_path, encoding="utf-8") as _static_help_file:
+            _static_help = _static_help_file.read()
+    except (OSError, UnicodeError):
+        print("Hermes help is unavailable; reinstall Hermes.", file=sys.stderr)
+        raise SystemExit(1) from None
+    sys.stdout.write(_static_help)
+    raise SystemExit(0)
+
+from hermes_cli.client_auth.guard import GuardRejected, enforce_raw_argv
+
+try:
+    enforce_raw_argv(_raw_startup_argv)
+except GuardRejected as _auth_error:
+    print(
+        f"AUTH_REQUIRED {_auth_error.reason}; run `hermes login`",
+        file=sys.stderr,
+    )
+    raise SystemExit(20) from None
+
+# Early venv self-heal remains ahead of every third-party import, but only
+# after the central authentication gate. Protected invocations must not touch
+# recovery markers, configuration, profiles, sessions, or subprocesses before
+# authorization succeeds.
 from hermes_cli import _early_recovery as _early_recovery_mod
 
 try:
@@ -417,11 +441,6 @@ def _try_termux_ultrafast_version() -> bool:
     return _try_ultrafast_version()
 
 
-_ensure_project_root_on_path_fast()
-
-if _try_ultrafast_version():
-    raise SystemExit(0)
-
 import argparse
 import hashlib
 import json
@@ -449,6 +468,7 @@ from hermes_cli.subcommands.slack import build_slack_parser
 from hermes_cli.subcommands.login import build_login_parser
 from hermes_cli.subcommands.logout import build_logout_parser
 from hermes_cli.subcommands.auth import build_auth_parser
+from hermes_cli.subcommands.provider import build_provider_parser
 from hermes_cli.subcommands.status import build_status_parser
 from hermes_cli.subcommands.pause import build_pause_parser
 from hermes_cli.subcommands.webhook import build_webhook_parser
@@ -4848,24 +4868,52 @@ def _run_anthropic_oauth_flow(save_env_value):
 
 
 
-def cmd_login(args):
-    """Authenticate Hermes CLI with a provider."""
-    from hermes_cli.auth import login_command
+def cmd_login(_args):
+    """Sign in to the fixed Hermes remote account server."""
+    from getpass import getpass
 
-    login_command(args)
+    from hermes_cli.client_auth.runtime import (
+        AuthRequired,
+        AuthState,
+        account_login,
+        account_status,
+    )
+
+    if not (sys.stdin.isatty() and sys.stderr.isatty()):
+        raise AuthRequired("interactive_login_required")
+    current = account_status()
+    if current.state is AuthState.AUTHENTICATED:
+        print(f"Authenticated as {current.username}")
+        return
+    username = input("Hermes account: ").strip()
+    password = bytearray(getpass("Password: ").encode("utf-8"))
+    try:
+        result = account_login(username, password)
+    finally:
+        password[:] = b"\0" * len(password)
+    print(f"Authenticated as {result.username}")
 
 
-def cmd_logout(args):
-    """Clear provider authentication."""
-    from hermes_cli.auth import logout_command
+def cmd_logout(_args):
+    """Sign out of the Hermes remote account."""
+    from hermes_cli.client_auth.runtime import account_logout
 
-    logout_command(args)
+    account_logout()
+    print("Remote Hermes account signed out; provider credentials were not modified.")
 
 
-def cmd_auth(args):
-    """Manage pooled credentials."""
+def cmd_auth_status(_args):
+    """Print redacted Hermes remote-account status."""
+    from hermes_cli.client_auth.runtime import account_status
+
+    print(json.dumps(account_status().public_dict(), sort_keys=True))
+
+
+def cmd_provider(args):
+    """Manage inference-provider credentials."""
     from hermes_cli.auth_commands import auth_command
 
+    args.auth_action = getattr(args, "provider_action", "")
     auth_command(args)
 
 
@@ -9567,6 +9615,7 @@ def _coalesce_session_name_args(argv: list) -> list:
         "login",
         "logout",
         "auth",
+        "provider",
         "status",
         "cron",
         "doctor",
@@ -10996,7 +11045,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "dump", "egress", "fallback", "gateway", "hooks", "import", "import-agent", "insights",
         "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate", "moa",
         "journey", "memory-graph", "learning",
-        "model", "monitoring", "pairing", "pause", "pets", "plugins", "portal", "profile",
+        "model", "monitoring", "pairing", "pause", "pets", "plugins", "portal", "profile", "provider",
         "project", "proxy",
         "prompt-size",
         "resume",
@@ -11678,7 +11727,7 @@ def _advertise_agent_env() -> None:
     os.environ.setdefault("HERMES_AGENT", "true")
 
 
-def main():
+def _main():
     """Main entry point for hermes CLI."""
     # Cosmetic: make the process show up as 'hermes' instead of 'python3.11'
     # in ps/top/htop.  Non-fatal — just a nicer UX.
@@ -11976,9 +12025,10 @@ def main():
     build_logout_parser(subparsers, cmd_logout=cmd_logout)
 
     # =========================================================================
-    # auth command  (parser built in hermes_cli/subcommands/auth.py)
+    # account auth and inference-provider credential commands
     # =========================================================================
-    build_auth_parser(subparsers, cmd_auth=cmd_auth)
+    build_auth_parser(subparsers, cmd_auth_status=cmd_auth_status)
+    build_provider_parser(subparsers, cmd_provider=cmd_provider)
 
     # =========================================================================
     # status command  (parser built in hermes_cli/subcommands/status.py)
@@ -13152,6 +13202,21 @@ def main():
             sys.exit(rc)
     else:
         parser.print_help()
+
+
+def main():
+    """Installed console-script boundary with stable auth error semantics."""
+    from hermes_cli.client_auth.runtime import AuthRequired
+
+    try:
+        return _main()
+    except AuthRequired as auth_error:
+        print(
+            f"AUTH_REQUIRED {auth_error.reason or auth_error.code}; "
+            "run `hermes login`",
+            file=sys.stderr,
+        )
+        raise SystemExit(20) from None
 
 
 if __name__ == "__main__":

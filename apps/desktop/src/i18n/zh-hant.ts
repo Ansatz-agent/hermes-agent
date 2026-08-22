@@ -3,6 +3,30 @@ import { defineFieldCopy } from '@/app/settings/field-copy'
 import { defineLocale } from './define-locale'
 
 export const zhHant = defineLocale({
+  auth: {
+    title: '登入 Hermes',
+    description: '啟動任何 Agent 功能前，必須先驗證 Hermes 帳戶。',
+    serverLabel: '帳戶伺服器',
+    username: '使用者名稱',
+    password: '密碼',
+    signIn: '登入',
+    signingIn: '正在登入…',
+    retry: '重試',
+    checking: '正在驗證帳戶工作階段…',
+    administratorManaged: '帳戶發放與密碼協助由伺服器管理員統一處理。',
+    reasons: {
+      interactiveLoginRequired: '請輸入伺服器管理員提供的帳戶憑證。',
+      invalidCredentials: '使用者名稱或密碼不正確。',
+      rateLimited: '登入嘗試過於頻繁，請稍後重試。',
+      runtimeUnavailable: '安全帳戶服務暫時無法使用，請重試。',
+      serverUnavailable: '帳戶伺服器暫時無法使用，請重試。',
+      sessionExpired: '工作階段已過期，請重新登入。',
+      sessionRejected: '工作階段已失效，請重新登入。',
+      signedOut: '請使用伺服器管理員提供的帳戶登入。',
+      vaultUnavailable: '此裝置的安全憑證儲存空間無法使用。'
+    }
+  },
+
   common: {
     apply: '套用',
     back: '返回',

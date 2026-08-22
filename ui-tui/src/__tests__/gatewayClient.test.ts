@@ -154,6 +154,49 @@ describe('GatewayClient websocket attach mode', () => {
     gw.kill()
   })
 
+  it('uses the fixed account auth RPC methods without putting the password in lifecycle logs', async () => {
+    process.env.HERMES_TUI_GATEWAY_URL = 'ws://gateway.test/api/ws?token=abc'
+    const gw = new GatewayClient()
+
+    gw.start()
+    const gatewaySocket = FakeWebSocket.instances[0]!
+    const login = gw.authLogin('alice', 'correct horse')
+
+    gatewaySocket.open()
+    await vi.waitFor(() => expect(gatewaySocket.sent).toHaveLength(1))
+
+    const frame = JSON.parse(gatewaySocket.sent[0] ?? '{}') as {
+      id: string
+      method: string
+      params: Record<string, string>
+    }
+
+    expect(frame).toMatchObject({
+      method: 'auth.login',
+      params: { password: 'correct horse', username: 'alice' }
+    })
+    expect(gw.getLogTail()).not.toContain('correct horse')
+
+    gatewaySocket.message(
+      JSON.stringify({
+        id: frame.id,
+        jsonrpc: '2.0',
+        result: {
+          epoch: 2,
+          reason: null,
+          runtime_instance_id: '0123456789abcdef0123456789abcdef',
+          session_expires_at: null,
+          state: 'authenticated',
+          username: 'alice',
+          valid_until: 9999
+        }
+      })
+    )
+
+    await expect(login).resolves.toMatchObject({ state: 'authenticated', username: 'alice' })
+    gw.kill()
+  })
+
   it('drains buffered events on a later microtask, not synchronously inside drain()', async () => {
     // Regression for #36658: in attach mode the already-running gateway
     // replays `gateway.ready` the instant the socket connects, so it lands in

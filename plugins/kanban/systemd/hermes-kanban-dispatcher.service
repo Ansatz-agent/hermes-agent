@@ -20,7 +20,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/env hermes kanban daemon --force --interval 60 --pidfile %t/hermes-kanban-dispatcher.pid
+ExecStart=/usr/bin/env python3 -m hermes_cli.client_auth.runtime service kanban
 Restart=on-failure
 RestartSec=5
 # Log to the journal via stdout/stderr; the dispatcher also writes per-task

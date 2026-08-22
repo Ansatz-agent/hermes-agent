@@ -2023,7 +2023,7 @@ def _run_post_setup(post_setup_key: str):
             from hermes_cli.config import save_env_value
         except Exception as exc:
             _print_warning(f"    Could not load setup helpers: {exc}")
-            _print_info("    Run later: hermes auth add xai-oauth   (or set XAI_API_KEY)")
+            _print_info("    Run later: hermes provider add xai-oauth   (or set XAI_API_KEY)")
             return
 
         idx = prompt_choice(
@@ -2031,7 +2031,7 @@ def _run_post_setup(post_setup_key: str):
             choices=[
                 "Sign in with xAI Grok OAuth (SuperGrok / Premium+) — browser login",
                 "Paste an xAI API key (console.x.ai)",
-                "Skip — configure later via `hermes auth add xai-oauth`",
+                "Skip — configure later via `hermes provider add xai-oauth`",
             ],
             default=0,
         )
@@ -2043,7 +2043,7 @@ def _run_post_setup(post_setup_key: str):
             else:
                 _print_warning(
                     "    xAI Grok OAuth login did not complete. "
-                    "Run later: hermes auth add xai-oauth"
+                    "Run later: hermes provider add xai-oauth"
                 )
         elif idx == 1:
             api_key = _setup_prompt("    xAI API key", password=True)
@@ -2052,7 +2052,7 @@ def _run_post_setup(post_setup_key: str):
                 _print_success("    XAI_API_KEY saved")
             else:
                 _print_warning(
-                    "    No API key provided. Run later: hermes auth add xai-oauth"
+                    "    No API key provided. Run later: hermes provider add xai-oauth"
                 )
         else:
             _print_info("    xAI will remain inactive until credentials are configured.")

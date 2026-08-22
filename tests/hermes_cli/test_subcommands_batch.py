@@ -27,6 +27,7 @@ from hermes_cli.subcommands.login import build_login_parser
 from hermes_cli.subcommands.logout import build_logout_parser
 from hermes_cli.subcommands.logs import build_logs_parser
 from hermes_cli.subcommands.model import build_model_parser
+from hermes_cli.subcommands.provider import build_provider_parser
 
 from hermes_cli.subcommands.prompt_size import build_prompt_size_parser
 from hermes_cli.subcommands.security import build_security_parser
@@ -56,7 +57,8 @@ SINGLE_HANDLER_CASES = [
     ("slack", build_slack_parser, "cmd_slack", ["slack"]),
     ("login", build_login_parser, "cmd_login", ["login"]),
     ("logout", build_logout_parser, "cmd_logout", ["logout"]),
-    ("auth", build_auth_parser, "cmd_auth", ["auth"]),
+    ("auth", build_auth_parser, "cmd_auth_status", ["auth", "status"]),
+    ("provider", build_provider_parser, "cmd_provider", ["provider"]),
     ("status", build_status_parser, "cmd_status", ["status"]),
     ("webhook", build_webhook_parser, "cmd_webhook", ["webhook"]),
     ("hooks", build_hooks_parser, "cmd_hooks", ["hooks"]),
@@ -99,15 +101,7 @@ def test_config_get_unset_subcommands_parse():
 
 
 
-# ── deprecated `hermes login` fails gracefully, not with argparse error ────
-#
-# `hermes login` is a removed command; its handler (`login_command` in
-# `hermes_cli/auth.py`) prints a deprecation notice pointing at `hermes auth` /
-# `hermes model` and exits 0.  Two behavior contracts guard the UX:
-#   1. ANY `--provider <value>` (including ones the user actually wants, like
-#      `anthropic`) must parse and reach the handler — never crash in argparse
-#      with `invalid choice` before the friendly redirect is printed (#24756).
-#   2. The subcommand must not advertise itself in the parser help row.
+# ── account login is a first-class, flag-free command ────
 
 
 def _login_parser():
@@ -119,18 +113,11 @@ def _login_parser():
 
 
 
-def test_login_subparser_help_is_suppressed():
-    """The deprecated `login` row must not appear in `hermes --help`.
-
-    Must hold without leaking argparse's literal `==SUPPRESS==` placeholder,
-    which `help=argparse.SUPPRESS` emits for a top-level subparser on 3.12+.
-    The fix omits the `help=` kwarg entirely instead.
-    """
+def test_login_subparser_advertises_remote_account_login():
     parser = argparse.ArgumentParser(prog="hermes")
     sub = parser.add_subparsers(dest="command")
     build_login_parser(sub, cmd_login=_h("login"))
     help_text = parser.format_help()
-    # The misleading old help string must be gone from the top-level usage.
-    assert "Authenticate with an inference provider" not in help_text
-    # And no leaked SUPPRESS placeholder row.
-    assert "==SUPPRESS==" not in help_text
+    assert "Sign in to the fixed Hermes remote account server" in help_text
+    with pytest.raises(SystemExit):
+        parser.parse_args(["login", "--provider", "anthropic"])

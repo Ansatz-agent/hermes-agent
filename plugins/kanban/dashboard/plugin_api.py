@@ -50,6 +50,7 @@ from pydantic import BaseModel, Field
 
 from hermes_cli import kanban_db
 from hermes_cli import kanban_diagnostics as kd
+from hermes_cli.client_auth.runtime import AuthRequired, require_authorized
 
 log = logging.getLogger(__name__)
 
@@ -2891,6 +2892,11 @@ def set_orchestration_settings(payload: OrchestrationSettingsBody):
 
 @router.websocket("/events")
 async def stream_events(ws: WebSocket):
+    try:
+        require_authorized("dashboard.ws.plugin.kanban")
+    except AuthRequired:
+        await ws.close(code=4401, reason="Hermes login required")
+        return
     # Authorize the upgrade via the dashboard's canonical WS gate so the
     # correct credential is accepted in every mode (loopback token / gated
     # single-use ticket / server-internal credential). Browsers can't set
@@ -2961,6 +2967,11 @@ async def stream_events(ws: WebSocket):
             except asyncio.TimeoutError:
                 pass  # no client message — poll the DB
 
+            try:
+                require_authorized("dashboard.ws.plugin.kanban.poll")
+            except AuthRequired:
+                await ws.close(code=4401, reason="Hermes login required")
+                return
             cursor, events = await asyncio.to_thread(_fetch_new, cursor)
             if events:
                 await ws.send_json({"events": events, "cursor": cursor})

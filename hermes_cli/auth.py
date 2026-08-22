@@ -1550,7 +1550,7 @@ def _persist_provider_state_to_store(
 def mark_provider_active_if_unset(provider_id: str) -> None:
     """Set ``active_provider`` to *provider_id* only when none is set yet.
 
-    Used by ``hermes auth add`` OAuth paths that create credential-pool
+    Used by ``hermes provider add`` OAuth paths that create credential-pool
     entries directly (no singleton ``providers.<id>`` block). Adding the
     very first credential for a provider should make it the active provider
     so the setup wizard's ``_model_section_has_credentials()`` check (which
@@ -1608,7 +1608,7 @@ def read_credential_pool(provider_id: Optional[str] = None) -> Dict[str, Any]:
 
     Profile entries always win: the global fallback only applies per-provider
     when the profile has zero entries for that provider. Once the user runs
-    ``hermes auth add <provider>`` inside the profile, profile entries
+    ``hermes provider add <provider>`` inside the profile, profile entries
     fully shadow global for that provider on the next read.
 
     Writes always go to the profile (``write_credential_pool`` is unchanged).
@@ -2183,10 +2183,10 @@ def resolve_provider(
     if has_usable_secret(os.getenv("OPENAI_API_KEY")) or has_usable_secret(os.getenv("OPENROUTER_API_KEY")):
         return "openrouter"
 
-    # Auto-detect an OpenRouter credential added via `hermes auth add openrouter`
+    # Auto-detect an OpenRouter credential added via `hermes provider add openrouter`
     # (manual pool entry, no env var). Without this, a key that only lives in
     # the credential pool is invisible to auto-detection — the user sees
-    # `hermes auth list` showing the credential while requests go out with no
+    # `hermes provider list` showing the credential while requests go out with no
     # Authorization header ("HTTP 401: Missing Authentication header"). The
     # env-var check above only covers keys exported as OPENROUTER_API_KEY /
     # OPENAI_API_KEY. See issue #42130.
@@ -2530,7 +2530,7 @@ def _assert_nous_inference_jwt_usable(
         return
     raise AuthError(
         "Nous Portal access token is not a usable inference JWT "
-        f"({reason}). Re-authenticate with: hermes auth add nous",
+        f"({reason}). Re-authenticate with: hermes provider add nous",
         provider="nous",
         code=reason,
         relogin_required=True,
@@ -3723,13 +3723,13 @@ def _sync_codex_pool_entries(
     * ``device_code`` — the singleton-seeded entry written by the device-code
       OAuth flow when the user logged in via ``hermes setup`` / the model
       picker.  Always synced with the fresh tokens.
-    * ``manual:device_code`` — entries created by ``hermes auth add openai-codex``
+    * ``manual:device_code`` — entries created by ``hermes provider add openai-codex``
       that use the same device-code OAuth mechanism.  ONLY synced if the
       entry's existing access_token matches the *previous* singleton
       access_token (i.e. the entry is a legacy singleton-alias from the
       #33000 workaround era).  Manual entries whose tokens never matched the
       singleton represent INDEPENDENT accounts added via
-      ``hermes auth add openai-codex`` and must not be overwritten by a
+      ``hermes provider add openai-codex`` and must not be overwritten by a
       re-auth that targeted a different account (regression for #39236).
 
       The original #33538 fix refreshed every ``manual:device_code`` entry
@@ -3815,7 +3815,7 @@ def _save_codex_tokens(tokens: Dict[str, str], last_refresh: str = None, label: 
         # Capture the previous singleton tokens BEFORE overwriting them.  The
         # pool-sync step uses this to distinguish legacy singleton-aliases
         # (which should be refreshed) from independent accounts that
-        # ``hermes auth add openai-codex`` created (which must not be
+        # ``hermes provider add openai-codex`` created (which must not be
         # overwritten — see #39236).
         previous_singleton_tokens = state.get("tokens") if isinstance(state.get("tokens"), dict) else None
         state["tokens"] = tokens
@@ -5851,7 +5851,7 @@ def _refresh_access_token(
             "Nous refresh tokens are single-use — only Hermes may call the "
             "refresh endpoint. For health checks, use `hermes auth status` "
             "instead.\n"
-            "Re-authenticate with: hermes auth add nous"
+            "Re-authenticate with: hermes provider add nous"
         )
         relogin = True
 
@@ -6142,7 +6142,7 @@ def refresh_nous_oauth_pure(
                     raise AuthError(
                         "Nous Portal access token is not a usable inference JWT "
                         f"({current_invoke_jwt_status}) and no refresh token is available. "
-                        "Re-authenticate with: hermes auth add nous",
+                        "Re-authenticate with: hermes provider add nous",
                         provider="nous",
                         code=current_invoke_jwt_status,
                         relogin_required=True,
@@ -6231,7 +6231,7 @@ def persist_nous_credentials(
       ``_seed_from_singletons()`` during pool load.
     - ``credential_pool.nous``: used by the runtime ``pool.select()`` path.
 
-    Historically ``hermes auth add nous`` wrote a ``manual:device_code`` pool
+    Historically ``hermes provider add nous`` wrote a ``manual:device_code`` pool
     entry only, skipping ``providers.nous``. When the runtime credential
     expired, the recovery path read the empty singleton state and raised
     ``AuthError`` silently (``logger.debug`` at INFO level).
@@ -6242,7 +6242,7 @@ def persist_nous_credentials(
     place; the pool never accumulates duplicate device_code rows.
 
     ``label`` is an optional user-chosen display name (from
-    ``hermes auth add nous --label <name>``).  It gets embedded in the
+    ``hermes provider add nous --label <name>``).  It gets embedded in the
     singleton state so that ``_seed_from_singletons`` uses it as the pool
     entry's label on every subsequent ``load_pool("nous")`` instead of the
     auto-derived token fingerprint.  When ``None``, the auto-derived label
@@ -6263,7 +6263,7 @@ def persist_nous_credentials(
         _save_auth_store(auth_store)
 
     # Mirror to the shared store so a new profile can one-tap import
-    # these credentials via `hermes auth add nous --type oauth`. Best-
+    # these credentials via `hermes provider add nous --type oauth`. Best-
     # effort: any I/O failure is logged and swallowed (the per-profile
     # auth.json is still the source of truth).
     _write_shared_nous_state(state)
@@ -6482,7 +6482,7 @@ def resolve_nous_runtime_credentials(
                             raise AuthError(
                                 "Nous Portal access token is not a usable inference JWT "
                                 f"({reason}) and no refresh token is available. "
-                                "Re-authenticate with: hermes auth add nous",
+                                "Re-authenticate with: hermes provider add nous",
                                 provider="nous",
                                 code=reason,
                                 relogin_required=True,
@@ -7978,9 +7978,9 @@ def _login_xai_oauth(
         auth_mode="oauth_device_code",
     )
     # An explicit interactive re-login is a strong signal the user wants the
-    # xAI credential re-enabled. ``hermes auth remove xai-oauth`` leaves a
+    # xAI credential re-enabled. ``hermes provider remove xai-oauth`` leaves a
     # ``device_code`` suppression marker that otherwise stops the singleton
-    # seed from re-creating the pool entry, so ``hermes auth list`` would show
+    # seed from re-creating the pool entry, so ``hermes provider list`` would show
     # nothing even though the agent still works via the singleton fallback.
     # Clear it here (same helper ``auth_add_command`` uses). This is kept OUT
     # of ``_save_xai_oauth_tokens`` on purpose — that helper is shared with the

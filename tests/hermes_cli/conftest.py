@@ -4,6 +4,29 @@ from __future__ import annotations
 
 import pytest
 
+from hermes_cli.client_auth import guard as _auth_guard
+
+
+_production_enforce_raw_argv = _auth_guard.enforce_raw_argv
+
+
+def _allow_pytest_collection(_argv):
+    """Keep pytest's own argv from being interpreted as a Hermes launch."""
+
+
+# Several legacy test modules import ``hermes_cli.main`` at module scope. The
+# production module deliberately guards before heavyweight imports, so this
+# test-only seam must be active during collection, before fixtures can run.
+# Subprocess tests get a fresh interpreter and therefore still exercise the
+# real production gate.
+_auth_guard.enforce_raw_argv = _allow_pytest_collection
+
+
+def pytest_collection_finish(session):
+    del session
+    if _auth_guard.enforce_raw_argv is _allow_pytest_collection:
+        _auth_guard.enforce_raw_argv = _production_enforce_raw_argv
+
 
 @pytest.fixture
 def all_assignees_spawnable(monkeypatch):
@@ -38,6 +61,11 @@ def _suppress_concurrent_hermes_gate(request, monkeypatch):
     if request.node.get_closest_marker("real_concurrent_gate"):
         return
     try:
+        # main.py now enforces the production auth gate at import time, before
+        # it exposes the update helper this fixture patches. This explicit
+        # in-process test seam prevents pytest's own argv from being treated as
+        # a Hermes launch. Subprocess guard tests do not inherit the monkeypatch.
+        monkeypatch.setattr(_auth_guard, "enforce_raw_argv", lambda _argv: None)
         from hermes_cli import main as _cli_main
     except Exception:
         return

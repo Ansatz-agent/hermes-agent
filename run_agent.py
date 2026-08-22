@@ -31,6 +31,11 @@ except ModuleNotFoundError:
     # means UTF-8 stdio setup is skipped on Windows; POSIX is unaffected.
     pass
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.run_agent")
+
 import asyncio
 import base64
 import copy
@@ -8303,6 +8308,9 @@ class AIAgent:
         moa_config: Optional[dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Forwarder — see ``agent.conversation_loop.run_conversation``."""
+        from hermes_cli.client_auth.runtime import require_authorized
+
+        require_authorized("agent.turn.start")
         from agent.aux_accounting import (
             reset_accounting_context,
             set_accounting_context,

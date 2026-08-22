@@ -914,7 +914,7 @@ def setup_model_provider(config: dict, *, quick: bool = False):
     # Credential rotation, vision-backend selection, and TTS provider are no
     # longer prompted here. They have safe defaults (rotation off, vision
     # auto-detected from the main provider, TTS = Edge) and are configurable
-    # on demand via `hermes auth add`, `hermes setup` vision, and
+    # on demand via `hermes provider add`, `hermes setup` vision, and
     # `hermes setup tts`. This keeps both quick and full setup thin.
 
 

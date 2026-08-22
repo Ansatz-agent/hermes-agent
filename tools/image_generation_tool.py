@@ -20,6 +20,11 @@ Pricing shown in UI strings is as-of the initial commit; we accept drift and
 update when it's noticed.
 """
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.tools.image_generation_tool")
+
 import json
 import logging
 import os

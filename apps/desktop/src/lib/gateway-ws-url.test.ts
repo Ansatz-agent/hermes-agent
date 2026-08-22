@@ -2,6 +2,7 @@ import { GatewayReauthRequiredError, isGatewayReauthRequired, resolveGatewayWsUr
 import { describe, expect, it, vi } from 'vitest'
 
 const oauthConn = { authMode: 'oauth' as const, wsUrl: 'ws://host/api/ws?ticket=stale' }
+const scopeConn = { authMode: 'scope' as const, wsUrl: 'ws://host/api/ws' }
 const tokenConn = { authMode: 'token' as const, wsUrl: 'ws://host/api/ws?token=abc' }
 
 describe('resolveGatewayWsUrl', () => {
@@ -69,6 +70,24 @@ describe('resolveGatewayWsUrl', () => {
       const result = await resolveGatewayWsUrl({ getGatewayWsUrl }, oauthConn).catch(() => 'threw')
       expect(result).toBe('threw')
       expect(result).not.toBe(oauthConn.wsUrl)
+    })
+  })
+
+  describe('desktop scope mode', () => {
+    it('requires a freshly minted one-shot URL', async () => {
+      const getGatewayWsUrl = vi.fn().mockResolvedValue('ws://host/api/ws?ticket=fresh')
+
+      await expect(resolveGatewayWsUrl({ getGatewayWsUrl }, scopeConn)).resolves.toBe(
+        'ws://host/api/ws?ticket=fresh'
+      )
+      expect(getGatewayWsUrl).toHaveBeenCalledOnce()
+    })
+
+    it('never falls back to the cached credential-free URL', async () => {
+      const getGatewayWsUrl = vi.fn().mockRejectedValue(new Error('scope token unavailable'))
+
+      await expect(resolveGatewayWsUrl({ getGatewayWsUrl }, scopeConn)).rejects.toThrow('scope token unavailable')
+      await expect(resolveGatewayWsUrl({}, scopeConn)).rejects.toThrow(/refresh.*WebSocket ticket/i)
     })
   })
 

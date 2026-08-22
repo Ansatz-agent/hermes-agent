@@ -2966,6 +2966,10 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
     tools. Used by the concurrent execution path; the sequential path retains
     its own inline invocation for backward-compatible display handling.
     """
+    from hermes_cli.client_auth.runtime import require_authorized
+
+    require_authorized("agent.tool.invoke")
+
     if not isinstance(function_args, dict):
         function_args = {}
 

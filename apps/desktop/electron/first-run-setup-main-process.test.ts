@@ -7,6 +7,12 @@ import { createFirstRunSetupGate } from './first-run-setup-gate'
 import { runPrimaryBackendStartup } from './primary-backend-startup'
 import { rehomePrimaryConnection } from './primary-connection-rehome'
 
+const connectionScope = {
+  connection_id: 'local',
+  runtime_instance_id: 'runtime-1',
+  epoch: 3
+}
+
 test('a first-run bootstrap-needed remote apply connects without ensuring or bootstrapping locally', async () => {
   const gate = createFirstRunSetupGate({ stuckAfterMs: 0 })
 
@@ -45,6 +51,7 @@ test('a first-run bootstrap-needed remote apply connects without ensuring or boo
   const prepareLocalBackend = vi.fn(async () => bootstrapBackend)
 
   const pendingConnection = runPrimaryBackendStartup({
+    connectionScope,
     connectRemote,
     ensureLocalRuntime,
     prepareLocalBackend,
@@ -82,7 +89,7 @@ test('a first-run bootstrap-needed remote apply connects without ensuring or boo
     connection: { ...candidateRemote, mode: 'remote' }
   })
   assert.deepEqual(resolveRemote.mock.calls, [[], []])
-  assert.deepEqual(connectRemote.mock.calls, [[candidateRemote]])
+  assert.deepEqual(connectRemote.mock.calls, [[candidateRemote, connectionScope]])
   assert.deepEqual(waitForLocalStart.mock.calls, [[]])
   assert.deepEqual(prepareLocalBackend.mock.calls, [[]])
   assert.equal(ensureLocalRuntime.mock.calls.length, 0)

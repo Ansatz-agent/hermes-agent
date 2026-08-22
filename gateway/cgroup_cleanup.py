@@ -14,6 +14,11 @@ signal delivery uses a separate code path that still works.
 
 from __future__ import annotations
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.gateway.cgroup_cleanup")
+
 import os
 import re
 import signal

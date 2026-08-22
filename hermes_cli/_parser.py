@@ -49,11 +49,13 @@ Examples:
     hermes --resume latest        Resume the most recent session (same as -c)
     hermes --tui --resume latest --in ./dir   Resume ./dir's latest session in the TUI
     hermes setup                  Run setup wizard
-    hermes logout                 Clear stored authentication
-    hermes auth add <provider>    Add a pooled credential
-    hermes auth list              List pooled credentials
-    hermes auth remove <p> <t>    Remove pooled credential by index, id, or label
-    hermes auth reset <provider>  Clear exhaustion status for a provider
+    hermes login                  Sign in to the Hermes remote account
+    hermes logout                 Sign out of the Hermes remote account
+    hermes auth status            Show Hermes remote account status
+    hermes provider add <p>       Add a pooled provider credential
+    hermes provider list          List provider credentials
+    hermes provider remove <p> <t> Remove provider credential by index, id, or label
+    hermes provider reset <p>     Clear provider exhaustion status
     hermes model                  Select default model
     hermes fallback [list]        Show fallback provider chain
     hermes fallback add           Add a fallback provider (same picker as `hermes model`)

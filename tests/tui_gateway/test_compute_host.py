@@ -1,6 +1,7 @@
 import json
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -9,6 +10,10 @@ from pathlib import Path
 import pytest
 
 from tui_gateway.compute_host import ComputeHost, HostSession
+from tests.hermes_cli.client_auth.subprocess_harness import (
+    authenticated_module_command,
+    authenticated_subprocess_environment,
+)
 
 
 def _stdout_queue(proc: subprocess.Popen) -> queue.Queue[dict]:
@@ -32,10 +37,9 @@ def _read_json_line(out: queue.Queue[dict], timeout: float = 2.0) -> dict:
 
 def test_compute_host_line_json_seed_turn_interrupt():
     repo = Path(__file__).resolve().parents[2]
-    env = dict(os.environ)
-    env["PYTHONPATH"] = str(repo) + os.pathsep + env.get("PYTHONPATH", "")
+    env, runtime_root = authenticated_subprocess_environment(dict(os.environ))
     proc = subprocess.Popen(
-        [sys.executable, "-m", "tui_gateway.compute_host"],
+        authenticated_module_command("tui_gateway.compute_host"),
         cwd=str(repo),
         env=env,
         stdin=subprocess.PIPE,
@@ -87,6 +91,8 @@ def test_compute_host_line_json_seed_turn_interrupt():
     finally:
         if proc.poll() is None:
             proc.kill()
+        proc.wait(timeout=2)
+        shutil.rmtree(runtime_root)
 
 
 @pytest.mark.parametrize("kind", ["legacy", "hard-only", "dynamic-getattr"])

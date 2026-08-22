@@ -33,6 +33,11 @@ Usage:
     result = terminal_tool("python server.py", background=True)
 """
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.tools.terminal_tool")
+
 import importlib.util
 import json
 import logging

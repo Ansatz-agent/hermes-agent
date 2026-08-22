@@ -14,6 +14,12 @@ export {}
 declare global {
   interface Window {
     hermesDesktop: {
+      auth: {
+        status: (connectionId?: string) => Promise<DesktopAccountStatus>
+        login: (username: string, password: string, connectionId?: string) => Promise<DesktopAccountStatus>
+        logout: (connectionId?: string) => Promise<DesktopAccountStatus>
+        onChanged: (callback: (status: DesktopAccountStatus, connectionId?: string) => void) => () => void
+      }
       // Resolve a backend connection. Omit `profile` (or pass the primary) for
       // the window's backend; pass a named profile to lazily spawn/reuse that
       // profile's backend from the pool.
@@ -402,6 +408,16 @@ declare global {
   }
 }
 
+interface DesktopAccountStatus {
+  state: 'checking' | 'authenticated' | 'signed_out' | 'locked'
+  username: string | null
+  runtime_instance_id: string
+  epoch: number
+  valid_until: number
+  session_expires_at: string | null
+  reason: string | null
+}
+
 export interface DesktopMarketplaceSearchItem {
   extensionId: string
   displayName: string
@@ -560,6 +576,11 @@ export interface DesktopUpdateProgress {
 }
 
 export interface HermesConnection {
+  authScope?: {
+    connection_id: string
+    runtime_instance_id: string
+    epoch: number
+  }
   baseUrl: string
   darwinMajor?: number
   isFullscreen: boolean
@@ -567,7 +588,7 @@ export interface HermesConnection {
   // 'cloud' saved-config entry resolves to a 'remote' connection under the hood
   // (cloud-auto-discovery Q3/Q6), so this never carries 'cloud'.
   mode?: 'local' | 'remote'
-  authMode?: 'oauth' | 'token'
+  authMode?: 'oauth' | 'scope' | 'token'
   remoteHost?: string
   remoteIdentity?: string
   remoteKind?: 'cloud' | 'ssh' | 'url'
@@ -960,6 +981,9 @@ export type DesktopBootstrapEvent =
     }
 
 export interface HermesApiRequest {
+  // Exact execution target. Main-process authorization rejects the request if
+  // this connection's current runtime scope is absent or stale.
+  connectionId?: string
   path: string
   method?: string
   body?: unknown

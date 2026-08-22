@@ -1,0 +1,5 @@
+#!/command/with-contenv sh
+# shellcheck shell=sh
+# The capability processes retain their own request-boundary guards. Returning
+# zero asks s6 to restart only this auth-only owner after an unexpected exit.
+exit 0

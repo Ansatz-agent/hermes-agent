@@ -44,12 +44,21 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - name: Linux-only tests
+            runner: ubuntu-latest
+            marker: linux_only
+            platform: linux
+            owner_transport: unix-peercred
           - name: macOS-only tests
             runner: macos-latest
             marker: macos_only
+            platform: macos
+            owner_transport: unix-getpeereid
           - name: Windows-only tests
             runner: windows-latest
             marker: windows_only
+            platform: windows
+            owner_transport: named-pipe-sid
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -135,9 +144,11 @@ jobs:
           # exit-5 branch below would be unreachable dead code — the job
           # would still fail red, but the diagnostic would never print.
           status=0
+          mkdir -p .auth-artifacts
           uv run --no-sync python -m pytest \
             "$@" \
             -m "${{ matrix.marker }} and not integration" \
+            --junitxml=".auth-artifacts/native-${{ matrix.platform }}.xml" \
             -v --tb=short || status=$?
           if [ "$status" -eq 5 ]; then
             echo "::error::No tests matched -m ${{ matrix.marker }}. Either the" \
@@ -152,3 +163,55 @@ jobs:
           OPENROUTER_API_KEY: ""
           OPENAI_API_KEY: ""
           NOUS_API_KEY: ""
+
+      - name: Verify locked service behavior
+        shell: bash
+        run: |
+          uv run --no-sync python -m pytest \
+            tests/hermes_cli/client_auth/test_entrypoints.py \
+            --junitxml=".auth-artifacts/locked-start-${{ matrix.platform }}.xml" \
+            -q
+          uv run --no-sync python -m pytest \
+            tests/hermes_cli/client_auth/test_background_modes.py \
+            tests/hermes_cli/client_auth/test_service_locked_waiting.py \
+            --junitxml=".auth-artifacts/service-${{ matrix.platform }}.xml" \
+            -q
+
+      - name: Write native auth evidence
+        shell: bash
+        env:
+          AUTH_PLATFORM: ${{ matrix.platform }}
+          AUTH_TRANSPORT: ${{ matrix.owner_transport }}
+        run: |
+          uv run --no-sync python scripts/write_auth_native_artifact.py \
+            --platform "$AUTH_PLATFORM" \
+            --owner-transport "$AUTH_TRANSPORT" \
+            --locked-start ".auth-artifacts/locked-start-${AUTH_PLATFORM}.xml" \
+            --handle-noninheriting ".auth-artifacts/native-${AUTH_PLATFORM}.xml" \
+            --service-waiting ".auth-artifacts/service-${AUTH_PLATFORM}.xml" \
+            --output ".auth-artifacts/${AUTH_PLATFORM}.json"
+
+      - name: Upload native auth evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: auth-native-${{ matrix.platform }}
+          path: .auth-artifacts/${{ matrix.platform }}.json
+          if-no-files-found: error
+
+  validate-auth-native:
+    name: Validate native auth matrix
+    needs: [os-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Download native auth evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: auth-native-*
+          path: .auth-artifacts
+          merge-multiple: true
+
+      - name: Validate native auth evidence
+        run: python3 scripts/check_auth_native_artifacts.py .auth-artifacts

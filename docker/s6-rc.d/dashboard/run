@@ -27,6 +27,12 @@ cd /opt/data
 # shellcheck disable=SC1091
 . /opt/hermes/.venv/bin/activate
 
+if [ "$(id -u)" = 0 ]; then
+    s6-setuidgid hermes python -m hermes_cli.client_auth.runtime wait container.dashboard.start
+else
+    python -m hermes_cli.client_auth.runtime wait container.dashboard.start
+fi
+
 dash_host="${HERMES_DASHBOARD_HOST:-0.0.0.0}"
 dash_port="${HERMES_DASHBOARD_PORT:-9119}"
 

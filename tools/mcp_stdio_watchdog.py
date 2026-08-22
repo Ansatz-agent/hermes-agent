@@ -42,6 +42,11 @@ Usage (see ``tools/mcp_tool.py::_run_stdio``)::
 
 from __future__ import annotations
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.tools.mcp_stdio_watchdog")
+
 import argparse
 import os
 import signal

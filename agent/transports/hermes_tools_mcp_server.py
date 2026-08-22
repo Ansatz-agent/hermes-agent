@@ -44,12 +44,19 @@ Spawned by: CodexAppServerSession.ensure_started() when the runtime is
 
 from __future__ import annotations
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.agent.transports.hermes_tools_mcp_server")
+
 import inspect
 import json
 import logging
 import os
 import sys
 from typing import Any, Optional
+
+from hermes_cli.client_auth.runtime import require_authorized
 
 logger = logging.getLogger(__name__)
 
@@ -209,6 +216,7 @@ def _build_server() -> Any:
             sig, annots = _signature_from_schema(schema)
 
             def _dispatch(**kwargs: Any) -> str:
+                require_authorized(f"mcp.hermes_tools.{tool_name}")
                 try:
                     # Filter out None values before dispatch so unset optionals
                     # aren't forwarded to the handler.

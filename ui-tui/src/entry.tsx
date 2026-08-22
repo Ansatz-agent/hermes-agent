@@ -4,7 +4,9 @@
 import './lib/forceTruecolor.js'
 
 import type { FrameEvent } from '@hermes/ink'
+import { lazy, Suspense } from 'react'
 
+import { AuthGate } from './authGate.js'
 import { DASHBOARD_TUI_MODE, TERMUX_TUI_MODE } from './config/env.js'
 import { GatewayClient } from './gatewayClient.js'
 import { setupGracefulExit } from './lib/gracefulExit.js'
@@ -147,12 +149,20 @@ if (process.env.HERMES_HEAPDUMP_ON_START === '1') {
 
 process.on('beforeExit', () => stopMemoryMonitor())
 
-const [ink, { App }, { logFrameEvent }, { trackFrame }] = await Promise.all([
+const [ink, { logFrameEvent }, { trackFrame }] = await Promise.all([
   import('@hermes/ink'),
-  import('./app.js'),
   import('./lib/perfPane.js'),
   import('./lib/fpsStore.js')
 ])
+
+// React.lazy does not invoke this import until AuthGate renders its children.
+// A signed-out process therefore never loads the Agent/session application
+// tree, even though the transport and auth-only form are already running.
+const ProtectedApp = lazy(async () => {
+  const module = await import('./app.js')
+
+  return { default: module.App }
+})
 
 // Both consumers are undefined when their env flags are off; only attach
 // onFrame when at least one is on so ink skips timing in the default case.
@@ -164,7 +174,13 @@ const onFrame =
       }
     : undefined
 
-ink.render(<App gw={gw} />, {
+ink.render(
+  <AuthGate gw={gw}>
+    <Suspense fallback={null}>
+      <ProtectedApp gw={gw} />
+    </Suspense>
+  </AuthGate>,
+  {
   exitOnCtrlC: false,
   onFrame,
   // Open URLs in the user's default browser when a link cell is clicked.
@@ -174,4 +190,5 @@ ink.render(<App gw={gw} />, {
   onHyperlinkClick: url => {
     openExternalUrl(url)
   }
-})
+  }
+)

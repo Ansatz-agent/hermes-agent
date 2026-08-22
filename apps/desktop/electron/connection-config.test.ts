@@ -646,6 +646,29 @@ test('resolveTestWsUrl (oauth, mint ok) builds a ?ticket= URL', async () => {
   assert.equal(url, 'wss://gw.example.com/api/ws?ticket=tkt-9')
 })
 
+test('resolveTestWsUrl (scope, mint ok) uses a ticket and never puts the bearer in the URL', async () => {
+  const bearer = 'scope-secret'
+
+  const url = await resolveTestWsUrl('http://127.0.0.1:8000', 'scope', bearer, {
+    mintScopeTicket: async (baseUrl, receivedBearer) => {
+      assert.equal(baseUrl, 'http://127.0.0.1:8000')
+      assert.equal(receivedBearer, bearer)
+
+      return 'scope-ticket'
+    }
+  })
+
+  assert.equal(url, 'ws://127.0.0.1:8000/api/ws?ticket=scope-ticket')
+  assert.doesNotMatch(url, /scope-secret/)
+})
+
+test('resolveTestWsUrl (scope) fails closed when its ticket minter is absent', async () => {
+  await assert.rejects(
+    () => resolveTestWsUrl('http://127.0.0.1:8000', 'scope', 'scope-secret'),
+    /mintScopeTicket function is required/
+  )
+})
+
 test('resolveTestWsUrl (oauth, auth rejected) requests sign-in and does not skip WS validation', async () => {
   const cause = Object.assign(new Error('ticket mint failed'), { statusCode: 401 })
 

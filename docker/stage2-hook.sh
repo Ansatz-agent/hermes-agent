@@ -615,4 +615,8 @@ if [ -z "${AGENT_BROWSER_EXECUTABLE_PATH:-}" ] && \
     fi
 fi
 
+# Ephemeral native auth transport. It is deliberately outside HERMES_HOME so
+# a container restart cannot preserve a Django Session or runtime endpoint.
+install -d -m 0700 -o hermes -g hermes /run/hermes-auth
+
 echo "[stage2] Setup complete; starting user services"

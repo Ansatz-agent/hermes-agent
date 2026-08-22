@@ -10,6 +10,9 @@ tests/docker/test_container_restart.py.
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -109,7 +112,7 @@ def _named_actions(actions: list[ReconcileAction]) -> list[ReconcileAction]:
 # ---------------------------------------------------------------------------
 
 
-def test_running_profile_is_registered_and_autostarted(tmp_path: Path) -> None:
+def test_running_profile_preserves_intent_but_registers_down(tmp_path: Path) -> None:
     scandir = tmp_path / "run-service"; scandir.mkdir()
     _make_profile(tmp_path, "coder", state="running")
 
@@ -118,14 +121,33 @@ def test_running_profile_is_registered_and_autostarted(tmp_path: Path) -> None:
     )
 
     assert _named_actions(actions) == [ReconcileAction(
-        profile="coder", prior_state="running", action="started",
+        profile="coder", prior_state="running", action="registered",
     )]
     svc = scandir / "gateway-coder"
     assert (svc / "run").exists()
     assert (svc / "run").stat().st_mode & 0o111  # executable
     assert (svc / "type").read_text().strip() == "longrun"
-    # Auto-start means no down-marker.
-    assert not (svc / "down").exists()
+    assert (svc / "down").exists()
+    run_script = (svc / "run").read_text()
+    assert "hermes_cli.client_auth.runtime wait container.gateway.start" in run_script
+    assert run_script.index("runtime wait") < run_script.index("gateway run")
+
+
+def test_running_default_profile_preserves_intent_but_registers_down(tmp_path: Path) -> None:
+    scandir = tmp_path / "run-service"; scandir.mkdir()
+    _seed_default_root(tmp_path, state="running")
+
+    actions = reconcile_profile_gateways(
+        hermes_home=tmp_path,
+        scandir=scandir,
+        dry_run=False,
+        container_argv=["/init"],
+    )
+
+    assert actions[0] == ReconcileAction(
+        profile="default", prior_state="running", action="registered",
+    )
+    assert (scandir / "gateway-default" / "down").exists()
 
 
 def test_registered_profile_has_finish_script(tmp_path: Path) -> None:
@@ -286,6 +308,29 @@ def test_main_skips_reconcile_in_dashboard_container_s6v3(
     assert "skipping (dashboard container" in capsys.readouterr().out
 
 
+def test_container_boot_module_is_auth_shell_and_only_registers_down(tmp_path: Path) -> None:
+    scandir = tmp_path / "run-service"; scandir.mkdir()
+    environment = {
+        **os.environ,
+        "HERMES_HOME": str(tmp_path),
+        "S6_PROFILE_GATEWAY_SCANDIR": str(scandir),
+    }
+
+    result = subprocess.run(
+        [sys.executable, "-m", "hermes_cli.container_boot"],
+        cwd=Path(__file__).resolve().parents[2],
+        env=environment,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert (scandir / "gateway-default" / "down").exists()
+    assert "AUTH_REQUIRED" not in result.stderr
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +342,3 @@ def _write_lifecycle_sentinel(profile_dir: Path, payload: dict) -> None:
     state_dir = profile_dir / "state"
     state_dir.mkdir(parents=True, exist_ok=True)
     (state_dir / "gateway.lifecycle.json").write_text(json.dumps(payload))
-
-
-
-
