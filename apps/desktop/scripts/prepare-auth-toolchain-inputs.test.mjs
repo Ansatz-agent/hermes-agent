@@ -6,6 +6,7 @@ import path from 'node:path'
 import { test } from 'vitest'
 
 import {
+  buildAuthLockEnvironment,
   buildAuthPayloadEnvironment,
   findManagedPython,
   prepareAuthToolchainInputs
@@ -30,6 +31,13 @@ test('auth payload environment rejects inherited downloader redirects and creden
   assert.equal(env.PYTHONPATH, undefined)
   assert.equal(JSON.stringify(env).includes('attacker.invalid'), false)
   assert.equal(JSON.stringify(env).includes('secret-token'), false)
+
+  const lockEnv = buildAuthLockEnvironment({ HOME: '/Users/example', PATH: '/usr/bin:/bin' })
+  assert.equal(lockEnv.UV_NO_CONFIG, '1')
+  assert.equal(lockEnv.UV_OFFLINE, '1')
+  assert.equal(lockEnv.UV_DEFAULT_INDEX, undefined)
+  assert.equal(lockEnv.UV_INDEX, undefined)
+  assert.equal(lockEnv.PIP_INDEX_URL, undefined)
 })
 
 test('managed Python discovery ignores the project venv and resolves interpreter links', () => {
@@ -71,8 +79,8 @@ function makeFixture() {
 function commandDouble({ failPrimary = false, wrongUvArch = false } = {}) {
   const calls = []
 
-  function execute(command, args) {
-    calls.push({ command, args: [...args] })
+  function execute(command, args, options = {}) {
+    calls.push({ command, args: [...args], options })
 
     if (command === '/usr/bin/file') {
       return wrongUvArch && args.at(-1)?.endsWith('/uv')
@@ -139,6 +147,9 @@ test('prepareAuthToolchainInputs creates locked macOS arm64 build inputs from ap
       exportCall.args[exportCall.args.indexOf('--config-file') + 1],
       path.join(fixture.projectRoot, 'desktop_auth_runtime', 'uv.toml')
     )
+    assert.equal(exportCall.options.env.UV_OFFLINE, '1')
+    assert.equal(exportCall.options.env.UV_DEFAULT_INDEX, undefined)
+    assert.equal(exportCall.options.env.UV_INDEX, undefined)
 
     const downloadCall = commands.calls.find(call => call.args.slice(0, 3).join(' ') === '-m pip download')
     assert.ok(downloadCall)

@@ -37,8 +37,8 @@ function makeFixture() {
 function fixtureCommands({ corruptUv = false, wrongWheel = false } = {}) {
   const calls = []
 
-  function execute(command, args) {
-    calls.push({ command, args: [...args] })
+  function execute(command, args, options = {}) {
+    calls.push({ command, args: [...args], options })
     if (args[0] === 'export') {
       const output = args[args.indexOf('--output-file') + 1]
       fs.writeFileSync(
@@ -131,6 +131,9 @@ test('prepareWindowsAuthToolchainInputs exports CPython 3.13 win_amd64 wheels an
       exportCall.args[exportCall.args.indexOf('--config-file') + 1],
       path.join(fixture.projectRoot, 'desktop_auth_runtime', 'uv.toml')
     )
+    assert.equal(exportCall.options.env.UV_OFFLINE, '1')
+    assert.equal(exportCall.options.env.UV_DEFAULT_INDEX, undefined)
+    assert.equal(exportCall.options.env.UV_INDEX, undefined)
 
     const lockedDownload = commands.calls.find(
       call => call.args.slice(0, 3).join(' ') === '-m pip download' && call.args.includes('--requirement')

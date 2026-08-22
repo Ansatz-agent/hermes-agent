@@ -35,6 +35,18 @@ export function buildAuthPayloadEnvironment(source = process.env) {
   return env
 }
 
+export function buildAuthLockEnvironment(source = process.env) {
+  const env = buildAuthPayloadEnvironment(source)
+
+  delete env.UV_DEFAULT_INDEX
+  delete env.UV_INDEX
+  delete env.PIP_INDEX_URL
+  delete env.HERMES_UV_FALLBACK_INDEX
+  env.UV_OFFLINE = '1'
+
+  return env
+}
+
 export const WINDOWS_PYTHON_VERSION = '3.13.15'
 export const WINDOWS_PYTHON_ARCHIVE = 'python-3.13.15-embed-amd64.zip'
 export const WINDOWS_PYTHON_SHA256 = 'd1f04d990aee1253d8569e8e5104e30fa9f5fa830899f14843448872d936a2cf'
@@ -342,7 +354,7 @@ export async function prepareWindowsAuthToolchainInputs({
       requirementsPath,
       '--config-file',
       authUvConfig
-    ])
+    ], { env: buildAuthLockEnvironment() })
     const requirements = fs.readFileSync(requirementsPath, 'utf8')
     if (!requirements.includes('--hash=sha256:')) {
       throw new Error('authentication requirements export is not hash locked')
@@ -488,7 +500,7 @@ export function prepareAuthToolchainInputs({
       requirementsPath,
       '--config-file',
       authUvConfig
-    ])
+    ], { env: buildAuthLockEnvironment() })
 
     const requirements = fs.readFileSync(requirementsPath, 'utf8')
     if (!requirements.includes('--hash=sha256:')) {
