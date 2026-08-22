@@ -32,6 +32,7 @@ import nodePty from 'node-pty'
 import { classifyActiveRuntime } from './active-runtime-state'
 import { AuthBridgeError, type BridgeStatus, DesktopAuthBridge } from './auth-bridge'
 import { AuthCoordinator } from './auth-coordinator'
+import { isAuthRuntimeUsable } from './auth-runtime-contract'
 import { encodeScopeTokenRegistration, issueAuthScopeToken, sanitizeAuthChildEnvironment } from './auth-scope-token'
 import { runAuthenticatedRuntimePreparation } from './authenticated-runtime-preparation'
 import { stopBackendChild as stopBackendChildImpl, stopBackendTreesForUpdate } from './backend-child'
@@ -713,6 +714,7 @@ function pathWithHermesManagedNode(...entries) {
 const ACTIVE_HERMES_ROOT = path.join(HERMES_HOME, 'hermes-agent')
 // VENV_ROOT — venv lives inside the repo, exactly like install.ps1 does it.
 const VENV_ROOT = path.join(ACTIVE_HERMES_ROOT, 'venv')
+const AUTH_VENV_ROOT = IS_WINDOWS ? path.join(ACTIVE_HERMES_ROOT, 'auth-venv') : VENV_ROOT
 const AUTH_BOOTSTRAP_COMPLETE_MARKER = path.join(ACTIVE_HERMES_ROOT, '.hermes-auth-bootstrap-complete')
 let desktopAuthBridge: DesktopAuthBridge | null = null
 let desktopAuthCoordinator: AuthCoordinator | null = null
@@ -795,13 +797,29 @@ function createDesktopAuthBridge() {
   // installs use the canonical venv created by the signed bootstrap flow.
   const candidate = resolveHermesBackend([], { requirePythonModule: true })
 
+  const packagedWindowsAuthReady =
+    IS_PACKAGED &&
+    IS_WINDOWS &&
+    isAuthRuntimeUsable({
+      activeRoot: ACTIVE_HERMES_ROOT,
+      bundledBootstrapRoot: BUNDLED_BOOTSTRAP_ROOT,
+      platform: process.platform,
+      requireLauncher: false
+    })
+
   const pythonExecutable =
-    candidate?.kind === 'python' && candidate.command ? candidate.command : getVenvPython(VENV_ROOT)
+    packagedWindowsAuthReady
+      ? path.join(AUTH_VENV_ROOT, 'python.exe')
+      : candidate?.kind === 'python' && candidate.command
+        ? candidate.command
+        : getVenvPython(VENV_ROOT)
 
   const candidateRoot =
     candidate && 'root' in candidate && candidate.root && directoryExists(candidate.root) ? candidate.root : null
 
-  const cwd = candidateRoot || (directoryExists(ACTIVE_HERMES_ROOT) ? ACTIVE_HERMES_ROOT : app.getPath('home'))
+  const cwd = packagedWindowsAuthReady
+    ? ACTIVE_HERMES_ROOT
+    : candidateRoot || (directoryExists(ACTIVE_HERMES_ROOT) ? ACTIVE_HERMES_ROOT : app.getPath('home'))
 
   return new DesktopAuthBridge({
     cwd,
@@ -897,10 +915,20 @@ async function startDesktopAuthRuntime() {
   const startup = (async () => {
     const candidate = resolveHermesBackend([], { requirePythonModule: true })
 
+    const packagedWindowsAuthReady =
+      IS_PACKAGED &&
+      IS_WINDOWS &&
+      isAuthRuntimeUsable({
+        activeRoot: ACTIVE_HERMES_ROOT,
+        bundledBootstrapRoot: BUNDLED_BOOTSTRAP_ROOT,
+        platform: process.platform,
+        requireLauncher: false
+      })
+
     // A fresh packaged install may not have the canonical Python runtime yet.
     // The signed bootstrap shell is the sole pre-auth executable exception: it
     // installs the closed auth bridge, but never starts an Agent/backend.
-    if (candidate?.kind === 'bootstrap-needed') {
+    if (!packagedWindowsAuthReady && candidate?.kind === 'bootstrap-needed') {
       await ensureRuntime(candidate, { scope: 'auth' })
     }
 
@@ -4953,7 +4981,7 @@ async function ensureRuntime(backend, { scope = 'runtime' }: any = {}) {
       return {
         kind: 'python',
         label: 'Hermes authentication runtime',
-        command: getVenvPython(VENV_ROOT),
+        command: IS_WINDOWS ? path.join(AUTH_VENV_ROOT, 'python.exe') : getVenvPython(VENV_ROOT),
         args: [],
         bootstrap: false,
         env: {},

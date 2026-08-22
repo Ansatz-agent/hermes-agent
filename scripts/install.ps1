@@ -37,6 +37,8 @@ param(
     # desktop GUI's onboarding wizard.
     [switch]$Manifest,
     [string]$Stage,
+    [ValidateSet("auth", "runtime")]
+    [string]$BootstrapScope = "runtime",
     [switch]$ProtocolVersion,
     [switch]$NonInteractive,
     [switch]$Json,
@@ -140,14 +142,15 @@ try {
 # them apply -- including non-Windows -- behaves exactly as it did before.
 
 $script:LongProfileRoot = $null
+$script:MachineReadableMode = $ProtocolVersion -or $ShowResolvedPaths -or $Manifest -or $Json -or $PSBoundParameters.ContainsKey('Stage')
 
 function Write-PathDiag {
     # Diagnostics for this block go to stderr, never stdout: the stage protocol
     # hands drivers a single line of JSON on stdout and a stray note would break
     # anything parsing it.
     #
-    # Suppressed entirely under -ShowResolvedPaths, which is a machine-readable
-    # query: Windows PowerShell 5.1 wraps any native-command stderr in a
+    # Suppressed entirely under every machine-readable query: Windows
+    # PowerShell 5.1 wraps any native-command stderr in a
     # NativeCommandError and folds it back into the caller's own stream, so a
     # child writing here at all is enough to corrupt a 5.1 caller's capture.
     # The JSON already carries everything these lines say.
@@ -156,7 +159,7 @@ function Write-PathDiag {
     # windows-latest runner. $host.UI.WriteErrorLine was tried and silently
     # produced nothing there under a non-interactive host.
     param([string]$Message)
-    if ($ShowResolvedPaths) { return }
+    if ($script:MachineReadableMode) { return }
     [Console]::Error.WriteLine("[hermes] $Message")
 }
 
@@ -1060,25 +1063,48 @@ function Resolve-AvailablePythonVersion {
     # survive into the ``venv`` stage's process -- there $PythonVersion is back
     # at its "3.11" default.  Consumers re-resolve here instead of trusting that
     # default, which is exactly the propagation gap behind issue #50769.
+    $packagedAuthPython = Resolve-PackagedAuthPython
+    if ($packagedAuthPython) { return $packagedAuthPython }
+
     $candidates = @($PythonVersion) + $PythonFallbackVersions
     $seen = @{}
     foreach ($ver in $candidates) {
         if (-not $ver -or $seen.ContainsKey($ver)) { continue }
         $seen[$ver] = $true
         try {
-            $found = & $UvCmd python find $ver 2>$null
+            $found = & $UvCmd --no-config python find $ver 2>$null
             if ($found) { return $ver }
         } catch { }
     }
     return $null
 }
 
+function Resolve-PackagedAuthPython {
+    if (-not $BundledSource) { return $null }
+    $candidate = Join-Path $InstallDir "auth-venv\python.exe"
+    if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { return $null }
+    try {
+        $version = & $candidate --version 2>$null
+        if ($LASTEXITCODE -eq 0 -and $version -match '^Python 3\.13\.') {
+            return $candidate
+        }
+    } catch { }
+    throw "The packaged authentication Python runtime is invalid"
+}
+
 function Test-Python {
     Write-Info "Checking Python $PythonVersion..."
+
+    $packagedAuthPython = Resolve-PackagedAuthPython
+    if ($packagedAuthPython) {
+        $script:PythonVersion = $packagedAuthPython
+        Write-Success "Using the packaged authentication Python runtime"
+        return $true
+    }
     
     # Let uv find or install Python
     try {
-        $pythonPath = & $UvCmd python find $PythonVersion 2>$null
+        $pythonPath = & $UvCmd --no-config python find $PythonVersion 2>$null
         if ($pythonPath) {
             $ver = & $pythonPath --version 2>$null
             Write-Success "Python found: $ver"
@@ -1088,28 +1114,33 @@ function Test-Python {
     
     # Python not found -- use uv to install it (no admin needed!)
     Write-Info "Python $PythonVersion not found, installing via uv..."
-    # Capture EAP outside the try block so the catch's restore call always
-    # has a meaningful value (see Install-Uv for the full rationale).
-    $prevEAP = $ErrorActionPreference
     try {
-        # Temporarily relax ErrorActionPreference: uv writes download progress
-        # ("Downloading cpython-3.11.15-windows-x86_64-none (24.5MiB)") to
-        # stderr.  With $ErrorActionPreference = "Stop" (set at the top of this
-        # script) PowerShell wraps stderr lines from native commands as
-        # ErrorRecord objects when captured via 2>&1, then throws a terminating
-        # exception on the first one -- even though uv exits 0 and Python was
-        # installed successfully.  Verify success via `uv python find`
-        # afterwards, which is the reliable signal regardless of exit-code
-        # semantics or stderr noise.  This fix was previously landed as
-        # commit ec1714e71 and then lost in a release squash; reapplied here.
-        $ErrorActionPreference = "Continue"
-        $uvOutput = & $UvCmd python install $PythonVersion 2>&1
-        $uvExitCode = $LASTEXITCODE
-        $ErrorActionPreference = $prevEAP
+        # Windows PowerShell 5.1 turns native stderr into ErrorRecord objects.
+        # A uv warning can therefore terminate the pipeline before uv finishes,
+        # even when the native process itself would succeed. Redirect both
+        # streams at the process boundary so PowerShell never interprets them.
+        $uvStdoutLog = [System.IO.Path]::GetTempFileName()
+        $uvStderrLog = [System.IO.Path]::GetTempFileName()
+        try {
+            $uvProcess = Start-Process -FilePath $UvCmd `
+                -ArgumentList @("--no-config", "python", "install", $PythonVersion) `
+                -NoNewWindow -PassThru `
+                -RedirectStandardOutput $uvStdoutLog `
+                -RedirectStandardError $uvStderrLog
+            $uvProcess.WaitForExit()
+            $uvProcess.Refresh()
+            $uvExitCode = [int]$uvProcess.ExitCode
+            $uvOutput = @(
+                [System.IO.File]::ReadAllText($uvStdoutLog)
+                [System.IO.File]::ReadAllText($uvStderrLog)
+            ) -join "`n"
+        } finally {
+            Remove-Item $uvStdoutLog, $uvStderrLog -Force -ErrorAction SilentlyContinue
+        }
 
         # Check if Python is now available (more reliable than exit code
         # since uv may return non-zero due to "already installed" etc.)
-        $pythonPath = & $UvCmd python find $PythonVersion 2>$null
+        $pythonPath = & $UvCmd --no-config python find $PythonVersion 2>$null
         if ($pythonPath) {
             $ver = & $pythonPath --version 2>$null
             Write-Success "Python installed: $ver"
@@ -1122,8 +1153,6 @@ function Test-Python {
             Write-Host $uvOutput -ForegroundColor DarkGray
         }
     } catch {
-        # Restore EAP in case the try block threw before the assignment
-        if ($prevEAP) { $ErrorActionPreference = $prevEAP }
         Write-Warn "uv python install error: $_"
     }
 
@@ -1131,7 +1160,7 @@ function Test-Python {
     Write-Info "Trying to find any existing Python 3.10+..."
     foreach ($fallbackVer in $PythonFallbackVersions) {
         try {
-            $pythonPath = & $UvCmd python find $fallbackVer 2>$null
+            $pythonPath = & $UvCmd --no-config python find $fallbackVer 2>$null
             if ($pythonPath) {
                 $ver = & $pythonPath --version 2>$null
                 Write-Success "Found fallback: $ver"
@@ -2021,6 +2050,9 @@ function Assert-BundledSource {
 
     $requiredFiles = @(
         "pyproject.toml",
+        "desktop_auth_runtime\pyproject.toml",
+        "desktop_auth_runtime\uv.lock",
+        "desktop_auth_runtime\uv.toml",
         "hermes_cli\main.py",
         "tools\sensevoice_stt.py",
         "scripts\install.ps1"
@@ -2042,16 +2074,17 @@ function Write-InstallMethod {
 
     $methodPath = Join-Path $InstallDir ".install_method"
     $temporaryPath = "$methodPath.tmp-$PID-$([Guid]::NewGuid().ToString('N'))"
+    $backupPath = "$methodPath.backup-$PID-$([Guid]::NewGuid().ToString('N'))"
     $utf8NoBom = New-Object System.Text.UTF8Encoding $false
     try {
         [System.IO.File]::WriteAllText($temporaryPath, "$Method`n", $utf8NoBom)
         if (Test-Path -LiteralPath $methodPath -PathType Leaf) {
-            [System.IO.File]::Replace($temporaryPath, $methodPath, $null)
+            [System.IO.File]::Replace($temporaryPath, $methodPath, $backupPath)
         } else {
             [System.IO.File]::Move($temporaryPath, $methodPath)
         }
     } finally {
-        Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $temporaryPath, $backupPath -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -2115,7 +2148,7 @@ function Install-Venv {
         # gateway into the replacement venv.
         if ($env:OS -eq "Windows_NT") {
             $myPid = $PID
-            Write-Info "Stopping any running hermes processes before recreating venv..."
+            Write-Info "Stopping Hermes runtime processes before recreating venv..."
             # Disarm the respawner FIRST: the gateway autostart Scheduled Task
             # relaunches a killed gateway within seconds, and losing that race
             # re-locks the venv's .pyd files between our kill sweep and
@@ -2141,9 +2174,10 @@ function Install-Venv {
             } catch {
                 Write-Warn "Could not enumerate gateway scheduled tasks: $($_.Exception.Message)"
             }
-            # The launcher CLI (hermes.exe) plus its child tree.
-            & taskkill /F /T /IM hermes.exe /FI "PID ne $myPid" 2>$null | Out-Null
-            # taskkill /IM hermes.exe is NOT enough: the gateway/agent that a
+            # Never terminate by the image name hermes.exe: the packaged
+            # Electron shell has that same name and owns this bootstrap. The
+            # path-scoped sweep below covers the venv launcher CLI as well as
+            # the gateway/agent that a
             # scheduled task or watchdog autostarts runs as
             # `pythonw.exe -m hermes_cli.main gateway run` straight out of
             # venv\Scripts\, so its image name is python/pythonw, not hermes.exe.
@@ -2332,6 +2366,269 @@ function Get-PendingVenvBackup {
     return $name
 }
 
+function Write-AtomicAuthBytes {
+    param(
+        [Parameter(Mandatory=$true)] [string]$Path,
+        [Parameter(Mandatory=$true)] [byte[]]$Bytes
+    )
+
+    $parent = Split-Path -Parent $Path
+    if ($parent) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
+    $temporaryPath = "$Path.tmp-$PID-$([Guid]::NewGuid().ToString('N'))"
+    $backupPath = "$Path.replace-$PID-$([Guid]::NewGuid().ToString('N'))"
+    $stream = $null
+    try {
+        $stream = New-Object System.IO.FileStream -ArgumentList @(
+            $temporaryPath,
+            [System.IO.FileMode]::CreateNew,
+            [System.IO.FileAccess]::Write,
+            [System.IO.FileShare]::None
+        )
+        $stream.Write($Bytes, 0, $Bytes.Length)
+        $stream.Flush($true)
+        $stream.Dispose()
+        $stream = $null
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            [System.IO.File]::Replace($temporaryPath, $Path, $backupPath)
+            Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
+        } else {
+            Move-Item -LiteralPath $temporaryPath -Destination $Path -ErrorAction Stop
+        }
+    } finally {
+        if ($stream) { $stream.Dispose() }
+        Remove-Item -LiteralPath $temporaryPath, $backupPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Write-AtomicAuthJson {
+    param(
+        [Parameter(Mandatory=$true)] [string]$Path,
+        [Parameter(Mandatory=$true)] $Value
+    )
+
+    $json = $Value | ConvertTo-Json -Compress -Depth 5
+    Write-AtomicAuthBytes -Path $Path -Bytes ([System.Text.Encoding]::UTF8.GetBytes($json))
+}
+
+function Get-PendingAuthVenvTransaction {
+    $transactionPath = Join-Path $InstallDir "auth-venv.pending-backup"
+    if (-not (Test-Path -LiteralPath $transactionPath -PathType Leaf)) { return $null }
+
+    try {
+        $raw = [System.IO.File]::ReadAllText($transactionPath)
+        if ($raw.Length -gt 131072) { throw "transaction record is too large" }
+        $record = $raw | ConvertFrom-Json
+        $keys = @($record.PSObject.Properties.Name | Sort-Object) -join ','
+        if ($keys -ne 'backupName,markerBase64,markerExisted,schemaVersion') {
+            throw "unexpected transaction fields"
+        }
+        if ($record.schemaVersion -ne 1 -or $record.markerExisted -isnot [bool]) {
+            throw "invalid transaction schema"
+        }
+        if ($null -ne $record.backupName -and (
+            $record.backupName -isnot [string] -or
+            $record.backupName -notmatch '^auth-venv\.stale\.\d{14}-[0-9a-f]{32}$'
+        )) {
+            throw "invalid auth-venv backup name"
+        }
+        if ($record.markerExisted) {
+            if ($record.markerBase64 -isnot [string]) { throw "missing previous marker bytes" }
+            $markerBytes = [Convert]::FromBase64String($record.markerBase64)
+            if ($markerBytes.Length -gt 65536) { throw "previous marker is too large" }
+        } elseif ($null -ne $record.markerBase64) {
+            throw "unexpected previous marker bytes"
+        }
+        return $record
+    } catch {
+        throw "Authentication environment transaction is invalid: $($_.Exception.Message)"
+    }
+}
+
+function Restore-AuthVenvTransaction {
+    $record = Get-PendingAuthVenvTransaction
+    if (-not $record) { return }
+
+    $authVenv = Join-Path $InstallDir "auth-venv"
+    $backupPath = if ($record.backupName) { Join-Path $InstallDir $record.backupName } else { $null }
+    $failedPath = Join-Path $InstallDir ("auth-venv.failed.{0}-{1}" -f (Get-Date -Format "yyyyMMddHHmmss"), ([Guid]::NewGuid().ToString("N")))
+
+    if ($backupPath -and (Test-Path -LiteralPath $backupPath -PathType Container)) {
+        if (Test-Path -LiteralPath $authVenv) {
+            Rename-Item -LiteralPath $authVenv -NewName (Split-Path -Leaf $failedPath) -ErrorAction Stop
+        }
+        Rename-Item -LiteralPath $backupPath -NewName "auth-venv" -ErrorAction Stop
+    } elseif ($backupPath) {
+        # The durable record is published before the rename. If the original
+        # fixed path still exists, the interrupted run never parked it (or a
+        # previous recovery already restored it), so it is already the safe
+        # environment. Neither path existing is an unrecoverable half-state.
+        if (-not (Test-Path -LiteralPath $authVenv -PathType Container)) {
+            throw "Authentication environment backup is missing: $($record.backupName)"
+        }
+    } elseif (Test-Path -LiteralPath $authVenv) {
+        Rename-Item -LiteralPath $authVenv -NewName (Split-Path -Leaf $failedPath) -ErrorAction Stop
+    }
+
+    $markerPath = Join-Path $InstallDir ".hermes-auth-bootstrap-complete"
+    if ($record.markerExisted) {
+        Write-AtomicAuthBytes -Path $markerPath -Bytes ([Convert]::FromBase64String($record.markerBase64))
+    } else {
+        Remove-Item -LiteralPath $markerPath -Force -ErrorAction SilentlyContinue
+    }
+
+    Remove-Item -LiteralPath (Join-Path $InstallDir "auth-venv.pending-backup") -Force -ErrorAction Stop
+    if (Test-Path -LiteralPath $failedPath) {
+        Remove-Item -LiteralPath $failedPath -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    Write-Warn "Restored the previous authentication environment after an interrupted or failed update"
+}
+
+function Complete-AuthVenvTransaction {
+    $record = Get-PendingAuthVenvTransaction
+    if (-not $record) { return }
+
+    # Removing the transaction record is the commit point. The validated new
+    # environment and schema-2 marker are already at their fixed paths. Old
+    # parked bytes are cleanup only after this point.
+    Remove-Item -LiteralPath (Join-Path $InstallDir "auth-venv.pending-backup") -Force -ErrorAction Stop
+    if ($record.backupName) {
+        $backupPath = Join-Path $InstallDir $record.backupName
+        Remove-Item -LiteralPath $backupPath -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $backupPath) {
+            Write-Warn "Old authentication environment remains parked at $($record.backupName)"
+        }
+    }
+}
+
+function Test-ExactAuthRuntimeOwner {
+    param(
+        [Parameter(Mandatory=$true)] $Process,
+        [Parameter(Mandatory=$true)] [string]$ExpectedExecutable,
+        [Parameter(Mandatory=$true)] [string]$ExpectedSid
+    )
+
+    if (-not $Process -or -not $Process.ExecutablePath -or -not $Process.CommandLine) {
+        throw "Authentication owner candidate identity is incomplete"
+    }
+    try {
+        $actualExecutable = [System.IO.Path]::GetFullPath([string]$Process.ExecutablePath)
+    } catch {
+        throw "Authentication owner candidate identity is incomplete"
+    }
+    if (-not [string]::Equals($actualExecutable, $ExpectedExecutable, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $false
+    }
+    $owner = Invoke-CimMethod -InputObject $Process -MethodName GetOwnerSid -ErrorAction Stop
+    if ($owner.ReturnValue -ne 0 -or -not $owner.Sid) {
+        throw "Authentication owner SID could not be confirmed"
+    }
+    if ($owner.Sid -ne $ExpectedSid) { return $false }
+    $expectedQuoted = '"' + $ExpectedExecutable + '" -m hermes_cli.client_auth.runtime owner'
+    $expectedPlain = $ExpectedExecutable + ' -m hermes_cli.client_auth.runtime owner'
+    return (
+        [string]::Equals([string]$Process.CommandLine, $expectedQuoted, [System.StringComparison]::OrdinalIgnoreCase) -or
+        [string]::Equals([string]$Process.CommandLine, $expectedPlain, [System.StringComparison]::OrdinalIgnoreCase)
+    )
+}
+
+function Stop-ExactAuthRuntimeOwner {
+    if ($env:OS -ne "Windows_NT") { return }
+
+    $expectedExecutable = [System.IO.Path]::GetFullPath((Join-Path $InstallDir "auth-venv\Scripts\python.exe"))
+    $currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $candidates = @(
+        Get-CimInstance Win32_Process -ErrorAction Stop |
+            Where-Object {
+                $_.ProcessId -ne $PID -and
+                $_.ExecutablePath -and
+                [string]::Equals(
+                    [System.IO.Path]::GetFullPath([string]$_.ExecutablePath),
+                    $expectedExecutable,
+                    [System.StringComparison]::OrdinalIgnoreCase
+                )
+            }
+    )
+    if ($candidates.Count -gt 64) {
+        throw "Authentication owner candidate limit exceeded"
+    }
+
+    foreach ($candidate in $candidates) {
+        if (-not (Test-ExactAuthRuntimeOwner -Process $candidate -ExpectedExecutable $expectedExecutable -ExpectedSid $currentSid)) {
+            continue
+        }
+
+        # Re-read and revalidate immediately before termination so PID reuse or
+        # a process exec cannot turn the earlier inventory into authority.
+        $targetPid = [int]$candidate.ProcessId
+        $current = Get-CimInstance Win32_Process -Filter "ProcessId = $targetPid" -ErrorAction Stop
+        if (-not (Test-ExactAuthRuntimeOwner -Process $current -ExpectedExecutable $expectedExecutable -ExpectedSid $currentSid)) {
+            throw "Authentication owner identity changed before it could be stopped"
+        }
+        $termination = Invoke-CimMethod -InputObject $current -MethodName Terminate -ErrorAction Stop
+        if ($termination.ReturnValue -ne 0) {
+            throw "Authentication owner could not be stopped"
+        }
+        $deadline = [DateTime]::UtcNow.AddSeconds(5)
+        do {
+            $remaining = Get-CimInstance Win32_Process -Filter "ProcessId = $targetPid" -ErrorAction SilentlyContinue
+            if (-not $remaining) { break }
+            Start-Sleep -Milliseconds 50
+        } while ([DateTime]::UtcNow -lt $deadline)
+        if ($remaining) { throw "Authentication owner did not exit before the update deadline" }
+    }
+}
+
+function Install-AuthVenv {
+    Stop-ExactAuthRuntimeOwner
+    Restore-AuthVenvTransaction
+
+    $resolved = Resolve-AvailablePythonVersion
+    if ($resolved -and $resolved -ne $PythonVersion) {
+        Write-Info "Python $PythonVersion not available; using detected Python $resolved"
+        $script:PythonVersion = $resolved
+    }
+
+    $authVenv = Join-Path $InstallDir "auth-venv"
+    $authPython = Join-Path $authVenv "Scripts\python.exe"
+    $markerPath = Join-Path $InstallDir ".hermes-auth-bootstrap-complete"
+    $backupName = if (Test-Path -LiteralPath $authVenv -PathType Container) {
+        "auth-venv.stale.{0}-{1}" -f (Get-Date -Format "yyyyMMddHHmmss"), ([Guid]::NewGuid().ToString("N"))
+    } else { $null }
+    $markerExisted = Test-Path -LiteralPath $markerPath -PathType Leaf
+    $markerBytes = if ($markerExisted) { [System.IO.File]::ReadAllBytes($markerPath) } else { $null }
+    if ($markerExisted -and $markerBytes.Length -gt 65536) {
+        throw "Previous authentication marker is too large to preserve safely"
+    }
+    $markerBase64 = if ($markerExisted) { [Convert]::ToBase64String($markerBytes) } else { $null }
+    $transaction = [ordered]@{
+        schemaVersion = 1
+        backupName = $backupName
+        markerExisted = [bool]$markerExisted
+        markerBase64 = $markerBase64
+    }
+    Write-AtomicAuthJson -Path (Join-Path $InstallDir "auth-venv.pending-backup") -Value $transaction
+
+    try {
+        if ($backupName) {
+            Rename-Item -LiteralPath $authVenv -NewName $backupName -ErrorAction Stop
+            Write-Info "Previous authentication environment parked at $backupName"
+        }
+
+        Write-Info "Creating authentication virtual environment with Python $PythonVersion..."
+        Invoke-NativeWithRelaxedErrorAction { & $UvCmd venv $authVenv --python $PythonVersion }
+        $authVenvExitCode = $LASTEXITCODE
+        if ($authVenvExitCode -ne 0) {
+            throw "Failed to create authentication virtual environment (uv venv exited with $authVenvExitCode)"
+        }
+        if (-not (Test-Path -LiteralPath $authPython -PathType Leaf)) {
+            throw "uv reported success but authentication interpreter is missing at $authPython"
+        }
+    } catch {
+        Restore-AuthVenvTransaction
+        throw
+    }
+}
+
 function Complete-VenvTransaction {
     # Commit: dependency install + baseline imports passed, so the previous
     # venv is no longer needed as a rollback source. Best-effort delete; a
@@ -2363,6 +2660,56 @@ function Restore-VenvBackup {
         Write-Warn "Restored previous virtual environment after failed dependency install"
     } catch {
         Write-Warn "Could not restore previous venv (still parked at $backupName): $($_.Exception.Message)"
+    }
+}
+
+function Install-AuthDependencies {
+    try {
+        $authProject = Join-Path $InstallDir "desktop_auth_runtime"
+        $authPython = Join-Path $InstallDir "auth-venv\Scripts\python.exe"
+        foreach ($requiredPath in @(
+            (Join-Path $authProject "pyproject.toml"),
+            (Join-Path $authProject "uv.lock"),
+            (Join-Path $authProject "uv.toml"),
+            $authPython
+        )) {
+            if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+                throw "Authentication runtime is missing required file: $requiredPath"
+            }
+        }
+
+        Write-Info "Installing locked authentication dependencies..."
+        $env:UV_PROJECT_ENVIRONMENT = (Join-Path $InstallDir "auth-venv")
+        $env:UV_PYTHON = $authPython
+        Invoke-NativeWithRelaxedErrorAction {
+            & $UvCmd sync --project $authProject --locked --no-install-project --config-file (Join-Path $authProject "uv.toml")
+        }
+        if ($LASTEXITCODE -ne 0) {
+            throw "Locked authentication dependency sync failed"
+        }
+
+        $previousPythonPath = $env:PYTHONPATH
+        $previousPreference = $ErrorActionPreference
+        try {
+            $env:PYTHONPATH = $InstallDir
+            $ErrorActionPreference = "Continue"
+            & $authPython -c "import hermes_cli.client_auth.bridge as bridge; assert bridge.PROTOCOL_VERSION == 1" 2>&1 | Out-Null
+            $probeExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousPreference
+            if ($null -eq $previousPythonPath) {
+                Remove-Item -LiteralPath "Env:PYTHONPATH" -ErrorAction SilentlyContinue
+            } else {
+                $env:PYTHONPATH = $previousPythonPath
+            }
+        }
+        if ($probeExitCode -ne 0) {
+            throw "Authentication runtime protocol probe failed"
+        }
+        Write-Success "Authentication dependencies installed from lockfile and protocol verified"
+    } catch {
+        Restore-AuthVenvTransaction
+        throw
     }
 }
 
@@ -2460,7 +2807,7 @@ function Install-Dependencies {
 
     # Parse [project.optional-dependencies].all from pyproject.toml.
     # tomllib is stdlib on Python 3.11+ which the bootstrap guarantees.
-    $pythonExeForParse = if (-not $NoVenv) { "$InstallDir\venv\Scripts\python.exe" } else { (& $UvCmd python find $PythonVersion) }
+    $pythonExeForParse = if (-not $NoVenv) { "$InstallDir\venv\Scripts\python.exe" } else { (& $UvCmd --no-config python find $PythonVersion) }
     $allExtras = @()
     if (Test-Path $pythonExeForParse) {
         $parsed = & $pythonExeForParse -c @"
@@ -2606,7 +2953,7 @@ print(','.join(scripts))
     # users hit and lazy-import errors from `hermes dashboard` are confusing.
     # If tier 1 failed (the common case), [web] was still picked up by tiers
     # 2-3; only tier 4 leaves you without it.
-    $pythonExe = if (-not $NoVenv) { "$InstallDir\venv\Scripts\python.exe" } else { (& $UvCmd python find $PythonVersion) }
+    $pythonExe = if (-not $NoVenv) { "$InstallDir\venv\Scripts\python.exe" } else { (& $UvCmd --no-config python find $PythonVersion) }
     if (Test-Path $pythonExe) {
         $webOk = $false
         $webServerSyntaxOk = $false
@@ -2708,6 +3055,71 @@ function Set-PathVariable {
     $env:Path = "$hermesBin;$env:Path"
     
     Write-Success "hermes command ready"
+}
+
+function Write-AuthBootstrapComplete {
+    try {
+        $authPython = Join-Path $InstallDir "auth-venv\Scripts\python.exe"
+        $authLock = Join-Path $InstallDir "desktop_auth_runtime\uv.lock"
+        foreach ($requiredPath in @($authPython, $authLock)) {
+            if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+                throw "Authentication runtime is missing required file: $requiredPath"
+            }
+        }
+
+        $sourceCommit = $null
+        $sourceArchiveSha256 = $null
+        $sourceMarkerPath = Join-Path $InstallDir ".hermes-bundled-source.json"
+        if (Test-Path -LiteralPath $sourceMarkerPath -PathType Leaf) {
+            $sourceMarker = [System.IO.File]::ReadAllText($sourceMarkerPath) | ConvertFrom-Json
+            if (
+                $sourceMarker.schemaVersion -ne 1 -or
+                $sourceMarker.commit -notmatch '^[0-9a-f]{40}$' -or
+                $sourceMarker.archiveSha256 -notmatch '^[0-9a-f]{64}$'
+            ) {
+                throw "Bundled source marker is invalid"
+            }
+            $sourceCommit = ([string]$sourceMarker.commit).ToLowerInvariant()
+            $sourceArchiveSha256 = ([string]$sourceMarker.archiveSha256).ToLowerInvariant()
+        } elseif (Test-Path -LiteralPath (Join-Path $InstallDir ".git")) {
+            $previousPreference = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                $sourceCommit = (& git -C $InstallDir -c windows.appendAtomically=false rev-parse HEAD 2>$null | Select-Object -First 1)
+                $gitExitCode = $LASTEXITCODE
+            } finally {
+                $ErrorActionPreference = $previousPreference
+            }
+            if ($gitExitCode -ne 0 -or $sourceCommit -notmatch '^[0-9a-f]{40}$') {
+                throw "Could not resolve the authentication source commit"
+            }
+            $sourceCommit = $sourceCommit.Trim().ToLowerInvariant()
+        } else {
+            throw "Authentication source has no managed marker or Git metadata"
+        }
+
+        $binDir = Join-Path $InstallDir "bin"
+        New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+        $launcherPath = Join-Path $binDir "hermes.cmd"
+        $launcher = "@echo off`r`nset `"PYTHONPATH=%~dp0..`"`r`n`"%~dp0..\auth-venv\Scripts\python.exe`" -m hermes_cli.main %*`r`n"
+        Write-AtomicAuthBytes -Path $launcherPath -Bytes ([System.Text.Encoding]::ASCII.GetBytes($launcher))
+
+        $marker = [ordered]@{
+            schemaVersion = 2
+            scope = "auth"
+            sourceCommit = $sourceCommit
+            sourceArchiveSha256 = $sourceArchiveSha256
+            authLockSha256 = (Get-FileHash -LiteralPath $authLock -Algorithm SHA256).Hash.ToLowerInvariant()
+            protocolVersion = 1
+        }
+        Write-AtomicAuthJson -Path (Join-Path $InstallDir ".hermes-auth-bootstrap-complete") -Value $marker
+        Complete-AuthVenvTransaction
+    } catch {
+        Restore-AuthVenvTransaction
+        throw
+    }
+
+    Write-Success "Authentication bootstrap complete"
 }
 
 function Write-BootstrapMarker {
@@ -2983,6 +3395,7 @@ function Install-NodeDeps {
         $proc = Start-Process -FilePath $env:ComSpec -ArgumentList $cmdLine `
             -WorkingDirectory $workDir -NoNewWindow -PassThru
         $deadline = [DateTime]::UtcNow.AddSeconds($timeoutSec)
+        $nextHeartbeat = [DateTime]::UtcNow.AddSeconds(30)
         $shown = 0
         function _Drain-NewLines([string]$path, [ref]$count) {
             $lines = @(Get-Content $path -ErrorAction SilentlyContinue)
@@ -2993,16 +3406,30 @@ function Install-NodeDeps {
                 $count.Value = $lines.Count
             }
         }
-        while (-not $proc.HasExited) {
-            if ([DateTime]::UtcNow -gt $deadline) {
+        while (-not $proc.WaitForExit(750)) {
+            $now = [DateTime]::UtcNow
+            if ($now -gt $deadline) {
                 & taskkill /T /F /PID $proc.Id 2>&1 | Out-Null
+                $proc.WaitForExit()
                 return 124
             }
-            Start-Sleep -Milliseconds 750
             _Drain-NewLines $logPath ([ref]$shown)
+            if ($now -ge $nextHeartbeat) {
+                # Keep the desktop bootstrap's shorter idle watchdog informed
+                # while a quiet npm download or extraction is still alive. The
+                # command remains bounded by $deadline above.
+                Write-Host "    [hermes] command still running" -ForegroundColor DarkGray
+                $nextHeartbeat = $now.AddSeconds(30)
+            }
         }
         _Drain-NewLines $logPath ([ref]$shown)
-        return $proc.ExitCode
+        # Start-Process without -Wait can report HasExited before its cached
+        # native exit code has been populated on Windows PowerShell 5.1.  A
+        # final wait + refresh makes the Process snapshot authoritative before
+        # callers decide whether npm succeeded.
+        $proc.WaitForExit()
+        $proc.Refresh()
+        return [int]$proc.ExitCode
     }
 
     # Helper: run "npm install" in a given directory and surface the real
@@ -4127,7 +4554,7 @@ function Write-Completion {
 # implements it.  ``Title`` is what UIs show; ``Category`` lets UIs group
 # stages; ``NeedsUserInput`` tells UIs "this stage prompts -- either skip it
 # or arrange to provide answers another way."
-$InstallStages = @(
+$RuntimeStageDefinitions = @(
     @{ Name = "uv";               Title = "Installing uv package manager";        Category = "prereqs";      NeedsUserInput = $false; Worker = "Stage-Uv" }
     @{ Name = "python";           Title = "Verifying Python $PythonVersion";      Category = "prereqs";      NeedsUserInput = $false; Worker = "Stage-Python" }
     @{ Name = "git";              Title = "Installing Git";                       Category = "prereqs";      NeedsUserInput = $false; Worker = "Stage-Git" }
@@ -4142,9 +4569,9 @@ if ($IncludeDesktop) {
     # Insert AFTER node-deps so workspace npm is already installed when
     # the desktop build runs. Inserted only when explicitly requested
     # (Hermes-Setup.exe), never via an unreviewed remote bootstrap script.
-    $InstallStages += @{ Name = "desktop"; Title = "Building desktop app"; Category = "install"; NeedsUserInput = $false; Worker = "Stage-Desktop" }
+    $RuntimeStageDefinitions += @{ Name = "desktop"; Title = "Building desktop app"; Category = "install"; NeedsUserInput = $false; Worker = "Stage-Desktop" }
 }
-$InstallStages += @(
+$RuntimeStageDefinitions += @(
     @{ Name = "path";             Title = "Adding Hermes to PATH";                Category = "finalize";     NeedsUserInput = $false; Worker = "Stage-Path" }
     @{ Name = "config-templates"; Title = "Writing configuration templates";      Category = "finalize";     NeedsUserInput = $false; Worker = "Stage-ConfigTemplates" }
     @{ Name = "platform-sdks";    Title = "Installing messaging platform SDKs";   Category = "finalize";     NeedsUserInput = $false; Worker = "Stage-PlatformSdks" }
@@ -4154,6 +4581,20 @@ $InstallStages += @(
     @{ Name = "configure";        Title = "Configuring API keys and models";      Category = "post-install"; NeedsUserInput = $true;  Worker = "Stage-Configure" }
     @{ Name = "gateway";          Title = "Starting messaging gateway";           Category = "post-install"; NeedsUserInput = $true;  Worker = "Stage-Gateway" }
 )
+
+$AuthStageDefinitions = @(
+    @{ Name = "auth-prerequisites"; Title = "Preparing authentication prerequisites"; Category = "prereqs"; NeedsUserInput = $false; Worker = "Stage-AuthPrerequisites" }
+    @{ Name = "repository";         Title = "Verifying Hermes repository";          Category = "install"; NeedsUserInput = $false; Worker = "Stage-Repository" }
+    @{ Name = "venv";               Title = "Creating authentication environment";  Category = "install"; NeedsUserInput = $false; Worker = "Stage-Venv" }
+    @{ Name = "python-auth-deps";   Title = "Installing authentication dependencies"; Category = "install"; NeedsUserInput = $false; Worker = "Stage-AuthDependencies" }
+    @{ Name = "auth-complete";      Title = "Publishing authentication runtime";     Category = "finalize"; NeedsUserInput = $false; Worker = "Stage-AuthComplete" }
+)
+
+if ($BootstrapScope -eq "auth") {
+    $InstallStages = $AuthStageDefinitions
+} else {
+    $InstallStages = $RuntimeStageDefinitions
+}
 
 # Stage workers -- thin wrappers that delegate to the existing Install-* /
 # Test-* / Invoke-* functions while preserving their error semantics.  Kept
@@ -4168,10 +4609,15 @@ $InstallStages += @(
 # process), and throws cleanly if uv truly isn't installed yet.
 function Stage-Uv               { if (-not (Install-Uv))     { throw "uv installation failed" } }
 function Stage-Python           { Resolve-UvCmd; if (-not (Test-Python))    { throw "Python $PythonVersion not available" } }
+function Stage-AuthPrerequisites {
+    if (-not (Install-Uv)) { throw "uv installation failed" }
+    Resolve-UvCmd
+    if (-not (Test-Python)) { throw "Python $PythonVersion not available" }
+}
 function Stage-Git              {
     if (-not (Install-Git)) {
         if ($script:GitInstallFailureReason) { throw $script:GitInstallFailureReason }
-        throw "Git not available and auto-install failed -- install from https://git-scm.com/download/win then re-run"
+        throw "Git is unavailable. Ask your administrator for the reviewed bundled Git runtime."
     }
 }
 # Node is optional (browser tools degrade gracefully without it).  Surface
@@ -4187,8 +4633,21 @@ function Stage-Node             {
 }
 function Stage-SystemPackages   { Install-SystemPackages }
 function Stage-Repository       { Install-Repository }
-function Stage-Venv             { Resolve-UvCmd; Install-Venv }
+function Stage-Venv             {
+    Resolve-UvCmd
+    if ($BootstrapScope -eq "auth") { Install-AuthVenv } else { Install-Venv }
+}
 function Stage-Dependencies     { Resolve-UvCmd; Install-Dependencies }
+function Stage-AuthDependencies {
+    try {
+        Resolve-UvCmd
+        Install-AuthDependencies
+    } catch {
+        Restore-AuthVenvTransaction
+        throw
+    }
+}
+function Stage-AuthComplete     { Write-AuthBootstrapComplete }
 function Stage-NodeDeps         { Install-NodeDeps }
 function Stage-Desktop          { Install-DesktopVoiceDeps; Install-Desktop }
 function Stage-Path             { Set-PathVariable }
@@ -4380,6 +4839,7 @@ try {
     if ($Manifest) {
         $payload = @{
             protocol_version = $InstallStageProtocolVersion
+            bootstrap_scope  = $BootstrapScope
             stages = @($InstallStages | ForEach-Object {
                 @{
                     name             = $_.Name

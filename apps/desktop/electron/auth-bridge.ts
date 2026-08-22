@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 
-const PROTOCOL_VERSION = 1
+export const AUTH_BRIDGE_PROTOCOL_VERSION = 1
+const PROTOCOL_VERSION = AUTH_BRIDGE_PROTOCOL_VERSION
 const MAX_LINE_BYTES = 64 * 1024
 const MAX_REQUEST_ID_LENGTH = 64
 const DEFAULT_TIMEOUT_MS = 20_000

@@ -105,13 +105,16 @@ test('Windows bundled runtime args keep the verified source and Git runtime loca
       installStamp: { commit: 'a'.repeat(40), branch: 'main' },
       activeRoot: 'C:\\Users\\tester\\AppData\\Local\\hermes\\hermes-agent',
       hermesHome: 'C:\\Users\\tester\\AppData\\Local\\hermes',
-      bundledSource: true
+      bundledSource: true,
+      bootstrapScope: 'runtime'
     }),
     [
       '-HermesHome',
       'C:\\Users\\tester\\AppData\\Local\\hermes',
       '-InstallDir',
       'C:\\Users\\tester\\AppData\\Local\\hermes\\hermes-agent',
+      '-BootstrapScope',
+      'runtime',
       '-Commit',
       'a'.repeat(40),
       '-Branch',
@@ -141,6 +144,27 @@ test('auth bootstrap args select only the installer auth scope', () => {
       'a'.repeat(40),
       '--bootstrap-scope',
       'auth'
+    ]
+  )
+
+  assert.deepEqual(
+    buildPowerShellBootstrapArgs({
+      installStamp: { commit: 'a'.repeat(40), branch: 'main' },
+      activeRoot: 'C:\\Hermes\\hermes-agent',
+      hermesHome: 'C:\\Hermes',
+      bootstrapScope: 'auth'
+    }),
+    [
+      '-HermesHome',
+      'C:\\Hermes',
+      '-InstallDir',
+      'C:\\Hermes\\hermes-agent',
+      '-BootstrapScope',
+      'auth',
+      '-Commit',
+      'a'.repeat(40),
+      '-Branch',
+      'main'
     ]
   )
 })

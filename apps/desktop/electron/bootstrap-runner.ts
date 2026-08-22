@@ -624,10 +624,23 @@ function buildPowerShellBootstrapArgs({
   activeRoot,
   hermesHome,
   pinCommit = true,
-  bundledSource = false
+  bundledSource = false,
+  bootstrapScope = 'runtime'
 }) {
-  const args = ['-HermesHome', hermesHome, '-InstallDir', activeRoot, ...buildPinArgs(installStamp, { pinCommit })]
-  if (bundledSource) args.push('-BundledSource', '-SkipComputerUse')
+  const args = [
+    '-HermesHome',
+    hermesHome,
+    '-InstallDir',
+    activeRoot,
+    '-BootstrapScope',
+    bootstrapScope,
+    ...buildPinArgs(installStamp, { pinCommit })
+  ]
+
+  if (bundledSource) {
+    args.push('-BundledSource', '-SkipComputerUse')
+  }
+
   return args
 }
 
@@ -707,7 +720,8 @@ async function fetchManifest({
           activeRoot,
           hermesHome,
           pinCommit,
-          bundledSource
+          bundledSource,
+          bootstrapScope
         })
       ]
 
@@ -742,7 +756,7 @@ async function fetchManifest({
       const parsed = JSON.parse(lines[i])
 
       if (parsed && Array.isArray(parsed.stages)) {
-        if (isPosix && parsed.bootstrap_scope !== bootstrapScope) {
+        if (parsed.bootstrap_scope !== bootstrapScope) {
           throw new Error('BOOTSTRAP_SCOPE_MISMATCH')
         }
 
@@ -835,7 +849,8 @@ async function runStage({
           activeRoot,
           hermesHome,
           pinCommit,
-          bundledSource
+          bundledSource,
+          bootstrapScope
         })
       ]
 
@@ -1138,8 +1153,12 @@ async function runBootstrap(opts) {
         { name: 'python-auth-deps', title: 'Install authentication dependencies', category: 'auth', needs_user_input: false },
         { name: 'auth-complete', title: 'Verify authentication runtime', category: 'auth', needs_user_input: false }
       ]
+
       emit({ type: 'manifest', stages, protocolVersion: 1, bootstrapScope })
-      for (const stage of stages) emit({ type: 'stage', name: stage.name, state: 'running' })
+
+      for (const stage of stages) {
+        emit({ type: 'stage', name: stage.name, state: 'running' })
+      }
 
       await prepareWindowsPackagedAuthRuntime({
         toolchain: bundledToolchain,
@@ -1148,14 +1167,22 @@ async function runBootstrap(opts) {
         emit
       })
 
-      for (const stage of stages) emit({ type: 'stage', name: stage.name, state: 'succeeded' })
-      if (sourceTransaction) await sourceTransaction.finalize()
+      for (const stage of stages) {
+        emit({ type: 'stage', name: stage.name, state: 'succeeded' })
+      }
+
+      if (sourceTransaction) {
+        await sourceTransaction.finalize()
+      }
+
       const marker = {
         pinnedCommit: payload.manifest.commit,
         pinnedBranch: payload.manifest.branch,
         bootstrapScope
       }
+
       emit({ type: 'complete', marker })
+
       return { ok: true, marker }
     }
 
@@ -1324,8 +1351,8 @@ async function runBootstrap(opts) {
 
 export {
   buildPinArgs,
-  buildPowerShellBootstrapArgs,
   buildPosixPinArgs,
+  buildPowerShellBootstrapArgs,
   cachedScriptPath,
   hasExistingGitCheckout,
   installedAgentInstallScript,

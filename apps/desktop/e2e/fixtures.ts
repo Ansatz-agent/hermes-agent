@@ -343,6 +343,106 @@ export async function launchDesktop(
   return { app, page }
 }
 
+export interface InstalledWindowsAppOptions {
+  executablePath: string
+  sandbox: Sandbox
+}
+
+export function validateInstalledWindowsBinaryPath(candidate: string): string {
+  if (!path.isAbsolute(candidate)) {
+    throw new Error('Installed Windows binary path must be absolute')
+  }
+  if (path.extname(candidate).toLowerCase() !== '.exe') {
+    throw new Error('Installed Windows binary path must end in .exe')
+  }
+
+  let stats: fs.Stats
+  try {
+    stats = fs.lstatSync(candidate)
+  } catch (error) {
+    throw new Error(`Installed Windows binary does not exist: ${(error as Error).message}`)
+  }
+  if (!stats.isFile() || stats.isSymbolicLink()) {
+    throw new Error('Installed Windows binary must be a regular file')
+  }
+
+  return candidate
+}
+
+export function resolveInstalledWindowsBinary(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  const candidate = env.HERMES_E2E_INSTALLED_BINARY
+  if (!candidate) {
+    throw new Error('HERMES_E2E_INSTALLED_BINARY is required')
+  }
+  if (process.platform !== 'win32') {
+    throw new Error('Installed Windows binary launch requires win32')
+  }
+
+  return validateInstalledWindowsBinaryPath(candidate)
+}
+
+export async function closeDesktopApp(
+  app: ElectronApplication,
+  options: { timeoutMs: number },
+): Promise<void> {
+  const child = app.process()
+  await app.evaluate(({ app: electronApp }) => {
+    setTimeout(() => electronApp.quit(), 500)
+    return true
+  })
+
+  let timeout: NodeJS.Timeout | undefined
+  let closeError: unknown
+  const graceful = await Promise.race([
+    app.close().then(
+      () => true,
+      error => {
+        closeError = error
+        return false
+      },
+    ),
+    new Promise<boolean>(resolve => {
+      timeout = setTimeout(() => resolve(false), options.timeoutMs)
+    }),
+  ])
+  if (timeout) {
+    clearTimeout(timeout)
+  }
+  if (!graceful) {
+    child.kill('SIGKILL')
+    if (closeError) {
+      throw new Error(`Playwright could not close Desktop: ${String(closeError)}`)
+    }
+    throw new Error(`Playwright did not close Desktop within ${options.timeoutMs}ms of app.quit()`)
+  }
+}
+
+export async function launchInstalledWindowsApp(
+  options: InstalledWindowsAppOptions,
+): Promise<{ app: ElectronApplication; page: Page }> {
+  if (process.platform !== 'win32') {
+    throw new Error('Installed Windows app launch requires win32')
+  }
+  const executablePath = validateInstalledWindowsBinaryPath(options.executablePath)
+  const env = buildAppEnv(options.sandbox)
+  delete env.HERMES_DESKTOP_DEV_SERVER
+  delete env.HERMES_DESKTOP_HERMES
+  delete env.HERMES_DESKTOP_HERMES_ROOT
+  delete env.HERMES_DESKTOP_BOOT_FAKE
+
+  const app = await _electron.launch({
+    executablePath,
+    args: ['--disable-gpu', '--no-sandbox'],
+    env,
+  })
+  const page = await app.firstWindow()
+  installErrorBannerGuard(page)
+
+  return { app, page }
+}
+
 // ─── Public fixtures ────────────────────────────────────────────────────
 
 export interface MockBackendFixture {
