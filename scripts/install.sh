@@ -5,11 +5,8 @@
 # Installation script for Linux, macOS, and Android/Termux.
 # Uses uv for desktop/server installs and Python's stdlib venv + pip on Termux.
 #
-# Usage:
-#   curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
-#
-# Or with options:
-#   curl -fsSL ... | bash -s -- --no-venv --skip-setup
+# Usage (administrator-supplied reviewed package):
+#   ./install.sh --bundled-source --no-venv --skip-setup
 #
 # ============================================================================
 
@@ -43,8 +40,6 @@ NC='\033[0m' # No Color
 BOLD='\033[1m'
 
 # Configuration
-REPO_URL_SSH="git@github.com:NousResearch/hermes-agent.git"
-REPO_URL_HTTPS="https://github.com/NousResearch/hermes-agent.git"
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 # INSTALL_DIR is resolved AFTER arg parsing and OS detection so we can pick an
 # FHS-style layout for root installs.  Track whether the user gave us an
@@ -89,8 +84,41 @@ BOOTSTRAP_SCOPE="runtime"
 DESKTOP_PYTHON_PRIMARY_MIRROR="https://mirrors.ustc.edu.cn/pypi/simple"
 DESKTOP_PYTHON_FALLBACK_MIRROR="https://pypi.tuna.tsinghua.edu.cn/simple"
 DESKTOP_NPM_REGISTRY="https://registry.npmmirror.com"
+DESKTOP_NPM_OFFICIAL_REGISTRY="https://registry.npmjs.org"
 DESKTOP_NODE_MIRROR="https://registry.npmmirror.com/-/binary/node/"
+DESKTOP_NODE_FALLBACK_MIRROR="https://npmmirror.com/mirrors/node/"
+DESKTOP_NODE_OFFICIAL_MIRROR="https://nodejs.org/dist/"
 DESKTOP_PLAYWRIGHT_MIRROR="https://registry.npmmirror.com/-/binary/playwright"
+DESKTOP_PLAYWRIGHT_FALLBACK_MIRROR="https://npmmirror.com/mirrors/playwright/"
+DESKTOP_ELECTRON_PRIMARY_MIRROR="https://npmmirror.com/mirrors/electron/"
+DESKTOP_ELECTRON_SECONDARY_MIRROR="https://registry.npmmirror.com/-/binary/electron/"
+
+# Product-managed child processes never inherit package/model redirect knobs.
+# Installers set one reviewed domestic-first policy for every transitive child.
+unset UV_INDEX UV_INDEX_URL UV_EXTRA_INDEX_URL UV_CONFIG_FILE UV_PYTHON \
+    PIP_INDEX_URL PIP_EXTRA_INDEX_URL PIP_CONFIG_FILE \
+    NPM_CONFIG_REGISTRY npm_config_registry NPM_CONFIG_USERCONFIG \
+    NODEJS_ORG_MIRROR ELECTRON_MIRROR ELECTRON_BUILDER_BINARIES_MIRROR \
+    PLAYWRIGHT_DOWNLOAD_HOST HF_ENDPOINT HF_TOKEN HUGGING_FACE_HUB_TOKEN
+export UV_NO_CONFIG=1
+export UV_DEFAULT_INDEX="$DESKTOP_PYTHON_PRIMARY_MIRROR"
+export UV_INDEX="$DESKTOP_PYTHON_PRIMARY_MIRROR"
+export PIP_CONFIG_FILE=/dev/null
+export PIP_INDEX_URL="$DESKTOP_PYTHON_PRIMARY_MIRROR"
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+export PIP_NO_INPUT=1
+export HERMES_UV_FALLBACK_INDEX="$DESKTOP_PYTHON_FALLBACK_MIRROR"
+export NPM_CONFIG_USERCONFIG=/dev/null
+export NPM_CONFIG_REGISTRY="$DESKTOP_NPM_REGISTRY"
+export npm_config_registry="$DESKTOP_NPM_REGISTRY"
+export NODEJS_ORG_MIRROR="$DESKTOP_NODE_MIRROR"
+export HERMES_NODE_MIRROR="$DESKTOP_NODE_MIRROR"
+export PLAYWRIGHT_DOWNLOAD_HOST="$DESKTOP_PLAYWRIGHT_MIRROR"
+export ELECTRON_MIRROR="$DESKTOP_ELECTRON_PRIMARY_MIRROR"
+export ELECTRON_BUILDER_BINARIES_MIRROR="https://npmmirror.com/mirrors/electron-builder-binaries/"
+export HF_HUB_OFFLINE=1
+export HF_HUB_DISABLE_TELEMETRY=1
+MANAGED_DOWNLOAD_ENVIRONMENT=1
 
 # Detect non-interactive mode (e.g. curl | bash)
 # When stdin is not a terminal, read -p will fail with EOF,
@@ -572,8 +600,7 @@ detect_os() {
         CYGWIN*|MINGW*|MSYS*)
             OS="windows"
             DISTRO="windows"
-            log_error "Windows detected. Please use the PowerShell installer:"
-            log_info "  iex (irm https://hermes-agent.nousresearch.com/install.ps1)"
+            log_error "Windows detected. Use the reviewed PowerShell installer supplied by your administrator."
             exit 1
             ;;
         *)
@@ -748,47 +775,30 @@ install_uv() {
         return 0
     fi
 
-    log_info "Installing managed uv into $HERMES_HOME/bin ..."
+    log_info "Preparing managed uv in $HERMES_HOME/bin ..."
     mkdir -p "$HERMES_HOME/bin"
 
-    # Two-stage: download the installer, then run it.  Piping
-    # `curl | sh` masks curl failures (sh exits 0 on empty stdin)
-    # and conflates network errors with installer errors.
-    local _uv_install_log _uv_installer
-    _uv_install_log="$(mktemp 2>/dev/null || echo "/tmp/hermes-uv-install.$$.log")"
-    _uv_installer="$(mktemp 2>/dev/null || echo "/tmp/hermes-uv-installer.$$.sh")"
-    if ! curl -LsSf https://astral.sh/uv/install.sh -o "$_uv_installer" 2>"$_uv_install_log"; then
-        log_error "Failed to download uv installer from https://astral.sh/uv/install.sh"
-        log_info "curl output:"
-        sed 's/^/    /' "$_uv_install_log" >&2
-        log_info "Install manually: https://docs.astral.sh/uv/getting-started/installation/"
-        rm -f "$_uv_install_log" "$_uv_installer"
-        exit 1
-    fi
-    # UV_UNMANAGED_INSTALL tells the astral installer to place the binary
-    # directly into $HERMES_HOME/bin instead of ~/.local/bin.
-    if UV_UNMANAGED_INSTALL="$HERMES_HOME/bin" sh "$_uv_installer" >>"$_uv_install_log" 2>&1; then
-        rm -f "$_uv_installer"
-        if [ -x "$_managed_uv" ]; then
+    # Packaged Desktop always supplies a hash-verified uv payload. A source
+    # install may adopt an already installed executable, but never downloads
+    # and executes a remote installer script.
+    local _existing_uv
+    _existing_uv="$(command -v uv 2>/dev/null || true)"
+    if [ -n "$_existing_uv" ] && [ -x "$_existing_uv" ]; then
+        cp "$_existing_uv" "$_managed_uv.tmp.$$"
+        chmod 0755 "$_managed_uv.tmp.$$"
+        if "$_managed_uv.tmp.$$" --version 2>/dev/null | grep -Eq '^uv [0-9]+\.[0-9]+\.[0-9]+'; then
+            mv -f "$_managed_uv.tmp.$$" "$_managed_uv"
             UV_CMD="$_managed_uv"
-        else
-            log_error "uv installer reported success but binary not found at $_managed_uv"
-            log_info "Installer output:"
-            sed 's/^/    /' "$_uv_install_log" >&2
-            rm -f "$_uv_install_log"
-            exit 1
+            UV_VERSION=$($UV_CMD --version 2>/dev/null)
+            log_success "Managed uv adopted from the local installation ($UV_VERSION)"
+            return 0
         fi
-        rm -f "$_uv_install_log"
-        UV_VERSION=$($UV_CMD --version 2>/dev/null)
-        log_success "Managed uv installed ($UV_VERSION)"
-    else
-        log_error "Failed to install uv"
-        log_info "Installer output:"
-        sed 's/^/    /' "$_uv_install_log" >&2
-        log_info "Install manually: https://docs.astral.sh/uv/getting-started/installation/"
-        rm -f "$_uv_install_log" "$_uv_installer"
-        exit 1
+        rm -f "$_managed_uv.tmp.$$"
     fi
+
+    log_error "A verified uv payload is unavailable."
+    log_info "Use the packaged Desktop installer or ask an administrator to place a reviewed uv binary at $_managed_uv."
+    return 1
 }
 
 check_python() {
@@ -1096,37 +1106,46 @@ install_node() {
             ;;
     esac
 
-    # Resolve the latest v${NODE_VERSION}.x.x tarball name from the index page.
-    # Bundled Desktop runtime stages receive a fixed, validated domestic base;
-    # non-Desktop installers retain the upstream default.
-    local node_mirror="${HERMES_NODE_MIRROR:-https://nodejs.org/dist/}"
-    local index_url="${node_mirror%/}/latest-v${NODE_VERSION}.x/"
-    local tarball_name
-    tarball_name=$(curl -fsSL "$index_url" \
-        | grep -oE "node-v${NODE_VERSION}\.[0-9]+\.[0-9]+-${node_os}-${node_arch}\.tar\.xz" \
-        | head -1)
-
-    # Fallback to .tar.gz if .tar.xz not available
-    if [ -z "$tarball_name" ]; then
-        tarball_name=$(curl -fsSL "$index_url" \
-            | grep -oE "node-v${NODE_VERSION}\.[0-9]+\.[0-9]+-${node_os}-${node_arch}\.tar\.gz" \
-            | head -1)
-    fi
-
-    if [ -z "$tarball_name" ]; then
-        log_warn "Could not find Node.js $NODE_VERSION binary for $node_os-$node_arch"
-        log_info "Install manually: https://nodejs.org/en/download/"
-        HAS_NODE=false
-        return 0
-    fi
-
-    local download_url="${index_url}${tarball_name}"
     local tmp_dir
     tmp_dir=$(mktemp -d)
+    local tarball_name=""
+    local index_url=""
+    local index_page=""
+    local node_mirror
+    local node_mirrors=(
+        "${HERMES_NODE_MIRROR:-$DESKTOP_NODE_MIRROR}"
+        "$DESKTOP_NODE_FALLBACK_MIRROR"
+        "$DESKTOP_NODE_OFFICIAL_MIRROR"
+    )
 
-    log_info "Downloading $tarball_name..."
-    if ! curl -fsSL "$download_url" -o "$tmp_dir/$tarball_name"; then
-        log_warn "Download failed"
+    for node_mirror in "${node_mirrors[@]}"; do
+        index_url="${node_mirror%/}/latest-v${NODE_VERSION}.x/"
+        if ! index_page=$(curl --connect-timeout 15 --max-time 60 -fsSL "$index_url"); then
+            log_warn "Managed Node.js mirror failed; trying the next reviewed source."
+            continue
+        fi
+        tarball_name=$(printf '%s' "$index_page" \
+            | grep -oE "node-v${NODE_VERSION}\.[0-9]+\.[0-9]+-${node_os}-${node_arch}\.tar\.xz" \
+            | head -1)
+        if [ -z "$tarball_name" ]; then
+            tarball_name=$(printf '%s' "$index_page" \
+                | grep -oE "node-v${NODE_VERSION}\.[0-9]+\.[0-9]+-${node_os}-${node_arch}\.tar\.gz" \
+                | head -1)
+        fi
+        if [ -z "$tarball_name" ]; then
+            log_warn "Node.js archive was not listed by the current managed mirror; trying the next source."
+            continue
+        fi
+        log_info "Downloading $tarball_name..."
+        if curl --connect-timeout 15 --max-time 300 -fsSL "${index_url}${tarball_name}" -o "$tmp_dir/$tarball_name"; then
+            break
+        fi
+        tarball_name=""
+        log_warn "Managed Node.js download failed; trying the next reviewed source."
+    done
+
+    if [ -z "$tarball_name" ] || [ ! -f "$tmp_dir/$tarball_name" ]; then
+        log_warn "Could not obtain Node.js $NODE_VERSION for $node_os-$node_arch from the managed sources"
         rm -rf "$tmp_dir"
         HAS_NODE=false
         return 0
@@ -1486,175 +1505,10 @@ clone_repo() {
         return 0
     fi
 
-    # An interrupted previous clone leaves a .git with no initial commit, where
-    # the update path's `git stash` / `git checkout` abort with "You do not
-    # have the initial commit yet" and fail the install (#40998). Move such a
-    # partial checkout aside -- never delete it, in case it holds something the
-    # user wants -- so the fresh-clone path below can proceed.
-    if [ -d "$INSTALL_DIR/.git" ] && ! git -C "$INSTALL_DIR" rev-parse --verify HEAD >/dev/null 2>&1; then
-        backup_dir="${INSTALL_DIR}.broken-$(date -u +%Y%m%d-%H%M%S)"
-        log_warn "Existing checkout at $INSTALL_DIR has no commits (interrupted clone)."
-        log_warn "Moving it aside to $backup_dir before re-cloning."
-        mv "$INSTALL_DIR" "$backup_dir"
-    fi
-
-    if [ -d "$INSTALL_DIR" ]; then
-        if [ -d "$INSTALL_DIR/.git" ]; then
-            log_info "Existing installation found, updating..."
-            cd "$INSTALL_DIR"
-
-            local autostash_ref=""
-            discard_update_lockfile_churn "$INSTALL_DIR"
-            if [ -n "$(git status --porcelain)" ]; then
-                # A previously interrupted update can leave the index with
-                # unmerged entries. In that state `git stash` aborts with
-                # "could not write index" and the later `git checkout` aborts
-                # with "you need to resolve your current index first", failing
-                # the whole install at the repository stage. Clear the conflict
-                # markers with `git reset` first -- this keeps working-tree
-                # changes (they're still stashed just below) and only drops the
-                # index-level conflict state. Mirrors the `hermes update` path
-                # (#4735).
-                if [ -n "$(git ls-files --unmerged)" ]; then
-                    log_info "Clearing unmerged index entries from a previous conflict..."
-                    git reset -q
-                fi
-                local stash_name
-                stash_name="hermes-install-autostash-$(date -u +%Y%m%d-%H%M%S)"
-                log_info "Local changes detected, stashing before update..."
-                git stash push --include-untracked -m "$stash_name"
-                autostash_ref="stash@{0}"
-            fi
-
-            # Fetch only the target branch. A bare `git fetch origin` pulls
-            # every ref, and this repo carries thousands of auto-generated
-            # branches — on a non-single-branch checkout that turns each update
-            # into a multi-minute download that can stall the installer.
-            git remote set-branches origin "$BRANCH" 2>/dev/null || true
-            git fetch origin "$BRANCH"
-            git checkout "$BRANCH"
-            # Managed installs should follow origin/$BRANCH exactly. If the
-            # checkout has diverged (or has local-only commits), ff-only pull
-            # cannot succeed — mirror ``hermes update`` and reset to the
-            # fetched remote so bootstrap/install can recover.
-            if ! git pull --ff-only origin "$BRANCH"; then
-                log_warn "Fast-forward not possible; resetting managed install to origin/$BRANCH..."
-                git reset --hard "origin/$BRANCH"
-            fi
-
-            if [ -n "$autostash_ref" ]; then
-                local restore_now="yes"
-                if [ -t 0 ] && [ -t 1 ]; then
-                    echo
-                    log_warn "Local changes were stashed before updating."
-                    log_warn "Restoring them may reapply local customizations onto the updated codebase."
-                    printf "Restore local changes now? [Y/n] "
-                    read -r restore_answer
-                    case "$restore_answer" in
-                        ""|y|Y|yes|YES|Yes) restore_now="yes" ;;
-                        *) restore_now="no" ;;
-                    esac
-                fi
-
-                if [ "$restore_now" = "yes" ]; then
-                    log_info "Restoring local changes..."
-                    local restore_output=""
-                    local restore_ok="yes"
-                    if restore_output="$(git stash apply "$autostash_ref" 2>&1)"; then
-                        restore_ok="yes"
-                    else
-                        restore_ok="no"
-                    fi
-                    local conflicted_files=""
-                    conflicted_files="$(git diff --name-only --diff-filter=U || true)"
-                    if [ "$restore_ok" = "yes" ] && [ -z "$conflicted_files" ]; then
-                        git stash drop "$autostash_ref" >/dev/null
-                        log_warn "Local changes were restored on top of the updated codebase."
-                        log_warn "Review git diff / git status if Hermes behaves unexpectedly."
-                    else
-                        log_error "Update pulled new code, but restoring local changes hit conflicts."
-                        if [ -n "$restore_output" ]; then
-                            printf '%s\n' "$restore_output"
-                        fi
-                        if [ -n "$conflicted_files" ]; then
-                            printf '\nConflicted files:\n'
-                            while IFS= read -r file; do
-                                [ -n "$file" ] && printf '  • %s\n' "$file"
-                            done <<EOF
-$conflicted_files
-EOF
-                        fi
-                        printf '\n'
-                        log_info "Your stashed changes are preserved — nothing is lost."
-                        log_info "  Stash ref: $autostash_ref"
-                        git reset --hard HEAD >/dev/null 2>&1 || true
-                        log_info "Working tree reset to clean state."
-                        log_info "Restore your changes later with: git stash apply $autostash_ref"
-                    fi
-                else
-                    log_info "Skipped restoring local changes."
-                    log_info "Your changes are still preserved in git stash."
-                    log_info "Restore manually with: git stash apply $autostash_ref"
-                fi
-            fi
-        else
-            log_error "Directory exists but is not a git repository: $INSTALL_DIR"
-            log_info "Remove it or choose a different directory with --dir"
-            exit 1
-        fi
-    else
-        # Try SSH first (for private repo access), fall back to HTTPS
-        # GIT_SSH_COMMAND disables interactive prompts and sets a short timeout
-        # so SSH fails fast instead of hanging when no key is configured.
-        log_info "Trying SSH clone..."
-        if GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=5" \
-           git clone --depth 1 --branch "$BRANCH" "$REPO_URL_SSH" "$INSTALL_DIR" 2>/dev/null; then
-            log_success "Cloned via SSH"
-        else
-            rm -rf "$INSTALL_DIR" 2>/dev/null  # Clean up partial SSH clone
-            log_info "SSH failed, trying HTTPS..."
-            if git clone --depth 1 --branch "$BRANCH" "$REPO_URL_HTTPS" "$INSTALL_DIR"; then
-                log_success "Cloned via HTTPS"
-            else
-                log_error "Failed to clone repository"
-                exit 1
-            fi
-        fi
-    fi
-
-    cd "$INSTALL_DIR"
-
-    if [ -n "$INSTALL_COMMIT" ]; then
-        # A commit pin must never move an existing install BACKWARDS. The
-        # bootstrap installer bakes its build-time commit into the binary
-        # (BUILD_PIN_COMMIT) and passes it as --commit on every install-mode
-        # run -- including the one the desktop's failure screen retries. An
-        # installer built months ago would otherwise rewind a current checkout
-        # to its build commit, stranding the user on ancient code with a
-        # current venv. Only pin when the target is not already an ancestor of
-        # HEAD; a fresh clone has no such ancestry and pins normally.
-        if ! git cat-file -e "$INSTALL_COMMIT^{commit}" 2>/dev/null; then
-            git fetch origin "$INSTALL_COMMIT" || true
-        fi
-        if git rev-parse --verify --quiet HEAD >/dev/null 2>&1 \
-           && git merge-base --is-ancestor "$INSTALL_COMMIT" HEAD 2>/dev/null \
-           && [ "$(git rev-parse "$INSTALL_COMMIT^{commit}" 2>/dev/null)" != "$(git rev-parse HEAD)" ]; then
-            if [ "$FORCE_COMMIT" = true ]; then
-                log_warn "--force-commit: rolling this install back to $INSTALL_COMMIT."
-                git checkout --detach "$INSTALL_COMMIT"
-            else
-                log_warn "Ignoring --commit $INSTALL_COMMIT: the checkout is already newer."
-                log_warn "Pinning to it would roll this install back. Pass --force-commit to override."
-            fi
-        else
-            log_info "Pinning checkout to commit $INSTALL_COMMIT..."
-            git checkout --detach "$INSTALL_COMMIT"
-        fi
-    fi
-
-    log_success "Repository ready"
+    log_error "Automatic source download is unavailable without a reviewed bundled payload."
+    log_info "Use the packaged Desktop installer supplied by your administrator."
+    return 1
 }
-
 setup_venv() {
     if [ "$USE_VENV" = false ]; then
         log_info "Skipping virtual environment (--no-venv)"
@@ -2571,6 +2425,18 @@ run_with_timeout() {
     return 124
 }
 
+run_npm_with_mirror_fallback() {
+    local timeout_seconds="$1"
+    shift
+    if NPM_CONFIG_REGISTRY="$DESKTOP_NPM_REGISTRY" npm_config_registry="$DESKTOP_NPM_REGISTRY" \
+        run_with_timeout "$timeout_seconds" "$@"; then
+        return 0
+    fi
+    log_info "Domestic npm registry failed; retrying the bounded command through the official registry..."
+    NPM_CONFIG_REGISTRY="$DESKTOP_NPM_OFFICIAL_REGISTRY" npm_config_registry="$DESKTOP_NPM_OFFICIAL_REGISTRY" \
+        run_with_timeout "$timeout_seconds" "$@"
+}
+
 # Return success only when the host is an apt release NEWER than the newest one
 # Playwright's platform resolver recognizes — the exact condition that makes
 # `playwright install` hang uninterruptibly (#35166). We scope the override
@@ -2630,8 +2496,9 @@ playwright_fallback_platform() {
 # An operator-provided PLAYWRIGHT_HOST_PLATFORM_OVERRIDE is always respected:
 # it is inherited by the first attempt, and the retry is skipped.
 #
-# Usage: run_playwright_install <timeout_seconds> npx playwright install [args...]
-run_playwright_install() {
+# Run once against the currently selected PLAYWRIGHT_DOWNLOAD_HOST while
+# preserving the supported platform-override retry.
+_run_playwright_install_for_current_mirror() {
     local timeout_seconds="$1"
     shift
 
@@ -2663,6 +2530,28 @@ run_playwright_install() {
     log_info "(apt releases newer than Playwright knows hang at this step; see #35166)"
     PLAYWRIGHT_HOST_PLATFORM_OVERRIDE="$fallback" \
         run_browser_install_with_timeout "$timeout_seconds" "$@"
+}
+
+# Usage: run_playwright_install <timeout_seconds> npx playwright install [args...]
+# Every attempt is bounded by the helper above. Domestic mirrors are tried in
+# reviewed order before Playwright's official default is allowed.
+run_playwright_install() {
+    local timeout_seconds="$1"
+    shift
+
+    local mirror
+    for mirror in "$DESKTOP_PLAYWRIGHT_MIRROR" "$DESKTOP_PLAYWRIGHT_FALLBACK_MIRROR" "__official__"; do
+        if [ "$mirror" = "__official__" ]; then
+            if ( unset PLAYWRIGHT_DOWNLOAD_HOST; _run_playwright_install_for_current_mirror "$timeout_seconds" "$@" ); then
+                return 0
+            fi
+        elif PLAYWRIGHT_DOWNLOAD_HOST="$mirror" \
+            _run_playwright_install_for_current_mirror "$timeout_seconds" "$@"; then
+            return 0
+        fi
+        log_warn "Playwright download source failed; trying the next reviewed source."
+    done
+    return 1
 }
 
 configure_browser_env_from_system_browser() {
@@ -2716,7 +2605,7 @@ install_node_deps() {
         # A failed npm install used to still print "✓ Node.js dependencies
         # installed", hiding the degradation from the user (#77003). Now it
         # fails the install outright instead of burying the warning (#85297).
-        if ! run_with_timeout "$NODE_DEPS_TIMEOUT" npm install --silent; then
+        if ! run_npm_with_mirror_fallback "$NODE_DEPS_TIMEOUT" npm install --silent; then
             log_error "npm install failed or timed out; Node.js dependencies were not installed"
             restore_dirty_lockfiles "$INSTALL_DIR"
             return 1
@@ -2846,7 +2735,7 @@ install_node_deps() {
         # Time-boxed: a stalled registry fetch would otherwise hang here (#39219).
         # Report success only on actual success, same as node-deps above
         # (#77003) — and fail the install outright (#85297).
-        if ! run_with_timeout "$NODE_DEPS_TIMEOUT" npm install --silent; then
+        if ! run_npm_with_mirror_fallback "$NODE_DEPS_TIMEOUT" npm install --silent; then
             log_error "TUI npm install failed or timed out; TUI dependencies were not installed"
             restore_dirty_lockfiles "$INSTALL_DIR"
             return 1
@@ -2923,24 +2812,8 @@ install_computer_use_driver() {
         return 0
     fi
 
-    log_info "Installing Computer Use driver (cua-driver)..."
-    # Same upstream installer `hermes computer-use install` runs; time-boxed
-    # so a stalled GitHub download can't hang the Hermes install. The
-    # upstream installer serializes with its own lock (600s stale window),
-    # so give it a ceiling above that — matching Hermes'
-    # _CUA_INSTALLER_TIMEOUT (660s).
-    local cua_log
-    cua_log="$(mktemp)"
-    if run_with_timeout 660 /bin/bash -c \
-        'curl -fsSL https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.sh | /bin/bash' \
-        >"$cua_log" 2>&1; then
-        log_success "Computer Use driver installed (enable via 'hermes tools' → Computer Use)"
-    else
-        log_warn "Computer Use driver install failed — it will install on demand when you enable the tool."
-        log_info "Install later with: hermes computer-use install"
-        tail -n 5 "$cua_log" >&2 || true
-    fi
-    rm -f "$cua_log"
+    log_warn "Computer Use driver is not present in this reviewed package."
+    log_info "Ask an administrator to supply the pinned cua-driver artifact; Hermes will not execute a remote installer."
 }
 
 run_setup_wizard() {
@@ -3228,7 +3101,7 @@ ensure_browser() {
     log_file="$(mktemp)"
     # Time-boxed (#39219): a stalled npm registry fetch here would otherwise
     # hang the installer with no progress, same class as the desktop build.
-    if ! run_with_timeout "$NODE_DEPS_TIMEOUT" "$npm_bin" install -g --prefix "$HERMES_HOME/node" --silent --ignore-scripts \
+    if ! run_npm_with_mirror_fallback "$NODE_DEPS_TIMEOUT" "$npm_bin" install -g --prefix "$HERMES_HOME/node" --silent --ignore-scripts \
         "@askjo/camofox-browser@^1.5.2" \
         >"$log_file" 2>&1; then
         log_error "npm install failed or timed out:"
@@ -3354,20 +3227,19 @@ EOF
 # current OS. Signing auto-discovery is disabled so electron-builder falls back
 # to an ad-hoc signature instead of grabbing an unrelated Developer ID from the
 # keychain (a real signed/notarized .dmg needs Apple credentials — a separate
-# release concern). Optional $2 = an ELECTRON_MIRROR base URL for this attempt,
-# used as a fallback when the default GitHub release download is blocked.
+# release concern). Optional $2 is a registered mirror, or __official__ after
+# both bounded domestic attempts failed.
 _desktop_pack() {
     local desktop_dir="$1"
     local mirror="${2:-}"
-    if [ -n "$mirror" ]; then
+    if [ "$mirror" = "__official__" ]; then
+        ( cd "$desktop_dir" && env -u ELECTRON_MIRROR CSC_IDENTITY_AUTO_DISCOVERY=false npm run pack )
+    elif [ -n "$mirror" ]; then
         ( cd "$desktop_dir" && ELECTRON_MIRROR="$mirror" CSC_IDENTITY_AUTO_DISCOVERY=false npm run pack )
     else
         ( cd "$desktop_dir" && CSC_IDENTITY_AUTO_DISCOVERY=false npm run pack )
     fi
 }
-
-# Last-resort Electron mirror after GitHub download fails (#47266).
-DESKTOP_ELECTRON_FALLBACK_MIRROR="https://npmmirror.com/mirrors/electron/"
 
 # Per-attempt wall-clock cap for the desktop npm install / electron-builder pack
 # (#39219). A stalled (not failed) Electron download on a throttled/blocked link
@@ -3417,7 +3289,9 @@ _restore_electron_dist() {
     rm -rf "$electron_dir/dist" 2>/dev/null || true
     rm -f "$electron_dir/path.txt" 2>/dev/null || true
 
-    if [ -n "$mirror" ]; then
+    if [ "$mirror" = "__official__" ]; then
+        ( cd "$electron_dir" && env -u ELECTRON_MIRROR node install.js ) || true
+    elif [ -n "$mirror" ]; then
         ( cd "$electron_dir" && ELECTRON_MIRROR="$mirror" node install.js ) || true
     else
         ( cd "$electron_dir" && node install.js ) || true
@@ -3434,8 +3308,9 @@ _electron_pkg_staged_missing_dist() {
 
 _restore_electron_dist_with_fallback() {
     local install_dir="$1"
-    _restore_electron_dist "$install_dir" \
-        || { [ -z "${ELECTRON_MIRROR:-}" ] && _restore_electron_dist "$install_dir" "$DESKTOP_ELECTRON_FALLBACK_MIRROR"; }
+    _restore_electron_dist "$install_dir" "$DESKTOP_ELECTRON_PRIMARY_MIRROR" \
+        || _restore_electron_dist "$install_dir" "$DESKTOP_ELECTRON_SECONDARY_MIRROR" \
+        || _restore_electron_dist "$install_dir" "__official__"
 }
 
 # Build apps/desktop into a launchable native app. Mirrors install.ps1's
@@ -3526,10 +3401,12 @@ install_desktop() {
     log_info "Installing desktop workspace dependencies (includes Electron ~150MB, 1-3min)..."
     local _deps_start _deps_remaining
     _deps_start=$(date +%s)
-    if run_with_timeout "$DESKTOP_BUILD_TIMEOUT" bash -c 'cd "$1" && npm ci' _ "$INSTALL_DIR"; then
+    if NPM_CONFIG_REGISTRY="$DESKTOP_NPM_REGISTRY" npm_config_registry="$DESKTOP_NPM_REGISTRY" \
+         run_with_timeout "$DESKTOP_BUILD_TIMEOUT" bash -c 'cd "$1" && npm ci' _ "$INSTALL_DIR"; then
         log_success "Desktop workspace dependencies installed"
     elif _deps_remaining=$(( DESKTOP_BUILD_TIMEOUT - ($(date +%s) - _deps_start) )); \
          [ "$_deps_remaining" -lt 30 ] && _deps_remaining=30; \
+         NPM_CONFIG_REGISTRY="$DESKTOP_NPM_OFFICIAL_REGISTRY" npm_config_registry="$DESKTOP_NPM_OFFICIAL_REGISTRY" \
          run_with_timeout "$_deps_remaining" bash -c 'cd "$1" && npm install' _ "$INSTALL_DIR"; then
         log_success "Desktop workspace dependencies installed"
     elif _electron_pkg_staged_missing_dist "$INSTALL_DIR"; then
@@ -3550,7 +3427,7 @@ install_desktop() {
         return 1
     fi
 
-    # 2. Build, with up to three escalating attempts so a transient/blocked
+    # 2. Build with bounded primary, secondary and then official attempts.
     #    Electron download self-heals instead of failing the whole install:
     #      a) plain `npm run pack` (downloads Electron from GitHub),
     #      b) on failure, purge a corrupt cached zip + stale unpacked dir and
@@ -3559,30 +3436,28 @@ install_desktop() {
     #         the GitHub-blocked/throttled case (the repeating "retrying" log).
     log_info "Building desktop app (this takes 1-3 minutes)..."
     local pack_ok=false
-    if run_with_timeout "$DESKTOP_BUILD_TIMEOUT" _desktop_pack "$desktop_dir"; then
+    if run_with_timeout "$DESKTOP_BUILD_TIMEOUT" _desktop_pack "$desktop_dir" "$DESKTOP_ELECTRON_PRIMARY_MIRROR"; then
         pack_ok=true
     else
         local purged=""
         local restored=false
         if ! _electron_dist_ok "$INSTALL_DIR"; then
             purged="$(clear_electron_build_cache "$desktop_dir")"
-            if _restore_electron_dist "$INSTALL_DIR"; then restored=true; fi
+            if _restore_electron_dist "$INSTALL_DIR" "$DESKTOP_ELECTRON_SECONDARY_MIRROR"; then restored=true; fi
         fi
         if [ "$restored" = true ]; then
             log_warn "Desktop build failed; refreshed the Electron download and retrying once..."
-            if run_with_timeout "$DESKTOP_BUILD_TIMEOUT" _desktop_pack "$desktop_dir"; then
+            if run_with_timeout "$DESKTOP_BUILD_TIMEOUT" _desktop_pack "$desktop_dir" "$DESKTOP_ELECTRON_SECONDARY_MIRROR"; then
                 pack_ok=true
             fi
         fi
     fi
 
-    # (c) GitHub blocked → mirror fallback (#47266).
-    if [ "$pack_ok" = false ] && [ -z "${ELECTRON_MIRROR:-}" ]; then
-        log_warn "Desktop build still failing — the Electron download from GitHub looks blocked."
-        log_warn "Re-downloading Electron via a public mirror ($DESKTOP_ELECTRON_FALLBACK_MIRROR), then rebuilding..."
-        log_warn "  (set ELECTRON_MIRROR yourself to use a different/trusted mirror)"
-        _electron_dist_ok "$INSTALL_DIR" || _restore_electron_dist "$INSTALL_DIR" "$DESKTOP_ELECTRON_FALLBACK_MIRROR" || true
-        if run_with_timeout "$DESKTOP_BUILD_TIMEOUT" _desktop_pack "$desktop_dir" "$DESKTOP_ELECTRON_FALLBACK_MIRROR"; then
+    # (c) Official @electron/get source only after both domestic sources fail.
+    if [ "$pack_ok" = false ]; then
+        log_warn "Both approved domestic Electron sources failed; trying the pinned official artifact once."
+        _electron_dist_ok "$INSTALL_DIR" || _restore_electron_dist "$INSTALL_DIR" "__official__" || true
+        if run_with_timeout "$DESKTOP_BUILD_TIMEOUT" _desktop_pack "$desktop_dir" "__official__"; then
             pack_ok=true
         fi
     fi

@@ -11,6 +11,30 @@ const VERSION_RE = /^[0-9]+(?:\.[0-9]+){2}$/
 const PYTHON_PRIMARY = 'https://mirrors.ustc.edu.cn/pypi/simple'
 const PYTHON_FALLBACK = 'https://pypi.tuna.tsinghua.edu.cn/simple'
 
+const SAFE_ENV_KEYS = Object.freeze([
+  'APPDATA', 'HOME', 'LANG', 'LC_ALL', 'LOCALAPPDATA', 'PATH', 'SYSTEMROOT',
+  'TEMP', 'TMP', 'TMPDIR', 'USER', 'USERPROFILE', 'WINDIR'
+])
+
+export function buildAuthPayloadEnvironment(source = process.env) {
+  const env = {}
+  for (const key of SAFE_ENV_KEYS) {
+    if (typeof source[key] === 'string') env[key] = source[key]
+  }
+  env.UV_NO_CONFIG = '1'
+  env.UV_DEFAULT_INDEX = PYTHON_PRIMARY
+  env.UV_INDEX = PYTHON_PRIMARY
+  env.PIP_CONFIG_FILE = source.SYSTEMROOT || source.WINDIR ? 'NUL' : '/dev/null'
+  env.PIP_INDEX_URL = PYTHON_PRIMARY
+  env.PIP_DISABLE_PIP_VERSION_CHECK = '1'
+  env.PIP_NO_INPUT = '1'
+  env.HERMES_UV_FALLBACK_INDEX = PYTHON_FALLBACK
+  env.HF_HUB_OFFLINE = '1'
+  env.HF_HUB_DISABLE_TELEMETRY = '1'
+  env.CI = '1'
+  return env
+}
+
 export const WINDOWS_PYTHON_VERSION = '3.13.15'
 export const WINDOWS_PYTHON_ARCHIVE = 'python-3.13.15-embed-amd64.zip'
 export const WINDOWS_PYTHON_SHA256 = 'd1f04d990aee1253d8569e8e5104e30fa9f5fa830899f14843448872d936a2cf'
@@ -22,9 +46,10 @@ export const WINDOWS_UV_VERSION = UV_VERSION
 export const WINDOWS_UV_WHEEL = `uv-${WINDOWS_UV_VERSION}-py3-none-win_amd64.whl`
 export const WINDOWS_UV_SHA256 = '455c3e57602e2141e66e2f0bf685898c9c5e5a70377d14c9a71554a3baf3ddbf'
 
-function defaultExecute(command, args) {
+function defaultExecute(command, args, options = {}) {
   return execFileSync(command, args, {
     encoding: 'utf8',
+    env: options.env || buildAuthPayloadEnvironment(),
     maxBuffer: 16 * 1024 * 1024,
     stdio: ['ignore', 'pipe', 'pipe']
   })
@@ -169,7 +194,7 @@ function downloadLockedWheels({ execute, pythonPath, requirementsPath, wheelhous
     indexUrl,
     '--disable-pip-version-check',
     '--no-input'
-  ])
+  ], { env: { ...buildAuthPayloadEnvironment(), UV_DEFAULT_INDEX: indexUrl, PIP_INDEX_URL: indexUrl } })
 }
 
 function downloadWindowsWheels({ execute, pythonPath, requirementsPath, wheelhousePath, indexUrl }) {
@@ -193,7 +218,7 @@ function downloadWindowsWheels({ execute, pythonPath, requirementsPath, wheelhou
     indexUrl,
     '--disable-pip-version-check',
     '--no-input'
-  ])
+  ], { env: { ...buildAuthPayloadEnvironment(), UV_DEFAULT_INDEX: indexUrl, PIP_INDEX_URL: indexUrl } })
 }
 
 function normalizedDistributionName(value) {
@@ -250,7 +275,7 @@ function downloadWindowsUvWheel({ execute, pythonPath, destinationRoot }) {
         indexUrl,
         '--disable-pip-version-check',
         '--no-input'
-      ])
+      ], { env: { ...buildAuthPayloadEnvironment(), UV_DEFAULT_INDEX: indexUrl, PIP_INDEX_URL: indexUrl } })
       const wheelPath = path.join(destinationRoot, WINDOWS_UV_WHEEL)
       requireRegularFile(wheelPath, 'Windows uv wheel')
       return { indexUrl, wheelPath }

@@ -821,8 +821,11 @@ def _pip_install(
     Returns the ``subprocess.CompletedProcess`` from whichever tier succeeded
     (or the last failure for the caller to inspect).
     """
+    from hermes_cli.managed_downloads import managed_download_environment
+
     venv_root = Path(sys.executable).parent.parent
-    uv_env = {**os.environ, "VIRTUAL_ENV": str(venv_root)}
+    uv_env = managed_download_environment("lazy-feature")
+    uv_env["VIRTUAL_ENV"] = str(venv_root)
 
     # Managed uv first: $HERMES_HOME/bin is never on PATH, so a bare which()
     # misses the uv Hermes installed and prefers a system one when both exist.
@@ -856,6 +859,7 @@ def _pip_install(
         probe = subprocess.run(
             pip_cmd + ["--version"],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
+            env=uv_env,
             creationflags=_post_setup_no_window_flags(),
         )
         if probe.returncode != 0:
@@ -865,6 +869,7 @@ def _pip_install(
             subprocess.run(
                 [sys.executable, "-m", "ensurepip", "--upgrade", "--default-pip"],
                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120, check=True,
+                env=uv_env,
                 creationflags=_post_setup_no_window_flags(),
             )
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
@@ -877,6 +882,7 @@ def _pip_install(
     return subprocess.run(
         pip_cmd + ["install", *args],
         capture_output=capture_output, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+        env=uv_env,
         creationflags=_post_setup_no_window_flags(
             streams_to_console=not capture_output
         ),
@@ -1389,266 +1395,23 @@ def _run_cua_driver_installer(
     pin_version: Optional[str] = None,
     show_progress: bool = True,
 ) -> bool:
-    """Run the upstream cua-driver installer for this platform.
+    """Fail closed when the reviewed cua-driver artifact is unavailable.
 
-    The scripts are idempotent: they always download the latest release, so
-    re-running on an already-installed system performs an upgrade.
-
-    * macOS / Linux → ``curl -fsSL …/install.sh | /bin/bash``.
-    * Windows       → ``powershell -NoProfile -ExecutionPolicy Bypass -Command
-      "irm …/install.ps1 | iex"``.
-
-    ``pin_version`` (e.g. ``"0.13.1"``) is exported as
-    ``CUA_DRIVER_RS_VERSION`` so the installer downloads that exact release
-    instead of its baked-in default. The baked version on upstream ``main``
-    is bumped by Release Please *before* the release assets are published,
-    so an unpinned run inside that window fails with a 404; pinning to the
-    version ``check-update`` confirmed sidesteps the race entirely.
+    Desktop packages may provide a pinned driver separately. Hermes never
+    downloads and executes an upstream installer script at runtime.
     """
-    import platform as _plat
-    import shutil
-    import subprocess
-
-    system = _plat.system()
-    is_windows = system == "Windows"
-    is_linux = system == "Linux"
-
-    if is_windows:
-        # Mirror the one-liner printed by cua_driver_install_hint().
-        ps_oneliner = (
-            "irm https://raw.githubusercontent.com/trycua/cua/main/"
-            "libs/cua-driver/scripts/install.ps1 | iex"
-        )
-        install_cmd = [
-            "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
-            "-Command", ps_oneliner,
-        ]
-        manual_hint = (
-            'powershell -NoProfile -ExecutionPolicy Bypass -Command '
-            f'"{ps_oneliner}"'
-        )
-        script_path = None
-    else:
-        # Download-then-exec instead of `bash -c "$(curl …)"`: no shell=True,
-        # no command substitution, and the script lands in a mkstemp file
-        # (unpredictable name, 0600) rather than a fixed /tmp path — avoiding
-        # both the shell-injection surface and a symlink/TOCTOU race on
-        # multi-user machines. The manual hint stays the upstream one-liner
-        # since that's what the docs/README teach.
-        import tempfile as _tempfile
-
-        install_url = (
-            "https://raw.githubusercontent.com/trycua/cua/main/"
-            "libs/cua-driver/scripts/install.sh"
-        )
-        manual_hint = f'/bin/bash -c "$(curl -fsSL {install_url})"'
-        fd, script_path = _tempfile.mkstemp(prefix="cua-driver-install-", suffix=".sh")
-        os.close(fd)
-        try:
-            dl = subprocess.run(
-                ["curl", "-fsSL", "-o", script_path, install_url],
-                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
-            )
-        except (subprocess.TimeoutExpired, OSError) as e:
-            _print_warning(f"    cua-driver installer download failed: {e}")
-            try:
-                os.remove(script_path)
-            except OSError:
-                pass
-            return False
-        if dl.returncode != 0:
-            _print_warning(
-                "    cua-driver installer download failed: "
-                f"{(dl.stderr or '').strip()[:200]}"
-            )
-            try:
-                os.remove(script_path)
-            except OSError:
-                pass
-            return False
-        install_cmd = ["/bin/bash", script_path]
-    use_shell = False
-
+    del pin_version
     if show_progress:
-        if verbose:
-            _print_info(f"    {label} cua-driver (background computer-use)...")
-        else:
-            _print_info(f"→ {label} cua-driver (Computer Use)...")
-    driver_cmd = _cua_driver_cmd()
-
-    installer_env = _cua_driver_env()
-    if pin_version:
-        # Both upstream installers (install.sh and install.ps1) honour
-        # CUA_DRIVER_RS_VERSION over their baked default.
-        installer_env["CUA_DRIVER_RS_VERSION"] = pin_version
-
-    # A previous timed-out install can leave the upstream installer's
-    # concurrent-install lock behind; clear it when provably stale so the
-    # refresh doesn't wedge waiting on a dead holder (issue #58762).
-    _clear_stale_cua_install_lock()
-
-    # POSIX: run the installer in its own process group so a timeout kill
-    # takes out the whole `curl | bash` pipeline (and the exec'd
-    # _install-rust.sh), not just the outer shell. Otherwise the surviving
-    # grandchildren keep holding the install lock, wedging every later run.
-    popen_kwargs = {}
-    if not is_windows:
-        popen_kwargs["start_new_session"] = True
-
-    def _kill_installer_tree(proc):
-        import signal as _signal
-        try:
-            if not is_windows:
-                os.killpg(os.getpgid(proc.pid), _signal.SIGKILL)  # windows-footgun: ok — POSIX branch only
-            else:
-                # PowerShell may leave download/install helpers alive after its
-                # direct process is killed. Those descendants inherit stdout
-                # and can keep both communicate() and install.lock wedged, so
-                # collect the tree first and kill it leaf-up.
-                import psutil as _psutil
-
-                try:
-                    parent = _psutil.Process(proc.pid)
-                    descendants = parent.children(recursive=True)
-                except _psutil.NoSuchProcess:
-                    return
-                except _psutil.Error as e:
-                    logger.debug(
-                        "could not enumerate cua-driver installer tree for pid %s: %s",
-                        proc.pid,
-                        e,
-                    )
-                    proc.kill()
-                    return
-
-                for child in reversed(descendants):
-                    try:
-                        child.kill()
-                    except _psutil.NoSuchProcess:
-                        pass
-                    except _psutil.Error as e:
-                        logger.debug(
-                            "could not kill cua-driver installer child pid %s: %s",
-                            child.pid,
-                            e,
-                        )
-                try:
-                    parent.kill()
-                except _psutil.NoSuchProcess:
-                    pass
-                except _psutil.Error as e:
-                    logger.debug(
-                        "could not kill cua-driver installer parent pid %s: %s",
-                        proc.pid,
-                        e,
-                    )
-                    proc.kill()
-        except (OSError, ProcessLookupError):
-            proc.kill()
-
-    try:
-        # When not verbose (e.g. `hermes update`'s refresh), capture the
-        # installer's chatty "Next steps" wall instead of dumping it to the
-        # terminal. The combined output is logged so a failure stays
-        # debuggable. Verbose installs (interactive `computer-use install`)
-        # keep streaming live.
-        if verbose:
-            proc = subprocess.Popen(
-                install_cmd, shell=use_shell, env=installer_env,
-                creationflags=_post_setup_no_window_flags(streams_to_console=True),
-                **popen_kwargs
-            )
-            try:
-                proc.communicate(timeout=_CUA_INSTALLER_TIMEOUT)
-            except subprocess.TimeoutExpired:
-                _kill_installer_tree(proc)
-                proc.communicate()
-                raise
-            result = subprocess.CompletedProcess(
-                install_cmd, proc.returncode, stdout=None, stderr=None
-            )
-        else:
-            proc = subprocess.Popen(
-                install_cmd, shell=use_shell, env=installer_env,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, encoding="utf-8", errors="replace",
-                creationflags=_post_setup_no_window_flags(),
-                **popen_kwargs
-            )
-            try:
-                out, _ = proc.communicate(timeout=_CUA_INSTALLER_TIMEOUT)
-            except subprocess.TimeoutExpired:
-                _kill_installer_tree(proc)
-                proc.communicate()
-                raise
-            result = subprocess.CompletedProcess(
-                install_cmd, proc.returncode, stdout=out, stderr=None
-            )
-            # Preserve the full installer output. During `hermes update`,
-            # sys.stdout is the mirroring _UpdateOutputStream whose `_log`
-            # handle is ~/.hermes/logs/update.log — write straight to it so
-            # the captured "Next steps" wall is kept in full (success AND
-            # failure), without echoing it to the terminal.
-            if result.stdout:
-                _update_log = getattr(sys.stdout, "_log", None)
-                if _update_log is not None:
-                    try:
-                        _update_log.write(
-                            "\n--- cua-driver installer output ---\n"
-                            + result.stdout
-                            + "\n"
-                        )
-                        _update_log.flush()
-                    except Exception:
-                        pass
-                if result.returncode != 0:
-                    logger.debug("cua-driver installer output:\n%s", result.stdout)
-        if result.returncode == 0 and shutil.which(driver_cmd):
-            if is_windows and not _repair_cua_driver_autostart_windows(
-                driver_cmd, verbose=verbose
-            ):
-                _print_warning(
-                    "    cua-driver installed, but auto-start was not registered."
-                )
-            if verbose:
-                _print_success(f"    {driver_cmd} installed.")
-                if is_windows:
-                    _print_info("    cua-driver may spawn a UIAccess worker (cua-driver-uia.exe);")
-                    _print_info("    Windows/SmartScreen may prompt the first time it runs.")
-                elif is_linux:
-                    _print_warning("    Linux support is alpha.")
-                else:
-                    _print_info("    IMPORTANT — grant macOS permissions now:")
-                    _print_info("      System Settings > Privacy & Security > Accessibility")
-                    _print_info("      System Settings > Privacy & Security > Screen Recording")
-                    _print_info("    Both must allow the terminal / Hermes process.")
-            return True
-        _print_warning(f"    cua-driver {label.lower()} did not complete. Re-run manually:")
-        _print_info(f"      {manual_hint}")
-        return False
-    except subprocess.TimeoutExpired:
-        _print_warning(
-            f"    cua-driver {label.lower()} timed out after "
-            f"{_CUA_INSTALLER_TIMEOUT}s."
+        message = (
+            f"    {label} cua-driver requires a reviewed administrator-supplied artifact."
+            if verbose
+            else "Computer Use driver update skipped: no reviewed packaged artifact."
         )
-        if not is_windows:
-            _print_info(
-                "    If this repeats, a stale installer lock may be present — "
-                f"check {_cua_install_lock_dir()}"
-            )
-        _print_info(f"    Re-run manually:  {manual_hint}")
-        return False
-    except Exception as e:
-        _print_warning(f"    cua-driver {label.lower()} failed: {e}")
-        return False
-    finally:
-        if script_path:
-            try:
-                os.remove(script_path)
-            except OSError:
-                pass
-
-
+        _print_warning(message)
+    _print_info(
+        "    Ask an administrator to install the pinned cua-driver artifact, then retry."
+    )
+    return False
 def _ensure_browser_use_cli(*, verbose_hints: bool = False) -> None:
     """Install the Browser Use CLI if it isn't already runnable.
 
@@ -1867,24 +1630,8 @@ def _run_post_setup(post_setup_key: str):
             return
         except ImportError:
             pass
-        _print_info("    Installing kittentts (~25-80MB model, CPU-only)...")
-        wheel_url = (
-            "https://github.com/KittenML/KittenTTS/releases/download/"
-            "0.8.1/kittentts-0.8.1-py3-none-any.whl"
-        )
-        try:
-            result = _pip_install(["-U", wheel_url, "soundfile", "--quiet"], timeout=300)
-            if result.returncode == 0:
-                _print_success("    kittentts installed")
-                _print_info("    Voices: Jasper, Bella, Luna, Bruno, Rosie, Hugo, Kiki, Leo")
-                _print_info("    Models: KittenML/kitten-tts-nano-0.8-int8 (25MB), micro (41MB), mini (80MB)")
-            else:
-                _print_warning("    kittentts install failed:")
-                _print_info(f"      {(result.stderr or '').strip()[:300]}")
-                _print_info(f"    Run manually: uv pip install -U '{wheel_url}' soundfile")
-        except subprocess.TimeoutExpired:
-            _print_warning("    kittentts install timed out (>5min)")
-            _print_info(f"    Run manually: uv pip install -U '{wheel_url}' soundfile")
+        _print_warning("    Automatic KittenTTS installation is unavailable in this release.")
+        _print_info("    Ask an administrator to supply the reviewed pinned wheel artifact.")
 
     elif post_setup_key == "piper":
         try:
@@ -3317,15 +3064,6 @@ def _module_installed(module_name: str) -> bool:
 # arguments in sync with the corresponding ``_run_post_setup`` branches.
 _RESTORABLE_PYTHON_TOOL_DEPENDENCIES: dict[str, tuple[str, tuple[str, ...]]] = {
     "faster_whisper": ("faster_whisper", ("-U", "faster-whisper")),
-    "kittentts": (
-        "kittentts",
-        (
-            "-U",
-            "https://github.com/KittenML/KittenTTS/releases/download/"
-            "0.8.1/kittentts-0.8.1-py3-none-any.whl",
-            "soundfile",
-        ),
-    ),
     "piper": ("piper", ("-U", "piper-tts")),
     "ddgs": ("ddgs", ("-U", "ddgs")),
     "langfuse": ("langfuse", ("langfuse",)),

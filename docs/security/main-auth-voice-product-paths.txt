@@ -41,6 +41,7 @@ apps/desktop/electron/preview-webview-policy.ts
 apps/desktop/electron/primary-backend-startup.ts
 apps/desktop/electron/profile-session-routing.ts
 apps/desktop/electron/renderer-log.ts
+apps/desktop/electron/runtime-download-policy.ts
 apps/desktop/electron/ssh-bootstrap-coordinator.ts
 apps/desktop/electron/ssh-config.ts
 apps/desktop/electron/ssh-connection.ts
@@ -143,13 +144,16 @@ hermes_cli/curator.py
 hermes_cli/dashboard_auth/routes.py
 hermes_cli/dashboard_auth/ws_tickets.py
 hermes_cli/dashboard_register.py
+hermes_cli/data/managed-download-origins.json
 hermes_cli/dump.py
 hermes_cli/gateway.py
 hermes_cli/gateway_enroll.py
 hermes_cli/gateway_windows.py
 hermes_cli/journey.py
 hermes_cli/main.py
+hermes_cli/managed_downloads.py
 hermes_cli/managed_uv.py
+hermes_cli/model_catalog.py
 hermes_cli/model_setup_flows.py
 hermes_cli/models.py
 hermes_cli/observability/schemas/hermes.shared_metrics.v2.schema.json
@@ -204,6 +208,8 @@ scripts/test-desktop-windows-install.ps1
 scripts/write_auth_native_artifact.py
 scripts/write_desktop_windows_electron_artifact.py
 tools/browser_tool.py
+tools/browser_use_cli.py
+tools/computer_use/cua_backend.py
 tools/delegate_tool.py
 tools/image_generation_tool.py
 tools/lazy_deps.py

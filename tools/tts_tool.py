@@ -2815,7 +2815,12 @@ def _generate_neutts(text: str, output_path: str, tts_config: Dict[str, Any]) ->
     neutts_config = tts_config.get("neutts") or {}
     ref_audio = neutts_config.get("ref_audio", "") or _default_neutts_ref_audio()
     ref_text = neutts_config.get("ref_text", "") or _default_neutts_ref_text()
-    model = neutts_config.get("model", "neuphonic/neutts-air-q4-gguf")
+    model = str(neutts_config.get("model") or "")
+    codec = str(neutts_config.get("codec") or "")
+    if not model or not codec:
+        raise RuntimeError(
+            "NeuTTS requires administrator-supplied local model and codec directories"
+        )
     device = neutts_config.get("device", "cpu")
 
     # NeuTTS outputs WAV natively — use a .wav path for generation,
@@ -2832,6 +2837,7 @@ def _generate_neutts(text: str, output_path: str, tts_config: Dict[str, Any]) ->
         "--ref-audio", ref_audio,
         "--ref-text", ref_text,
         "--model", model,
+        "--codec", codec,
         "--device", device,
     ]
 

@@ -53,6 +53,10 @@ MODEL_MANIFEST = ModelManifest(
         "fuyuan-sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/"
         "resolve/09e1d219be6d1c55a88223f49bd6617e9f531611/"
         "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2",
+        "https://modelscope.cn/models/fuyuantech/"
+        "fuyuan-sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17/"
+        "resolve/09e1d219be6d1c55a88223f49bd6617e9f531611/"
+        "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2",
         "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
         "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2",
     ),

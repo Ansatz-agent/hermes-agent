@@ -6,30 +6,8 @@
   "user_configured_endpoint_paths": [
     "hermes_cli/config_defaults.py"
   ],
-  "temporary_legacy_unsafe_callers": [
-    "hermes_cli/managed_uv.py:cmd = \"irm https://astral.sh/uv/install.ps1 | iex\"",
-    "hermes_cli/update_cmd.py:\"  curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash\"",
-    "scripts/install.ps1:& $psHostExe -ExecutionPolicy ByPass -c \"irm https://astral.sh/uv/install.ps1 | iex\" 2>&1 | Tee-Object -Variable astralOut | Out-Null",
-    "scripts/install.ps1:& $psHostExe -ExecutionPolicy ByPass -c \"irm https://github.com/astral-sh/uv/releases/latest/download/uv-installer.ps1 | iex\" 2>&1 | Tee-Object -Variable ghOut | Out-Null",
-    "scripts/install.ps1:Invoke-RestMethod -UseBasicParsing \"https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.ps1\" | Invoke-Expression"
-  ],
-  "temporary_legacy_unmanaged_child_callers": [
-    {
-      "path": "hermes_cli/tools_config.py",
-      "kind": "package-manager",
-      "value": "uv tool install browser-use"
-    },
-    {
-      "path": "scripts/install.ps1",
-      "kind": "package-manager",
-      "value": "uv tool install browser-use"
-    },
-    {
-      "path": "tools/browser_use_cli.py",
-      "kind": "package-manager",
-      "value": "uv tool install browser-use"
-    }
-  ],
+  "temporary_legacy_unsafe_callers": [],
+  "temporary_legacy_unmanaged_child_callers": [],
   "temporary_legacy_notes": {
     "unsafe_callers": "Exact inherited download-and-execute commands are removed in Task 6; command changes fail closed.",
     "unmanaged_child_callers": "Exact inherited callers are removed in Task 6; new or orphan callers fail closed.",
@@ -99,6 +77,16 @@
           "path": "scripts/install.sh",
           "kind": "literal-url",
           "value": "https://pypi.tuna.tsinghua.edu.cn/simple"
+        },
+        {
+          "path": "scripts/install.ps1",
+          "kind": "literal-url",
+          "value": "https://mirrors.ustc.edu.cn/pypi/simple"
+        },
+        {
+          "path": "scripts/install.ps1",
+          "kind": "literal-url",
+          "value": "https://pypi.tuna.tsinghua.edu.cn/simple"
         }
       ],
       "packaged_outputs": [
@@ -135,6 +123,11 @@
         },
         {
           "path": "scripts/install.sh",
+          "kind": "literal-url",
+          "value": "https://registry.npmmirror.com"
+        },
+        {
+          "path": "scripts/install.ps1",
           "kind": "literal-url",
           "value": "https://registry.npmmirror.com"
         }
@@ -174,22 +167,32 @@
         {
           "path": "scripts/install.ps1",
           "kind": "literal-url",
-          "value": "https://nodejs.org/dist/latest-v${NodeVersion"
+          "value": "https://registry.npmmirror.com/-/binary/node/"
         },
         {
-          "path": "scripts/install.sh",
+          "path": "scripts/install.ps1",
+          "kind": "literal-url",
+          "value": "https://npmmirror.com/mirrors/node/"
+        },
+        {
+          "path": "scripts/install.ps1",
           "kind": "literal-url",
           "value": "https://nodejs.org/dist/"
         },
         {
           "path": "scripts/install.sh",
           "kind": "literal-url",
-          "value": "https://nodejs.org/dist/latest-v${NODE_VERSION"
+          "value": "https://registry.npmmirror.com/-/binary/node/"
         },
         {
           "path": "scripts/install.sh",
           "kind": "literal-url",
-          "value": "https://registry.npmmirror.com/-/binary/node/"
+          "value": "https://npmmirror.com/mirrors/node/"
+        },
+        {
+          "path": "scripts/install.sh",
+          "kind": "literal-url",
+          "value": "https://nodejs.org/dist/"
         }
       ],
       "packaged_outputs": [
@@ -225,15 +228,25 @@
           "value": "https://npmmirror.com/mirrors/electron/"
         },
         {
+          "path": "scripts/install.ps1",
+          "kind": "literal-url",
+          "value": "https://registry.npmmirror.com/-/binary/electron/"
+        },
+        {
           "path": "scripts/install.sh",
           "kind": "literal-url",
           "value": "https://npmmirror.com/mirrors/electron/"
+        },
+        {
+          "path": "scripts/install.sh",
+          "kind": "literal-url",
+          "value": "https://registry.npmmirror.com/-/binary/electron/"
         }
       ],
       "packaged_outputs": [
         "apps/desktop/release"
       ],
-      "implicit_official_default": true
+      "implicit_official_default": false
     },
     {
       "id": "electron-builder-binaries",
@@ -253,7 +266,18 @@
       "owners": [
         "apps/desktop/scripts/run-electron-builder.mjs"
       ],
-      "callers": [],
+      "callers": [
+        {
+          "path": "scripts/install.ps1",
+          "kind": "literal-url",
+          "value": "https://npmmirror.com/mirrors/electron-builder-binaries/"
+        },
+        {
+          "path": "scripts/install.sh",
+          "kind": "literal-url",
+          "value": "https://npmmirror.com/mirrors/electron-builder-binaries/"
+        }
+      ],
       "packaged_outputs": [
         "apps/desktop/release"
       ]
@@ -290,6 +314,21 @@
           "path": "scripts/install.sh",
           "kind": "literal-url",
           "value": "https://registry.npmmirror.com/-/binary/playwright"
+        },
+        {
+          "path": "scripts/install.sh",
+          "kind": "literal-url",
+          "value": "https://npmmirror.com/mirrors/playwright/"
+        },
+        {
+          "path": "scripts/install.ps1",
+          "kind": "literal-url",
+          "value": "https://registry.npmmirror.com/-/binary/playwright"
+        },
+        {
+          "path": "scripts/install.ps1",
+          "kind": "literal-url",
+          "value": "https://npmmirror.com/mirrors/playwright/"
         }
       ],
       "packaged_outputs": [
@@ -326,6 +365,11 @@
           "path": "tools/sensevoice_stt.py",
           "kind": "literal-url",
           "value": "https://www.modelscope.cn/models/fuyuantech/"
+        },
+        {
+          "path": "tools/sensevoice_stt.py",
+          "kind": "literal-url",
+          "value": "https://modelscope.cn/models/fuyuantech/"
         }
       ],
       "packaged_outputs": [
@@ -353,38 +397,7 @@
         "scripts/install.ps1",
         "scripts/install.sh"
       ],
-      "callers": [
-        {
-          "path": "hermes_cli/managed_uv.py",
-          "kind": "literal-url",
-          "value": "https://astral.sh/uv/install.ps1"
-        },
-        {
-          "path": "hermes_cli/managed_uv.py",
-          "kind": "literal-url",
-          "value": "https://astral.sh/uv/install.sh"
-        },
-        {
-          "path": "scripts/install.ps1",
-          "kind": "literal-url",
-          "value": "https://astral.sh/uv/install.ps1"
-        },
-        {
-          "path": "scripts/install.ps1",
-          "kind": "literal-url",
-          "value": "https://github.com/astral-sh/uv/releases/download/$UvVersion/uv-$targetTriple.zip"
-        },
-        {
-          "path": "scripts/install.ps1",
-          "kind": "literal-url",
-          "value": "https://github.com/astral-sh/uv/releases/latest/download/uv-installer.ps1"
-        },
-        {
-          "path": "scripts/install.sh",
-          "kind": "literal-url",
-          "value": "https://astral.sh/uv/install.sh"
-        }
-      ],
+      "callers": [],
       "packaged_outputs": [
         "apps/desktop/build/bootstrap/auth-toolchain/uv"
       ],
@@ -486,13 +499,7 @@
         "apps/desktop/scripts/prepare-windows-git-runtime.mjs",
         "scripts/install.ps1"
       ],
-      "callers": [
-        {
-          "path": "scripts/install.ps1",
-          "kind": "literal-url",
-          "value": "https://github.com/git-for-windows/git/releases/download/$gitTag/$assetName"
-        }
-      ],
+      "callers": [],
       "packaged_outputs": [
         "apps/desktop/build/windows-prereqs/git-bash-runtime.tar.xz"
       ],
@@ -566,38 +573,7 @@
         "scripts/install.sh",
         "tools/computer_use/cua_backend.py"
       ],
-      "callers": [
-        {
-          "path": "hermes_cli/tools_config.py",
-          "kind": "literal-url",
-          "value": "https://raw.githubusercontent.com/trycua/cua/main/"
-        },
-        {
-          "path": "scripts/install.ps1",
-          "kind": "literal-url",
-          "value": "https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.ps1"
-        },
-        {
-          "path": "scripts/install.sh",
-          "kind": "literal-url",
-          "value": "https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.sh"
-        },
-        {
-          "path": "tools/computer_use/cua_backend.py",
-          "kind": "literal-url",
-          "value": "https://raw.githubusercontent.com/trycua/cua/main/"
-        },
-        {
-          "path": "tools/computer_use/cua_backend.py",
-          "kind": "literal-url",
-          "value": "https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.ps1"
-        },
-        {
-          "path": "tools/computer_use/cua_backend.py",
-          "kind": "literal-url",
-          "value": "https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.sh"
-        }
-      ],
+      "callers": [],
       "packaged_outputs": [
         "apps/desktop/build/bootstrap/tools/cua-driver"
       ],
@@ -625,18 +601,7 @@
         "hermes_cli/setup.py",
         "hermes_cli/tools_config.py"
       ],
-      "callers": [
-        {
-          "path": "hermes_cli/setup.py",
-          "kind": "literal-url",
-          "value": "https://github.com/KittenML/KittenTTS/releases/download/"
-        },
-        {
-          "path": "hermes_cli/tools_config.py",
-          "kind": "literal-url",
-          "value": "https://github.com/KittenML/KittenTTS/releases/download/"
-        }
-      ],
+      "callers": [],
       "packaged_outputs": [
         "apps/desktop/build/bootstrap/wheelhouse/kitten-tts.whl"
       ],
@@ -665,112 +630,13 @@
         "scripts/install.ps1",
         "scripts/install.sh"
       ],
-      "callers": [
-        {
-          "path": "hermes_cli/update_cmd.py",
-          "kind": "literal-url",
-          "value": "https://github.com/NousResearch/hermes-agent.git"
-        },
-        {
-          "path": "hermes_cli/update_cmd.py",
-          "kind": "literal-url",
-          "value": "https://github.com/NousResearch/hermes-agent/archive/refs/heads/{branch"
-        },
-        {
-          "path": "hermes_cli/update_cmd.py",
-          "kind": "literal-url",
-          "value": "https://hermes-agent.nousresearch.com/install.sh"
-        },
-        {
-          "path": "scripts/install.ps1",
-          "kind": "literal-url",
-          "value": "https://github.com/NousResearch/hermes-agent.git"
-        },
-        {
-          "path": "scripts/install.ps1",
-          "kind": "literal-url",
-          "value": "https://github.com/NousResearch/hermes-agent/archive/$Commit.zip"
-        },
-        {
-          "path": "scripts/install.ps1",
-          "kind": "literal-url",
-          "value": "https://github.com/NousResearch/hermes-agent/archive/refs/heads/$Branch.zip"
-        },
-        {
-          "path": "scripts/install.ps1",
-          "kind": "literal-url",
-          "value": "https://github.com/NousResearch/hermes-agent/archive/refs/tags/$Tag.zip"
-        },
-        {
-          "path": "scripts/install.ps1",
-          "kind": "literal-url",
-          "value": "https://hermes-agent.nousresearch.com/install.ps1"
-        },
-        {
-          "path": "scripts/install.sh",
-          "kind": "literal-url",
-          "value": "https://github.com/NousResearch/hermes-agent.git"
-        },
-        {
-          "path": "scripts/install.sh",
-          "kind": "literal-url",
-          "value": "https://hermes-agent.nousresearch.com/install.ps1"
-        },
-        {
-          "path": "scripts/install.sh",
-          "kind": "literal-url",
-          "value": "https://hermes-agent.nousresearch.com/install.sh"
-        }
-      ],
+      "callers": [],
       "packaged_outputs": [
         "apps/desktop/build/bootstrap/hermes-backend.tar.gz"
       ],
       "build_provenance": "repository source is archived from a locked commit and hashed by the package payload builder",
       "sha256": null,
       "sha256_manifest_field": "apps/desktop/build/bootstrap/hermes-backend.tar.gz#asset.sha256"
-    },
-    {
-      "id": "huggingface-model",
-      "phases": [
-        "auth-payload-build",
-        "runtime-install",
-        "repair",
-        "lazy-feature"
-      ],
-      "delivery": "bundled",
-      "domestic_primary": null,
-      "domestic_secondary": null,
-      "official_fallback": null,
-      "integrity": "package-manifest-sha256",
-      "idle_timeout_seconds": 90,
-      "total_timeout_seconds": 600,
-      "environment": [],
-      "owners": [
-        "tools/neutts_synth.py"
-      ],
-      "callers": [
-        {
-          "path": "hermes_cli/config_defaults.py",
-          "kind": "model-id",
-          "value": "neuphonic/neutts-air-q4-gguf"
-        },
-        {
-          "path": "tools/neutts_synth.py",
-          "kind": "model-id",
-          "value": "neuphonic/neucodec"
-        },
-        {
-          "path": "tools/neutts_synth.py",
-          "kind": "model-id",
-          "value": "neuphonic/neutts-air-q4-gguf"
-        }
-      ],
-      "packaged_outputs": [
-        "apps/desktop/build/bootstrap/models/huggingface"
-      ],
-      "build_provenance": "approved pinned model files are staged and hash-audited before packaging",
-      "sha256": null,
-      "sha256_manifest_field": "apps/desktop/build/bootstrap/models/huggingface#asset.sha256"
     },
     {
       "id": "model-catalog",
@@ -791,28 +657,7 @@
       "owners": [
         "hermes_cli/model_catalog.py"
       ],
-      "callers": [
-        {
-          "path": "hermes_cli/config_defaults.py",
-          "kind": "literal-url",
-          "value": "https://hermes-agent.nousresearch.com/docs/api/model-catalog.json"
-        },
-        {
-          "path": "hermes_cli/config_defaults.py",
-          "kind": "literal-url",
-          "value": "https://models.dev/api.json"
-        },
-        {
-          "path": "hermes_cli/model_catalog.py",
-          "kind": "literal-url",
-          "value": "https://hermes-agent.nousresearch.com/docs/api/model-catalog.json"
-        },
-        {
-          "path": "hermes_cli/model_catalog.py",
-          "kind": "literal-url",
-          "value": "https://raw.githubusercontent.com/NousResearch/hermes-agent/main/website/static/api/model-catalog.json"
-        }
-      ],
+      "callers": [],
       "packaged_outputs": [
         "apps/desktop/build/bootstrap/model-catalog.json"
       ],
@@ -877,180 +722,8 @@
       "sha256_manifest_field": "apps/desktop/build/bootstrap/system-tools/ffmpeg#asset.sha256"
     }
   ],
-  "temporary_legacy_bundled_runtime_callers": [
-    {
-      "path": "hermes_cli/config_defaults.py",
-      "kind": "literal-url",
-      "value": "https://hermes-agent.nousresearch.com/docs/api/model-catalog.json"
-    },
-    {
-      "path": "hermes_cli/config_defaults.py",
-      "kind": "literal-url",
-      "value": "https://models.dev/api.json"
-    },
-    {
-      "path": "hermes_cli/config_defaults.py",
-      "kind": "model-id",
-      "value": "neuphonic/neutts-air-q4-gguf"
-    },
-    {
-      "path": "hermes_cli/managed_uv.py",
-      "kind": "literal-url",
-      "value": "https://astral.sh/uv/install.ps1"
-    },
-    {
-      "path": "hermes_cli/managed_uv.py",
-      "kind": "literal-url",
-      "value": "https://astral.sh/uv/install.sh"
-    },
-    {
-      "path": "hermes_cli/model_catalog.py",
-      "kind": "literal-url",
-      "value": "https://hermes-agent.nousresearch.com/docs/api/model-catalog.json"
-    },
-    {
-      "path": "hermes_cli/model_catalog.py",
-      "kind": "literal-url",
-      "value": "https://raw.githubusercontent.com/NousResearch/hermes-agent/main/website/static/api/model-catalog.json"
-    },
-    {
-      "path": "hermes_cli/setup.py",
-      "kind": "literal-url",
-      "value": "https://github.com/KittenML/KittenTTS/releases/download/"
-    },
-    {
-      "path": "hermes_cli/tools_config.py",
-      "kind": "literal-url",
-      "value": "https://github.com/KittenML/KittenTTS/releases/download/"
-    },
-    {
-      "path": "hermes_cli/tools_config.py",
-      "kind": "literal-url",
-      "value": "https://raw.githubusercontent.com/trycua/cua/main/"
-    },
-    {
-      "path": "hermes_cli/update_cmd.py",
-      "kind": "literal-url",
-      "value": "https://github.com/NousResearch/hermes-agent.git"
-    },
-    {
-      "path": "hermes_cli/update_cmd.py",
-      "kind": "literal-url",
-      "value": "https://github.com/NousResearch/hermes-agent/archive/refs/heads/{branch"
-    },
-    {
-      "path": "hermes_cli/update_cmd.py",
-      "kind": "literal-url",
-      "value": "https://hermes-agent.nousresearch.com/install.sh"
-    },
-    {
-      "path": "scripts/install.ps1",
-      "kind": "literal-url",
-      "value": "https://astral.sh/uv/install.ps1"
-    },
-    {
-      "path": "scripts/install.ps1",
-      "kind": "literal-url",
-      "value": "https://github.com/astral-sh/uv/releases/latest/download/uv-installer.ps1"
-    },
-    {
-      "path": "scripts/install.ps1",
-      "kind": "literal-url",
-      "value": "https://github.com/git-for-windows/git/releases/download/$gitTag/$assetName"
-    },
-    {
-      "path": "scripts/install.ps1",
-      "kind": "literal-url",
-      "value": "https://github.com/NousResearch/hermes-agent.git"
-    },
-    {
-      "path": "scripts/install.ps1",
-      "kind": "literal-url",
-      "value": "https://github.com/NousResearch/hermes-agent/archive/$Commit.zip"
-    },
-    {
-      "path": "scripts/install.ps1",
-      "kind": "literal-url",
-      "value": "https://github.com/NousResearch/hermes-agent/archive/refs/heads/$Branch.zip"
-    },
-    {
-      "path": "scripts/install.ps1",
-      "kind": "literal-url",
-      "value": "https://github.com/NousResearch/hermes-agent/archive/refs/tags/$Tag.zip"
-    },
-    {
-      "path": "scripts/install.ps1",
-      "kind": "literal-url",
-      "value": "https://hermes-agent.nousresearch.com/install.ps1"
-    },
-    {
-      "path": "scripts/install.ps1",
-      "kind": "literal-url",
-      "value": "https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.ps1"
-    },
-    {
-      "path": "scripts/install.sh",
-      "kind": "literal-url",
-      "value": "https://astral.sh/uv/install.sh"
-    },
-    {
-      "path": "scripts/install.sh",
-      "kind": "literal-url",
-      "value": "https://github.com/NousResearch/hermes-agent.git"
-    },
-    {
-      "path": "scripts/install.sh",
-      "kind": "literal-url",
-      "value": "https://hermes-agent.nousresearch.com/install.ps1"
-    },
-    {
-      "path": "scripts/install.sh",
-      "kind": "literal-url",
-      "value": "https://hermes-agent.nousresearch.com/install.sh"
-    },
-    {
-      "path": "scripts/install.sh",
-      "kind": "literal-url",
-      "value": "https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.sh"
-    },
-    {
-      "path": "tools/computer_use/cua_backend.py",
-      "kind": "literal-url",
-      "value": "https://raw.githubusercontent.com/trycua/cua/main/"
-    },
-    {
-      "path": "tools/computer_use/cua_backend.py",
-      "kind": "literal-url",
-      "value": "https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.ps1"
-    },
-    {
-      "path": "tools/computer_use/cua_backend.py",
-      "kind": "literal-url",
-      "value": "https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.sh"
-    },
-    {
-      "path": "tools/neutts_synth.py",
-      "kind": "model-id",
-      "value": "neuphonic/neucodec"
-    },
-    {
-      "path": "tools/neutts_synth.py",
-      "kind": "model-id",
-      "value": "neuphonic/neutts-air-q4-gguf"
-    }
-  ],
-  "temporary_legacy_official_only_callers": [
-    {
-      "path": "scripts/install.ps1",
-      "kind": "literal-url",
-      "value": "https://nodejs.org/dist/latest-v${NodeVersion"
-    },
-    {
-      "path": "scripts/install.sh",
-      "kind": "literal-url",
-      "value": "https://pypi.org/simple/"
-    }
-  ],
+  "temporary_legacy_bundled_runtime_callers": [],
+  "temporary_legacy_official_only_callers": [],
   "managed_download_scan_paths": [
     "apps/desktop/electron/bootstrap-process.ts",
     "apps/desktop/electron/runtime-download-policy.ts",
@@ -1072,7 +745,5 @@
     "tools/neutts_synth.py",
     "tools/sensevoice_stt.py"
   ],
-  "temporary_legacy_implicit_official_entries": [
-    "electron-runtime"
-  ]
+  "temporary_legacy_implicit_official_entries": []
 }

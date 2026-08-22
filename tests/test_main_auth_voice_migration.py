@@ -145,6 +145,7 @@ def test_checked_in_ledger_has_locked_authorities_and_exact_enums() -> None:
         "ff25f03ef33b7943269f5f8b62066040277b2186",
         "0cf5c3c23e125e668bda27f8492e702e98bf6c3c",
         "83223adbcc56d4a960acc806d84a550f4509055b",
+        "e9501893d88243105e87ae758c0574d3ee46e0e6",
     ]
     assert ledger["contract_bookkeeping_paths"] == [
         "docs/security/hermes-managed-download-origins.json",

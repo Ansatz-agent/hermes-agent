@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ast
-import hashlib
 import json
 import subprocess
 import sys
@@ -20,7 +19,6 @@ LEGACY_FIELDS = (
     "temporary_legacy_official_only_callers",
     "temporary_legacy_implicit_official_entries",
 )
-EXPECTED_LEGACY_DIGEST = "1849034d274e95cf0d865b217439676a07ca06476480e33180576451766b1cd5"
 REVIEWED_SCAN_PATHS = {
     "scripts/install.sh",
     "scripts/install.ps1",
@@ -141,7 +139,6 @@ def test_checked_in_manifest_and_checker_accept_current_candidate() -> None:
         "cua-driver",
         "kitten-tts-wheel",
         "hermes-source-archive",
-        "huggingface-model",
         "model-catalog",
         "system-package-ripgrep",
         "system-package-ffmpeg",
@@ -183,12 +180,8 @@ def test_windows_auth_toolchain_build_inputs_are_exactly_pinned() -> None:
 
 def test_checked_in_legacy_exceptions_are_exactly_pinned() -> None:
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    assert manifest["temporary_legacy_implicit_official_entries"] == [
-        "electron-runtime"
-    ]
-    payload = {field: manifest[field] for field in LEGACY_FIELDS}
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    assert hashlib.sha256(encoded).hexdigest() == EXPECTED_LEGACY_DIGEST
+    for field in LEGACY_FIELDS:
+        assert manifest[field] == [], f"legacy managed-download exception remains: {field}"
 
 
 def test_scan_inventory_covers_every_task_6_production_path() -> None:

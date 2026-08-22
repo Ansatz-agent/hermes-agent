@@ -615,6 +615,18 @@ class TestInstallUvInternals:
             call_env = mock_posix.call_args[0][0]
             assert call_env["UV_UNMANAGED_INSTALL"] == str(tmp_path / "bin")
 
+    def test_installers_never_download_or_execute_remote_scripts(self):
+        import inspect
+        import hermes_cli.managed_uv as managed_uv
+
+        source = inspect.getsource(managed_uv._install_uv_posix) + inspect.getsource(
+            managed_uv._install_uv_windows
+        )
+        assert "astral.sh" not in source
+        assert "curl" not in source
+        assert "Invoke-RestMethod" not in source
+        assert "| iex" not in source
+
 
 class TestRuntimeRequestMinorLine:
     """The repair must request the CPython minor line, not the exact patch.
@@ -1286,4 +1298,3 @@ class TestVenvPythonUpdateBoundary:
         expected = Path("/opt/hermes/venv/Scripts/python.exe") \
             if sys.platform == "win32" else Path("/opt/hermes/venv/bin/python")
         assert _venv_python(Path("/opt/hermes/venv")) == expected
-

@@ -6,6 +6,10 @@ import {
   normalizeBootstrapProgress,
   reduceBootstrapState
 } from './bootstrap-progress'
+import {
+  buildManagedDownloadEnvironment,
+  MANAGED_DOMESTIC_DOWNLOADS
+} from './runtime-download-policy'
 
 const DEFAULT_CAPTURE_LIMIT_BYTES = 256 * 1024
 const DEFAULT_HARD_TIMEOUT_MS = 10 * 60_000
@@ -15,11 +19,11 @@ const MAX_EMITTED_LINE_CHARS = 64 * 1024
 const STRUCTURED_PROGRESS_PREFIX = 'HERMES_BOOTSTRAP_PROGRESS '
 
 export const DOMESTIC_BOOTSTRAP_MIRRORS = Object.freeze({
-  pythonPrimary: 'https://mirrors.ustc.edu.cn/pypi/simple',
-  pythonFallback: 'https://pypi.tuna.tsinghua.edu.cn/simple',
-  npmRegistry: 'https://registry.npmmirror.com',
-  nodeBase: 'https://registry.npmmirror.com/-/binary/node/',
-  playwrightBase: 'https://registry.npmmirror.com/-/binary/playwright'
+  pythonPrimary: MANAGED_DOMESTIC_DOWNLOADS.pythonPrimary,
+  pythonFallback: MANAGED_DOMESTIC_DOWNLOADS.pythonSecondary,
+  npmRegistry: MANAGED_DOMESTIC_DOWNLOADS.npmPrimary,
+  nodeBase: MANAGED_DOMESTIC_DOWNLOADS.nodePrimary,
+  playwrightBase: MANAGED_DOMESTIC_DOWNLOADS.playwrightPrimary
 })
 
 const SAFE_ENV_KEYS = new Set([
@@ -91,13 +95,17 @@ export function buildBootstrapEnvironment(
   source: NodeJS.ProcessEnv = process.env,
   options: BuildBootstrapEnvironmentOptions = {}
 ): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {}
+  const env: NodeJS.ProcessEnv = options.useDomesticRuntimeMirrors
+    ? buildManagedDownloadEnvironment(source, 'runtime-install')
+    : {}
 
-  for (const key of SAFE_ENV_KEYS) {
-    const value = source[key]
+  if (!options.useDomesticRuntimeMirrors) {
+    for (const key of SAFE_ENV_KEYS) {
+      const value = source[key]
 
-    if (typeof value === 'string') {
-      env[key] = value
+      if (typeof value === 'string') {
+        env[key] = value
+      }
     }
   }
 
@@ -124,8 +132,11 @@ export function buildBootstrapEnvironment(
 
   if (options.useDomesticRuntimeMirrors) {
     env.UV_DEFAULT_INDEX = DOMESTIC_BOOTSTRAP_MIRRORS.pythonPrimary
+    env.UV_INDEX = DOMESTIC_BOOTSTRAP_MIRRORS.pythonPrimary
+    env.PIP_INDEX_URL = DOMESTIC_BOOTSTRAP_MIRRORS.pythonPrimary
     env.HERMES_UV_FALLBACK_INDEX = DOMESTIC_BOOTSTRAP_MIRRORS.pythonFallback
     env.NPM_CONFIG_REGISTRY = DOMESTIC_BOOTSTRAP_MIRRORS.npmRegistry
+    env.npm_config_registry = DOMESTIC_BOOTSTRAP_MIRRORS.npmRegistry
     env.HERMES_NODE_MIRROR = DOMESTIC_BOOTSTRAP_MIRRORS.nodeBase
     env.PLAYWRIGHT_DOWNLOAD_HOST = DOMESTIC_BOOTSTRAP_MIRRORS.playwrightBase
   }

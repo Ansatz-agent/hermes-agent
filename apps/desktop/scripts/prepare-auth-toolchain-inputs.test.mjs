@@ -5,7 +5,28 @@ import path from 'node:path'
 
 import { test } from 'vitest'
 
-import { prepareAuthToolchainInputs } from './prepare-auth-toolchain-inputs.mjs'
+import { buildAuthPayloadEnvironment, prepareAuthToolchainInputs } from './prepare-auth-toolchain-inputs.mjs'
+
+test('auth payload environment rejects inherited downloader redirects and credentials', () => {
+  const env = buildAuthPayloadEnvironment({
+    HOME: '/Users/example',
+    PATH: '/usr/bin:/bin',
+    PIP_INDEX_URL: 'https://attacker.invalid/pypi',
+    PIP_EXTRA_INDEX_URL: 'https://attacker.invalid/extra',
+    UV_CONFIG_FILE: '/tmp/attacker.toml',
+    HF_TOKEN: 'secret-token',
+    PYTHONPATH: '/tmp/injected'
+  })
+  assert.equal(env.UV_DEFAULT_INDEX, 'https://mirrors.ustc.edu.cn/pypi/simple')
+  assert.equal(env.HERMES_UV_FALLBACK_INDEX, 'https://pypi.tuna.tsinghua.edu.cn/simple')
+  assert.equal(env.PIP_INDEX_URL, 'https://mirrors.ustc.edu.cn/pypi/simple')
+  assert.equal(env.PIP_EXTRA_INDEX_URL, undefined)
+  assert.equal(env.UV_CONFIG_FILE, undefined)
+  assert.equal(env.HF_TOKEN, undefined)
+  assert.equal(env.PYTHONPATH, undefined)
+  assert.equal(JSON.stringify(env).includes('attacker.invalid'), false)
+  assert.equal(JSON.stringify(env).includes('secret-token'), false)
+})
 
 function makeFixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-auth-inputs-'))

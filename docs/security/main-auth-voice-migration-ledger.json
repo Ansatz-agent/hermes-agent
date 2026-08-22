@@ -3875,6 +3875,76 @@
     },
     {
       "match": "exact",
+      "path": "apps/desktop/electron/runtime-download-policy.ts",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/runtime-download-policy.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/data/managed-download-origins.json",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/managed_downloads.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/model_catalog.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_managed_downloads.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_model_catalog.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_install_ps1_browser_install.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_install_sh_browser_install.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/tools/test_browser_use_cli.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/tools/test_lazy_deps.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/tools/test_sensevoice_stt.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tools/browser_use_cli.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/computer_use/cua_backend.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
       "path": "uv.lock",
       "owner": "common-product"
     },

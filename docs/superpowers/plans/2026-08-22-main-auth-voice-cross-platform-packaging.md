@@ -875,7 +875,7 @@ git commit -m "feat(desktop): add dual-platform packaged auth runtime"
 - Modify: `tools/neutts_synth.py`
 - Modify: `tests/tools/test_lazy_deps.py`, `tests/tools/test_sensevoice_stt.py`, `tests/tools/test_browser_use_cli.py`, `tests/hermes_cli/test_tools_config.py`, `tests/hermes_cli/test_managed_uv.py`, `tests/hermes_cli/test_setup.py`, `tests/hermes_cli/test_model_catalog.py`, `tests/cli/test_update_command.py`, `tests/test_install_sh_browser_install.py`, `tests/test_install_ps1_browser_install.py`
 
-- [ ] **Step 1: Write failing recursive propagation tests**
+- [x] **Step 1: Write failing recursive propagation tests**
 
 The tests must prove:
 
@@ -908,7 +908,7 @@ npm run test --workspace apps/desktop -- \
 
 Expected: targeted failures show the existing nested official/remote-script paths.
 
-- [ ] **Step 2: Implement one immutable policy builder**
+- [x] **Step 2: Implement one immutable policy builder**
 
 Use this public TypeScript shape:
 
@@ -939,7 +939,7 @@ def managed_download_environment(
 
 Both implementations copy only an explicit safe environment allowlist and add registered mirror variables. They never accept a renderer-provided URL.
 
-- [ ] **Step 3: Remove unsafe nested download behavior**
+- [x] **Step 3: Remove unsafe nested download behavior**
 
 Replace:
 
@@ -969,7 +969,7 @@ Do not silently disable Computer Use or Browser Use. The UI/CLI must report why 
 
 `hermes_cli/managed_uv.py` must use the registered bundled or domestic-PyPI uv wheel path and never `curl`/`irm` an Astral script. KittenTTS's GitHub-only wheel and Hermes source archives cannot run automatically on a clean packaged installation unless a reviewed domestic origin and hash are registered; otherwise the product gives a clear administrator-supplied-artifact/update message. HuggingFace-backed models use the registered domestic endpoint first with pinned repository revision/file hashes and sanitized headers. The origin checker derives these obligations from discovered callers, so adding a later download sink without updating policy and tests fails the gate.
 
-- [ ] **Step 4: Add a controlled-proxy integration test**
+- [x] **Step 4: Add a controlled-proxy integration test**
 
 The test launches local primary/secondary/official fixtures, rewrites only the manifest fixture endpoints, and records request order. Assert:
 
@@ -982,7 +982,7 @@ assert retry_resumes_without_marking_partial_download_ready()
 
 This is a local deterministic test; it does not contact real mirrors.
 
-- [ ] **Step 5: Run the complete download gate and commit**
+- [x] **Step 5: Run the complete download gate and commit**
 
 Run:
 

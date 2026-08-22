@@ -292,8 +292,9 @@ def install_cli(timeout_s: int = 600) -> Tuple[bool, str]:
             "(https://docs.astral.sh/uv/) and run `uv tool install browser-use`."
         )
 
-    env = dict(os.environ)
-    env["UV_NO_CONFIG"] = "1"
+    from hermes_cli.managed_downloads import managed_download_environment
+
+    env = managed_download_environment("lazy-feature")
     if bin_dir:
         try:
             Path(bin_dir).mkdir(parents=True, exist_ok=True)
