@@ -1,6 +1,7 @@
 """Tests for acp_adapter.entry startup wiring."""
 
 import sys
+from types import SimpleNamespace
 
 import acp
 import pytest
@@ -42,19 +43,17 @@ def test_main_skips_configured_mcp_discovery_when_requested(monkeypatch):
 
     assert discovery_calls == []
 
-
-
-
-
-
-
-
-
-
 def test_main_setup_offers_browser_install_when_tty(monkeypatch):
     """When stdin is a TTY and the user answers yes, model setup is followed
     by a browser-tools bootstrap call."""
-    monkeypatch.setattr("hermes_cli.main.main", lambda: None)
+    # The real hermes_cli.main import is guarded at module load.  This unit test
+    # exercises only the already-authorized ACP setup flow; direct ACP startup
+    # hard-gate coverage lives in client_auth/test_entrypoints.py.
+    monkeypatch.setitem(
+        sys.modules,
+        "hermes_cli.main",
+        SimpleNamespace(main=lambda: None),
+    )
     monkeypatch.setattr("sys.stdin.isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda *_args, **_kwargs: "y")
 
@@ -68,15 +67,6 @@ def test_main_setup_offers_browser_install_when_tty(monkeypatch):
     entry.main(["--setup"])
 
     assert bootstrap_calls == [False]
-
-
-
-
-
-
-
-
-
 
 def test_main_setup_browser_propagates_browser_failure(monkeypatch):
     """If browser install fails, exit code is 1."""

@@ -41,6 +41,15 @@ BACKEND_SCOPE_TOKEN_TTL_SECONDS = 60.0
 _BACKEND_SCOPE_TOKEN_BYTES = 32
 
 
+def _test_runtime_suffix() -> str:
+    """Return a compact broker namespace only under the test isolation marker."""
+    marker = os.environ.get("HERMES_TEST_ISOLATION", "")
+    if not marker:
+        return ""
+    digest = hashlib.blake2s(marker.encode("utf-8"), digest_size=4).hexdigest()
+    return f"-t{digest}"
+
+
 class AuthState(StrEnum):
     CHECKING = "checking"
     AUTHENTICATED = "authenticated"
@@ -496,7 +505,7 @@ class WindowsNamedPipeEndpoint:
         compact_sid = hashlib.blake2s(
             owner_sid.encode("ascii"),
             digest_size=16,
-        ).hexdigest()
+        ).hexdigest() + _test_runtime_suffix()
         return cls(
             pipe_name=rf"\\.\pipe\hermes-auth-{compact_sid}",
             owner_sid=owner_sid,
@@ -733,7 +742,7 @@ class UnixEndpoint:
         elif sys.platform == "darwin":
             if not darwin_user_temp:
                 raise AuthRequired("runtime_unavailable")
-            runtime_root = _darwin_user_temp_dir() / "ha"
+            runtime_root = _darwin_user_temp_dir() / f"ha{_test_runtime_suffix()}"
         else:
             raise AuthRequired("runtime_unavailable")
         return cls.for_directory(runtime_root, random_name=random_name)
@@ -2531,6 +2540,7 @@ def _validate_peer_uid(connection: socket.socket) -> None:
 
 
 def _linux_runtime_root() -> Path:
+    suffix = _test_runtime_suffix()
     configured = os.environ.get("XDG_RUNTIME_DIR")
     if configured:
         base = Path(configured)
@@ -2544,8 +2554,8 @@ def _linux_runtime_root() -> Path:
             or stat.S_IMODE(details.st_mode) != 0o700
         ):
             raise AuthRequired("runtime_unavailable")
-        return base / "hermes-remote-auth"
-    return Path(tempfile.gettempdir()) / f"hermes-remote-auth-{os.getuid()}"
+        return base / f"hermes-remote-auth{suffix}"
+    return Path(tempfile.gettempdir()) / f"hermes-remote-auth-{os.getuid()}{suffix}"
 
 
 def _darwin_user_temp_dir() -> Path:

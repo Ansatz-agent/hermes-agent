@@ -907,6 +907,28 @@ def test_macos_unix_runtime_endpoint_enforces_permissions_and_peer_uid():
         _assert_unix_endpoint_security(Path(temporary))
 
 
+@pytest.mark.macos_only
+def test_macos_runtime_endpoint_is_namespaced_for_test_isolation(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime._darwin_user_temp_dir",
+        lambda: tmp_path,
+    )
+    monkeypatch.setenv("HERMES_TEST_ISOLATION", "test-file-a")
+    first = runtime_endpoint()
+    monkeypatch.setenv("HERMES_TEST_ISOLATION", "test-file-b")
+    second = runtime_endpoint()
+    monkeypatch.delenv("HERMES_TEST_ISOLATION")
+    production = runtime_endpoint()
+
+    assert first.root != second.root
+    assert first.root.name.startswith("ha-t")
+    assert second.root.name.startswith("ha-t")
+    assert production.root == tmp_path / "ha"
+
+
 @pytest.mark.linux_only
 def test_linux_unix_runtime_endpoint_enforces_permissions_and_peer_uid():
     with tempfile.TemporaryDirectory(prefix="ha-runtime-") as temporary:
@@ -946,7 +968,7 @@ def test_macos_runtime_endpoint_uses_darwin_private_temp_and_short_path():
     endpoint = runtime_endpoint()
 
     assert isinstance(endpoint, UnixEndpoint)
-    assert endpoint.root.name == "ha"
+    assert endpoint.root.name.startswith("ha-t")
     assert endpoint.root.stat().st_mode & 0o777 == 0o700
     assert len(os.fsencode(endpoint.socket_path)) < 104
 
