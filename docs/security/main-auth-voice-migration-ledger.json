@@ -17,7 +17,9 @@
     "tests/test_hermes_managed_downloads.py",
     "tests/test_main_auth_voice_migration.py"
   ],
-  "post_tip_commits": [],
+  "post_tip_commits": [
+    "a6e8792b0c701287eecee97c692956e10a35b5d8"
+  ],
   "owner_enum": [
     "common-product",
     "package-shared",
