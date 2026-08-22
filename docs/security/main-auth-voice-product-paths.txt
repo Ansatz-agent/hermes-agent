@@ -54,10 +54,12 @@ apps/desktop/scripts/before-pack.mjs
 apps/desktop/scripts/build-auth-toolchain.mjs
 apps/desktop/scripts/build-backend-payload.mjs
 apps/desktop/scripts/exe-identity-options.mjs
+apps/desktop/scripts/macos-dmg-builder.mjs
 apps/desktop/scripts/package-audit.mjs
 apps/desktop/scripts/prepare-auth-toolchain-inputs.mjs
 apps/desktop/scripts/prepare-package-inputs.mjs
 apps/desktop/scripts/prepare-windows-git-runtime.mjs
+apps/desktop/scripts/run-electron-builder.mjs
 apps/desktop/scripts/set-exe-identity.mjs
 apps/desktop/scripts/stage-native-deps.mjs
 apps/desktop/src/app/chat/composer/controls.tsx

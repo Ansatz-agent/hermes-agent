@@ -73,7 +73,8 @@
     "9b9be2ab302457e85aec5fe8aef173b2b2f3d211",
     "491accd211727f64576aae168e8d8d8e7e4d6967",
     "49c27bc2b6bde2f8c46f60a8d4e9ddd413f20da4",
-    "84078b95e55c9e7231bda9e43b1c3cc10b4e73d7"
+    "84078b95e55c9e7231bda9e43b1c3cc10b4e73d7",
+    "0bd282242c76d055c278ab3b8d1fc15a82fe3bc3"
   ],
   "parity_reason_enum": [
     "windows-adapter-addition",
@@ -191,6 +192,13 @@
       "tests": ["scripts/desktop-windows-contract.test.mjs"]
     },
     {
+      "path": "apps/desktop/scripts/macos-dmg-builder.mjs",
+      "reason": "package-producer-interface-extraction",
+      "owner": "package-macos",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/scripts/run-electron-builder.test.mjs"]
+    },
+    {
       "path": "apps/desktop/scripts/package-audit.mjs",
       "reason": "windows-adapter-addition",
       "owner": "package-shared",
@@ -217,6 +225,13 @@
       "owner": "package-windows",
       "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
       "tests": ["scripts/desktop-windows-contract.test.mjs"]
+    },
+    {
+      "path": "apps/desktop/scripts/run-electron-builder.mjs",
+      "reason": "package-producer-interface-extraction",
+      "owner": "package-shared",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/scripts/run-electron-builder.test.mjs"]
     },
     {
       "path": "docs/security/hermes-managed-download-origins.json",
@@ -2646,6 +2661,11 @@
     },
     {
       "match": "exact",
+      "path": "apps/desktop/scripts/macos-dmg-builder.mjs",
+      "owner": "package-macos"
+    },
+    {
+      "match": "exact",
       "path": "apps/desktop/scripts/package-audit.mjs",
       "owner": "package-shared"
     },
@@ -2673,6 +2693,16 @@
       "match": "exact",
       "path": "apps/desktop/scripts/prepare-windows-git-runtime.mjs",
       "owner": "package-windows"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/run-electron-builder.mjs",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/run-electron-builder.test.mjs",
+      "owner": "test-evidence"
     },
     {
       "match": "exact",
