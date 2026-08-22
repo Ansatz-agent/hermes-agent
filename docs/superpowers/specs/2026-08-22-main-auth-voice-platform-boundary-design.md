@@ -1,169 +1,255 @@
-# Main Auth and Voice Platform Boundary Design
+# Main Authentication and Voice Platform Boundary Design
 
 ## Goal
 
-Make `main` the runnable, cross-platform product baseline for Hermes authentication and voice. macOS DMG and Windows release branches must add only the installer, packaging payload, platform bootstrap, and artifact-specific verification required by that distribution.
+Make `main` the single source-runnable product baseline for Hermes authentication and Voice/SenseVoice. The macOS and Windows release branches must consume that common behavior and add only delivery concerns: installer construction, bundled payload materialization, packaged-runtime discovery, platform bootstrap, signing, artifact workflows, and installed-artifact evidence.
 
-## Baselines and authoritative implementations
+The primary boundary is capability ownership:
 
-- Target base: `ansatz/main@9bd88c530716279a089ed18428dc785732b6e1be`.
-- Validated macOS behavior: `release/desktop-dmg-auth-e2e@80db6d8265f805cec46817d913982e4c5f6405c4`.
-- Validated Windows behavior: `integration/desktop-windows-auth-e2e@c2d3d09aab921130171ff611e260c13e9c6d477c`.
-- Original authentication feature: `feature/remote-auth-hard-gate@763465daf019c8755813659b98a72c6c6f4662e3`.
-- Original voice feature: `feature/desktop-dmg-voice-confirmation@3ad4a126606079c77e7adca6d8661cd0c8c0a93b`.
+- Login policy, session lifecycle, hard-gate decisions, logout behavior, protected-entrypoint coverage, and Voice behavior are common product capabilities and belong to `main`.
+- Keychain versus Windows Credential Manager and Unix socket versus Windows named pipe are internal operating-system adapters for those common capabilities. They also belong to `main` because source execution on each supported operating system must work without a release overlay.
+- DMG, NSIS, packaged payloads, mirrors, signing, installer repair, quarantine handling, and exact-artifact test drivers are platform delivery capabilities and do not belong to `main`.
 
-The migration must preserve authorship where commits can be replayed without importing platform packaging. The validated macOS and Windows branches are behavioral references, not branches to merge wholesale.
+No macOS-only or Windows-only user-facing product capability is introduced by this migration.
 
-## Required behavior in `main`
+## Locked references
 
-`main` must be directly runnable from source on macOS and Windows. Source execution is not an authentication bypass.
+The references for this reconstruction are:
 
-Authentication behavior in `main` includes:
+| Role | Reference |
+| --- | --- |
+| Target base | `ansatz/main@9bd88c530716279a089ed18428dc785732b6e1be` |
+| Accepted macOS product behavior and shipping source | `release/desktop-dmg-auth-e2e@80db6d8265f805cec46817d913982e4c5f6405c4` |
+| Replayable macOS integration history | `integration/desktop-dmg-auth-e2e@403e1c3873d1679720c1403d7e38acd289804d69` |
+| Accepted Windows product behavior | `integration/desktop-windows-auth-e2e@c2d3d09aab921130171ff611e260c13e9c6d477c` |
+| Latest local Windows documentation tip | `integration/desktop-windows-auth-e2e@56b402c63b22da81f906ff1f7398a90cfd17bd81` |
+| Original common authentication feature | `feature/remote-auth-hard-gate@763465daf019c8755813659b98a72c6c6f4662e3` |
+| Original complete Voice feature | `feature/desktop-dmg-voice-confirmation@3ad4a126606079c77e7adca6d8661cd0c8c0a93b` |
+| Shared pre-integration baseline | `4ef56cef4c6eecc009e2284fe2f1df20664f357a` |
 
-- The fixed account server `https://c2sml.cn/agent`.
-- Online authentication before any protected Hermes runtime or interface starts.
-- Central Auth Guard enforcement for Desktop GUI, CLI, Ink TUI, gateway, serve, cron, MCP, ACP, and background/service entrypoints.
-- Only `hermes login`, `hermes logout`, `hermes auth status`, `hermes --help`, and `hermes --version` are usable while signed out.
-- Background entrypoints never request a password and direct the user to `hermes login`.
-- Session material is stored only through the operating system secure credential store. It is never written to config files, logs, install directories, or bootstrap state.
-- The client offers no registration, invitation, password recovery, or account creation surface.
-- Login, logout, online session revalidation, expiry/revocation relocking, protected IPC rejection, and backend shutdown behavior are shared product behavior.
-- Authentication errors fail closed and expose only normalized, non-sensitive reasons.
+`git ls-remote ansatz refs/heads/main` returned `9bd88c530716279a089ed18428dc785732b6e1be` on 2026-08-22. Implementation must repeat that check before the first source change and must stop if the remote tip moved.
 
-Voice behavior in `main` includes:
+### Why the replay source is not the release branch
 
-- Desktop recording and voice composer behavior.
-- SenseVoice transcription integration and readiness handling.
-- Voice timing, barge-in, automatic dictation, provider configuration, and shared localization.
-- Python transcription registry and transcription tools.
-- Voice unit and integration tests that do not depend on a packaged installer.
+`release/desktop-dmg-auth-e2e` and `integration/desktop-dmg-auth-e2e` are not in an ancestor relationship. Their merge base is the old shared baseline:
 
-Voice failure must remain isolated from authentication: unavailable voice models or providers may disable voice actions, but must not prevent login or weaken the Auth Guard.
+```bash
+git merge-base release/desktop-dmg-auth-e2e integration/desktop-dmg-auth-e2e
+# 4ef56cef4c6eecc009e2284fe2f1df20664f357a
+```
 
-## Code ownership boundary
+The release branch starts from squash commit `553adec5b2` and contains the accepted shipping source. The integration branch preserves the individual commits needed for an auditable replay. Their final product code is equivalent; the 15 path differences are CI credential/Gatekeeper drivers and release documentation:
 
-### `main` owns product runtime behavior
+```bash
+git diff --name-status 403e1c3873d1679720c1403d7e38acd289804d69 \
+  80db6d8265f805cec46817d913982e4c5f6405c4
+```
 
-`main` owns code that answers what authentication or voice does, regardless of installation method:
+The implementation plan may therefore replay product commits from `403e1c3873`, but functional parity must always be measured against shipping reference `80db6d8265`.
 
-- Authentication client, session runtime, central guard, entrypoint wrappers, and safe status protocol.
-- Desktop login/logout UI, protected root, guarded IPC, and Electron-to-Python authentication protocol.
-- Secure credential storage calls through the cross-platform credential abstraction.
-- Platform-neutral authentication state, runtime scope, progress event contracts, and renderer state.
-- Voice and SenseVoice application/runtime code.
-- Root dependency declarations required to run authentication and voice from source.
-- Cross-platform behavior tests and static entrypoint inventories.
+### Path-count definition
 
-Code may branch on `process.platform` or the Python platform only when the operating system capability is part of runtime behavior, such as selecting a secure credential store. It must not resolve packaged resources or installer locations in `main`.
+Using the final release DMG reference `80db6d8265`, Windows behavior reference `c2d3d09aab`, and shared baseline `4ef56cef4c`, the two final branches have 285 common changed paths. Of those, 227 have identical final blobs and 58 differ.
 
-### macOS DMG release branch owns delivery to macOS
+The count is specifically the intersection of:
 
-The macOS release overlay owns:
+```bash
+git diff --name-only 4ef56cef4c..80db6d8265
+git diff --name-only 4ef56cef4c..c2d3d09aab
+```
 
-- DMG build commands and Electron Builder macOS artifact configuration.
-- Bundled backend and authentication payload generation, signing, hashing, staging, and validation.
-- macOS shell installation/bootstrap, mirror selection, runtime placement, and install markers.
-- Gatekeeper, quarantine, architecture, signature, mounted-DMG, installed-App, and exact-artifact tests.
-- macOS packaging documentation and release evidence.
+It must not be recomputed with `403e1c3873` substituted for the release reference, because the integration tree retains CI/evidence paths intentionally absent from the shipping release. Path intersection is only a discovery aid; responsibility and behavioral parity decide ownership.
 
-It must not redefine authentication policy or voice behavior.
+## Required common behavior
 
-### Windows release branch owns delivery to Windows
+### Authentication
 
-The Windows release overlay owns:
+`main` must provide the following behavior from source on macOS and Windows:
 
-- NSIS and Windows Electron Builder artifact configuration.
-- PowerShell installation/bootstrap, payload staging, managed runtime placement, and install markers.
-- Windows packaged-process containment, installer recovery, and artifact-specific runtime discovery.
-- Windows packaging workflow and clean-VM installed-artifact tests.
-- Windows packaging documentation and release evidence.
+- The account server is fixed to `https://c2sml.cn/agent`.
+- The client provides no registration, invitation, password-recovery, or account-creation surface.
+- Session material is stored only through the operating-system secure credential abstraction. It is never written to config files, logs, install directories, bootstrap state, or renderer-readable diagnostics.
+- Restored sessions are checked online before protected state is entered.
+- Login, logout, expiry, revocation, Retry, bridge recovery, and owner recovery fail closed.
+- Desktop GUI, CLI, Ink TUI, gateway, serve, cron, MCP, ACP, and background/service entrypoints all use the central Auth Guard.
+- While signed out, only `hermes login`, `hermes logout`, `hermes auth status`, `hermes --help`, and `hermes --version` are allowed.
+- Background entrypoints never prompt for a password and instruct the operator to run `hermes login`.
+- Protected backend, Agent, gateway, HTTP/WS listener, protected renderer root, and protected IPC do not start or mount before authorization.
+- Logout clears the current scope, stops acceptance of new tasks, suppresses results from the old runtime epoch, and immediately returns Desktop to the login gate.
+- A fast logout followed by login to another account cannot publish the prior account's authenticated runtime state.
+- Source execution and packaged execution use the same authorization decisions.
 
-It must not redefine authentication policy or voice behavior.
+### Safe pre-authentication progress
 
-### Packaging metadata is not product runtime
+The common layer owns the safe progress contract and login-gate presentation:
 
-Minimal-auth lock projects, payload manifests, bundled-resource lookup, `process.resourcesPath` handling, platform installer scripts, build workflows, and exact-artifact drivers stay out of `main` even when macOS and Windows currently contain similar copies. A shared runtime protocol can live in `main`; the files that materialize that protocol into an installer remain release overlays.
+- `hermes:bootstrap:get` remains protected and returns `AUTH_REQUIRED` while signed out.
+- The only signed-out bootstrap status channel is `hermes:auth-bootstrap:get`.
+- Its payload is bounded, structured, sanitized, and contains no raw command, path, Cookie, Session, CSRF value, password, Keychain value, or terminal transcript.
+- Unknown labels are sanitized and length-limited.
+- A percentage is shown only when a producer supplies a real total.
+- Retry is enabled only after a declared failure and never resubmits credentials.
+- `runtime_ready` is part of the common account/runtime status. Protected product mounting requires both an authenticated scope and `runtime_ready`.
+- `desktop-runtime-gate.ts`, `authenticated-runtime-preparation.ts`, `bootstrap-progress.ts`, the safe renderer progress components, and their state contracts are common product logic. A release overlay may produce progress events, but it may not redefine their safety or mounting semantics.
 
-The current `.github/workflows/desktop-windows-package.yml` at `ansatz/main@9bd88c5` is therefore removed from the common product branch and retained in the Windows packaging branch.
+### Voice/SenseVoice
+
+`main` owns the complete Voice behavior already accepted in the final macOS DMG:
+
+- Desktop recording and composer controls.
+- Automatic SenseVoice transcription.
+- Readiness, download, retry, lazy dependency loading, and model-cache behavior.
+- Voice timing, recorder teardown, and barge-in behavior.
+- Provider configuration without inventing a provider requirement for local SenseVoice.
+- Python transcription registry and tools.
+- Shared configuration defaults, example configuration, types, and localization.
+- Authentication protection for transcription endpoints and Voice UI placement behind the protected root.
+
+A blob comparison confirmed that the Voice product paths in `3ad4a126606079c77e7adca6d8661cd0c8c0a93b` match the shipping DMG reference. Later commits touching those paths are authentication integration changes, not missing Voice features. The Voice commit is therefore the authoritative common Voice source.
+
+Voice failure is isolated from authentication: a missing model or provider disables the affected Voice action but cannot block login, create an alternate protected entrypoint, or weaken the Auth Guard.
+
+## Ownership boundary
+
+### `main`: common capability and source-runtime adapters
+
+`main` owns:
+
+- `hermes_cli/client_auth/**`, common CLI commands, entrypoint wrappers, manifest, static help, and native evidence tools.
+- The central guard wiring across Desktop, CLI, TUI, gateway, serve, cron, MCP, ACP, Docker/s6 background services, and direct Python entrypoints.
+- Electron auth bridge/coordinator/scope, guarded IPC, safe preload APIs, backend ownership, protected-root ordering, safe progress contract, runtime epoch suppression, and GUI logout.
+- Cross-platform secure-credential and local-owner transports required for source mode, including macOS secure-store/Unix transport behavior and Windows Credential Manager/named-pipe behavior behind the same interfaces.
+- Platform-neutral Electron hardening that protects common authenticated behavior, such as trusted-renderer, external-open, media-permission, preview-webview, and normalized renderer logging policies when they are not coupled to an installer.
+- The complete Voice/SenseVoice source implementation and source-install dependency declarations.
+- Neutral `desktop-bundle` update messaging used by shared product files. Platform overlays must not fork `hermes_cli/config.py`, `update_cmd.py`, or `web_server.py` merely to say “DMG” or “installer”.
+- Common source-mode tests, the multi-OS native authentication evidence matrix, functional-parity inventories, and platform-boundary checks.
+
+OS-specific adapter code is permitted in `main` only when all of these conditions hold:
+
+1. It implements a common authentication or Voice interface.
+2. Source execution on that OS requires it.
+3. It does not inspect `process.resourcesPath`, packaged payloads, installer state, or release artifacts.
+4. Its behavior is covered by source-mode tests on the corresponding OS.
+
+### macOS release overlay
+
+The macOS branch owns only:
+
+- DMG/Electron Builder mac artifact configuration.
+- Bundled backend and authentication-toolchain payload generation, hashing, staging, signing, and validation.
+- Packaged-resource lookup and macOS runtime placement.
+- Shell bootstrap used only by the installed application, domestic mirrors used only for packaged first launch, install markers, and platform repair.
+- Code signing, notarization, Gatekeeper/quarantine, architecture, mounted-DMG, installed-App, and exact-artifact tests.
+- macOS release workflows, CI credential drivers, build documentation, and sanitized acceptance evidence.
+
+It must not modify common authentication policy, `client_auth/**`, guarded IPC policy, Auth Gate behavior, GUI logout, runtime epoch handling, or Voice behavior.
+
+### Windows release overlay
+
+The Windows branch owns only:
+
+- NSIS/Electron Builder Windows artifact configuration.
+- Bundled runtime/payload staging, packaged Git/uv/Python discovery, and PowerShell installer/bootstrap used by the installed application.
+- Windows installer markers, packaged process containment, installer recovery, and installed-artifact runtime discovery.
+- Windows packaging workflows, exact-artifact drivers, clean-VM installed tests, build documentation, and sanitized release evidence.
+
+It must not delete the common GUI logout item, fork common update messaging, keep a private copy of `client_auth/runtime.py`, or redefine Auth Guard/Voice behavior.
+
+### Explicitly forbidden in `main`
+
+The common branch must reject:
+
+- `desktop_auth_runtime/**` and minimal-auth bundled lock projects.
+- DMG/NSIS contracts and artifact builders.
+- `bootstrap-payload*`, `bootstrap-toolchain*`, `bundled-runtime*`, and packaged backend/auth-toolchain materialization.
+- Packaged-resource lookup using `process.resourcesPath`.
+- Signing, notarization, Gatekeeper/quarantine, and platform-mirror configuration.
+- `.github/workflows/desktop-windows-package.yml`, `.github/workflows/desktop-dmg-gatekeeper.yml`, and exact-artifact credential drivers.
+- Packaged-only PowerShell and shell tests, while retaining the existing generic source-installer tests already present in `main`.
+- DMG/Windows release evidence and platform packaging design documents.
+
+## Dependency ownership
+
+`main` owns dependencies required to run common authentication and Voice from source, including `keyring` and the `sensevoice` extra. Release-only dependency pinning, bundled offline projects, and packaged-browser/toolchain locks remain overlays.
+
+Before implementation, the plan must resolve `pyproject.toml`, `uv.lock`, and `uv.toml` explicitly:
+
+- The common lock is regenerated from the common dependency declarations; it is not copied from a packaged runtime.
+- `uv lock --check` is used only after regeneration.
+- Any `exclude-newer` timestamp retained in `main` must be justified as repository-wide source reproducibility, not as a bundled Desktop workaround.
+- `setuptools==83.0.0` remains in `main` only if source authentication or Voice requires it; a bundled-runtime-only pin stays in an overlay.
 
 ## Migration strategy
 
-Use a clean-base reconstruction rather than merging either final packaging branch wholesale:
+Use a clean-base reconstruction; never merge either shipping platform branch wholesale:
 
-1. Start `integration/main-auth-voice-base` from `ansatz/main@9bd88c5`.
-2. Remove the Windows packaging workflow from the common branch.
-3. Replay the original authentication and voice feature commits while preserving authorship.
-4. Replay cross-platform fixes that are required by both validated release branches.
-5. For files where macOS and Windows differ, extract or retain a platform-neutral runtime core and move resource discovery, installer execution, and packaged-runtime validation into the respective release overlays.
-6. Verify the common tree against both validated branches so no authentication or voice regression is lost.
-7. Merge the reviewed common branch into `main` without importing either platform installer.
-8. Create new macOS and Windows release branches from the updated `main`, then apply only their platform overlays. Preserve the existing release branches as historical acceptance references; do not force-rewrite them.
+1. Reconfirm `ansatz/main` and the locked reference SHAs.
+2. Add an executable allowlist-based common-branch boundary checker and remove the misplaced Windows packaging workflow already present in the target base.
+3. Merge the reviewed original authentication history.
+4. Replay every accepted common authentication commit in original dependency order, including safe bootstrap IPC/progress, GUI logout, bridge recovery, `runtime_ready`, runtime epoch suppression, and native owner recovery.
+5. Cherry-pick the complete Voice commit, resolving overlapping files by preserving both authentication and Voice.
+6. Extract the source-runtime portions of the accepted Windows owner/deadline/named-pipe work into the common implementation; do not import Windows packaging files.
+7. Reconcile dependencies and regenerate deterministic inventories without losing any protected entrypoint.
+8. Prove product-file parity against the shipping DMG reference, with written waivers for intentional neutralization or Windows source support.
+9. Run macOS and Windows source-mode acceptance before proposing a merge into `main`.
+10. Only after approval, merge the common branch and recreate the platform release branches as thin overlays based on the new `main`.
 
-The current final branches change 285 common paths relative to the old baseline. Of those, 227 have identical final blobs and 58 differ. Identical files are strong common-layer candidates, but inclusion is decided by responsibility, not by automatic file intersection.
+The implementation plan contains the complete commit classification and is authoritative for replay. Handwritten reconstruction is not an acceptable substitute when an accepted product commit exists.
+
+## Required proof gates
+
+Passing tests alone does not prove equivalence. The candidate must pass all of the following:
+
+1. **Product-file parity:** a versioned manifest lists every common product path expected from the final DMG. `git diff <candidate> 80db6d8265 -- <manifest paths>` must be empty except for reviewed waivers describing neutral platform wording, Windows source adapters, or newer common tests.
+2. **Reverse boundary:** every path changed from `ansatz/main` must be covered by an approved `main` ownership rule. Packaging-like new files fail by pattern even when their exact names were not known when the checker was written.
+3. **Entrypoint non-regression:** the generated common entrypoint manifest contains every non-installer protected entrypoint present in the accepted DMG manifest.
+4. **Signed-out IPC isolation:** `hermes:bootstrap:get` returns `AUTH_REQUIRED`; only sanitized `hermes:auth-bootstrap:get` is available to the login surface.
+5. **Account epoch isolation:** logout and rapid account switching cannot publish a prior epoch's authenticated runtime status.
+6. **macOS source acceptance:** login, logout, restore plus online validation, expiry/revocation relock, all-entrypoint rejection, backend lifecycle, and Voice smoke.
+7. **Windows source acceptance:** the same behavior using the Windows secure-store and named-pipe owner transport, including cold-start and Retry races.
+8. **Voice parity:** the accepted Voice paths remain blob-equivalent to `3ad4a12660` unless a documented authentication-integration change is required.
 
 ## Runtime flows
 
 ### Source execution
 
-1. A permitted public command or the authentication UI starts.
-2. The common authentication runtime checks the operating system secure credential store.
-3. Any restored session is validated online against the fixed server.
-4. Only an authenticated scope can open protected IPC or start a protected backend/entrypoint.
-5. Logout or remote session invalidation revokes the local scope, stops accepting new work, and returns Desktop to the login gate.
+1. Only the public authentication surface or an allowed public command starts.
+2. The common runtime reads the OS secure store through its adapter.
+3. A restored session is validated online.
+4. The common auth scope is issued for the current session epoch.
+5. Guarded IPC and protected backend startup become available.
+6. The protected root mounts exactly once after both auth scope and common runtime readiness are true.
+7. Logout or remote invalidation revokes the scope, increments the epoch, ignores stale preparation results, stops new work, and returns to the gate.
 
-No installer or bundled payload is involved in this flow.
+No installer or bundled payload participates in source execution.
 
 ### Packaged execution
 
-1. The platform release overlay prepares the minimal authentication runtime without starting Hermes backend services.
-2. The common authentication UI and protocol perform the same source-runtime login flow.
-3. After authentication succeeds, the platform overlay prepares the full Hermes runtime and emits sanitized common progress events.
-4. The common Auth Guard mounts the protected product only after both authenticated scope and runtime readiness are true.
+1. The platform overlay prepares only the minimal login runtime without starting protected Hermes services.
+2. The common login/session flow runs unchanged.
+3. After authentication, the overlay prepares the full packaged runtime and emits only sanitized common progress events.
+4. The common runtime gate sets `runtime_ready` after validated preparation.
+5. The common Auth Guard mounts the protected product.
 
-## Failure handling and security invariants
+## Failure and security invariants
 
-- Missing dependencies, credential-store failures, bridge failures, timeouts, and network errors remain locked states.
-- Retry restarts only the failed safe operation and never reuses or retransmits a password automatically.
-- Installer output is sanitized before it becomes a progress event. Raw commands, paths, cookies, sessions, CSRF values, passwords, or credential-store contents never reach the renderer.
-- Unknown or malformed progress events are ignored or converted to a safe failure; percentages are shown only when the producer supplies a real total.
-- Voice initialization and model download failures surface as voice-specific errors and never open protected product surfaces.
-- Packaging overlays may implement recovery for their own runtime, but cannot override Auth Guard decisions.
+- Every missing dependency, credential-store error, bridge failure, timeout, network error, malformed progress event, or owner race remains locked.
+- Retry repeats only the failed safe operation and never reuses a password.
+- Raw installer output never reaches the renderer.
+- Protected IPC stays fail-closed during bootstrap and teardown.
+- Voice failures never become authentication failures and never open an alternate service path.
+- Platform overlays cannot override auth scope or runtime epoch decisions.
+- Logs and evidence remain sanitized and never include credentials or session material.
 
-## Verification gates
-
-### Common `main` gate
-
-- Python authentication suite, entrypoint inventory, static help generator, and credential-storage tests.
-- Desktop typecheck, lint, relevant Vitest, and Auth Guard E2E in source mode.
-- Signed-out rejection tests for GUI, CLI, TUI, gateway, serve, cron/background, MCP, and ACP.
-- Login, restored-session online validation, logout, expiry/revocation, protected IPC, and backend lifecycle tests.
-- Voice/SenseVoice Python and Desktop tests, including provider readiness and failure isolation.
-- Ruff, YAML, shell syntax for common scripts, lock consistency, and `git diff --check`.
-- A boundary test that rejects DMG, NSIS, platform installer, bundled payload, and packaging-workflow files in the common branch.
-
-### macOS release overlay gate
-
-- Common gate plus DMG contracts, payload integrity, real DMG build, Gatekeeper/quarantine, clean install, login/logout, Voice smoke, and installed-App execution.
-- An artifact inventory proving that Windows workflows, NSIS, PowerShell installers, and CI credential drivers are absent from the DMG.
-
-### Windows release overlay gate
-
-- Common gate plus NSIS contracts, payload integrity, real installer build, clean-VM install, login/logout, Voice smoke, and installed-App execution.
-- An artifact inventory proving that DMG scripts, macOS shell bootstrap, signing assets, and macOS release evidence are absent from the installer.
-
-Temporary CI-only verification files may exist on a separate verification branch, but must not be merged into `main` or either shipping source branch.
-
-## Branch result
-
-The intended branch graph is:
+## Intended branch graph
 
 ```text
 ansatz/main
-└── authentication + Voice/SenseVoice + cross-platform runtime behavior
+└── common authentication + common Voice/SenseVoice + required source-runtime OS adapters
     ├── release/desktop-dmg-auth-voice-v2
-    │   └── macOS installer and DMG packaging overlay only
+    │   └── macOS delivery overlay only
     └── release/desktop-windows-auth-voice-v2
-        └── Windows installer and packaging overlay only
+        └── Windows delivery overlay only
 ```
 
-The existing DMG and Windows integration branches remain available as immutable behavioral and artifact references until both replacement release branches pass full acceptance.
+The current DMG and Windows branches remain immutable behavior/artifact references until both replacement overlays pass installed-artifact acceptance. This design does not authorize a merge into `main`.
