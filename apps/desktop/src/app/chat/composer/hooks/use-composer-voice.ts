@@ -76,6 +76,7 @@ export function useSenseVoiceReadiness(sttProvider?: string): SenseVoiceReadines
     setRetrying(true)
 
     try {
+      await queryClient.cancelQueries({ exact: true, queryKey })
       const next = await prepareSenseVoice(true)
       queryClient.setQueryData(queryKey, next)
     } catch {
