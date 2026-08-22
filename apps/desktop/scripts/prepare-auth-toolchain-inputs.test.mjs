@@ -5,7 +5,11 @@ import path from 'node:path'
 
 import { test } from 'vitest'
 
-import { buildAuthPayloadEnvironment, prepareAuthToolchainInputs } from './prepare-auth-toolchain-inputs.mjs'
+import {
+  buildAuthPayloadEnvironment,
+  findManagedPython,
+  prepareAuthToolchainInputs
+} from './prepare-auth-toolchain-inputs.mjs'
 
 test('auth payload environment rejects inherited downloader redirects and credentials', () => {
   const env = buildAuthPayloadEnvironment({
@@ -26,6 +30,23 @@ test('auth payload environment rejects inherited downloader redirects and creden
   assert.equal(env.PYTHONPATH, undefined)
   assert.equal(JSON.stringify(env).includes('attacker.invalid'), false)
   assert.equal(JSON.stringify(env).includes('secret-token'), false)
+})
+
+test('managed Python discovery ignores the project venv and resolves interpreter links', () => {
+  const calls = []
+  const execute = (command, args) => {
+    calls.push({ command, args })
+    return '/Users/example/.local/share/uv/python/cpython-3.11.16-macos-aarch64-none/bin/python3.11\n'
+  }
+
+  assert.equal(
+    findManagedPython('/opt/hermes/uv', '3.11', execute),
+    '/Users/example/.local/share/uv/python/cpython-3.11.16-macos-aarch64-none/bin/python3.11'
+  )
+  assert.deepEqual(calls, [{
+    command: '/opt/hermes/uv',
+    args: ['python', 'find', '--no-project', '--managed-python', '--resolve-links', '3.11']
+  }])
 })
 
 function makeFixture() {

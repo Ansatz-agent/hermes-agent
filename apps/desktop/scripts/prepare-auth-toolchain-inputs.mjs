@@ -565,6 +565,23 @@ export function findUv(env, projectRoot) {
   throw new Error(`uv ${UV_VERSION} was not found for the DMG build at ${projectRoot}`)
 }
 
+export function findManagedPython(uvPath, version, execute = defaultExecute) {
+  const candidate = String(execute(uvPath, [
+    'python',
+    'find',
+    '--no-project',
+    '--managed-python',
+    '--resolve-links',
+    version
+  ])).trim()
+
+  if (!path.isAbsolute(candidate)) {
+    throw new Error(`uv-managed Python ${version} was not found`)
+  }
+
+  return candidate
+}
+
 export async function prepareWindowsAuthToolchainInputsFromEnvironment(env = process.env) {
   const moduleDir = path.dirname(fileURLToPath(import.meta.url))
   const projectRoot = path.resolve(moduleDir, '../../..')
@@ -574,7 +591,7 @@ export async function prepareWindowsAuthToolchainInputsFromEnvironment(env = pro
   const hostUvPath = findUv(env, projectRoot)
   const hostPythonPath = env.HERMES_AUTH_TOOLCHAIN_HOST_PYTHON
     ? path.resolve(env.HERMES_AUTH_TOOLCHAIN_HOST_PYTHON)
-    : String(defaultExecute(hostUvPath, ['python', 'find', '3.13'])).trim()
+    : findManagedPython(hostUvPath, '3.13')
 
   return prepareWindowsAuthToolchainInputs({
     outputDir,
@@ -593,7 +610,7 @@ export function prepareAuthToolchainInputsFromEnvironment(env = process.env) {
   const uvPath = findUv(env, projectRoot)
   const pythonPath = env.HERMES_AUTH_TOOLCHAIN_PYTHON_BIN
     ? path.resolve(env.HERMES_AUTH_TOOLCHAIN_PYTHON_BIN)
-    : String(defaultExecute(uvPath, ['python', 'find', '3.11'])).trim()
+    : findManagedPython(uvPath, '3.11')
 
   return prepareAuthToolchainInputs({ outputDir, projectRoot, pythonPath, uvPath })
 }
