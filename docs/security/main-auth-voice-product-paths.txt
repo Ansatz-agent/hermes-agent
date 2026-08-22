@@ -188,9 +188,7 @@ scripts/build-desktop-dmg.sh
 scripts/build-desktop-windows.mjs
 scripts/check_auth_entrypoints.py
 scripts/check_auth_native_artifacts.py
-scripts/desktop-credential-login.mjs
 scripts/desktop-dmg-contract.mjs
-scripts/desktop-dmg-credential-login.mjs
 scripts/desktop-windows-contract.mjs
 scripts/discord-voice-doctor.py
 scripts/generate_auth_free_help.py
@@ -201,7 +199,6 @@ scripts/keystroke_diagnostic.py
 scripts/run_tests.sh
 scripts/test-desktop-windows-auth-host.ps1
 scripts/test-desktop-windows-install.ps1
-scripts/verify-desktop-dmg-gatekeeper.sh
 scripts/write_auth_native_artifact.py
 scripts/write_desktop_windows_electron_artifact.py
 tools/browser_tool.py

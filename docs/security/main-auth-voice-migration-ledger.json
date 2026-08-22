@@ -56,7 +56,8 @@
   "post_tip_commits": [
     "a6e8792b0c701287eecee97c692956e10a35b5d8",
     "11bcf8976dc3f9511b4d021da686b4236b52e68c",
-    "ff25f03ef33b7943269f5f8b62066040277b2186"
+    "ff25f03ef33b7943269f5f8b62066040277b2186",
+    "0cf5c3c23e125e668bda27f8492e702e98bf6c3c"
   ],
   "owner_enum": [
     "common-product",
@@ -1033,9 +1034,12 @@
     },
     {
       "sha": "02f539099641708cfd4996cde2295a22b56e7f42",
-      "owner": "historical-drop",
-      "strategy": "drop",
-      "paths": []
+      "owner": "package-shared",
+      "strategy": "path-extract",
+      "paths": [
+        "apps/desktop/scripts/build-backend-payload.integration.test.mjs",
+        "apps/desktop/scripts/build-backend-payload.mjs"
+      ]
     },
     {
       "sha": "ccc7e10274f828d3ebcc47f44b1d0712677ac99b",
@@ -3325,7 +3329,7 @@
     {
       "match": "exact",
       "path": "scripts/desktop-credential-login.mjs",
-      "owner": "package-shared"
+      "owner": "ci-infrastructure"
     },
     {
       "match": "exact",
@@ -3345,7 +3349,7 @@
     {
       "match": "exact",
       "path": "scripts/desktop-dmg-credential-login.mjs",
-      "owner": "package-macos"
+      "owner": "ci-infrastructure"
     },
     {
       "match": "exact",
@@ -3430,7 +3434,7 @@
     {
       "match": "exact",
       "path": "scripts/verify-desktop-dmg-gatekeeper.sh",
-      "owner": "package-macos"
+      "owner": "ci-infrastructure"
     },
     {
       "match": "exact",
