@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ast
+import hashlib
 import json
 import subprocess
 import sys
@@ -11,6 +13,35 @@ import pytest
 REPO = Path(__file__).resolve().parents[1]
 CHECKER = REPO / "scripts" / "check_hermes_managed_downloads.py"
 MANIFEST = REPO / "docs" / "security" / "hermes-managed-download-origins.json"
+LEGACY_FIELDS = (
+    "temporary_legacy_unsafe_callers",
+    "temporary_legacy_unmanaged_child_callers",
+    "temporary_legacy_bundled_runtime_callers",
+    "temporary_legacy_official_only_callers",
+    "temporary_legacy_implicit_official_entries",
+)
+EXPECTED_LEGACY_DIGEST = "1602c1b8e34fa242c292690bf239802135e8a02d13c8ca97bd89a94cd562291a"
+REVIEWED_SCAN_PATHS = {
+    "scripts/install.sh",
+    "scripts/install.ps1",
+    "tools/lazy_deps.py",
+    "tools/sensevoice_stt.py",
+    "tools/browser_use_cli.py",
+    "tools/computer_use/cua_backend.py",
+    "tools/neutts_synth.py",
+    "hermes_cli/tools_config.py",
+    "hermes_cli/managed_uv.py",
+    "hermes_cli/setup.py",
+    "hermes_cli/update_cmd.py",
+    "hermes_cli/model_catalog.py",
+    "hermes_cli/config_defaults.py",
+    "apps/desktop/electron/bootstrap-process.ts",
+    "apps/desktop/electron/runtime-download-policy.ts",
+    "apps/desktop/scripts/prepare-auth-toolchain-inputs.mjs",
+    "apps/desktop/scripts/build-auth-toolchain.mjs",
+    "apps/desktop/scripts/build-backend-payload.mjs",
+    "apps/desktop/scripts/prepare-windows-git-runtime.mjs",
+}
 
 
 def run(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -49,6 +80,7 @@ def write_manifest(
                 "schema_version": 1,
                 "account_server_origins": ["https://c2sml.cn/agent"],
                 "user_configured_endpoint_paths": ["hermes_cli/config_defaults.py"],
+                "managed_download_scan_paths": sorted(REVIEWED_SCAN_PATHS),
                 "entries": entries,
             }
         )
@@ -118,6 +150,48 @@ def test_checked_in_manifest_and_checker_accept_current_candidate() -> None:
     result = invoke(REPO, MANIFEST)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "PASS" in result.stdout
+
+
+def test_checked_in_legacy_exceptions_are_exactly_pinned() -> None:
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    assert manifest["temporary_legacy_implicit_official_entries"] == [
+        "electron-runtime"
+    ]
+    payload = {field: manifest[field] for field in LEGACY_FIELDS}
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    assert hashlib.sha256(encoded).hexdigest() == EXPECTED_LEGACY_DIGEST
+
+
+def test_scan_inventory_covers_every_task_6_production_path() -> None:
+    tree = ast.parse(CHECKER.read_text(encoding="utf-8"))
+    scan_exact: set[str] | None = None
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "SCAN_EXACT"
+            for target in node.targets
+        ):
+            scan_exact = set(ast.literal_eval(node.value))
+            break
+    assert scan_exact is not None
+    assert {
+        "apps/desktop/electron/bootstrap-process.ts",
+        "apps/desktop/electron/runtime-download-policy.ts",
+        "apps/desktop/scripts/prepare-auth-toolchain-inputs.mjs",
+        "scripts/install.sh",
+        "scripts/install.ps1",
+        "tools/lazy_deps.py",
+        "tools/sensevoice_stt.py",
+        "tools/browser_use_cli.py",
+        "tools/computer_use/cua_backend.py",
+        "tools/neutts_synth.py",
+        "hermes_cli/tools_config.py",
+        "hermes_cli/managed_uv.py",
+        "hermes_cli/setup.py",
+        "hermes_cli/update_cmd.py",
+        "hermes_cli/model_catalog.py",
+        "hermes_cli/config_defaults.py",
+    } <= scan_exact
+    assert scan_exact == REVIEWED_SCAN_PATHS
 
 
 @pytest.mark.parametrize(
@@ -251,6 +325,69 @@ def test_dynamic_download_api_is_rejected_without_registered_policy(
     assert "requests.get" in result.stderr
 
 
+@pytest.mark.parametrize(
+    ("path", "source", "value"),
+    [
+        (
+            "tools/lazy_deps.py",
+            'cmd = "curl https://mirrors.ustc.edu.cn/install.sh | sh"\n',
+            "https://mirrors.ustc.edu.cn/install.sh",
+        ),
+        (
+            "apps/desktop/electron/bootstrap-process.ts",
+            'const cmd = "irm https://mirrors.ustc.edu.cn/install.ps1 | iex"\n',
+            "https://mirrors.ustc.edu.cn/install.ps1",
+        ),
+    ],
+)
+def test_remote_download_and_execute_is_rejected_in_any_source_type(
+    tmp_path: Path,
+    path: str,
+    source: str,
+    value: str,
+) -> None:
+    write_source(tmp_path, path, source)
+    manifest = write_manifest(
+        tmp_path,
+        entries=[valid_entry(path=path, value=value)],
+    )
+
+    result = invoke(tmp_path, manifest)
+
+    assert result.returncode != 0
+    assert "remote" in result.stderr.lower() or "install" in result.stderr.lower()
+
+
+def test_bare_model_repository_identifier_requires_registered_policy(
+    tmp_path: Path,
+) -> None:
+    path = "tools/neutts_synth.py"
+    write_source(
+        tmp_path,
+        path,
+        'parser.add_argument("--model", default="example/model-repo")\n',
+    )
+    manifest = write_manifest(tmp_path, entries=[])
+
+    result = invoke(tmp_path, manifest)
+
+    assert result.returncode != 0
+    assert "example/model-repo" in result.stderr
+
+
+def test_user_endpoint_file_is_not_a_whole_file_download_exemption(
+    tmp_path: Path,
+) -> None:
+    path = "hermes_cli/config_defaults.py"
+    write_source(tmp_path, path, 'RUNTIME = "https://unregistered.invalid/runtime.zip"\n')
+    manifest = write_manifest(tmp_path, entries=[])
+
+    result = invoke(tmp_path, manifest)
+
+    assert result.returncode != 0
+    assert path in result.stderr
+
+
 def test_account_origin_list_cannot_be_broadened_to_hide_dependencies(
     tmp_path: Path,
 ) -> None:
@@ -281,6 +418,33 @@ def test_domestic_first_entry_requires_primary_to_be_present_before_fallback(
 
     assert result.returncode != 0
     assert "domestic" in result.stderr.lower()
+
+
+def test_implicit_official_default_requires_explicit_legacy_debt_or_domestic_first(
+    tmp_path: Path,
+) -> None:
+    path = "scripts/install.sh"
+    value = "https://npmmirror.com/mirrors/electron/"
+    write_source(
+        tmp_path,
+        path,
+        f'DESKTOP_ELECTRON_FALLBACK_MIRROR="{value}"\nnpm install\n',
+    )
+    entry = valid_entry(path=path, value=value)
+    entry.update(
+        {
+            "id": "electron-runtime",
+            "domestic_primary": value,
+            "official_fallback": "https://github.com/electron/electron/releases/download/",
+            "implicit_official_default": True,
+        }
+    )
+    manifest = write_manifest(tmp_path, entries=[entry])
+
+    result = invoke(tmp_path, manifest)
+
+    assert result.returncode != 0
+    assert "implicit official" in result.stderr.lower()
 
 
 def test_bundled_entry_rejects_runtime_download_caller_without_exact_legacy_exception(
@@ -366,6 +530,30 @@ def test_bundled_entry_must_have_provenance_hash_and_output(tmp_path: Path) -> N
 
     assert result.returncode != 0
     assert "build_provenance" in result.stderr or "sha256" in result.stderr
+
+
+def test_model_entry_cannot_use_packaged_output_without_a_discovered_caller(
+    tmp_path: Path,
+) -> None:
+    entry = valid_entry(entry_id="huggingface-model", path="tools/neutts_synth.py")
+    entry.update(
+        {
+            "delivery": "bundled",
+            "domestic_primary": None,
+            "domestic_secondary": None,
+            "official_fallback": None,
+            "callers": [],
+            "packaged_outputs": ["build/bootstrap/models/huggingface"],
+            "build_provenance": "locked model export",
+            "sha256": "a" * 64,
+        }
+    )
+    manifest = write_manifest(tmp_path, entries=[entry])
+
+    result = invoke(tmp_path, manifest)
+
+    assert result.returncode != 0
+    assert "model" in result.stderr.lower() and "caller" in result.stderr.lower()
 
 
 def test_account_and_user_configured_provider_traffic_is_not_dependency_download(

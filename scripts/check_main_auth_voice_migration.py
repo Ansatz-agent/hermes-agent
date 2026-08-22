@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 from collections.abc import Iterable
@@ -18,8 +19,26 @@ PRODUCT_OWNERS = {
     "package-macos",
     "package-windows",
 }
-GENERATED_SUFFIXES = (".dmg", ".pkg", ".exe", ".msi", ".zip", ".tar.gz")
-GENERATED_PREFIXES = ("apps/desktop/release/", "apps/desktop/build/logs/")
+GENERATED_SUFFIXES = (
+    ".dmg",
+    ".pkg",
+    ".exe",
+    ".msi",
+    ".zip",
+    ".tar.gz",
+    ".tar.xz",
+    ".gz",
+    ".whl",
+    ".blockmap",
+)
+GENERATED_PREFIXES = (
+    "apps/desktop/release/",
+    "apps/desktop/build/",
+)
+CHERRY_PICK_RE = re.compile(
+    r"\(cherry picked from commit ([0-9a-f]{40})\)",
+    re.IGNORECASE,
+)
 SENSITIVE_BASENAMES = {
     ".env",
     "credential.json",
@@ -159,6 +178,124 @@ def validate_ledger(ledger: dict[str, Any], product_paths: list[str]) -> list[di
     return path_owners
 
 
+def commit_range(repo: Path, start: str, end: str) -> set[str]:
+    return output_paths(git(repo, "log", "--format=%H", f"{start}..{end}"))
+
+
+def commit_changed_paths(repo: Path, sha: str) -> set[str]:
+    return output_paths(
+        git(repo, "diff-tree", "--root", "--no-commit-id", "--name-only", "-r", sha)
+    )
+
+
+def validate_locked_commit_coverage(
+    repo: Path,
+    base: str,
+    ledger: dict[str, Any],
+) -> list[str]:
+    if ledger.get("enforce_locked_commit_coverage") is not True:
+        return []
+
+    required_refs = {
+        "common_baseline": ledger.get("common_baseline"),
+        "dmg_integration_reference": ledger.get("dmg_integration_reference"),
+        "windows_integration_reference": ledger.get("windows_integration_reference"),
+        "candidate_tip": ledger.get("candidate_tip"),
+        "base": ledger.get("base"),
+    }
+    for field, value in required_refs.items():
+        if not isinstance(value, str) or len(value) != 40:
+            raise MigrationError(f"locked commit coverage requires {field}")
+        git(repo, "rev-parse", "--verify", f"{value}^{{commit}}")
+    if git(repo, "rev-parse", base).strip() != required_refs["base"]:
+        raise MigrationError("checker base does not match the locked migration base")
+
+    expected = set()
+    expected.update(
+        commit_range(
+            repo,
+            required_refs["common_baseline"],
+            required_refs["dmg_integration_reference"],
+        )
+    )
+    expected.update(
+        commit_range(
+            repo,
+            required_refs["common_baseline"],
+            required_refs["windows_integration_reference"],
+        )
+    )
+    expected.update(
+        commit_range(repo, required_refs["base"], required_refs["candidate_tip"])
+    )
+    actual = {entry["sha"] for entry in ledger["commits"]}
+    violations: list[str] = []
+    missing = sorted(expected - actual)
+    extra = sorted(actual - expected)
+    if missing:
+        violations.append("locked commit coverage is missing: " + ", ".join(missing))
+    if extra:
+        violations.append("locked commit coverage has unexpected entries: " + ", ".join(extra))
+
+    contract_paths_raw = ledger.get("contract_bookkeeping_paths")
+    post_tip_subjects_raw = ledger.get("post_tip_subjects")
+    if not isinstance(contract_paths_raw, list) or not contract_paths_raw:
+        raise MigrationError("contract_bookkeeping_paths must be a non-empty list")
+    if not isinstance(post_tip_subjects_raw, list):
+        raise MigrationError("post_tip_subjects must be a list")
+    contract_paths = {
+        normalized_repo_path(path, field="contract bookkeeping path")
+        for path in contract_paths_raw
+    }
+    post_tip_subjects = {
+        subject
+        for subject in post_tip_subjects_raw
+        if isinstance(subject, str) and subject
+    }
+    if len(post_tip_subjects) != len(post_tip_subjects_raw):
+        raise MigrationError("post_tip_subjects must contain unique non-empty strings")
+
+    source_strategies = {
+        entry["sha"]: entry["strategy"] for entry in ledger["commits"]
+    }
+    rows = git(
+        repo,
+        "log",
+        "--reverse",
+        "--format=%H%x00%s%x00%P",
+        f"{required_refs['candidate_tip']}..HEAD",
+    ).splitlines()
+    for row in rows:
+        if not row:
+            continue
+        parts = row.split("\0")
+        if len(parts) != 3:
+            raise MigrationError("cannot parse post-tip commit metadata")
+        sha, subject, parent_text = parts
+        changed = commit_changed_paths(repo, sha)
+        if changed and changed <= contract_paths:
+            continue
+        if subject in post_tip_subjects:
+            continue
+        message = git(repo, "show", "-s", "--format=%B", sha)
+        cherry_pick = CHERRY_PICK_RE.search(message)
+        if cherry_pick and source_strategies.get(cherry_pick.group(1)) in {
+            "cherry-pick",
+            "path-extract",
+            "reference-equivalent",
+        }:
+            continue
+        parents = parent_text.split()
+        if len(parents) > 1:
+            imported = commit_range(repo, parents[0], parents[1])
+            if imported and imported <= actual:
+                continue
+        violations.append(
+            f"post-tip commit is not covered by migration policy: {sha} {subject}"
+        )
+    return violations
+
+
 def output_paths(output: str) -> set[str]:
     return {line for line in output.splitlines() if line}
 
@@ -238,7 +375,8 @@ def main() -> int:
         ledger = load_json(ledger_path, label="migration ledger")
         product_paths = load_product_paths(product_path)
         path_owners = validate_ledger(ledger, product_paths)
-        violations = check_candidate(repo, args.base, path_owners)
+        violations = validate_locked_commit_coverage(repo, args.base, ledger)
+        violations.extend(check_candidate(repo, args.base, path_owners))
     except MigrationError as exc:
         print(f"main auth voice migration: {exc}", file=sys.stderr)
         return 1

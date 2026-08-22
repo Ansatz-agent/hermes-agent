@@ -98,6 +98,10 @@ def test_checked_in_ledger_has_locked_authorities_and_exact_enums() -> None:
     assert ledger["candidate_tip"] == PLANNED_CANDIDATE_TIP
     assert set(ledger["owner_enum"]) == OWNER_ENUM
     assert set(ledger["strategy_enum"]) == STRATEGY_ENUM
+    assert ledger["enforce_locked_commit_coverage"] is True
+    assert ledger["common_baseline"] == "4ef56cef4c6eecc009e2284fe2f1df20664f357a"
+    assert ledger["dmg_integration_reference"] == "403e1c3873d1679720c1403d7e38acd289804d69"
+    assert ledger["windows_integration_reference"] == "56b402c63b22da81f906ff1f7398a90cfd17bd81"
 
 
 def test_every_locked_source_commit_has_one_owner_and_strategy() -> None:
@@ -184,6 +188,25 @@ def test_current_candidate_has_one_owner_and_no_generated_or_secret_artifacts() 
     assert "PASS" in result.stdout
 
 
+def test_checker_itself_rejects_incomplete_locked_commit_coverage(
+    tmp_path: Path,
+) -> None:
+    ledger = load_ledger()
+    ledger["commits"] = ledger["commits"][1:]
+    bad_ledger = tmp_path / "ledger.json"
+    bad_ledger.write_text(json.dumps(ledger) + "\n", encoding="utf-8")
+
+    result = invoke(
+        REPO,
+        base="ansatz/main",
+        ledger=bad_ledger,
+        product_paths=PRODUCT_PATHS,
+    )
+
+    assert result.returncode != 0
+    assert "commit coverage" in result.stderr.lower()
+
+
 def initialize_fixture_repo(tmp_path: Path) -> str:
     assert run(tmp_path, "git", "init", "-q").returncode == 0
     assert run(tmp_path, "git", "config", "user.email", "migration@example.invalid").returncode == 0
@@ -262,6 +285,11 @@ def test_checker_inspects_all_candidate_states(tmp_path: Path, state: str) -> No
         "dist/Hermes.msi",
         "dist/Hermes.zip",
         "apps/desktop/build/bootstrap/hermes-backend.tar.gz",
+        "apps/desktop/build/bootstrap/git-bash-runtime.tar.xz",
+        "apps/desktop/build/bootstrap/uv.gz",
+        "apps/desktop/build/bootstrap/auth.whl",
+        "apps/desktop/release/Hermes.dmg.blockmap",
+        "apps/desktop/build/unexpected.txt",
         ".env",
         "credentials.json",
         "apps/desktop/build/logs/raw-session.log",

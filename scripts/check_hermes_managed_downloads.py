@@ -42,6 +42,18 @@ MODEL_PATTERNS = (
     re.compile(r"\bsnapshot_download\s*\(\s*[\"']([^\"']+)[\"']"),
     re.compile(r"\bhf_hub_download\s*\([^)]*?repo_id\s*=\s*[\"']([^\"']+)[\"']", re.DOTALL),
 )
+BARE_MODEL_PATTERNS_BY_PATH = {
+    "tools/neutts_synth.py": (
+        re.compile(r"\bdefault\s*=\s*[\"']([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)[\"']"),
+        re.compile(r"\bcodec_repo\s*=\s*[\"']([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)[\"']"),
+    ),
+    "hermes_cli/config_defaults.py": (
+        re.compile(
+            r"[\"']model[\"']\s*:\s*[\"']([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)[\"']"
+            r"[^\n]*#\s*HuggingFace model repo"
+        ),
+    ),
+}
 DOWNLOAD_API_PATTERNS = (
     (re.compile(r"\brequests\.get\s*\("), "requests.get"),
     (re.compile(r"\brequests\.Session\s*\([^)]*\)\.get\s*\("), "requests.Session.get"),
@@ -87,6 +99,9 @@ DEPENDENCY_HOSTS = {
     "registry.npmmirror.com",
 }
 NON_DOWNLOAD_LITERAL_PATHS = {"hermes_cli/config_defaults.py"}
+NON_DOWNLOAD_LITERAL_CALLS = {
+    ("hermes_cli/config_defaults.py", "https://example.com/my-curation.json"),
+}
 
 
 class DownloadPolicyError(RuntimeError):
@@ -156,7 +171,7 @@ def clean_url(raw: str) -> str:
 
 
 def is_dependency_url(path: str, value: str) -> bool:
-    if path in NON_DOWNLOAD_LITERAL_PATHS:
+    if (path, value) in NON_DOWNLOAD_LITERAL_CALLS:
         return False
     parsed = urlsplit(value)
     hostname = (parsed.hostname or "").lower()
@@ -214,10 +229,8 @@ def discover_sinks(
     sinks: list[Sink] = []
     violations: list[str] = []
     for number, line in executable_lines(path, source):
-        if path.endswith((".sh", ".ps1")) and (
-            REMOTE_SHELL_RE.search(line) or REMOTE_POWERSHELL_RE.search(line)
-        ):
-            violations.append(f"{path}:{number}:{line.strip()}")
+        if REMOTE_SHELL_RE.search(line) or REMOTE_POWERSHELL_RE.search(line):
+            violations.append(f"{path}:{line.strip()}")
 
     for match in URL_RE.finditer(source):
         value = clean_url(match.group(0))
@@ -228,6 +241,12 @@ def discover_sinks(
         sinks.append(Sink(path, "literal-url", value, source_line(source, match.start())))
 
     for pattern in MODEL_PATTERNS:
+        for match in pattern.finditer(source):
+            sinks.append(
+                Sink(path, "model-id", match.group(1), source_line(source, match.start()))
+            )
+
+    for pattern in BARE_MODEL_PATTERNS_BY_PATH.get(path, ()):
         for match in pattern.finditer(source):
             sinks.append(
                 Sink(path, "model-id", match.group(1), source_line(source, match.start()))
@@ -323,6 +342,7 @@ def validate_entries(
     temporary_legacy_unmanaged_children: set[tuple[str, str, str]],
     temporary_legacy_bundled_callers: set[tuple[str, str, str]],
     temporary_legacy_official_only_callers: set[tuple[str, str, str]],
+    temporary_legacy_implicit_official_entries: set[str],
 ) -> list[str]:
     entries = manifest.get("entries")
     if not isinstance(entries, list):
@@ -358,6 +378,8 @@ def validate_entries(
         if not isinstance(callers, list) or not isinstance(packaged_outputs, list):
             violations.append(f"{entry_id}: callers and packaged_outputs must be lists")
             continue
+        if entry_id in {"huggingface-model", "sensevoice-model"} and not callers:
+            violations.append(f"{entry_id}: model entry requires a discovered caller")
         output_paths = [normalize_path(path, field=f"{entry_id} packaged output") for path in packaged_outputs]
 
         if delivery == "domestic-first":
@@ -366,6 +388,16 @@ def validate_entries(
                 violations.append(f"{entry_id}: domestic_primary is required")
             elif "github.com" in primary or "raw.githubusercontent.com" in primary:
                 violations.append(f"{entry_id}: GitHub cannot be a domestic primary")
+            implicit_official = entry.get("implicit_official_default", False)
+            if not isinstance(implicit_official, bool):
+                violations.append(f"{entry_id}: implicit_official_default must be boolean")
+            elif (
+                implicit_official
+                and entry_id not in temporary_legacy_implicit_official_entries
+            ):
+                violations.append(
+                    f"{entry_id}: implicit official default is not recorded as exact legacy debt"
+                )
         elif delivery == "bundled":
             if any(entry.get(field) is not None for field in ("domestic_primary", "domestic_secondary", "official_fallback")):
                 violations.append(f"{entry_id}: bundled delivery cannot define runtime origins")
@@ -463,6 +495,15 @@ def validate_entries(
             violations.append(
                 f"orphan temporary legacy {label} caller: " + " | ".join(orphan)
             )
+    implicit_entries = {
+        entry.get("id")
+        for entry in entries
+        if isinstance(entry, dict) and entry.get("implicit_official_default") is True
+    }
+    for orphan in sorted(temporary_legacy_implicit_official_entries - implicit_entries):
+        violations.append(
+            f"orphan temporary legacy implicit official entry: {orphan}"
+        )
     return violations
 
 
@@ -511,6 +552,11 @@ def main() -> int:
             raise DownloadPolicyError(
                 "user_configured_endpoint_paths must equal the narrow reviewed path list"
             )
+        raw_scan_paths = manifest.get("managed_download_scan_paths")
+        if raw_scan_paths != sorted(SCAN_EXACT):
+            raise DownloadPolicyError(
+                "managed_download_scan_paths must equal the reviewed scanner path list"
+            )
         account_origins = tuple(raw_origins)
         sources = source_sets[0]
         sinks, violations = inventory([sources], account_origins=account_origins)
@@ -532,10 +578,26 @@ def main() -> int:
         legacy_children = {caller_key(item) for item in raw_legacy_children}
         raw_bundled_callers = manifest.get("temporary_legacy_bundled_runtime_callers", [])
         raw_official_callers = manifest.get("temporary_legacy_official_only_callers", [])
-        if not isinstance(raw_bundled_callers, list) or not isinstance(raw_official_callers, list):
+        raw_implicit_entries = manifest.get(
+            "temporary_legacy_implicit_official_entries", []
+        )
+        if (
+            not isinstance(raw_bundled_callers, list)
+            or not isinstance(raw_official_callers, list)
+            or not isinstance(raw_implicit_entries, list)
+            or not all(
+                isinstance(entry_id, str) and entry_id
+                for entry_id in raw_implicit_entries
+            )
+        ):
             raise DownloadPolicyError("temporary legacy caller fields must be caller lists")
         bundled_callers = {caller_key(item) for item in raw_bundled_callers}
         official_callers = {caller_key(item) for item in raw_official_callers}
+        implicit_entries = set(raw_implicit_entries)
+        if len(implicit_entries) != len(raw_implicit_entries):
+            raise DownloadPolicyError(
+                "temporary_legacy_implicit_official_entries must be unique"
+            )
         violations.extend(
             validate_entries(
                 manifest,
@@ -544,6 +606,7 @@ def main() -> int:
                 legacy_children,
                 bundled_callers,
                 official_callers,
+                implicit_entries,
             )
         )
     except DownloadPolicyError as exc:

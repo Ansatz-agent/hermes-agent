@@ -7,9 +7,11 @@
     "hermes_cli/config_defaults.py"
   ],
   "temporary_legacy_unsafe_callers": [
-    "scripts/install.ps1:3580:Invoke-RestMethod -UseBasicParsing \"https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.ps1\" | Invoke-Expression",
-    "scripts/install.ps1:775:& $psHostExe -ExecutionPolicy ByPass -c \"irm https://astral.sh/uv/install.ps1 | iex\" 2>&1 | Tee-Object -Variable astralOut | Out-Null",
-    "scripts/install.ps1:783:& $psHostExe -ExecutionPolicy ByPass -c \"irm https://github.com/astral-sh/uv/releases/latest/download/uv-installer.ps1 | iex\" 2>&1 | Tee-Object -Variable ghOut | Out-Null"
+    "hermes_cli/managed_uv.py:cmd = \"irm https://astral.sh/uv/install.ps1 | iex\"",
+    "hermes_cli/update_cmd.py:\"  curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash\"",
+    "scripts/install.ps1:& $psHostExe -ExecutionPolicy ByPass -c \"irm https://astral.sh/uv/install.ps1 | iex\" 2>&1 | Tee-Object -Variable astralOut | Out-Null",
+    "scripts/install.ps1:& $psHostExe -ExecutionPolicy ByPass -c \"irm https://github.com/astral-sh/uv/releases/latest/download/uv-installer.ps1 | iex\" 2>&1 | Tee-Object -Variable ghOut | Out-Null",
+    "scripts/install.ps1:Invoke-RestMethod -UseBasicParsing \"https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.ps1\" | Invoke-Expression"
   ],
   "temporary_legacy_unmanaged_child_callers": [
     {
@@ -29,10 +31,11 @@
     }
   ],
   "temporary_legacy_notes": {
-    "unsafe_callers": "Exact inherited download-and-execute lines are removed in Task 6; line or command changes fail closed.",
+    "unsafe_callers": "Exact inherited download-and-execute commands are removed in Task 6; command changes fail closed.",
     "unmanaged_child_callers": "Exact inherited callers are removed in Task 6; new or orphan callers fail closed.",
     "bundled_runtime_callers": "Exact inherited runtime downloads are removed or converted to verified build-time payloads in Task 6.",
-    "official_only_callers": "Exact inherited official-only callers are converted to bounded domestic-first behavior in Task 6."
+    "official_only_callers": "Exact inherited explicit official-only callers are converted to bounded domestic-first behavior in Task 6.",
+    "implicit_official_entries": "Electron currently uses its implicit official default before the declared mirror; Task 6 must invert the execution order and remove this exact entry."
   },
   "entries": [
     {
@@ -229,7 +232,8 @@
       ],
       "packaged_outputs": [
         "apps/desktop/release"
-      ]
+      ],
+      "implicit_official_default": true
     },
     {
       "id": "electron-builder-binaries",
@@ -721,7 +725,23 @@
       "owners": [
         "tools/neutts_synth.py"
       ],
-      "callers": [],
+      "callers": [
+        {
+          "path": "hermes_cli/config_defaults.py",
+          "kind": "model-id",
+          "value": "neuphonic/neutts-air-q4-gguf"
+        },
+        {
+          "path": "tools/neutts_synth.py",
+          "kind": "model-id",
+          "value": "neuphonic/neucodec"
+        },
+        {
+          "path": "tools/neutts_synth.py",
+          "kind": "model-id",
+          "value": "neuphonic/neutts-air-q4-gguf"
+        }
+      ],
       "packaged_outputs": [
         "apps/desktop/build/bootstrap/models/huggingface"
       ],
@@ -749,6 +769,16 @@
         "hermes_cli/model_catalog.py"
       ],
       "callers": [
+        {
+          "path": "hermes_cli/config_defaults.py",
+          "kind": "literal-url",
+          "value": "https://hermes-agent.nousresearch.com/docs/api/model-catalog.json"
+        },
+        {
+          "path": "hermes_cli/config_defaults.py",
+          "kind": "literal-url",
+          "value": "https://models.dev/api.json"
+        },
         {
           "path": "hermes_cli/model_catalog.py",
           "kind": "literal-url",
@@ -825,6 +855,21 @@
     }
   ],
   "temporary_legacy_bundled_runtime_callers": [
+    {
+      "path": "hermes_cli/config_defaults.py",
+      "kind": "literal-url",
+      "value": "https://hermes-agent.nousresearch.com/docs/api/model-catalog.json"
+    },
+    {
+      "path": "hermes_cli/config_defaults.py",
+      "kind": "literal-url",
+      "value": "https://models.dev/api.json"
+    },
+    {
+      "path": "hermes_cli/config_defaults.py",
+      "kind": "model-id",
+      "value": "neuphonic/neutts-air-q4-gguf"
+    },
     {
       "path": "hermes_cli/managed_uv.py",
       "kind": "literal-url",
@@ -959,6 +1004,16 @@
       "path": "tools/computer_use/cua_backend.py",
       "kind": "literal-url",
       "value": "https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.sh"
+    },
+    {
+      "path": "tools/neutts_synth.py",
+      "kind": "model-id",
+      "value": "neuphonic/neucodec"
+    },
+    {
+      "path": "tools/neutts_synth.py",
+      "kind": "model-id",
+      "value": "neuphonic/neutts-air-q4-gguf"
     }
   ],
   "temporary_legacy_official_only_callers": [
@@ -977,5 +1032,29 @@
       "kind": "literal-url",
       "value": "https://pypi.org/simple/"
     }
+  ],
+  "managed_download_scan_paths": [
+    "apps/desktop/electron/bootstrap-process.ts",
+    "apps/desktop/electron/runtime-download-policy.ts",
+    "apps/desktop/scripts/build-auth-toolchain.mjs",
+    "apps/desktop/scripts/build-backend-payload.mjs",
+    "apps/desktop/scripts/prepare-auth-toolchain-inputs.mjs",
+    "apps/desktop/scripts/prepare-windows-git-runtime.mjs",
+    "hermes_cli/config_defaults.py",
+    "hermes_cli/managed_uv.py",
+    "hermes_cli/model_catalog.py",
+    "hermes_cli/setup.py",
+    "hermes_cli/tools_config.py",
+    "hermes_cli/update_cmd.py",
+    "scripts/install.ps1",
+    "scripts/install.sh",
+    "tools/browser_use_cli.py",
+    "tools/computer_use/cua_backend.py",
+    "tools/lazy_deps.py",
+    "tools/neutts_synth.py",
+    "tools/sensevoice_stt.py"
+  ],
+  "temporary_legacy_implicit_official_entries": [
+    "electron-runtime"
   ]
 }
