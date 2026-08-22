@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 import os
 import shlex
@@ -11,6 +12,11 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 INSTALL_SH = REPO_ROOT / "scripts" / "install.sh"
+
+
+def _write_uv_archive(toolchain: Path, script: str) -> None:
+    with gzip.open(toolchain / "uv.gz", "wb") as archive:
+        archive.write(script.encode("utf-8"))
 
 
 def _manifest(scope: str) -> list[dict[str, object]]:
@@ -219,7 +225,8 @@ def test_bundled_auth_prerequisites_install_uv_and_python_without_network(tmp_pa
     with tarfile.open(toolchain / "python.tar.gz", "w:gz") as archive:
         archive.add(python_source, arcname=python_source.name)
 
-    (toolchain / "uv").write_text(
+    _write_uv_archive(
+        toolchain,
         "\n".join(
             [
                 "#!/bin/bash",
@@ -230,9 +237,7 @@ def test_bundled_auth_prerequisites_install_uv_and_python_without_network(tmp_pa
             ]
         )
         + "\n",
-        encoding="utf-8",
     )
-    (toolchain / "uv").chmod(0o755)
     (toolchain / "auth-requirements.txt").write_text(
         "httpx==0.28.1 --hash=sha256:" + "a" * 64 + "\n", encoding="utf-8"
     )
@@ -311,7 +316,8 @@ def test_bundled_auth_stages_sync_hashed_wheels_without_network(tmp_path: Path) 
     with tarfile.open(toolchain / "python.tar.gz", "w:gz") as archive:
         archive.add(python_source, arcname=python_source.name)
 
-    (toolchain / "uv").write_text(
+    _write_uv_archive(
+        toolchain,
         "\n".join(
             [
                 "#!/bin/bash",
@@ -331,9 +337,7 @@ def test_bundled_auth_stages_sync_hashed_wheels_without_network(tmp_path: Path) 
             ]
         )
         + "\n",
-        encoding="utf-8",
     )
-    (toolchain / "uv").chmod(0o755)
     requirements = toolchain / "auth-requirements.txt"
     requirements.write_text(
         "httpx==0.28.1 --hash=sha256:" + "a" * 64 + "\n", encoding="utf-8"

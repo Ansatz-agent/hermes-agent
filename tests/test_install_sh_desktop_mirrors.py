@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import os
 import shlex
 import subprocess
@@ -35,8 +36,8 @@ def _write_toolchain(tmp_path: Path, uv_body: str) -> Path:
     with tarfile.open(toolchain / "python.tar.gz", "w:gz") as archive:
         archive.add(python_source, arcname=python_source.name)
 
-    (toolchain / "uv").write_text(uv_body, encoding="utf-8")
-    (toolchain / "uv").chmod(0o755)
+    with gzip.open(toolchain / "uv.gz", "wb") as archive:
+        archive.write(uv_body.encode("utf-8"))
     (toolchain / "auth-requirements.txt").write_text(
         "httpx==0.28.1 --hash=sha256:" + "a" * 64 + "\n", encoding="utf-8"
     )

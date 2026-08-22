@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { gunzipSync } from 'node:zlib'
 
 import { test } from 'vitest'
 
@@ -69,6 +70,7 @@ test('buildAuthToolchain writes and verifies a deterministic manifest', () => {
     assert.equal(result.manifest.schemaVersion, 1)
     assert.equal(result.manifest.platform, 'darwin')
     assert.equal(result.manifest.arch, 'arm64')
+    assert.equal(result.manifest.uv.file, 'uv.gz')
     assert.equal(result.manifest.uv.version, '0.12.5')
     assert.equal(result.manifest.python.version, '3.11.14')
     assert.equal(result.manifest.uv.sha256, sha256(uvOutput))
@@ -76,7 +78,8 @@ test('buildAuthToolchain writes and verifies a deterministic manifest', () => {
     assert.equal(result.manifest.requirements.sha256, sha256(requirementsOutput))
     assert.equal(result.manifest.wheels[0].sha256, sha256(wheelOutput))
     assert.deepEqual(verifyAuthToolchain(fixture.outputDir), result.manifest)
-    assert.equal(fs.statSync(uvOutput).mode & 0o777, 0o755)
+    assert.deepEqual(gunzipSync(fs.readFileSync(uvOutput)), fs.readFileSync(fixture.uvPath))
+    assert.equal(fs.existsSync(path.join(fixture.outputDir, 'uv')), false)
     assert.ok(fs.statSync(manifestPath).isFile())
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true })
@@ -87,10 +90,28 @@ test('verifyAuthToolchain rejects a changed asset', () => {
   const fixture = makeFixture()
 
   try {
-    buildAuthToolchain(buildOptions(fixture))
-    fs.appendFileSync(path.join(fixture.outputDir, 'uv'), 'tampered\n')
+    const result = buildAuthToolchain(buildOptions(fixture))
+    fs.appendFileSync(path.join(fixture.outputDir, result.manifest.uv.file), 'tampered\n')
 
     assert.throws(() => verifyAuthToolchain(fixture.outputDir), /size mismatch|checksum mismatch/)
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test('buildAuthToolchain produces the same uv archive across output directories', () => {
+  const fixture = makeFixture()
+  const secondOutputDir = path.join(fixture.root, 'second-output')
+
+  try {
+    const first = buildAuthToolchain(buildOptions(fixture))
+    const second = buildAuthToolchain(buildOptions(fixture, { outputDir: secondOutputDir }))
+
+    assert.deepEqual(first.manifest, second.manifest)
+    assert.deepEqual(
+      fs.readFileSync(path.join(fixture.outputDir, first.manifest.uv.file)),
+      fs.readFileSync(path.join(secondOutputDir, second.manifest.uv.file))
+    )
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true })
   }

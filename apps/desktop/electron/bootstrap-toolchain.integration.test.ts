@@ -22,7 +22,7 @@ function asset(root: string, file: string, version?: string) {
 function makeToolchain() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-auth-toolchain-runtime-'))
   fs.mkdirSync(path.join(root, 'wheelhouse'))
-  fs.writeFileSync(path.join(root, 'uv'), 'fixture uv\n')
+  fs.writeFileSync(path.join(root, 'uv.gz'), 'fixture compressed uv\n')
   fs.writeFileSync(path.join(root, 'python.tar.gz'), 'fixture python\n')
   fs.writeFileSync(path.join(root, 'auth-requirements.txt'), 'fixture requirements\n')
   fs.writeFileSync(path.join(root, 'wheelhouse', 'httpx.whl'), 'fixture wheel\n')
@@ -30,7 +30,7 @@ function makeToolchain() {
     schemaVersion: 1,
     platform: 'darwin',
     arch: 'arm64',
-    uv: asset(root, 'uv', '0.12.5'),
+    uv: asset(root, 'uv.gz', '0.12.5'),
     python: asset(root, 'python.tar.gz', '3.11.16'),
     requirements: asset(root, 'auth-requirements.txt'),
     wheels: [asset(root, 'wheelhouse/httpx.whl')]
@@ -48,7 +48,7 @@ test('resolveBundledAuthToolchain verifies every packaged asset', async () => {
 
     assert.deepEqual(resolved.manifest, fixture.manifest)
     assert.equal(resolved.root, fixture.root)
-    assert.equal(resolved.uvPath, path.join(fixture.root, 'uv'))
+    assert.equal(resolved.uvArchivePath, path.join(fixture.root, 'uv.gz'))
     assert.equal(resolved.pythonArchivePath, path.join(fixture.root, 'python.tar.gz'))
     assert.equal(resolved.requirementsPath, path.join(fixture.root, 'auth-requirements.txt'))
     assert.deepEqual(resolved.wheelPaths, [path.join(fixture.root, 'wheelhouse', 'httpx.whl')])
@@ -62,12 +62,12 @@ test('resolveBundledAuthToolchain rejects changed files and links', async () => 
   const linked = makeToolchain()
 
   try {
-    fs.appendFileSync(path.join(tampered.root, 'uv'), 'changed\n')
+    fs.appendFileSync(path.join(tampered.root, 'uv.gz'), 'changed\n')
     await assert.rejects(resolveBundledAuthToolchain(tampered.root), /size mismatch|checksum mismatch/)
 
     const wheelPath = path.join(linked.root, 'wheelhouse', 'httpx.whl')
     fs.unlinkSync(wheelPath)
-    fs.symlinkSync(path.join(linked.root, 'uv'), wheelPath)
+    fs.symlinkSync(path.join(linked.root, 'uv.gz'), wheelPath)
     await assert.rejects(resolveBundledAuthToolchain(linked.root), /regular non-link file/)
   } finally {
     fs.rmSync(tampered.root, { recursive: true, force: true })

@@ -604,7 +604,7 @@ validate_bundled_toolchain_root() {
     fi
 
     local required
-    for required in manifest.json uv python.tar.gz auth-requirements.txt; do
+    for required in manifest.json uv.gz python.tar.gz auth-requirements.txt; do
         if [ ! -f "$BUNDLED_TOOLCHAIN_ROOT/$required" ] || [ -L "$BUNDLED_TOOLCHAIN_ROOT/$required" ]; then
             log_error "Bundled authentication toolchain asset is unavailable: $required"
             return 1
@@ -643,7 +643,11 @@ install_bundled_uv() {
     local managed_uv="$HERMES_HOME/bin/uv"
     local temporary_uv="$managed_uv.tmp.$$"
     rm -f "$temporary_uv"
-    cp "$BUNDLED_TOOLCHAIN_ROOT/uv" "$temporary_uv"
+    if ! gzip -dc "$BUNDLED_TOOLCHAIN_ROOT/uv.gz" > "$temporary_uv"; then
+        rm -f "$temporary_uv"
+        log_error "Bundled uv archive extraction failed"
+        return 1
+    fi
     chmod 0755 "$temporary_uv"
 
     if ! "$temporary_uv" --version 2>/dev/null | grep -Eq '^uv [0-9]+\.[0-9]+\.[0-9]+'; then

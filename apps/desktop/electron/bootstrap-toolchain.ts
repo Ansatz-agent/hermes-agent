@@ -26,7 +26,7 @@ export interface BundledAuthToolchain {
   root: string
   manifest: AuthToolchainManifest
   manifestPath: string
-  uvPath: string
+  uvArchivePath: string
   pythonArchivePath: string
   requirementsPath: string
   wheelPaths: string[]
@@ -97,7 +97,7 @@ function parseManifest(raw: unknown): AuthToolchainManifest {
     throw new Error('authentication toolchain target must be darwin-arm64')
   }
 
-  const uv = parseVersionedAsset(value.uv, 'uv', 'uv')
+  const uv = parseVersionedAsset(value.uv, 'uv.gz', 'uv')
   const python = parseVersionedAsset(value.python, 'python.tar.gz', 'Python')
   const requirements = parseAsset(value.requirements, 'auth-requirements.txt', 'requirements')
 
@@ -202,7 +202,7 @@ export async function resolveBundledAuthToolchain(root: string): Promise<Bundled
     root: path.resolve(root),
     manifest,
     manifestPath,
-    uvPath: assetPath(root, manifest.uv.file),
+    uvArchivePath: assetPath(root, manifest.uv.file),
     pythonArchivePath: assetPath(root, manifest.python.file),
     requirementsPath: assetPath(root, manifest.requirements.file),
     wheelPaths: manifest.wheels.map(wheel => assetPath(root, wheel.file))

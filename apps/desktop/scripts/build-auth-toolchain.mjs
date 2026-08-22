@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto'
 import {
-  chmodSync,
   copyFileSync,
   existsSync,
   lstatSync,
@@ -9,10 +8,10 @@ import {
   readdirSync,
   renameSync,
   rmSync,
-  statSync,
   writeFileSync
 } from 'node:fs'
 import path from 'node:path'
+import { gzipSync } from 'node:zlib'
 
 export const AUTH_TOOLCHAIN_SCHEMA_VERSION = 1
 export const AUTH_TOOLCHAIN_PLATFORM = 'darwin'
@@ -21,7 +20,7 @@ export const AUTH_TOOLCHAIN_ARCH = 'arm64'
 const SHA256_RE = /^[0-9a-f]{64}$/
 const SAFE_VERSION_RE = /^[0-9]+(?:\.[0-9]+){1,3}$/
 const FIXED_FILES = Object.freeze({
-  uv: 'uv',
+  uv: 'uv.gz',
   python: 'python.tar.gz',
   requirements: 'auth-requirements.txt'
 })
@@ -208,8 +207,10 @@ export function buildAuthToolchain(options) {
   mkdirSync(path.join(stagingRoot, 'wheelhouse'), { recursive: true })
 
   try {
-    copyRegularFile(uvPath, path.join(stagingRoot, FIXED_FILES.uv), 'uv input')
-    chmodSync(path.join(stagingRoot, FIXED_FILES.uv), 0o755)
+    writeFileSync(
+      path.join(stagingRoot, FIXED_FILES.uv),
+      gzipSync(readFileSync(uvPath), { level: 9 })
+    )
     copyRegularFile(
       pythonArchivePath,
       path.join(stagingRoot, FIXED_FILES.python),

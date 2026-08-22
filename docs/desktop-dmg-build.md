@@ -9,8 +9,14 @@ FFmpeg.
 - macOS on Apple silicon
 - Node.js 26.7.0
 - npm compatible with the committed `package-lock.json`
+- uv 0.12.5 for macOS arm64, either on `PATH`, under
+  `$HERMES_HOME/bin/uv`, or under `~/.hermes/bin/uv`
+- a relocatable uv-managed CPython 3.11 macOS arm64 runtime; the build finds
+  it with `uv python find 3.11`
 - network access to the npm registry and the configured Electron and
-  electron-builder binary mirrors when dependencies are not already cached
+  electron-builder binary mirrors when dependencies are not already cached,
+  plus the approved USTC or Tsinghua Python mirror for the authentication
+  wheelhouse
 
 The repository pins Node in both `.nvmrc` and `.node-version`. The build also
 checks the running Node executable and stops before installing dependencies if
@@ -33,6 +39,45 @@ builds in China; callers can override `ELECTRON_MIRROR` and
 `ELECTRON_BUILDER_BINARIES_MIRROR`. Electron Builder still verifies its binary
 downloads against the checksums shipped with the package.
 
+Before Electron Builder runs, the command also creates the offline
+authentication toolchain used before the login form can appear. The build
+requires uv 0.12.5 and a relocatable CPython 3.11 macOS arm64 runtime, exports
+`desktop_auth_runtime/uv.lock` as hash-locked requirements, downloads only
+binary wheels from the USTC mirror with a Tsinghua retry, and archives Python.
+The packaged toolchain also gzip-wraps the verified `uv` executable before
+writing its manifest. This keeps the later macOS App signing pass from
+modifying a bare Mach-O after its size and SHA-256 have been recorded; the
+installer verifies the archive and extracts it atomically before use. The
+resulting inputs are copied into
+`apps/desktop/build/bootstrap/auth-toolchain/`; `beforePack` records every
+asset size and SHA-256 in `manifest.json`. The packaged App verifies the same
+manifest before invoking the installer.
+
+The supported default build performs that preparation automatically. A
+controlled release environment may instead provide all seven absolute inputs
+below; partial overrides are not treated as a complete prebuilt toolchain:
+
+```text
+HERMES_AUTH_TOOLCHAIN_OUTPUT_DIR
+HERMES_AUTH_TOOLCHAIN_UV_PATH
+HERMES_AUTH_TOOLCHAIN_PYTHON_ARCHIVE
+HERMES_AUTH_TOOLCHAIN_REQUIREMENTS
+HERMES_AUTH_TOOLCHAIN_WHEELHOUSE
+HERMES_AUTH_TOOLCHAIN_UV_VERSION
+HERMES_AUTH_TOOLCHAIN_PYTHON_VERSION
+```
+
+At first launch, authentication preparation is fully offline from these
+packaged assets. After successful online account validation, full runtime
+downloads use the fixed USTC/Tsinghua Python mirrors and the npmmirror npm,
+Node, and Playwright endpoints. This automatic first-launch chain has no
+GitHub, Astral, or nodejs.org fallback.
+
+The backend archive and App resources are product-only. `.github`, CI evidence
+publishers, Gatekeeper verifiers, credential-login drivers, tests, and build
+documents are rejected or excluded; the GitHub Actions verification workflow
+is not part of the DMG payload.
+
 For this local-testing milestone the macOS build explicitly uses Electron
 Builder's ad-hoc identity (`mac.identity=-`). The pipeline then runs
 `codesign --verify --deep --strict` against the packaged `Hermes.app`; an
@@ -44,8 +89,9 @@ build log is `apps/desktop/build/logs/phase1-desktop-dmg-build.log`.
 
 ## Preflight only
 
-To verify the host, Node version, browser-download policy, and Electron mirror
-without installing or building anything:
+To verify the host, Node version, browser-download policy, Electron mirror, and
+whether auth inputs will be prebuilt or prepared without installing or
+building anything:
 
 ```bash
 PATH="/Users/zhouzhangchen/.hermes/node/bin:$PATH" scripts/build-desktop-dmg.sh --check
