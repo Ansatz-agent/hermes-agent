@@ -13,7 +13,8 @@ const signedOut: DesktopAccountStatus = {
   epoch: 1,
   valid_until: 0,
   session_expires_at: null,
-  reason: 'signed_out'
+  reason: 'signed_out',
+  runtime_ready: false
 }
 
 const authenticated = {
