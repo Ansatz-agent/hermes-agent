@@ -155,6 +155,7 @@ def test_checked_in_ledger_has_locked_authorities_and_exact_enums() -> None:
         "49c27bc2b6bde2f8c46f60a8d4e9ddd413f20da4",
         "84078b95e55c9e7231bda9e43b1c3cc10b4e73d7",
         "0bd282242c76d055c278ab3b8d1fc15a82fe3bc3",
+        "bc3e158c8798613d03692bfa7ef0f7195ad4eeed",
     ]
     assert ledger["contract_bookkeeping_paths"] == [
         ".github/workflows/desktop-macos-package.yml",

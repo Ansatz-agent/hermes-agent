@@ -74,7 +74,8 @@
     "491accd211727f64576aae168e8d8d8e7e4d6967",
     "49c27bc2b6bde2f8c46f60a8d4e9ddd413f20da4",
     "84078b95e55c9e7231bda9e43b1c3cc10b4e73d7",
-    "0bd282242c76d055c278ab3b8d1fc15a82fe3bc3"
+    "0bd282242c76d055c278ab3b8d1fc15a82fe3bc3",
+    "bc3e158c8798613d03692bfa7ef0f7195ad4eeed"
   ],
   "parity_reason_enum": [
     "windows-adapter-addition",
@@ -134,6 +135,13 @@
       "owner": "common-product",
       "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
       "tests": ["apps/desktop/src/components/auth-gate.test.tsx"]
+    },
+    {
+      "path": "apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/src/app/chat/composer/hooks/use-composer-voice.test.tsx"]
     },
     {
       "path": "apps/desktop/electron/package-runtime/windows-auth-toolchain.ts",
@@ -2723,6 +2731,11 @@
       "match": "exact",
       "path": "apps/desktop/src/app/chat/composer/controls.tsx",
       "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/chat/composer/hooks/use-composer-voice.test.tsx",
+      "owner": "test-evidence"
     },
     {
       "match": "exact",
