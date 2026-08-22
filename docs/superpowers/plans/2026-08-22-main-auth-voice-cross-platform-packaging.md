@@ -393,7 +393,6 @@ e28883110d  build: mirror electron builder tool downloads
 abbc79d0cd  feat(desktop): bundle backend bootstrap payload
 904d435685  fix(desktop): exclude dependency tests from package
 936ede7953  test(desktop): lock packaged bootstrap contract
-89503cfb2b  test(desktop): add backend payload integration coverage
 11d2143924  fix(desktop): close packaged payload validation gaps
 7666fc4da5  fix(desktop): harden package audit inputs
 42bbebadf9  test(desktop): add Gatekeeper payload verification
@@ -507,6 +506,7 @@ Expected: tests PASS and the evidence search finds no real credential/session co
 Add the following exact order to `main-auth-voice-migration-ledger.json`:
 
 ```text
+89503cfb2b
 08a2eedf67 706c5a4d0d 6aed1cc0f1 e042ce3861 bffdd26edf f28a0f4b58
 8af9e3eefe cdc12484f1 27567163b3 366fb3f5a8 cdb5c65bc8 df34e9da62
 c478db4d2f e51e448669 f68510d905 817a5d0a6a b22bdb8d31 af19ce56b1
@@ -516,6 +516,8 @@ c893e264e9 38230a6c9f 4e4a5d42c7
 ```
 
 The ledger records `cherry-pick`, `path-extract`, or `reference-equivalent` for each SHA and exhaustive path lists for every path-extract.
+
+`89503cfb2b` is deliberately the first post-merge replay: it modifies `apps/desktop/e2e/auth-hard-gate.spec.ts`, which is created by `feature/remote-auth-hard-gate` and does not exist on `ansatz/main`. The other five package-contract commits remain in Task 2 because their targets already exist there. This preserves the dependency order without deleting the protected-auth E2E.
 
 - [ ] **Step 2: Add failing behavioral tests before replay**
 
@@ -542,6 +544,7 @@ Run targeted Python and Vitest suites and record the expected failing names befo
 Run each command separately. After each command, resolve conflicts using Appendix B, run `test -z "$(git diff --name-only --diff-filter=U)"`, `git diff --check`, and the migration checker before continuing:
 
 ```bash
+git cherry-pick -x 89503cfb2b
 git cherry-pick -x 08a2eedf67
 git cherry-pick -x 706c5a4d0d
 git cherry-pick -x 6aed1cc0f1
@@ -706,6 +709,8 @@ upstream SHA-256: 455c3e57602e2141e66e2f0bf685898c9c5e5a70377d14c9a71554a3baf3dd
 
 All authentication wheels are exported from `desktop_auth_runtime/uv.lock` for CPython 3.13 / `win_amd64`, downloaded through USTC then Tsinghua, and verified against lock/upstream hashes. Build-time official fallback is bounded and recorded; the installed App never performs it. Do not reuse a macOS wheel, host Python, ambient uv, or the earlier Windows online installer as evidence.
 
+The platform minor-version split is intentional and tested: the accepted macOS auth payload retains its pinned CPython 3.11.x archive, while Windows uses current binary-supported CPython 3.13.15. The shared auth project must resolve/import under both interpreters, and Task 8's platform-complete lock gate rejects a dependency that works on only one minor/platform pair.
+
 - [ ] **Step 2: Write failing Windows offline-toolchain tests**
 
 Tests assert:
@@ -807,6 +812,8 @@ The dispatcher verifies every size/SHA-256 and atomically publishes only under `
 ```
 
 `prepare-package-inputs.test.mjs` compares each `from`/`to` entry one-for-one with `packageInputPlan`/`packageResourcePlan`; an output with no mapping or a mapping with no verified output fails.
+
+The comparison is over resource roots. A directory mapping such as `build/bootstrap/auth-toolchain` is satisfied only when its platform manifest output exists and every file recursively named by that manifest is hash/size verified; extra unmanifested files under the directory fail. Thus a directory `from` is not incorrectly compared as a literal filename to `auth-toolchain/manifest.json`.
 
 The package scripts are exact:
 
@@ -1024,7 +1031,7 @@ git commit -m "fix(installer): enforce recursive domestic mirror policy"
 
 - Create/modify: `apps/desktop/electron/windows-auth-owner*`, `auth-runtime-contract*`
 - Modify: `apps/desktop/scripts/prepare-windows-git-runtime.mjs`; create/modify: `apps/desktop/scripts/package-audit.mjs`
-- Create/modify: `scripts/build-desktop-windows.mjs`, `build-desktop-windows.test.mjs`, `desktop-windows-contract.mjs`, `desktop-windows-contract.test.mjs`, `desktop-credential-login.test.mjs`
+- Create/modify: `scripts/build-desktop-windows.mjs`, `build-desktop-windows.test.mjs`, `desktop-windows-contract.mjs`, `desktop-windows-contract.test.mjs`, `desktop-credential-login.mjs`, `desktop-credential-login.test.mjs`
 - Create/modify: `scripts/test-desktop-windows-install.ps1`, `test-desktop-windows-auth-host.ps1`
 - Create/modify: `scripts/tests/test-install-ps1-managed-uv.ps1`, `test-install-ps1-packaged-lock.ps1`
 - Create/modify: `apps/desktop/e2e/installed-windows-smoke.spec.ts`, `installed-windows-auth.spec.ts`
@@ -1047,6 +1054,7 @@ git restore --source=c2d3d09aab -- \
   scripts/build-desktop-windows.test.mjs \
   scripts/desktop-windows-contract.mjs \
   scripts/desktop-windows-contract.test.mjs \
+  scripts/desktop-credential-login.mjs \
   scripts/desktop-credential-login.test.mjs \
   scripts/test-desktop-windows-install.ps1 \
   scripts/test-desktop-windows-auth-host.ps1 \
@@ -1150,6 +1158,7 @@ git add apps/desktop/electron apps/desktop/scripts apps/desktop/e2e \
   apps/desktop/package.json package.json scripts/install.ps1 \
   scripts/build-desktop-windows.mjs scripts/build-desktop-windows.test.mjs \
   scripts/desktop-windows-contract.mjs scripts/desktop-windows-contract.test.mjs \
+  scripts/desktop-credential-login.mjs \
   scripts/desktop-credential-login.test.mjs \
   scripts/test-desktop-windows-install.ps1 \
   scripts/test-desktop-windows-auth-host.ps1 scripts/tests
