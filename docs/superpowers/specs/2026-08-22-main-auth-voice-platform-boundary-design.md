@@ -7,7 +7,7 @@ Make `main` the authoritative implementation of Hermes authentication, Voice/Sen
 The completed `main` candidate must satisfy all three hard requirements:
 
 1. Authentication and Voice behavior matches the accepted macOS DMG source at `release/desktop-dmg-auth-e2e@80db6d8265f805cec46817d913982e4c5f6405c4`, except for reviewed operating-system adapters.
-2. Authentication dependencies and the post-login Hermes runtime use a controlled domestic-mirror-first download policy, with integrity validation and bounded fallback.
+2. Authentication dependencies, the post-login Hermes runtime, and every Hermes-managed transitive, optional, repair, or lazy dependency use a controlled domestic-mirror-first download policy, with integrity validation and bounded fallback.
 3. Running `dist:mac:dmg` on macOS or `dist:win:nsis` on Windows produces an installer that can be installed on a clean computer, authenticate, prepare the runtime, use Voice/SenseVoice, and log out correctly.
 
 This is stronger than source compatibility or a successful Electron compile. A package that opens but cannot authenticate on a clean machine does not meet the goal.
@@ -117,6 +117,24 @@ Mirror priority never weakens supply-chain validation:
 
 The minimum authentication runtime is bundled into each installer, so a clean computer does not have to reach GitHub, PyPI, or npm before showing and submitting the login form. Domestic mirrors are used when producing that bundled runtime and for any validated repair. After login, the same domestic-first ordering applies while materializing the full Hermes/Voice runtime.
 
+### Recursive coverage
+
+Domestic-first is an end-to-end installation invariant, not an environment setting applied only to the first command. It covers every download initiated or delegated by Hermes during build, installation, first launch, repair, update, and later lazy feature preparation:
+
+- all direct and transitive Python wheels and source distributions resolved by uv or pip;
+- uv-managed tools, including dependencies installed by `uv tool install` or equivalent lazy installers;
+- all direct, transitive, optional, and native npm packages plus downloads initiated by npm lifecycle scripts;
+- Node, Electron, Playwright browsers, managed Python, uv, Git, ripgrep, ffmpeg, and other Hermes-managed toolchain archives;
+- the SenseVoice runtime and model archive, retaining ModelScope as the first model source and a hash-pinned fallback chain;
+- Browser Use, Computer Use, and other optional Hermes features when Hermes performs their installation;
+- child installers and subprocesses launched by `install.sh`, `install.ps1`, Electron bootstrap, repair, update, or feature-enablement code.
+
+Every Hermes-owned download entrypoint is registered in a versioned origin manifest with its domestic primary, domestic secondary when available, official fallback, timeout, expected integrity mechanism, and owning test. An unregistered network origin in an installation or lazy-dependency path fails the boundary check.
+
+Child processes receive the sanitized mirror policy through the variables understood by that tool, not through an unrestricted inherited environment. A child script may not clear the policy, switch to an official source first, execute an unverified remote script, or resolve an unlocked dependency. If a third-party installer cannot honor the policy and integrity contract, Hermes must replace it with a pinned direct download, bundle the dependency, or fail with a clear manual-action message.
+
+This policy applies to downloads managed by Hermes. It does not rewrite user-configured model providers, account-server traffic, arbitrary plugin network calls, or the user's global Homebrew, winget, npm, pip, or uv configuration.
+
 ## Packaging foundation owned by `main`
 
 `main` owns everything required for the two supported build commands to produce clean-machine-capable installers:
@@ -197,7 +215,7 @@ The candidate cannot be proposed for `main` until all gates pass:
 
 1. **DMG product parity:** every accepted authentication and Voice path matches `80db6d8265`, except reviewed OS-neutral wording or Windows adapter changes with path-specific evidence.
 2. **Entrypoint parity:** every non-installer protected entrypoint in the final DMG remains protected in `main` and in both installed products.
-3. **Mirror policy:** authentication bootstrap and full runtime tests prove domestic-first ordering, bounded fallback, hash validation, environment sanitization, and recoverable failure.
+3. **Recursive mirror policy:** authentication bootstrap, full runtime, repair, update, optional feature, Voice model, and lazy-dependency tests prove domestic-first ordering, bounded fallback, hash validation, child-process propagation, environment sanitization, and recoverable failure. A network-origin inventory and controlled-proxy test prove that no Hermes-managed nested installer contacts an unregistered or official-first package source.
 4. **macOS clean artifact:** `dist:mac:dmg` produces a real DMG; a clean-state installation can log in, prepare runtime, use Voice, restore a valid session online, log out, and relock.
 5. **Windows clean artifact:** `dist:win:nsis` produces a real NSIS installer; a clean Windows installation passes the same behavior using Credential Manager and named pipes.
 6. **Pre-auth isolation:** no backend, Agent, gateway, protected HTTP/WS listener, protected root, or protected IPC starts before authentication.
