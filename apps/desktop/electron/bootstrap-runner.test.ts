@@ -118,6 +118,31 @@ test('auth bootstrap args select only the installer auth scope', () => {
   )
 })
 
+test('bundled Desktop bootstrap args include the verified authentication toolchain root', () => {
+  assert.deepEqual(
+    buildPosixPinArgs({
+      installStamp: null,
+      activeRoot: '/managed/hermes-agent',
+      hermesHome: '/managed/home',
+      bundledSource: true,
+      bundledToolchainRoot: '/Applications/Hermes.app/Contents/Resources/bootstrap/auth-toolchain',
+      bootstrapScope: 'auth'
+    }),
+    [
+      '--dir',
+      '/managed/hermes-agent',
+      '--hermes-home',
+      '/managed/home',
+      '--bundled-source',
+      '--skip-computer-use',
+      '--bundled-toolchain',
+      '/Applications/Hermes.app/Contents/Resources/bootstrap/auth-toolchain',
+      '--bootstrap-scope',
+      'auth'
+    ]
+  )
+})
+
 test('existing-checkout bootstrap args keep branch but skip the packaged commit pin', () => {
   const installStamp = { commit: 'a'.repeat(40), branch: 'main' }
 

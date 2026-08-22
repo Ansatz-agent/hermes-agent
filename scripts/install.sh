@@ -83,6 +83,7 @@ JSON_OUTPUT=false
 NON_INTERACTIVE=false
 INCLUDE_DESKTOP=false
 BUNDLED_SOURCE=false
+BUNDLED_TOOLCHAIN_ROOT=""
 BOOTSTRAP_SCOPE="runtime"
 
 # Detect non-interactive mode (e.g. curl | bash)
@@ -153,6 +154,14 @@ while [[ $# -gt 0 ]]; do
             BUNDLED_SOURCE=true
             shift
             ;;
+        --bundled-toolchain)
+            BUNDLED_TOOLCHAIN_ROOT="${2:-}"
+            if [ -z "$BUNDLED_TOOLCHAIN_ROOT" ]; then
+                echo "Missing bundled authentication toolchain path" >&2
+                exit 1
+            fi
+            shift 2
+            ;;
         --bootstrap-scope)
             BOOTSTRAP_SCOPE="${2:-}"
             case "$BOOTSTRAP_SCOPE" in
@@ -199,6 +208,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --include-desktop  Also build the desktop app (apps/desktop -> Hermes.app)"
             echo "  --bundled-source  Use verified Desktop source already present at --dir;"
             echo "                    never clone, fetch, pull, or check out repository data"
+            echo "  --bundled-toolchain PATH  Verified Desktop authentication toolchain"
             echo "  --bootstrap-scope SCOPE  Desktop bootstrap scope: auth or runtime"
             echo "  --dir PATH     Installation directory"
             echo "                   default (non-root):  ~/.hermes/hermes-agent"
@@ -574,11 +584,128 @@ detect_os() {
 # Dependency checks
 # ============================================================================
 
+validate_bundled_toolchain_root() {
+    [ -n "$BUNDLED_TOOLCHAIN_ROOT" ] || return 1
+
+    case "$BUNDLED_TOOLCHAIN_ROOT" in
+        /*) ;;
+        *) log_error "Bundled authentication toolchain path must be absolute"; return 1 ;;
+    esac
+
+    if [ ! -d "$BUNDLED_TOOLCHAIN_ROOT" ] || [ -L "$BUNDLED_TOOLCHAIN_ROOT" ]; then
+        log_error "Bundled authentication toolchain root is unavailable"
+        return 1
+    fi
+
+    local required
+    for required in manifest.json uv python.tar.gz auth-requirements.txt; do
+        if [ ! -f "$BUNDLED_TOOLCHAIN_ROOT/$required" ] || [ -L "$BUNDLED_TOOLCHAIN_ROOT/$required" ]; then
+            log_error "Bundled authentication toolchain asset is unavailable: $required"
+            return 1
+        fi
+    done
+
+    if [ ! -d "$BUNDLED_TOOLCHAIN_ROOT/wheelhouse" ] || [ -L "$BUNDLED_TOOLCHAIN_ROOT/wheelhouse" ]; then
+        log_error "Bundled authentication wheelhouse is unavailable"
+        return 1
+    fi
+
+    return 0
+}
+
+install_bundled_uv() {
+    validate_bundled_toolchain_root || return 1
+    mkdir -p "$HERMES_HOME/bin"
+
+    local managed_uv="$HERMES_HOME/bin/uv"
+    local temporary_uv="$managed_uv.tmp.$$"
+    rm -f "$temporary_uv"
+    cp "$BUNDLED_TOOLCHAIN_ROOT/uv" "$temporary_uv"
+    chmod 0755 "$temporary_uv"
+
+    if ! "$temporary_uv" --version 2>/dev/null | grep -Eq '^uv [0-9]+\.[0-9]+\.[0-9]+'; then
+        rm -f "$temporary_uv"
+        log_error "Bundled uv executable validation failed"
+        return 1
+    fi
+
+    mv -f "$temporary_uv" "$managed_uv"
+    UV_CMD="$managed_uv"
+    UV_VERSION=$($UV_CMD --version 2>/dev/null)
+    log_success "Managed uv installed from the signed Desktop payload ($UV_VERSION)"
+}
+
+install_bundled_python() {
+    validate_bundled_toolchain_root || return 1
+    export UV_PYTHON_INSTALL_DIR="$HERMES_HOME/python"
+    export UV_PYTHON_BIN_DIR="$HERMES_HOME/python-bin"
+
+    local archive="$BUNDLED_TOOLCHAIN_ROOT/python.tar.gz"
+    local entry root_name temporary_root target_root python_bin
+    root_name=""
+
+    while IFS= read -r entry; do
+        [ -n "$entry" ] || continue
+        case "$entry" in
+            /*|../*|*/../*|*'/..')
+                log_error "Bundled Python archive contains an unsafe path"
+                return 1
+                ;;
+        esac
+        local candidate="${entry%%/*}"
+        [ -n "$candidate" ] || continue
+        if [ -z "$root_name" ]; then
+            root_name="$candidate"
+        elif [ "$candidate" != "$root_name" ]; then
+            log_error "Bundled Python archive must contain one runtime root"
+            return 1
+        fi
+    done < <(tar -tzf "$archive")
+
+    case "$root_name" in
+        cpython-3.11.*-macos-aarch64-none) ;;
+        *) log_error "Bundled Python runtime target is invalid"; return 1 ;;
+    esac
+
+    target_root="$UV_PYTHON_INSTALL_DIR/$root_name"
+    python_bin="$target_root/bin/python3.11"
+    if [ -x "$python_bin" ] && "$python_bin" --version 2>&1 | grep -Eq '^Python 3\.11\.'; then
+        return 0
+    fi
+
+    temporary_root="$HERMES_HOME/.python-install.$$"
+    rm -rf "$temporary_root"
+    mkdir -p "$temporary_root"
+    if ! tar -xzf "$archive" -C "$temporary_root"; then
+        rm -rf "$temporary_root"
+        log_error "Bundled Python runtime extraction failed"
+        return 1
+    fi
+
+    if [ ! -x "$temporary_root/$root_name/bin/python3.11" ] || \
+       ! "$temporary_root/$root_name/bin/python3.11" --version 2>&1 | grep -Eq '^Python 3\.11\.'; then
+        rm -rf "$temporary_root"
+        log_error "Bundled Python runtime validation failed"
+        return 1
+    fi
+
+    mkdir -p "$UV_PYTHON_INSTALL_DIR"
+    rm -rf "$target_root"
+    mv "$temporary_root/$root_name" "$target_root"
+    rm -rf "$temporary_root"
+    log_success "Python 3.11 installed from the signed Desktop payload"
+}
+
 install_uv() {
     if [ "$DISTRO" = "termux" ]; then
         log_info "Termux detected — using Python's stdlib venv + pip instead of uv"
         UV_CMD=""
         return 0
+    fi
+
+    if [ -n "$BUNDLED_TOOLCHAIN_ROOT" ]; then
+        install_bundled_uv
+        return $?
     fi
 
     # Hermes owns its own uv at $HERMES_HOME/bin/uv.  Always install there —
@@ -658,6 +785,10 @@ check_python() {
     fi
 
     log_info "Checking Python $PYTHON_VERSION..."
+
+    if [ -n "$BUNDLED_TOOLCHAIN_ROOT" ]; then
+        install_bundled_python || exit 1
+    fi
 
     # Let uv handle Python — it can download and manage Python versions
     # First check if a suitable Python is already available
@@ -1834,11 +1965,23 @@ install_auth_deps() {
     export UV_PYTHON="$auth_python"
     log_info "Installing the locked authentication dependency set..."
 
-    # This is deliberately fail-closed. The Desktop authentication bootstrap
-    # never falls back to an unlocked `uv pip install` or another package
-    # index when the release lock is missing, stale, or unavailable.
-    if ! UV_PROJECT_ENVIRONMENT="$INSTALL_DIR/venv" \
-        $UV_CMD sync --project "$auth_project" --locked --no-install-project \
+    if [ -n "$BUNDLED_TOOLCHAIN_ROOT" ]; then
+        validate_bundled_toolchain_root || return 1
+        if ! "$UV_CMD" pip sync "$BUNDLED_TOOLCHAIN_ROOT/auth-requirements.txt" \
+            --python "$auth_python" \
+            --require-hashes \
+            --no-index \
+            --find-links "$BUNDLED_TOOLCHAIN_ROOT/wheelhouse" \
+            --offline \
+            --only-binary :all:; then
+            log_error "Bundled authentication dependency installation failed"
+            return 1
+        fi
+    # This is deliberately fail-closed. The non-bundled Desktop path never
+    # falls back to an unlocked `uv pip install` or another package index when
+    # the release lock is missing, stale, or unavailable.
+    elif ! UV_PROJECT_ENVIRONMENT="$INSTALL_DIR/venv" \
+        "$UV_CMD" sync --project "$auth_project" --locked --no-install-project \
         --config-file "$auth_uv_config"; then
         log_error "Locked authentication dependency installation failed"
         return 1

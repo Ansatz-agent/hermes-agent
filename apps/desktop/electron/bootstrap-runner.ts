@@ -40,6 +40,7 @@ import path from 'node:path'
 
 import { prepareBundledSource, type PreparedBundledSource, resolveBundledPayload } from './bootstrap-payload'
 import { buildBootstrapEnvironment, runBootstrapProcess } from './bootstrap-process'
+import { resolveBundledAuthToolchain } from './bootstrap-toolchain'
 import { hiddenWindowsChildOptions } from './windows-child-options'
 
 const IS_WINDOWS = process.platform === 'win32'
@@ -587,6 +588,7 @@ function buildPosixPinArgs({
   hermesHome,
   pinCommit = true,
   bundledSource = false,
+  bundledToolchainRoot = null,
   bootstrapScope = null
 }) {
   const args = ['--dir', activeRoot, '--hermes-home', hermesHome]
@@ -605,6 +607,10 @@ function buildPosixPinArgs({
     // best-effort GitHub fetch for the optional Computer Use driver; that
     // capability still installs on demand if the user enables it later.
     args.push('--bundled-source', '--skip-computer-use')
+
+    if (bundledToolchainRoot) {
+      args.push('--bundled-toolchain', bundledToolchainRoot)
+    }
   }
 
   if (bootstrapScope) {
@@ -623,6 +629,7 @@ async function fetchManifest({
   installStamp,
   pinCommit,
   bundledSource,
+  bundledToolchainRoot,
   abortSignal,
   timeoutBudget: processTimeout,
   idleTimeoutMs,
@@ -640,6 +647,7 @@ async function fetchManifest({
           hermesHome,
           pinCommit,
           bundledSource,
+          bundledToolchainRoot,
           bootstrapScope
         })
       ]
@@ -723,6 +731,7 @@ async function runStage({
   installStamp,
   pinCommit,
   bundledSource,
+  bundledToolchainRoot,
   timeoutBudget: processTimeout,
   idleTimeoutMs,
   killGraceMs,
@@ -753,6 +762,7 @@ async function runStage({
           hermesHome,
           pinCommit,
           bundledSource,
+          bundledToolchainRoot,
           bootstrapScope
         })
       ]
@@ -1026,6 +1036,9 @@ async function runBootstrap(opts) {
     const payload = bundledBootstrapRoot
       ? await resolveBundledPayload({ bootstrapRoot: bundledBootstrapRoot, installStamp })
       : null
+    const bundledToolchain = payload
+      ? await resolveBundledAuthToolchain(path.join(bundledBootstrapRoot, 'auth-toolchain'))
+      : null
 
     if (payload && !existingCheckout) {
       sourceTransaction = await prepareBundledSource({ payload, activeRoot, hermesHome })
@@ -1061,6 +1074,7 @@ async function runBootstrap(opts) {
       installStamp,
       pinCommit,
       bundledSource,
+      bundledToolchainRoot: bundledToolchain?.root || null,
       abortSignal,
       timeoutBudget: manifestTimeout,
       idleTimeoutMs: timeouts.idleMs,
@@ -1113,6 +1127,7 @@ async function runBootstrap(opts) {
         installStamp,
         pinCommit,
         bundledSource,
+        bundledToolchainRoot: bundledToolchain?.root || null,
         timeoutBudget: stageTimeout,
         idleTimeoutMs: timeouts.idleMs,
         killGraceMs: timeouts.killGraceMs,
