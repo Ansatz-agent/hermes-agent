@@ -1,0 +1,270 @@
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+
+REPO = Path(__file__).resolve().parents[1]
+CHECKER = REPO / "scripts" / "check_main_auth_voice_migration.py"
+LEDGER = REPO / "docs" / "security" / "main-auth-voice-migration-ledger.json"
+PRODUCT_PATHS = REPO / "docs" / "security" / "main-auth-voice-product-paths.txt"
+
+BASE = "9bd88c530716279a089ed18428dc785732b6e1be"
+DMG_REFERENCE = "80db6d8265f805cec46817d913982e4c5f6405c4"
+WINDOWS_REFERENCE = "c2d3d09aab921130171ff611e260c13e9c6d477c"
+PLANNED_CANDIDATE_TIP = "b0a9dfc4e212cd9f25a0e9474e65f77f4adbf6f1"
+
+OWNER_ENUM = {
+    "common-product",
+    "package-shared",
+    "package-macos",
+    "package-windows",
+    "ci-infrastructure",
+    "test-evidence",
+    "historical-drop",
+    "reference-equivalent",
+}
+STRATEGY_ENUM = {
+    "candidate",
+    "merge",
+    "cherry-pick",
+    "path-extract",
+    "reference-equivalent",
+    "drop",
+}
+PRODUCT_OWNERS = {
+    "common-product",
+    "package-shared",
+    "package-macos",
+    "package-windows",
+}
+
+
+def run(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        args,
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+
+def git_lines(repo: Path, *args: str) -> list[str]:
+    result = run(repo, "git", *args)
+    assert result.returncode == 0, result.stderr
+    return [line for line in result.stdout.splitlines() if line]
+
+
+def load_ledger() -> dict[str, object]:
+    assert LEDGER.is_file(), f"missing migration ledger: {LEDGER}"
+    return json.loads(LEDGER.read_text(encoding="utf-8"))
+
+
+def invoke(
+    repo: Path,
+    *,
+    base: str,
+    ledger: Path,
+    product_paths: Path,
+) -> subprocess.CompletedProcess[str]:
+    assert CHECKER.is_file(), f"missing migration checker: {CHECKER}"
+    return run(
+        repo,
+        sys.executable,
+        str(CHECKER),
+        "--repo",
+        str(repo),
+        "--base",
+        base,
+        "--ledger",
+        str(ledger),
+        "--product-paths",
+        str(product_paths),
+    )
+
+
+def test_checked_in_ledger_has_locked_authorities_and_exact_enums() -> None:
+    ledger = load_ledger()
+
+    assert ledger["schema_version"] == 1
+    assert ledger["base"] == BASE
+    assert ledger["dmg_reference"] == DMG_REFERENCE
+    assert ledger["windows_reference"] == WINDOWS_REFERENCE
+    assert ledger["candidate_tip"] == PLANNED_CANDIDATE_TIP
+    assert set(ledger["owner_enum"]) == OWNER_ENUM
+    assert set(ledger["strategy_enum"]) == STRATEGY_ENUM
+
+
+def test_every_locked_source_commit_has_one_owner_and_strategy() -> None:
+    ledger = load_ledger()
+    commits = ledger["commits"]
+    assert isinstance(commits, list)
+
+    actual = [entry["sha"] for entry in commits]
+    assert len(actual) == len(set(actual)), "a commit is classified more than once"
+    for entry in commits:
+        assert entry["owner"] in OWNER_ENUM
+        assert entry["strategy"] in STRATEGY_ENUM
+        if entry["strategy"] == "path-extract":
+            assert entry["paths"], f"path-extract lacks exhaustive paths: {entry['sha']}"
+
+    expected = set(
+        git_lines(REPO, "log", "--reverse", "--format=%H", "4ef56cef4c..403e1c3873")
+        + git_lines(REPO, "log", "--reverse", "--format=%H", "4ef56cef4c..56b402c63b")
+        + git_lines(
+            REPO,
+            "log",
+            "--reverse",
+            "--format=%H",
+            f"ansatz/main..{ledger['candidate_tip']}",
+        )
+    )
+    assert set(actual) == expected
+    assert run(
+        REPO,
+        "git",
+        "merge-base",
+        "--is-ancestor",
+        str(ledger["candidate_tip"]),
+        "HEAD",
+    ).returncode == 0
+
+
+def test_product_path_manifest_equals_ledger_projection() -> None:
+    ledger = load_ledger()
+    path_owners = ledger["path_owners"]
+    assert isinstance(path_owners, list)
+
+    paths = [entry["path"] for entry in path_owners]
+    assert len(paths) == len(set(paths)), "a path is listed under two owners"
+    assert all(entry["owner"] in OWNER_ENUM for entry in path_owners)
+
+    expected = sorted(
+        entry["path"]
+        for entry in path_owners
+        if entry["owner"] in PRODUCT_OWNERS
+    )
+    assert PRODUCT_PATHS.is_file(), f"missing product path manifest: {PRODUCT_PATHS}"
+    actual = [
+        line
+        for line in PRODUCT_PATHS.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    assert actual == sorted(actual)
+    assert actual == expected
+
+
+def test_current_candidate_has_one_owner_and_no_generated_or_secret_artifacts() -> None:
+    result = invoke(
+        REPO,
+        base="ansatz/main",
+        ledger=LEDGER,
+        product_paths=PRODUCT_PATHS,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "PASS" in result.stdout
+
+
+def initialize_fixture_repo(tmp_path: Path) -> str:
+    assert run(tmp_path, "git", "init", "-q").returncode == 0
+    assert run(tmp_path, "git", "config", "user.email", "migration@example.invalid").returncode == 0
+    assert run(tmp_path, "git", "config", "user.name", "Migration Test").returncode == 0
+    (tmp_path / "base.txt").write_text("base\n", encoding="utf-8")
+    assert run(tmp_path, "git", "add", "base.txt").returncode == 0
+    assert run(tmp_path, "git", "commit", "-qm", "base").returncode == 0
+    return git_lines(tmp_path, "rev-parse", "HEAD")[0]
+
+
+def write_fixture_contract(
+    tmp_path: Path,
+    *,
+    base: str,
+    owned_paths: list[str],
+) -> tuple[Path, Path]:
+    contract_dir = tmp_path.parent / f"{tmp_path.name}-contracts"
+    contract_dir.mkdir()
+    ledger = contract_dir / "ledger.json"
+    product = contract_dir / "product.txt"
+    ledger.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "base": base,
+                "dmg_reference": DMG_REFERENCE,
+                "windows_reference": WINDOWS_REFERENCE,
+                "candidate_tip": base,
+                "owner_enum": sorted(OWNER_ENUM),
+                "strategy_enum": sorted(STRATEGY_ENUM),
+                "commits": [],
+                "path_owners": [
+                    {"path": path, "owner": "common-product"}
+                    for path in owned_paths
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    product.write_text("".join(f"{path}\n" for path in sorted(owned_paths)), encoding="utf-8")
+    return ledger, product
+
+
+@pytest.mark.parametrize("state", ["committed", "staged", "unstaged", "untracked"])
+def test_checker_inspects_all_candidate_states(tmp_path: Path, state: str) -> None:
+    base = initialize_fixture_repo(tmp_path)
+    path = "src/owned.py"
+    candidate = tmp_path / path
+    candidate.parent.mkdir()
+
+    if state == "unstaged":
+        candidate.write_text("first\n", encoding="utf-8")
+        assert run(tmp_path, "git", "add", path).returncode == 0
+        assert run(tmp_path, "git", "commit", "-qm", "owned").returncode == 0
+        candidate.write_text("second\n", encoding="utf-8")
+    else:
+        candidate.write_text("candidate\n", encoding="utf-8")
+        if state in {"committed", "staged"}:
+            assert run(tmp_path, "git", "add", path).returncode == 0
+        if state == "committed":
+            assert run(tmp_path, "git", "commit", "-qm", "owned").returncode == 0
+
+    ledger, product = write_fixture_contract(tmp_path, base=base, owned_paths=[path])
+    result = invoke(tmp_path, base=base, ledger=ledger, product_paths=product)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "src/unowned.py",
+        "apps/desktop/release/Hermes.dmg",
+        "dist/Hermes.pkg",
+        "dist/Hermes.exe",
+        "dist/Hermes.msi",
+        "dist/Hermes.zip",
+        "apps/desktop/build/bootstrap/hermes-backend.tar.gz",
+        ".env",
+        "credentials.json",
+        "apps/desktop/build/logs/raw-session.log",
+        "tests/.artifacts/keychain-session.txt",
+    ],
+)
+def test_checker_rejects_unowned_generated_or_sensitive_paths(
+    tmp_path: Path,
+    path: str,
+) -> None:
+    base = initialize_fixture_repo(tmp_path)
+    candidate = tmp_path / path
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    candidate.write_text("candidate\n", encoding="utf-8")
+    ledger, product = write_fixture_contract(tmp_path, base=base, owned_paths=[])
+
+    result = invoke(tmp_path, base=base, ledger=ledger, product_paths=product)
+
+    assert result.returncode != 0
+    assert path in result.stderr

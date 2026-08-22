@@ -1,0 +1,15 @@
+.node-version
+apps/desktop/electron/
+apps/desktop/package.json
+apps/desktop/scripts/
+apps/desktop/src/
+desktop_auth_runtime/
+docs/security/hermes-managed-download-origins.json
+hermes_cli/
+package-lock.json
+package.json
+pyproject.toml
+ruff.toml
+scripts/
+tools/
+uv.lock
