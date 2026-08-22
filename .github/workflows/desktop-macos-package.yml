@@ -56,7 +56,9 @@ jobs:
         run: |
           set -euo pipefail
           npm run typecheck --workspace apps/desktop
-          node --test scripts/desktop-dmg-contract.test.mjs
+          node --test \
+            scripts/desktop-dmg-contract.test.mjs \
+            scripts/desktop-dmg-gatekeeper-contract.test.mjs
 
       - name: Build with the local product command
         shell: bash

@@ -4,45 +4,36 @@ import path from 'node:path'
 import test from 'node:test'
 
 const repoRoot = path.resolve(import.meta.dirname, '..')
-const workflowPath = path.join(repoRoot, '.github', 'workflows', 'desktop-dmg-gatekeeper.yml')
+const workflowPath = path.join(repoRoot, '.github', 'workflows', 'desktop-macos-package.yml')
 const verifierPath = path.join(repoRoot, 'scripts', 'verify-desktop-dmg-gatekeeper.sh')
 
 const expected = {
-  branch: 'integration/desktop-dmg-auth-e2e',
-  runner: 'macos-26',
-  asset: 'Hermes-0.17.0-mac-arm64.dmg',
-  bytes: '166088977',
-  sha256: '02f99b5e740a312d03b7c6da099016beed278003e51001a06950b72781f3c70f',
-  tag: 'desktop-dmg-gatekeeper-02f99b5e'
+  runner: 'macos-15',
+  buildCommand: 'npm run dist:mac:dmg --workspace apps/desktop'
 }
 
-test('workflow pins the private exact-DMG fresh-arm64 acceptance boundary', () => {
+test('workflow builds and exercises the current fresh arm64 DMG without Gatekeeper bypasses', () => {
   assert.ok(fs.existsSync(workflowPath), 'fresh macOS DMG workflow must exist')
   const workflow = fs.readFileSync(workflowPath, 'utf8')
 
-  assert.match(workflow, /branches:\s*\[integration\/desktop-dmg-auth-e2e\]/)
-  assert.match(workflow, /paths:/)
-  assert.match(workflow, /desktop-dmg-gatekeeper\.yml/)
-  assert.match(workflow, /verify-desktop-dmg-gatekeeper\.sh/)
   assert.match(workflow, /desktop-dmg-gatekeeper-contract\.test\.mjs/)
+  assert.match(workflow, /workflow_dispatch:/)
   assert.match(workflow, /permissions:\s*\n\s+contents: read/)
   assert.match(workflow, new RegExp(`runs-on: ${expected.runner}`))
-  assert.match(workflow, /timeout-minutes: 30/)
-  assert.match(workflow, new RegExp(expected.tag))
-  assert.match(workflow, new RegExp(expected.asset.replaceAll('.', '\\.')))
-  assert.match(workflow, new RegExp(expected.sha256))
-  assert.match(workflow, new RegExp(expected.bytes))
-  assert.match(workflow, /gh release download/)
-  assert.match(workflow, /GH_TOKEN: \$\{\{ github\.token \}\}/)
-  assert.match(workflow, /if: always\(\)/)
-  assert.match(workflow, /retention-days: 7/)
+  assert.match(workflow, /timeout-minutes: 180/)
+  assert.match(workflow, new RegExp(expected.buildCommand.replaceAll('.', '\\.')))
+  assert.match(workflow, /Credentialed installed-app login/)
+  assert.match(workflow, /ditto "\$mount\/Hermes\.app" \/Applications\/Hermes\.app/)
+  assert.match(workflow, /desktop-credential-login\.mjs/)
+  assert.match(workflow, /actions\/upload-artifact@[0-9a-f]{40}/)
+  assert.match(workflow, /apps\/desktop\/release\/\*-mac-arm64\.dmg/)
+  assert.match(workflow, /retention-days: 14/)
   assert.match(workflow, /if-no-files-found: error/)
-  assert.match(workflow, /steps\.verify\.outcome/)
-  assert.doesNotMatch(
-    workflow,
-    /path:\s*[^\n]*\.dmg/,
-    'the DMG must not be copied into an Actions artifact'
-  )
+  assert.doesNotMatch(workflow, /gh release download/, 'acceptance must build the current commit')
+
+  for (const bypass of ['xattr -d', 'xattr -c', 'spctl --add', 'spctl --master-disable', '--no-quarantine']) {
+    assert.ok(!workflow.includes(bypass), `Gatekeeper bypass is forbidden: ${bypass}`)
+  }
 })
 
 test('verifier rejects identity drift and never bypasses Gatekeeper', () => {
