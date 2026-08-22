@@ -88,6 +88,7 @@ The common layer owns the safe progress contract and login-gate presentation:
 - Its payload is bounded, structured, sanitized, and contains no raw command, path, Cookie, Session, CSRF value, password, Keychain value, or terminal transcript.
 - Unknown labels are sanitized and length-limited.
 - A percentage is shown only when a producer supplies a real total.
+- Source mode has no packaged bootstrap-process producer, so stage progress may remain `null`; the gate shows the current safe stage without inventing a progress value. This known shipping/source difference is a required parity waiver, not an implicit fallback.
 - Retry is enabled only after a declared failure and never resubmits credentials.
 - `runtime_ready` is part of the common account/runtime status. Protected product mounting requires both an authenticated scope and `runtime_ready`.
 - `desktop-runtime-gate.ts`, `authenticated-runtime-preparation.ts`, `bootstrap-progress.ts`, the safe renderer progress components, and their state contracts are common product logic. A release overlay may produce progress events, but it may not redefine their safety or mounting semantics.
@@ -186,11 +187,11 @@ Use a clean-base reconstruction; never merge either shipping platform branch who
 1. Reconfirm `ansatz/main` and the locked reference SHAs.
 2. Add an executable allowlist-based common-branch boundary checker and remove the misplaced Windows packaging workflow already present in the target base.
 3. Merge the reviewed original authentication history.
-4. Replay every accepted common authentication commit in original dependency order, including safe bootstrap IPC/progress, GUI logout, bridge recovery, `runtime_ready`, runtime epoch suppression, and native owner recovery.
+4. Replay or path-extract every accepted common authentication commit in original dependency order, including safe bootstrap IPC/progress, GUI logout, bridge recovery, `runtime_ready`, runtime epoch suppression, and native owner recovery. Mixed delivery/product commits are always split.
 5. Cherry-pick the complete Voice commit, resolving overlapping files by preserving both authentication and Voice.
 6. Extract the source-runtime portions of the accepted Windows owner/deadline/named-pipe work into the common implementation; do not import Windows packaging files.
 7. Reconcile dependencies and regenerate deterministic inventories without losing any protected entrypoint.
-8. Prove product-file parity against the shipping DMG reference, with written waivers for intentional neutralization or Windows source support.
+8. Prove product-file parity against the shipping DMG reference. Derive the manifest mechanically from the commit ledger, and require path-specific waivers for intentional neutralization, source dependency/install policy, missing packaged producers, or Windows source support.
 9. Run macOS and Windows source-mode acceptance before proposing a merge into `main`.
 10. Only after approval, merge the common branch and recreate the platform release branches as thin overlays based on the new `main`.
 
@@ -200,13 +201,13 @@ The implementation plan contains the complete commit classification and is autho
 
 Passing tests alone does not prove equivalence. The candidate must pass all of the following:
 
-1. **Product-file parity:** a versioned manifest lists every common product path expected from the final DMG. `git diff <candidate> 80db6d8265 -- <manifest paths>` must be empty except for reviewed waivers describing neutral platform wording, Windows source adapters, or newer common tests.
+1. **Product-file parity:** a versioned manifest is mechanically derived from all `main` paths, the `main_paths` side of every split ledger entry, and explicit `common_interface_waiver_paths` on overlay commits, intersected with the final DMG reference. `git diff <candidate> 80db6d8265 -- <manifest paths>` must be empty except for reviewed, path-specific waivers describing neutral wording, Windows source adapters, common-test strengthening, source dependency/install policy, or the absence of a packaged progress producer.
 2. **Reverse boundary:** every path changed from `ansatz/main` must be covered by an approved `main` ownership rule. Packaging-like new files fail by pattern even when their exact names were not known when the checker was written.
 3. **Entrypoint non-regression:** the generated common entrypoint manifest contains every non-installer protected entrypoint present in the accepted DMG manifest.
 4. **Signed-out IPC isolation:** `hermes:bootstrap:get` returns `AUTH_REQUIRED`; only sanitized `hermes:auth-bootstrap:get` is available to the login surface.
 5. **Account epoch isolation:** logout and rapid account switching cannot publish a prior epoch's authenticated runtime status.
 6. **macOS source acceptance:** login, logout, restore plus online validation, expiry/revocation relock, all-entrypoint rejection, backend lifecycle, and Voice smoke.
-7. **Windows source acceptance:** the same behavior using the Windows secure-store and named-pipe owner transport, including cold-start and Retry races.
+7. **Windows source acceptance:** the same behavior using the Windows secure-store and named-pipe owner transport, including cold-start and Retry races. A generic source-only Windows Desktop E2E job may live in common CI, but it must never construct or upload an installer/payload and is never packaged into a release artifact.
 8. **Voice parity:** the accepted Voice paths remain blob-equivalent to `3ad4a12660` unless a documented authentication-integration change is required.
 
 ## Runtime flows

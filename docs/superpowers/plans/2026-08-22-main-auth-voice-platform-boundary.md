@@ -114,7 +114,7 @@ Expected: PASS. Stop on a pre-existing baseline failure.
 
 - [ ] **Step 1: Create the approved common path manifest**
 
-Create `docs/security/main-auth-voice-common-paths.txt` as a sorted newline-separated list. Seed it from the exact product/test paths assigned to `main` or the `main` side of `split` in Appendix A and Appendix B. Do not include a directory wildcard.
+Create `docs/security/main-auth-voice-common-paths.txt` as a sorted newline-separated list. Seed it from the exact product/test paths assigned to `main` or the `main` side of `split` in Appendix A and Appendix B. Also include the current common boundary design and implementation-plan paths, which already differ from `ansatz/main`. Do not include a directory wildcard.
 
 Validate sorting and uniqueness:
 
@@ -173,6 +173,18 @@ def make_repo(tmp_path: Path, candidate_path: str, allow: bool) -> Path:
         ("scripts/new-nsis-proof.mjs", True, 1),
         ("apps/desktop/electron/new-bundled-runtime.ts", True, 1),
         ("apps/desktop/electron/new-bootstrap-payload.ts", True, 1),
+        ("apps/desktop/electron/bootstrap-process.ts", True, 1),
+        ("apps/desktop/electron/windows-auth-owner.ts", True, 1),
+        ("apps/desktop/electron/auth-runtime-contract.ts", True, 1),
+        ("apps/desktop/e2e/installed-windows-auth.spec.ts", True, 1),
+        ("apps/desktop/electron/windows-process-tree.ts", True, 1),
+        ("apps/desktop/scripts/before-pack.mjs", True, 1),
+        ("apps/desktop/scripts/package-audit.mjs", True, 1),
+        ("scripts/build-desktop-windows.ps1", True, 1),
+        ("scripts/desktop-windows-contract.test.mjs", True, 1),
+        ("scripts/desktop-credential-login.mjs", True, 1),
+        ("scripts/write_desktop_windows_electron_artifact.py", True, 1),
+        ("scripts/test-desktop-windows-auth.ps1", True, 1),
         ("scripts/tests/test-install-ps1-longpath.ps1", True, 0),
         ("hermes_cli/client_auth/runtime.py", True, 0),
     ],
@@ -221,7 +233,7 @@ The checker must:
 1. Read the explicit allowlist.
 2. Compare `git diff --name-only --diff-filter=ACMR ansatz/main...HEAD` against it in the real repository; the `--repo`/`--base` arguments make the same logic testable in a temporary repository.
 3. Reject every unapproved changed path.
-4. Reject tracked delivery paths by exact directory/name tokens: `desktop_auth_runtime`, `desktop-dmg`, `desktop-windows-package`, `dmg-gatekeeper`, `nsis`, `bootstrap-payload`, `bootstrap-toolchain`, `bundled-runtime`, `build-backend-payload`, `build-auth-toolchain`, `prepare-auth-toolchain-inputs`, `prepare-windows-git-runtime`, and exact-artifact credential drivers.
+4. Reject tracked delivery paths by exact directory/name tokens: `desktop_auth_runtime`, `desktop-dmg`, `desktop-windows-package`, `dmg-gatekeeper`, `nsis`, `bootstrap-payload`, `bootstrap-process`, `bootstrap-toolchain`, `bundled-runtime`, `windows-auth-owner`, `auth-runtime-contract`, `installed-windows-`, `windows-process-tree`, `before-pack`, `after-pack`, `stage-native-deps`, `set-exe-identity`, `exe-identity-options`, `package-audit`, `build-backend-payload`, `build-auth-toolchain`, `build-desktop-windows`, `desktop-windows-contract`, `desktop-credential-login`, `prepare-auth-toolchain-inputs`, `prepare-windows-git-runtime`, `write_desktop_windows_electron_artifact`, `test-desktop-windows-`, and exact-artifact credential drivers.
 5. Never use the broad prefix `scripts/tests/test-install-ps1-`; only the packaged-only files `test-install-ps1-managed-uv.ps1` and `test-install-ps1-packaged-lock.ps1` are forbidden.
 
 The CLI is:
@@ -242,7 +254,7 @@ python scripts/check_main_platform_boundary.py \
   --allowlist docs/security/main-auth-voice-common-paths.txt
 ```
 
-Expected before deletion: FAIL naming `.github/workflows/desktop-windows-package.yml` plus any deliberately unapproved planning fixture. Delete only the Windows packaging workflow; do not delete `.github/workflows/tests.yml`, `.github/workflows/tests-os.yml`, or the three generic `install.ps1` tests.
+Expected before deletion: FAIL naming `.github/workflows/desktop-windows-package.yml`. The two common boundary documents are already allowlisted. Delete only the Windows packaging workflow; do not delete `.github/workflows/tests.yml`, `.github/workflows/tests-os.yml`, or the three generic `install.ps1` tests.
 
 - [ ] **Step 6: Run and commit the boundary gate**
 
@@ -322,7 +334,7 @@ cdc12484f1  GUI logout item
 366fb3f5a8  bounded auth bridge requests
 cdb5c65bc8  bounded auth bootstrap progress
 c478db4d2f  common runtime gate/product status paths only
-e51e448669  usable pre-runtime CLI
+e51e448669  usable pre-runtime CLI paths only
 817a5d0a6a  bridge timeout after HTTP
 b22bdb8d31  dead local bridge recovery
 af19ce56b1  Retry rebuilds bridge
@@ -331,7 +343,7 @@ bddbec2abb  safe bootstrap progress state and common event contract
 c4d5ae2d40  pre-auth IPC isolation
 f8d7c05fad  locked progress renderer
 34026f7627  progress remains inside Auth Gate
-a416087126  progress lint correction
+a416087126  common progress lint paths only
 34f1c119e2  Retry only after declared failure
 c8fad50c49  common entrypoint closure paths only
 f5a7372e4c  common entrypoint audit paths only
@@ -355,6 +367,10 @@ assert before("c4d5ae2d40", "f8d7c05fad")
 assert before("f8d7c05fad", "34026f7627")
 assert destination("c478db4d2f") == "split"
 assert destination("89503cfb2b") == "split"
+assert destination("e51e448669") == "split"
+assert destination("a416087126") == "split"
+assert every_main_or_split_commit_has_an_execution_step()
+assert product_manifest_equals_ledger_projection()
 ```
 
 Run:
@@ -384,7 +400,7 @@ Create `docs/security/main-auth-voice-commit-ledger.json` with one object for ev
 }
 ```
 
-The JSON order must equal `git log --reverse 4ef56cef4c..403e1c3873`. `split` entries must include `main_paths` and `overlay_paths` arrays.
+The JSON order must equal `git log --reverse 4ef56cef4c..403e1c3873`. `split` entries must include exhaustive `main_paths` and `overlay_paths` arrays. An overlay commit that intentionally modifies an already-common interface may declare `common_interface_waiver_paths`; `6e57ead969` uses it for `apps/desktop/electron/bootstrap-runner.ts` and its test. Documentation-only historical commits use `drop`, not `main`; every `main` or `split` entry must be named by exactly one execution step. The product manifest projection is derived mechanically from the ledger in Task 8, so a missing replay or explicit interface-waiver path cannot be hidden by a handwritten manifest.
 
 Run the contract again. Expected: PASS and exactly 165 commit objects.
 
@@ -397,6 +413,7 @@ git restore --source=HEAD --staged --worktree -- \
   apps/desktop/electron/bundled-runtime.integration.test.ts \
   apps/desktop/scripts/before-pack-payload.integration.test.mjs \
   apps/desktop/scripts/build-backend-payload.integration.test.mjs
+git diff --cached --check
 git diff --cached --name-only
 python scripts/check_main_platform_boundary.py --base ansatz/main \
   --allowlist docs/security/main-auth-voice-common-paths.txt
@@ -432,6 +449,7 @@ git restore --source=HEAD --staged --worktree -- \
   apps/desktop/scripts/build-backend-payload.mjs \
   desktop_auth_runtime pyproject.toml scripts/install.sh \
   tests/test_install_sh_bootstrap_scope.py uv.lock uv.toml
+git diff --cached --check
 git diff --cached --name-only
 python scripts/check_main_platform_boundary.py --base ansatz/main \
   --allowlist docs/security/main-auth-voice-common-paths.txt
@@ -440,24 +458,92 @@ git commit -C c478db4d2f
 
 Expected: the staged set equals the ledger's common runtime-gate paths. `bootstrap-runner*`, dependency locks, bundled payloads, installer hunks, and root `uv.toml` remain unchanged.
 
-- [ ] **Step 6: Replay the bridge, safe-gate, and first entrypoint segment**
+- [ ] **Step 6: Extract the common pre-runtime CLI side of `e51e448669`**
 
 ```bash
-second_common_segment=(
-  e51e448669 817a5d0a6a b22bdb8d31 af19ce56b1 50609240e2
-  bddbec2abb c4d5ae2d40 f8d7c05fad 34026f7627 a416087126
-  34f1c119e2 c8fad50c49
+git cherry-pick --no-commit e51e448669
+git restore --source=HEAD --staged --worktree -- \
+  scripts/install.sh tests/test_install_sh_bootstrap_scope.py
+git diff --cached --check
+git diff --cached --name-only
+python scripts/check_main_platform_boundary.py --base ansatz/main \
+  --allowlist docs/security/main-auth-voice-common-paths.txt
+git commit -C e51e448669
+```
+
+Expected: only `hermes_cli/client_auth/cli.py`, `hermes_cli/main.py`, and `tests/hermes_cli/client_auth/test_account_commands.py` are committed. The auth-scope installer launcher publication remains in the platform overlay.
+
+- [ ] **Step 7: Replay bridge recovery and the safe progress-state contract**
+
+```bash
+bridge_progress_state_segment=(
+  817a5d0a6a b22bdb8d31 af19ce56b1 50609240e2
+  bddbec2abb
 )
-for replay_sha in "${second_common_segment[@]}"; do
+for replay_sha in "${bridge_progress_state_segment[@]}"; do
   git cherry-pick "$replay_sha"
   python scripts/check_main_platform_boundary.py --base ansatz/main \
     --allowlist docs/security/main-auth-voice-common-paths.txt
 done
 ```
 
-Expected: `50609240e2` follows `af19ce56b1`; safe progress never exposes the packaged producer; `c8fad50c49` changes only common entrypoint files.
+Expected: `50609240e2` follows `af19ce56b1`; the sanitized state/event contract is present before its public channel is added.
 
-- [ ] **Step 7: Extract the common entrypoint side of `f5a7372e4c`**
+- [ ] **Step 8: Add the signed-out IPC regression before exposing safe progress**
+
+Extend `apps/desktop/electron/guarded-ipc.test.ts` and `apps/desktop/e2e/auth-hard-gate.spec.ts` with this contract:
+
+```text
+signed out -> invoke hermes:bootstrap:get -> AUTH_REQUIRED
+signed out -> invoke hermes:auth-bootstrap:get -> sanitized bounded state
+sanitized state -> no raw log, command, absolute path, Cookie, Session, CSRF, password, keychain field
+```
+
+Run now: Expected FAIL because `c4d5ae2d40` has not landed.
+
+- [ ] **Step 9: Replay the safe public channel and locked progress renderer**
+
+```bash
+safe_gate_segment=(c4d5ae2d40 f8d7c05fad 34026f7627)
+for replay_sha in "${safe_gate_segment[@]}"; do
+  git cherry-pick "$replay_sha"
+  python scripts/check_main_platform_boundary.py --base ansatz/main \
+    --allowlist docs/security/main-auth-voice-common-paths.txt
+done
+```
+
+Run the Step 8 regressions again. Expected: PASS; raw `hermes:bootstrap:get` remains protected and only the sanitized channel is public.
+
+- [ ] **Step 10: Extract the common lint side of `a416087126`**
+
+```bash
+git cherry-pick --no-commit a416087126
+git restore --source=HEAD --staged --worktree -- \
+  apps/desktop/electron/bootstrap-process.ts \
+  apps/desktop/electron/bootstrap-process.test.ts
+git diff --cached --check
+git diff --cached --name-only
+python scripts/check_main_platform_boundary.py --base ansatz/main \
+  --allowlist docs/security/main-auth-voice-common-paths.txt
+git commit -C a416087126
+```
+
+Expected: only `apps/desktop/electron/main.ts` and `apps/desktop/src/components/auth-bootstrap-progress.test.tsx` are committed. `bootstrap-process*` never enters `main`.
+
+- [ ] **Step 11: Replay the Retry and first entrypoint closure**
+
+```bash
+third_common_segment=(34f1c119e2 c8fad50c49)
+for replay_sha in "${third_common_segment[@]}"; do
+  git cherry-pick "$replay_sha"
+  python scripts/check_main_platform_boundary.py --base ansatz/main \
+    --allowlist docs/security/main-auth-voice-common-paths.txt
+done
+```
+
+Expected: Retry appears only after declared failure, and `c8fad50c49` changes only common entrypoint files.
+
+- [ ] **Step 12: Extract the common entrypoint side of `f5a7372e4c`**
 
 ```bash
 
@@ -465,6 +551,7 @@ git cherry-pick --no-commit f5a7372e4c
 git restore --source=HEAD --staged --worktree -- \
   apps/desktop/electron/bootstrap-payload.ts \
   apps/desktop/electron/bootstrap-payload.integration.test.ts
+git diff --cached --check
 git diff --cached --name-only
 python scripts/check_main_platform_boundary.py --base ansatz/main \
   --allowlist docs/security/main-auth-voice-common-paths.txt
@@ -473,7 +560,7 @@ git commit -C f5a7372e4c
 
 Expected: the staged list equals the ledger's `main_paths` exactly; `git commit -C` preserves author/message.
 
-- [ ] **Step 8: Replay the final common reliability segment**
+- [ ] **Step 13: Replay the final common reliability segment**
 
 ```bash
 final_common_segment=(c893e264e9 38230a6c9f 4e4a5d42c7)
@@ -486,7 +573,7 @@ done
 
 Expected: focus resync precedes epoch suppression, which precedes native-owner recovery.
 
-- [ ] **Step 9: Resolve the three known conflicts by accepted dependency semantics**
+- [ ] **Step 14: Resolve the known conflicts by accepted dependency semantics**
 
 The known conflict surfaces are:
 
@@ -495,7 +582,7 @@ The known conflict surfaces are:
 af19ce56b1  apps/desktop/electron/main.ts
 4e4a5d42c7 apps/desktop/src/components/auth-gate.test.tsx
              tests/hermes_cli/client_auth/test_bridge.py
-             two obsolete DMG planning documents (drop)
+             two historical owner-recovery planning documents (drop)
 ```
 
 Resolution rules:
@@ -503,24 +590,12 @@ Resolution rules:
 - Keep `DesktopAuthContext/useDesktopAuth` and the GUI logout callback from `8af9e3eefe`.
 - Preserve the timeout ordering from `817a5d0a6a`, dead-bridge recovery from `b22bdb8d31`, Retry reconstruction from `af19ce56b1`, and lint correction from `50609240e2`.
 - Preserve lease-clock alignment from `6aed1cc0f1` before applying owner expiry recovery.
-- Drop modify/delete conflicts for obsolete DMG planning documents; never restore them into `main`.
+- The historical owner-recovery design/plan from `280751398d` is intentionally classified `drop`; resolve the two later modify/delete conflicts by leaving those documents absent from `main`.
 - Never resolve by exposing `hermes:bootstrap:get` to signed-out code.
 
 Immediately run the focused test named by each conflicted path before continuing.
 
-- [ ] **Step 10: Add the signed-out IPC regression before completing safe-progress replay**
-
-Extend `apps/desktop/electron/guarded-ipc.test.ts` and `apps/desktop/e2e/auth-hard-gate.spec.ts` with this contract:
-
-```text
-signed out -> invoke hermes:bootstrap:get -> AUTH_REQUIRED
-signed out -> invoke hermes:auth-bootstrap:get -> sanitized bounded state
-sanitized state -> no raw log, command, absolute path, Cookie, Session, CSRF, password, keychain field
-```
-
-Run before `c4d5ae2d40`: Expected FAIL. Run after the progress sequence: Expected PASS.
-
-- [ ] **Step 11: Verify logout epoch isolation**
+- [ ] **Step 15: Verify logout epoch isolation**
 
 Run the tests introduced by `38230a6c9f` and add an E2E case that performs logout followed by a second synthetic account epoch. Assert that the prior preparation result is ignored and no `authenticated` runtime message from the first epoch reaches the renderer.
 
@@ -533,7 +608,7 @@ npm run test:e2e --workspace apps/desktop -- e2e/auth-hard-gate.spec.ts
 
 Expected: PASS.
 
-- [ ] **Step 12: Run the complete authentication replay gate**
+- [ ] **Step 16: Run the complete authentication replay gate**
 
 ```bash
 uv run pytest tests/hermes_cli/client_auth tests/tui_gateway/test_account_auth.py tests/acp/test_entry.py -q
@@ -580,6 +655,7 @@ Conflict rules:
 - `hermes.ts`: keep typed auth IPC and add Voice types/methods.
 - i18n: keep every auth/progress key in `en`, `zh`, `ja`, `zh-hant`, and add Voice keys defined by the Voice commit.
 - `tools_config.py` and `web_server.py`: authentication executes before transcription/provider work.
+- `apps/desktop/src/app/contrib/surfaces.tsx`: preserve the GUI account/logout registration from `cdc12484f1` and add the Voice surface registration; neither side may replace the other wholesale.
 - `pyproject.toml`: preserve common auth dependencies and add `sensevoice`; do not import bundled-runtime pins.
 - `scripts/install.sh`: accept only the `3ad4a12660` source-install Voice hunk. Reject every hunk from `c478db4d2f`, `d0b334abba`, `86d0598a13`, `bf090797fe`, `9689aefd08`, and `82b23ebde6`.
 - Include `cli-config.yaml.example`.
@@ -623,7 +699,7 @@ Expected: PASS and zero external downloads.
 - Modify: `apps/desktop/electron/auth-bridge.test.ts`
 - Modify: `apps/desktop/src/components/auth-gate.tsx`
 - Modify: `apps/desktop/src/components/auth-gate.test.tsx`
-- Create/modify only when uncoupled from packaging: `apps/desktop/electron/auth-runtime-contract.ts`, `backend-probes.ts`, `external-open-policy.ts`, `media-permission-policy.ts`, `preview-webview-policy.ts`, `renderer-log.ts`, `trusted-renderer.ts`, and tests.
+- Create/modify only when uncoupled from packaging: `apps/desktop/electron/backend-probes.ts`, `external-open-policy.ts`, `media-permission-policy.ts`, `preview-webview-policy.ts`, `renderer-log.ts`, `trusted-renderer.ts`, and tests.
 - Exclude: `apps/desktop/electron/windows-auth-owner.ts`, `desktop_auth_runtime/**`, Windows installer files, workflows, and installed-artifact tests.
 
 - [ ] **Step 1: Write the Windows source-adapter regression contract**
@@ -632,7 +708,7 @@ The common Python tests must cover:
 
 ```text
 WindowsNamedPipeEndpoint uses FILE_FLAG_OVERLAPPED
-connect_current(timeout=AUTH_CONNECT_TIMEOUT_SECONDS) retries until its monotonic deadline
+connect_current(timeout=_RUNTIME_REQUEST_TIMEOUT_SECONDS) retries until its monotonic deadline
 owner startup race does not return runtime_unavailable early
 OwnerBroker and RemoteRuntimeOwner preserve the current session identity
 timeout and peer validation fail closed
@@ -663,6 +739,7 @@ git show 45eb464242 -- \
   tests/hermes_cli/client_auth/test_background_modes.py \
   tests/hermes_cli/client_auth/test_bridge.py tests/hermes_cli/client_auth/test_runtime.py | \
   git apply --index -3
+git diff --cached --check
 git diff --cached --name-only
 python scripts/check_main_platform_boundary.py --base ansatz/main \
   --allowlist docs/security/main-auth-voice-common-paths.txt
@@ -674,6 +751,7 @@ git show 9a32e19153 -- \
   hermes_cli/client_auth/runtime.py scripts/write_auth_native_artifact.py \
   tests/hermes_cli/client_auth/test_native_artifacts.py \
   tests/hermes_cli/client_auth/test_runtime.py | git apply --index -3
+git diff --cached --check
 git diff --cached --name-only
 python scripts/check_main_platform_boundary.py --base ansatz/main \
   --allowlist docs/security/main-auth-voice-common-paths.txt
@@ -719,7 +797,7 @@ b2b6a610b1:
   apps/desktop/electron/trusted-renderer.test.ts
 ```
 
-For `b2b6a610b1`, reconcile only the corresponding guarded wiring hunks in `apps/desktop/electron/main.ts`; stage that file only after `git diff --cached --check` shows no packaged bootstrap/process-tree/resource lookup. The machine-readable ledger must contain the lists above before applying any patch, and the boundary/parity tests must fail if the staged set differs.
+For `d282099faf`, `772903c824`, and `b2b6a610b1`, run `git diff --cached --check` immediately after each staged extraction so conflict markers cannot survive. For `b2b6a610b1`, reconcile only the corresponding guarded wiring hunks in `apps/desktop/electron/main.ts`; stage that file only after the check shows no packaged bootstrap/process-tree/resource lookup. The machine-readable ledger must contain the lists above before applying any patch, and the boundary/parity tests must fail if the staged set differs.
 
 Expected: no `windows-auth-owner.ts`, workflow, installer, packaged runtime, installed-Windows E2E, or `desktop_auth_runtime` path is staged.
 
@@ -729,6 +807,7 @@ Record these explicit exclusions in the commit ledger:
 
 ```text
 windows-auth-owner.ts                  Windows overlay; resolves packaged auth venv
+auth-runtime-contract.{ts,test.ts}     Windows overlay; validates packaged auth payload
 desktop_auth_runtime/**                Windows/macOS overlay; bundled minimal project
 scripts/install.ps1 packaged branches Windows overlay
 desktop-windows-package.yml            Windows overlay
@@ -760,8 +839,8 @@ uv run pytest tests/hermes_cli/client_auth/test_runtime.py \
   tests/hermes_cli/client_auth/test_bridge.py \
   tests/hermes_cli/client_auth/test_native_artifacts.py -q
 npm run test --workspace apps/desktop -- \
-  electron/auth-bridge.test.ts electron/auth-runtime-contract.test.ts \
-  electron/backend-probes.test.ts electron/trusted-renderer.test.ts \
+  electron/auth-bridge.test.ts electron/backend-probes.test.ts \
+  electron/trusted-renderer.test.ts \
   src/components/auth-gate.test.tsx
 ```
 
@@ -871,12 +950,21 @@ Expected: PASS and no entrypoint loss.
 
 - Create: `docs/security/main-auth-voice-dmg-product-paths.txt`
 - Create: `docs/security/main-auth-voice-parity-waivers.json`
+- Create: `scripts/generate_main_auth_voice_manifest.py`
 - Create: `scripts/check_main_auth_voice_parity.py`
 - Create: `tests/test_main_auth_voice_parity.py`
 
 - [ ] **Step 1: Create the final-DMG common product manifest**
 
-List every common authentication and Voice product path at `80db6d8265`. Exclude only delivery paths classified macOS in Appendix A. Include safe progress, `runtime_ready`, logout, entrypoint, and all Voice paths.
+Generate, rather than handwrite, every common authentication and Voice product/test path expected at `80db6d8265`. The generator must:
+
+1. Parse `docs/security/main-auth-voice-commit-ledger.json`.
+2. Take every path changed by a `main` commit, every `main_paths` entry of a `split` commit, and every explicit `common_interface_waiver_paths` entry.
+3. Intersect that set with paths changed by `4ef56cef4c..80db6d8265` and present in the shipping reference.
+4. Reject any path assigned to both `main_paths` and `overlay_paths`.
+5. Write a sorted, unique manifest and support `--check` so manual omission or addition fails.
+
+Include safe progress, `runtime_ready`, logout, entrypoint, all Voice paths, source dependency files, and common tests. Delivery paths classified macOS remain absent. Root `uv.toml` is absent because it is overlay-owned and is guarded separately by Task 6.
 
 - [ ] **Step 2: Write failing parity tests**
 
@@ -884,6 +972,7 @@ The tests must fail when:
 
 ```text
 a manifest path is absent from the candidate
+a checked-in manifest differs from the ledger-derived projection
 a candidate blob differs without a waiver
 a waiver lacks path, owner, reason, reference SHA, and expected invariant
 an entrypoint baseline item is absent
@@ -901,22 +990,26 @@ Expected: FAIL until manifests and approved differences are complete.
 
 - [ ] **Step 3: Implement parity checking**
 
-The checker compares each manifest path between `HEAD` and `80db6d8265`. A difference is accepted only when `docs/security/main-auth-voice-parity-waivers.json` identifies one of these reasons:
+The checker first verifies the manifest is exactly the ledger-derived projection, then compares each manifest path between `HEAD` and `80db6d8265`. A difference is accepted only when `docs/security/main-auth-voice-parity-waivers.json` identifies one of these reasons:
 
 ```text
 neutral-platform-wording
 windows-source-runtime-adapter
 common-test-strengthening
 packaging-producer-interface-extraction
+source-dependency-policy
+source-install-scope
+source-mode-no-packaged-progress-producer
 ```
 
-No wildcard waiver is allowed. A waiver never permits weaker auth behavior.
+No wildcard waiver is allowed. A waiver never permits weaker auth behavior. At minimum, `pyproject.toml` and `uv.lock` use `source-dependency-policy`; the accepted source-only hunk set in `scripts/install.sh` uses `source-install-scope`; and the absence of the packaged producer's indeterminate progress event in source mode uses `source-mode-no-packaged-progress-producer`. Every waiver records its invariant and reference SHA.
 
 - [ ] **Step 4: Run the complete parity gate**
 
 ```bash
 python scripts/check_main_auth_voice_parity.py \
   --reference 80db6d8265f805cec46817d913982e4c5f6405c4
+python scripts/generate_main_auth_voice_manifest.py --check
 uv run pytest tests/test_main_auth_voice_parity.py -q
 python scripts/check_main_platform_boundary.py --base ansatz/main \
   --allowlist docs/security/main-auth-voice-common-paths.txt
@@ -953,18 +1046,31 @@ With the user entering the password directly into the GUI, verify login, logout,
 
 - [ ] **Step 3: Preserve the common multi-OS native evidence workflow**
 
-The common workflows may run source tests on Linux, macOS, and Windows using fixed local contract servers and ephemeral test owner state. They must not contain DMG/NSIS construction, exact-artifact credentials, production account credentials, or installed-artifact drivers.
+The common workflows may run source tests on Linux, macOS, and Windows using fixed local contract servers and ephemeral test owner state. They must not contain DMG/NSIS construction, exact-artifact credentials, production account credentials, or installed-artifact drivers. A workflow file is repository validation metadata and is never copied into a DMG or NSIS payload.
 
 Run the workflow validation locally:
 
 ```bash
-uv run python scripts/check_auth_native_artifacts.py
+native_junit_dir=$(mktemp -d)
+native_evidence_dir=$(mktemp -d)
+uv run pytest tests/hermes_cli/client_auth -q \
+  --junitxml "$native_junit_dir/auth.xml"
+uv run python scripts/write_auth_native_artifact.py \
+  --platform macos --owner-transport unix-getpeereid \
+  --locked-start "$native_junit_dir/auth.xml" \
+  --handle-noninheriting "$native_junit_dir/auth.xml" \
+  --service-waiting "$native_junit_dir/auth.xml" \
+  --output "$native_evidence_dir/macos.json"
+uv run python scripts/check_auth_native_artifacts.py \
+  --allow-partial-local "$native_evidence_dir"
 uv run pytest tests/hermes_cli/client_auth/test_native_artifacts.py -q
 ```
 
 Expected: PASS.
 
-- [ ] **Step 4: Run Windows source acceptance on a clean Windows runner**
+- [ ] **Step 4: Add and run Windows source acceptance on a clean Windows runner**
+
+Add a `desktop-auth-source-windows` job to `.github/workflows/tests-os.yml`. It runs on `windows-latest`, installs only the source Node/Python dependencies, starts only a fixed local auth contract server, and executes the Desktop source-mode Auth Gate E2E. It must not build an installer, stage a payload, read repository secrets, upload a release artifact, or call `.github/workflows/desktop-windows-package.yml`.
 
 Required checks:
 
@@ -1130,12 +1236,12 @@ This appendix is normative. It covers every commit in `4ef56cef4c..403e1c3873` i
 | 62 | `bffdd26edf` | main | TUI watcher lifecycle test fix. |
 | 63 | `f28a0f4b58` | main | Auth-owner E2E cleanup. |
 | 64 | `eb26a5ecea` | macOS | Installed DMG auth acceptance evidence. |
-| 65 | `ab712d9946` | main | Common GUI logout design. |
-| 66 | `9d77f29d5a` | main | Common GUI logout plan. |
+| 65 | `ab712d9946` | drop | Historical GUI logout design; accepted behavior is replayed from product commits. |
+| 66 | `9d77f29d5a` | drop | Historical GUI logout plan; accepted behavior is replayed from product commits. |
 | 67 | `8af9e3eefe` | main | Authenticated Desktop account context. |
 | 68 | `cdc12484f1` | main | GUI account logout item. |
 | 69 | `27567163b3` | main | Logout remains authenticated-only. |
-| 70 | `07df7ea759` | main | Common GUI logout acceptance record. |
+| 70 | `07df7ea759` | drop | DMG-specific GUI logout acceptance record; release evidence stays in the overlay. |
 | 71 | `26afd123eb` | macOS | Clean-machine packaged bootstrap design. |
 | 72 | `25d37ca7f6` | macOS | Packaged bootstrap recovery plan. |
 | 73 | `366fb3f5a8` | main | Bounded account-bridge requests. |
@@ -1143,13 +1249,13 @@ This appendix is normative. It covers every commit in `4ef56cef4c..403e1c3873` i
 | 75 | `df34e9da62` | macOS | Packaged bootstrap process-group supervision. |
 | 76 | `c478db4d2f` | split | Main keeps `runtime_ready`, runtime gate, Auth Gate/status contracts; macOS keeps bundled locks, payload builder, mirrors, and installer bootstrap. |
 | 77 | `ac3f53a2ff` | macOS | Packaged bootstrap recovery evidence. |
-| 78 | `e51e448669` | main | Public CLI works before full runtime. |
+| 78 | `e51e448669` | split | Main keeps the auth-only CLI module, command wiring, and tests; the auth-scope installer launcher publication stays macOS. |
 | 79 | `f68510d905` | macOS | Installer method-stamp contract. |
 | 80 | `50e0ca5654` | macOS | Packaged bootstrap acceptance. |
 | 81 | `f6a3ae1950` | macOS | Zero-residual DMG rerun evidence. |
 | 82 | `06e19c3ba3` | macOS | Installed SenseVoice retry evidence. |
-| 83 | `8bccbdb20a` | main | Common auth-bridge recovery design. |
-| 84 | `cc49af7546` | main | Common auth-bridge recovery plan. |
+| 83 | `8bccbdb20a` | drop | Historical auth-bridge recovery design; product commits are authoritative. |
+| 84 | `cc49af7546` | drop | Historical auth-bridge recovery plan; product commits are authoritative. |
 | 85 | `817a5d0a6a` | main | Bridge timeout ordered after HTTP. |
 | 86 | `b22bdb8d31` | main | Dead local bridge recovery. |
 | 87 | `af19ce56b1` | main | Retry reconstructs auth bridge. |
@@ -1165,14 +1271,14 @@ This appendix is normative. It covers every commit in `4ef56cef4c..403e1c3873` i
 | 97 | `22800baacf` | macOS | Private prerelease exact-DMG downloader. |
 | 98 | `527eb97a19` | macOS | Packaged payload validation. |
 | 99 | `31cf387094` | macOS | Gatekeeper failure evidence. |
-| 100 | `e57b25c985` | main | Safe auth-bootstrap progress design. |
-| 101 | `396cb551c1` | main | Safe auth-bootstrap progress plan. |
+| 100 | `e57b25c985` | drop | Historical safe-progress design; the current boundary design replaces it. |
+| 101 | `396cb551c1` | drop | Historical safe-progress plan; the current implementation plan replaces it. |
 | 102 | `bddbec2abb` | main | Safe bounded progress state. |
-| 103 | `6e57ead969` | macOS | Structured progress producer lives only in packaged bootstrap process/runner; the common safe state/event contract comes from `bddbec2abb`. |
+| 103 | `6e57ead969` | macOS | Packaged process files plus an eight-line indeterminate-progress producer hunk in the common runner remain overlay-owned; the safety/state contract comes from `bddbec2abb`, and source mode records a no-producer parity waiver. |
 | 104 | `c4d5ae2d40` | main | Pre-auth IPC isolation and safe preload API. |
 | 105 | `f8d7c05fad` | main | Locked progress renderer and four-language catalog. |
 | 106 | `34026f7627` | main | Progress remains inside Auth Gate. |
-| 107 | `a416087126` | main | Common progress lint correction. |
+| 107 | `a416087126` | split | Main keeps `electron/main.ts` import ordering and the safe-progress renderer test lint fix; packaged `bootstrap-process*` lint stays macOS. |
 | 108 | `34f1c119e2` | main | Retry appears only after failure. |
 | 109 | `3796a43498` | macOS | Installed progress acceptance evidence. |
 | 110 | `ad61acdccf` | macOS | Progress DMG fresh-macOS workflow. |
@@ -1201,19 +1307,19 @@ This appendix is normative. It covers every commit in `4ef56cef4c..403e1c3873` i
 | 133 | `f5a7372e4c` | split | Main keeps cron/gateway/entrypoint inventory and tests; macOS keeps payload integration changes. |
 | 134 | `f3ca2085a4` | macOS | Exact-f5 artifact workflow. |
 | 135 | `30d02d508f` | macOS | Final f5 DMG evidence. |
-| 136 | `f47a1e47e0` | main | Common elapsed-timer focus design. |
+| 136 | `f47a1e47e0` | drop | Historical elapsed-timer design; accepted product commit is replayed. |
 | 137 | `5a41a5cb49` | macOS | CI-isolated replacement-DMG requirement. |
 | 138 | `38993cffe4` | macOS | Replacement-DMG timer plan. |
 | 139 | `c893e264e9` | main | Auth Gate elapsed-time focus resync. |
 | 140 | `744fb0b729` | macOS | Replacement-DMG timer evidence. |
 | 141 | `d340ebd15e` | macOS | Zero-residual timer rerun evidence. |
-| 142 | `cb26826fad` | main | Common logout stale-status design. |
-| 143 | `f4bdb9655f` | main | Common logout stale-status plan. |
+| 142 | `cb26826fad` | drop | Historical logout stale-status design; accepted product commits are replayed. |
+| 143 | `f4bdb9655f` | drop | Historical logout stale-status plan; accepted product commits are replayed. |
 | 144 | `38230a6c9f` | main | Runtime epoch/instance stale-result suppression. |
 | 145 | `d35641eb43` | macOS | Logout replacement-DMG evidence. |
-| 146 | `38cbc945e7` | main | Durable common hard-gate implementation summary. |
-| 147 | `5beace1d8f` | main | Common auth asset-summary distinction. |
-| 148 | `280751398d` | main | Native owner recovery design. |
+| 146 | `38cbc945e7` | drop | Historical implementation asset; the new design and acceptance evidence replace it. |
+| 147 | `5beace1d8f` | drop | Historical Feishu-summary distinction; not product source. |
+| 148 | `280751398d` | drop | Historical native-owner recovery design/plan; accepted product fix `4e4a5d42c7` is replayed. |
 | 149 | `4e4a5d42c7` | main | Expired native owner recovery. |
 | 150 | `035fbf16da` | macOS | Owner-recovery DMG evidence. |
 | 151 | `30f78f4207` | macOS | Offline first-launch toolchain design. |
