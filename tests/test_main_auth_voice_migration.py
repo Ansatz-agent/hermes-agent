@@ -103,7 +103,8 @@ def test_checked_in_ledger_has_locked_authorities_and_exact_enums() -> None:
     assert ledger["dmg_integration_reference"] == "403e1c3873d1679720c1403d7e38acd289804d69"
     assert ledger["windows_integration_reference"] == "56b402c63b22da81f906ff1f7398a90cfd17bd81"
     assert ledger["post_tip_commits"] == [
-        "a6e8792b0c701287eecee97c692956e10a35b5d8"
+        "a6e8792b0c701287eecee97c692956e10a35b5d8",
+        "11bcf8976dc3f9511b4d021da686b4236b52e68c",
     ]
     assert ledger["contract_bookkeeping_paths"] == [
         "docs/security/hermes-managed-download-origins.json",

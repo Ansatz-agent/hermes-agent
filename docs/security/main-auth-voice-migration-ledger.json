@@ -18,7 +18,8 @@
     "tests/test_main_auth_voice_migration.py"
   ],
   "post_tip_commits": [
-    "a6e8792b0c701287eecee97c692956e10a35b5d8"
+    "a6e8792b0c701287eecee97c692956e10a35b5d8",
+    "11bcf8976dc3f9511b4d021da686b4236b52e68c"
   ],
   "owner_enum": [
     "common-product",
