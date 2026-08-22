@@ -16,6 +16,7 @@ param(
     [switch]$NoVenv,
     [switch]$SkipSetup,
     [switch]$SkipComputerUse,
+    [switch]$BundledSource,
     [string]$Branch = "main",
     # -Commit and -Tag are higher-precedence variants of -Branch for users
     # who need reproducible installs (desktop installer pinning, CI, release
@@ -1222,6 +1223,41 @@ function Test-Python {
 $script:GitInstallFailureReason = $null
 $script:GitBashPath = $null
 $script:GitBashProbeOutput = $null
+$script:BundledGitRuntimeFile = "git-bash-runtime.tar.xz"
+$script:PortableGitReleaseFile = "PortableGit-2.55.0.3-64-bit.7z.exe"
+$script:PortableGitReleaseSha256 = "ab00566336b5472120f9a52d34f2e79c5406535792acb0548001ffd0bd090e5d"
+
+function Resolve-BundledGitRuntimeArchive {
+    if (-not $BundledSource) { return $null }
+
+    $archivePath = Join-Path $PSScriptRoot $script:BundledGitRuntimeFile
+    $manifestPath = Join-Path $PSScriptRoot "payload-manifest.json"
+    if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
+        throw "Bundled Git Bash runtime archive is missing at $archivePath"
+    }
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        throw "Bundled payload manifest is missing at $manifestPath"
+    }
+
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    if (-not $manifest.PSObject.Properties["gitBashRuntime"]) {
+        throw "Bundled payload manifest has no Git Bash runtime metadata"
+    }
+    $metadata = $manifest.gitBashRuntime
+    $archiveInfo = Get-Item -LiteralPath $archivePath
+    $actualSha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $manifestSha256 = ([string]$metadata.sha256).ToLowerInvariant()
+    $sourceSha256 = ([string]$metadata.source.sha256).ToLowerInvariant()
+    if ([string]$metadata.file -ne $script:BundledGitRuntimeFile -or
+        [long]$metadata.size -ne $archiveInfo.Length -or
+        $manifestSha256 -ne $actualSha256 -or
+        [string]$metadata.source.file -ne $script:PortableGitReleaseFile -or
+        $sourceSha256 -ne $script:PortableGitReleaseSha256) {
+        throw "Bundled Git Bash runtime failed size, SHA-256, or pinned-source validation"
+    }
+
+    return $archivePath
+}
 
 function Test-GitBashCompatibility {
     <#
@@ -1322,8 +1358,10 @@ function Install-Git {
     Priority order (deliberately simple -- no winget, no registry, no system
     package manager):
       1. Existing ``git`` on PATH -- use it as-is (the common fast path).
-      2. Download **PortableGit** from the official git-for-windows GitHub
-         release (self-extracting 7z.exe) and unpack it to
+      2. For bundled Desktop installs, unpack the verified, documentation-free
+         Git Bash runtime shipped inside the NSIS package.
+      3. For the standalone CLI installer, download **PortableGit** from the
+         official git-for-windows GitHub release (self-extracting 7z.exe) to
          ``%LOCALAPPDATA%\hermes\git`` -- never touches system Git, never
          requires admin, works even on locked-down machines and machines
          with a broken system Git install.
@@ -1372,57 +1410,49 @@ function Install-Git {
         Write-Info "Trying a Hermes-managed PortableGit install instead..."
     }
 
-    # Download PortableGit into $HermesHome\git.  Always works as long as
-    # we can reach github.com -- no admin, no winget, no reliance on the
-    # user's possibly-broken system Git install.
-    Write-Info "Git not found -- downloading PortableGit to $HermesHome\git\ ..."
-    Write-Info "(no admin rights required; isolated from any system Git install)"
-
     try {
         $arch = Get-WindowsArch
-        if ($arch -eq 'arm64') {
-            $assetTag = 'arm64'
+        $bundledArchive = Resolve-BundledGitRuntimeArchive
+        if ($bundledArchive) {
+            if ($arch -ne "x64") {
+                throw "This Hermes Desktop package contains PortableGit for Windows x64, but detected $arch"
+            }
+            $assetName = $script:BundledGitRuntimeFile
             $downloadIsZip = $false
-        } elseif ($arch -eq 'x64') {
-            $assetTag = '64-bit'
-            $downloadIsZip = $false
+            $tmpFile = $bundledArchive
+            Write-Info "Git not found -- installing the verified Git Bash runtime from the Hermes Desktop package..."
         } else {
-            # PortableGit does not ship 32-bit / arm builds -- fall back to MinGit
-            # 32-bit with a warning that bash-based features will be unavailable.
-            $assetTag = '32-bit-mingit'
-            $downloadIsZip = $true
+            # Download PortableGit into $HermesHome\git.  This is the CLI
+            # installer fallback; bundled Desktop packages use the verified
+            # local archive above and do not download Git on the user machine.
+            Write-Info "Git not found -- downloading PortableGit to $HermesHome\git\ ..."
+            Write-Info "(no admin rights required; isolated from any system Git install)"
+
+            # Pinned git-for-windows release. We deliberately do NOT hit
+            # api.github.com/repos/.../releases/latest here: that endpoint is
+            # rate-limited for unauthenticated callers.
+            $gitTag    = "v2.55.0.windows.3"
+            $gitVer    = "2.55.0.3"
+            $gitVerTag = "2.55.0.windows.3"
+
+            if ($arch -eq "32-bit-mingit") {
+                Write-Warn "32-bit Windows detected -- PortableGit is 64-bit only.  Installing MinGit 32-bit as a last resort; bash-dependent Hermes features (terminal tool, agent-browser) will not work on this machine."
+                $assetName = "MinGit-$gitVer-32-bit.zip"
+                $downloadIsZip = $true
+            } elseif ($arch -eq "arm64") {
+                $assetName = "PortableGit-$gitVer-arm64.7z.exe"
+                $downloadIsZip = $false
+            } else {
+                $assetName = "PortableGit-$gitVer-64-bit.7z.exe"
+                $downloadIsZip = $false
+            }
+
+            $downloadUrl = "https://github.com/git-for-windows/git/releases/download/$gitTag/$assetName"
+            $tmpFile = "$env:TEMP\$assetName"
+            Write-Info "Downloading $assetName (Git for Windows $gitVerTag)..."
+            Invoke-WebRequest -Uri $downloadUrl -OutFile $tmpFile -UseBasicParsing
         }
-
-        # Pinned git-for-windows release. We deliberately do NOT hit
-        # api.github.com/repos/.../releases/latest here: that endpoint
-        # is rate-limited to 60 requests/hour/IP for unauthenticated
-        # callers, and users behind CGNAT / corporate NAT / dorm WiFi
-        # routinely hit the limit, breaking the installer.
-        # Static github.com/.../releases/download/<tag>/<asset> URLs
-        # are not subject to the API rate limit.
-        $gitTag    = "v2.54.0.windows.1"
-        $gitVer    = "2.54.0"
-        $gitVerTag = "$gitVer.windows.1"
-
-        if ($arch -eq "32-bit-mingit") {
-            Write-Warn "32-bit Windows detected -- PortableGit is 64-bit only.  Installing MinGit 32-bit as a last resort; bash-dependent Hermes features (terminal tool, agent-browser) will not work on this machine."
-            $assetName    = "MinGit-$gitVer-32-bit.zip"
-            $downloadIsZip = $true
-        } elseif ($arch -eq "arm64") {
-            $assetName    = "PortableGit-$gitVer-arm64.7z.exe"
-            $downloadIsZip = $false
-        } else {
-            $assetName    = "PortableGit-$gitVer-64-bit.7z.exe"
-            $downloadIsZip = $false
-        }
-
-        $downloadUrl = "https://github.com/git-for-windows/git/releases/download/$gitTag/$assetName"
-        $downloadExt = if ($downloadIsZip) { "zip" } else { "7z.exe" }
-        $tmpFile = "$env:TEMP\$assetName"
         $gitDir = "$HermesHome\git"
-
-        Write-Info "Downloading $assetName (Git for Windows $gitVerTag)..."
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $tmpFile -UseBasicParsing
 
         if (Test-Path $gitDir) {
             Write-Info "Removing previous Git install at $gitDir ..."
@@ -1430,7 +1460,17 @@ function Install-Git {
         }
         New-Item -ItemType Directory -Path $gitDir -Force | Out-Null
 
-        if ($downloadIsZip) {
+        if ($bundledArchive) {
+            $tarExe = Join-Path $env:SystemRoot "System32\tar.exe"
+            if (-not (Test-Path -LiteralPath $tarExe -PathType Leaf)) {
+                throw "Windows tar.exe is required to extract the bundled Git Bash runtime"
+            }
+            Write-Info "Extracting the bundled Git Bash runtime to $gitDir ..."
+            & $tarExe -xJf $tmpFile -C $gitDir
+            if ($LASTEXITCODE -ne 0) {
+                throw "Git Bash runtime extraction failed (exit code $LASTEXITCODE)"
+            }
+        } elseif ($downloadIsZip) {
             Expand-Archive -Path $tmpFile -DestinationPath $gitDir -Force
         } else {
             # PortableGit is a self-extracting 7z archive.  Invoke it with
@@ -1444,7 +1484,9 @@ function Install-Git {
                 throw "PortableGit extraction failed (exit code $($extractProc.ExitCode))"
             }
         }
-        Remove-Item -Force $tmpFile -ErrorAction SilentlyContinue
+        if (-not $bundledArchive) {
+            Remove-Item -Force $tmpFile -ErrorAction SilentlyContinue
+        }
 
         # PortableGit layout: cmd\git.exe + bin\bash.exe + usr\bin\ (coreutils)
         # MinGit layout:      cmd\git.exe + usr\bin\bash.exe (if present)
@@ -1497,6 +1539,11 @@ function Install-Git {
     } catch {
         if ($script:GitInstallFailureReason) {
             Write-Err $script:GitInstallFailureReason
+            return $false
+        }
+        if ($BundledSource) {
+            Write-Err "Could not install the bundled Git Bash runtime: $_"
+            Write-Info "Reinstall Hermes Desktop; the packaged Git Bash runtime is missing or damaged."
             return $false
         }
         Write-Err "Could not install portable Git: $_"
@@ -1986,8 +2033,111 @@ function Install-SystemPackages {
 # Installation
 # ============================================================================
 
+function Assert-BundledSource {
+    if (-not $Commit -or $Commit -notmatch '^[0-9a-fA-F]{40}$' -or $Commit -match '^0+$') {
+        throw "Bundled source requires a real 40-character -Commit value"
+    }
+
+    if (-not (Test-Path -LiteralPath $HermesHome -PathType Container)) {
+        throw "Bundled source Hermes home does not exist: $HermesHome"
+    }
+    if (-not (Test-Path -LiteralPath $InstallDir -PathType Container)) {
+        throw "Bundled source install directory does not exist: $InstallDir"
+    }
+
+    $resolvedHome = (Resolve-Path -LiteralPath $HermesHome -ErrorAction Stop).ProviderPath
+    $resolvedInstall = (Resolve-Path -LiteralPath $InstallDir -ErrorAction Stop).ProviderPath
+    $installParent = [System.IO.Directory]::GetParent($resolvedInstall)
+    if (-not $installParent -or -not [string]::Equals(
+        $installParent.FullName.TrimEnd('\'),
+        $resolvedHome.TrimEnd('\'),
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw "Bundled source install directory must be a direct child of Hermes home"
+    }
+
+    $installItem = Get-Item -LiteralPath $resolvedInstall -Force -ErrorAction Stop
+    if (($installItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Bundled source install directory must not be a reparse point"
+    }
+
+    $markerPath = Join-Path $resolvedInstall ".hermes-bundled-source.json"
+    if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) {
+        throw "Bundled source marker is missing: $markerPath"
+    }
+    $markerItem = Get-Item -LiteralPath $markerPath -Force -ErrorAction Stop
+    if (($markerItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Bundled source marker must not be a reparse point"
+    }
+
+    try {
+        $marker = Get-Content -LiteralPath $markerPath -Raw -ErrorAction Stop | ConvertFrom-Json
+    } catch {
+        throw "Bundled source marker is not valid JSON: $markerPath"
+    }
+    if ($marker.schemaVersion -ne 1) {
+        throw "Bundled source marker schemaVersion must be 1"
+    }
+    if (-not [string]::Equals(
+        [string]$marker.commit,
+        $Commit,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw "Bundled source marker commit does not match -Commit"
+    }
+
+    $requiredFiles = @(
+        "pyproject.toml",
+        "hermes_cli\main.py",
+        "tools\sensevoice_stt.py",
+        "scripts\install.ps1"
+    )
+    foreach ($relativePath in $requiredFiles) {
+        $requiredPath = Join-Path $resolvedInstall $relativePath
+        if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+            throw "Bundled source is missing required runtime file: $relativePath"
+        }
+        $requiredItem = Get-Item -LiteralPath $requiredPath -Force -ErrorAction Stop
+        if (($requiredItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Bundled source runtime file must not be a reparse point: $relativePath"
+        }
+    }
+}
+
+function Write-InstallMethod {
+    param([Parameter(Mandatory = $true)][ValidateSet("desktop-bundle", "git")][string]$Method)
+
+    $methodPath = Join-Path $InstallDir ".install_method"
+    $temporaryPath = "$methodPath.tmp-$PID-$([Guid]::NewGuid().ToString('N'))"
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    try {
+        [System.IO.File]::WriteAllText($temporaryPath, "$Method`n", $utf8NoBom)
+        if (Test-Path -LiteralPath $methodPath -PathType Leaf) {
+            [System.IO.File]::Replace($temporaryPath, $methodPath, $null)
+        } else {
+            [System.IO.File]::Move($temporaryPath, $methodPath)
+        }
+    } finally {
+        Remove-Item -LiteralPath $temporaryPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Install-Repository {
     Write-Info "Installing to $InstallDir..."
+
+    if ($BundledSource) {
+        Assert-BundledSource
+
+        $currentHermesHome = [Environment]::GetEnvironmentVariable("HERMES_HOME", "User")
+        if (-not $currentHermesHome -or $currentHermesHome -ne $HermesHome) {
+            [Environment]::SetEnvironmentVariable("HERMES_HOME", $HermesHome, "User")
+            Write-Success "Set HERMES_HOME=$HermesHome"
+        }
+        $env:HERMES_HOME = $HermesHome
+        Write-InstallMethod -Method "desktop-bundle"
+        Write-Success "Verified bundled repository ready"
+        return
+    }
 
     $didUpdate = $false
 
@@ -2402,6 +2552,7 @@ function Install-Repository {
         }
     }
 
+    Write-InstallMethod -Method "git"
     Write-Success "Repository ready"
 }
 
@@ -3154,6 +3305,17 @@ function Copy-ConfigTemplates {
         $examplePath = "$InstallDir\cli-config.yaml.example"
         if (Test-Path $examplePath) {
             Copy-Item $examplePath $configPath
+            if ($BundledSource) {
+                $configText = [System.IO.File]::ReadAllText($configPath)
+                $defaultProvider = '  # provider: "local"          # auto-detected if omitted'
+                $desktopProvider = '  provider: "sensevoice"       # fresh Hermes Desktop default'
+                if (-not $configText.Contains($defaultProvider)) {
+                    throw "Fresh Desktop config template is missing the expected STT provider anchor"
+                }
+                $configText = $configText.Replace($defaultProvider, $desktopProvider)
+                $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+                [System.IO.File]::WriteAllText($configPath, $configText, $utf8NoBom)
+            }
             Write-Success "Created $configPath from template"
         }
     } else {

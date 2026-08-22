@@ -18,8 +18,9 @@ function sha256(filePath: string): string {
 function makePayloadFixture({
   symlink = false,
   androidHelper = false,
-  githubWorkflow = false
-}: { symlink?: boolean; androidHelper?: boolean; githubWorkflow?: boolean } = {}) {
+  githubWorkflow = false,
+  platform = 'darwin'
+}: { symlink?: boolean; androidHelper?: boolean; githubWorkflow?: boolean; platform?: 'darwin' | 'win32' } = {}) {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-bootstrap-payload-'))
   const sourceRoot = path.join(tempRoot, 'source', 'hermes-agent')
   const bootstrapRoot = path.join(tempRoot, 'bootstrap')
@@ -46,16 +47,33 @@ function makePayloadFixture({
   }
 
   const archivePath = path.join(bootstrapRoot, 'hermes-backend.tar.gz')
-  const installerPath = path.join(bootstrapRoot, 'install.sh')
+  const installerFile = platform === 'win32' ? 'install.ps1' : 'install.sh'
+  const installerPath = path.join(bootstrapRoot, installerFile)
+  const gitRuntimePath = path.join(bootstrapRoot, 'git-bash-runtime.tar.xz')
   execFileSync('tar', ['-czf', archivePath, '-C', path.join(tempRoot, 'source'), 'hermes-agent'])
-  fs.writeFileSync(installerPath, '#!/bin/sh\nexit 0\n')
+  fs.writeFileSync(installerPath, platform === 'win32' ? 'exit 0\r\n' : '#!/bin/sh\nexit 0\n')
+  if (platform === 'win32') fs.writeFileSync(gitRuntimePath, 'fixture Git Bash runtime')
 
   const manifest = {
     schemaVersion: 1,
     commit: COMMIT,
     branch: 'integration/desktop-dmg-auth-e2e',
     archive: { file: 'hermes-backend.tar.gz', size: fs.statSync(archivePath).size, sha256: sha256(archivePath) },
-    installer: { file: 'install.sh', size: fs.statSync(installerPath).size, sha256: sha256(installerPath) }
+    installer: { file: installerFile, size: fs.statSync(installerPath).size, sha256: sha256(installerPath) },
+    ...(platform === 'win32'
+      ? {
+          gitBashRuntime: {
+            file: 'git-bash-runtime.tar.xz',
+            size: fs.statSync(gitRuntimePath).size,
+            sha256: sha256(gitRuntimePath),
+            entries: 4,
+            source: {
+              file: 'PortableGit-2.55.0.3-64-bit.7z.exe',
+              sha256: 'ab00566336b5472120f9a52d34f2e79c5406535792acb0548001ffd0bd090e5d'
+            }
+          }
+        }
+      : {})
   }
 
   fs.writeFileSync(path.join(bootstrapRoot, 'payload-manifest.json'), JSON.stringify(manifest))
@@ -69,6 +87,28 @@ test('archive path contract rejects traversal, absolute, Windows, and NUL entrie
   assert.equal(archiveEntryIsSafe('/hermes-agent/main.py'), false)
   assert.equal(archiveEntryIsSafe('hermes-agent\\main.py'), false)
   assert.equal(archiveEntryIsSafe('hermes-agent/secret\0.py'), false)
+})
+
+test('verified Windows payload requires and stages install.ps1', async () => {
+  const fixture = makePayloadFixture({ platform: 'win32' })
+
+  try {
+    const payload = await resolveBundledPayload({
+      bootstrapRoot: fixture.bootstrapRoot,
+      installStamp: { commit: COMMIT },
+      targetPlatform: 'win32'
+    })
+    const hermesHome = path.join(fixture.tempRoot, 'home')
+    const activeRoot = path.join(hermesHome, 'hermes-agent')
+    const prepared = await prepareBundledSource({ payload, activeRoot, hermesHome })
+
+    assert.equal(payload.manifest.installer.file, 'install.ps1')
+    assert.equal(payload.gitRuntimePath, path.join(fixture.bootstrapRoot, 'git-bash-runtime.tar.xz'))
+    assert.equal(fs.readFileSync(path.join(activeRoot, 'scripts', 'install.ps1'), 'utf8'), 'exit 0\r\n')
+    await prepared.finalize()
+  } finally {
+    fs.rmSync(fixture.tempRoot, { recursive: true, force: true })
+  }
 })
 
 test('verified payload resolves and stages a complete managed source transaction', async () => {

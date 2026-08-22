@@ -10,7 +10,7 @@ const COMMIT_RE = /^[0-9a-f]{40}$/i
 const SHA256_RE = /^[0-9a-f]{64}$/
 const SOURCE_MARKER_NAME = '.hermes-bundled-source.json'
 const ARCHIVE_FILE = 'hermes-backend.tar.gz'
-const INSTALLER_FILE = 'install.sh'
+type DesktopInstallerFile = 'install.sh' | 'install.ps1'
 
 const RUNTIME_SCRIPT_FILES = [
   'desktop-update.ps1',
@@ -55,7 +55,14 @@ export interface BundledPayloadManifest {
   commit: string
   branch: string | null
   archive: { file: 'hermes-backend.tar.gz'; size: number; sha256: string }
-  installer: { file: 'install.sh'; size: number; sha256: string }
+  installer: { file: DesktopInstallerFile; size: number; sha256: string }
+  gitBashRuntime?: {
+    file: 'git-bash-runtime.tar.xz'
+    size: number
+    sha256: string
+    entries: number
+    source: { file: 'PortableGit-2.55.0.3-64-bit.7z.exe'; sha256: string }
+  }
 }
 
 export interface BundledPayload {
@@ -63,6 +70,7 @@ export interface BundledPayload {
   manifestPath: string
   archivePath: string
   installerPath: string
+  gitRuntimePath: string | null
 }
 
 export interface BundledSourceMarker {
@@ -89,6 +97,7 @@ interface InstallStampLike {
 interface ResolveBundledPayloadOptions {
   bootstrapRoot: string
   installStamp: InstallStampLike | null | undefined
+  targetPlatform?: NodeJS.Platform
 }
 
 interface PrepareBundledSourceOptions {
@@ -123,7 +132,13 @@ function isPositiveSafeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
 }
 
-function parseManifest(raw: unknown): BundledPayloadManifest {
+function installerFileForPlatform(platform: NodeJS.Platform): DesktopInstallerFile {
+  if (platform === 'darwin') return 'install.sh'
+  if (platform === 'win32') return 'install.ps1'
+  throw new Error(`unsupported bundled payload platform: ${platform}`)
+}
+
+function parseManifest(raw: unknown, installerFile: DesktopInstallerFile): BundledPayloadManifest {
   if (!raw || typeof raw !== 'object') {throw new Error('Bundled payload manifest must be an object')}
   const value = raw as Record<string, any>
 
@@ -148,11 +163,28 @@ function parseManifest(raw: unknown): BundledPayloadManifest {
 
   if (
     !value.installer ||
-    value.installer.file !== INSTALLER_FILE ||
+    value.installer.file !== installerFile ||
     !isPositiveSafeInteger(value.installer.size) ||
     !isSha256(value.installer.sha256)
   ) {
     throw new Error('Bundled payload installer metadata is invalid')
+  }
+
+  if (installerFile === 'install.ps1') {
+    const git = value.gitBashRuntime
+    if (
+      !git ||
+      git.file !== 'git-bash-runtime.tar.xz' ||
+      !isPositiveSafeInteger(git.size) ||
+      !isSha256(git.sha256) ||
+      !isPositiveSafeInteger(git.entries) ||
+      git.source?.file !== 'PortableGit-2.55.0.3-64-bit.7z.exe' ||
+      !isSha256(git.source?.sha256)
+    ) {
+      throw new Error('Bundled Git Bash runtime metadata is invalid')
+    }
+  } else if (value.gitBashRuntime !== undefined) {
+    throw new Error('macOS bundled payload must not declare a Windows Git Bash runtime')
   }
 
   return value as BundledPayloadManifest
@@ -253,10 +285,12 @@ async function verifyArchiveEntries(archivePath: string): Promise<void> {
 
 export async function resolveBundledPayload({
   bootstrapRoot,
-  installStamp
+  installStamp,
+  targetPlatform = process.platform
 }: ResolveBundledPayloadOptions): Promise<BundledPayload> {
+  const installerFile = installerFileForPlatform(targetPlatform)
   const manifestPath = path.join(bootstrapRoot, 'payload-manifest.json')
-  const manifest = parseManifest(await readJson(manifestPath, 'bundled payload manifest'))
+  const manifest = parseManifest(await readJson(manifestPath, 'bundled payload manifest'), installerFile)
 
   if (!isRealCommit(installStamp?.commit) || manifest.commit !== installStamp.commit) {
     throw new Error(
@@ -265,9 +299,15 @@ export async function resolveBundledPayload({
   }
 
   const archivePath = path.join(bootstrapRoot, ARCHIVE_FILE)
-  const installerPath = path.join(bootstrapRoot, INSTALLER_FILE)
+  const installerPath = path.join(bootstrapRoot, installerFile)
+  const gitRuntimePath = manifest.gitBashRuntime
+    ? path.join(bootstrapRoot, manifest.gitBashRuntime.file)
+    : null
   const archiveStats = await requireRegularFile(archivePath, 'bundled backend archive')
   const installerStats = await requireRegularFile(installerPath, 'bundled installer')
+  const gitRuntimeStats = gitRuntimePath
+    ? await requireRegularFile(gitRuntimePath, 'bundled Git Bash runtime')
+    : null
 
   if (archiveStats.size !== manifest.archive.size) {
     throw new Error(`Bundled backend archive size mismatch: expected ${manifest.archive.size}, got ${archiveStats.size}`)
@@ -276,10 +316,14 @@ export async function resolveBundledPayload({
   if (installerStats.size !== manifest.installer.size) {
     throw new Error(`Bundled installer size mismatch: expected ${manifest.installer.size}, got ${installerStats.size}`)
   }
+  if (gitRuntimeStats && gitRuntimeStats.size !== manifest.gitBashRuntime?.size) {
+    throw new Error('Bundled Git Bash runtime size mismatch')
+  }
 
-  const [archiveSha256, installerSha256] = await Promise.all([
+  const [archiveSha256, installerSha256, gitRuntimeSha256] = await Promise.all([
     sha256File(archivePath),
-    sha256File(installerPath)
+    sha256File(installerPath),
+    gitRuntimePath ? sha256File(gitRuntimePath) : Promise.resolve(null)
   ])
 
   if (archiveSha256 !== manifest.archive.sha256) {
@@ -289,10 +333,13 @@ export async function resolveBundledPayload({
   if (installerSha256 !== manifest.installer.sha256) {
     throw new Error('Bundled installer SHA-256 checksum mismatch')
   }
+  if (manifest.gitBashRuntime && gitRuntimeSha256 !== manifest.gitBashRuntime.sha256) {
+    throw new Error('Bundled Git Bash runtime SHA-256 checksum mismatch')
+  }
 
   await verifyArchiveEntries(archivePath)
 
-  return { manifest, manifestPath, archivePath, installerPath }
+  return { manifest, manifestPath, archivePath, installerPath, gitRuntimePath }
 }
 
 function parseSourceMarker(raw: unknown): BundledSourceMarker | null {
@@ -562,7 +609,7 @@ export async function prepareBundledSource({
 
     const scriptsDir = path.join(stagingPath, 'scripts')
     await fsp.mkdir(scriptsDir, { recursive: true })
-    await fsp.copyFile(payload.installerPath, path.join(scriptsDir, INSTALLER_FILE))
+    await fsp.copyFile(payload.installerPath, path.join(scriptsDir, payload.manifest.installer.file))
 
     const marker: BundledSourceMarker = {
       schemaVersion: SOURCE_MARKER_SCHEMA_VERSION,

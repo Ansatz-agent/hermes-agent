@@ -20,7 +20,7 @@ LEGACY_FIELDS = (
     "temporary_legacy_official_only_callers",
     "temporary_legacy_implicit_official_entries",
 )
-EXPECTED_LEGACY_DIGEST = "1602c1b8e34fa242c292690bf239802135e8a02d13c8ca97bd89a94cd562291a"
+EXPECTED_LEGACY_DIGEST = "1849034d274e95cf0d865b217439676a07ca06476480e33180576451766b1cd5"
 REVIEWED_SCAN_PATHS = {
     "scripts/install.sh",
     "scripts/install.ps1",
@@ -150,6 +150,35 @@ def test_checked_in_manifest_and_checker_accept_current_candidate() -> None:
     result = invoke(REPO, MANIFEST)
     assert result.returncode == 0, result.stdout + result.stderr
     assert "PASS" in result.stdout
+
+
+def test_windows_auth_toolchain_build_inputs_are_exactly_pinned() -> None:
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    entries = {entry["id"]: entry for entry in manifest["entries"]}
+
+    assert entries["managed-python-windows-x64"]["build_sources"] == [
+        {
+            "platform": "win32",
+            "arch": "x64",
+            "version": "3.13.15",
+            "filename": "python-3.13.15-embed-amd64.zip",
+            "domestic_primary": "https://mirrors.huaweicloud.com/python/3.13.15/python-3.13.15-embed-amd64.zip",
+            "official_fallback": "https://www.python.org/ftp/python/3.13.15/python-3.13.15-embed-amd64.zip",
+            "sha256": "d1f04d990aee1253d8569e8e5104e30fa9f5fa830899f14843448872d936a2cf",
+        }
+    ]
+    assert entries["managed-uv"]["build_sources"] == [
+        {
+            "platform": "win32",
+            "arch": "x64",
+            "version": "0.12.5",
+            "filename": "uv-0.12.5-py3-none-win_amd64.whl",
+            "domestic_primary": "https://mirrors.ustc.edu.cn/pypi/simple",
+            "domestic_secondary": "https://pypi.tuna.tsinghua.edu.cn/simple",
+            "official_fallback": "https://pypi.org/simple",
+            "sha256": "455c3e57602e2141e66e2f0bf685898c9c5e5a70377d14c9a71554a3baf3ddbf",
+        }
+    ]
 
 
 def test_checked_in_legacy_exceptions_are_exactly_pinned() -> None:

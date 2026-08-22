@@ -17,13 +17,34 @@ export const AUTH_TOOLCHAIN_SCHEMA_VERSION = 1
 export const AUTH_TOOLCHAIN_PLATFORM = 'darwin'
 export const AUTH_TOOLCHAIN_ARCH = 'arm64'
 
+export const AUTH_TOOLCHAIN_TARGETS = Object.freeze({
+  'darwin-arm64': Object.freeze({
+    platform: 'darwin',
+    arch: 'arm64',
+    uvFile: 'uv.gz',
+    pythonFile: 'python.tar.gz'
+  }),
+  'win32-x64': Object.freeze({
+    platform: 'win32',
+    arch: 'x64',
+    uvFile: 'uv.exe',
+    pythonFile: 'python-embed.zip'
+  })
+})
+
 const SHA256_RE = /^[0-9a-f]{64}$/
 const SAFE_VERSION_RE = /^[0-9]+(?:\.[0-9]+){1,3}$/
-const FIXED_FILES = Object.freeze({
-  uv: 'uv.gz',
-  python: 'python.tar.gz',
-  requirements: 'auth-requirements.txt'
-})
+const REQUIREMENTS_FILE = 'auth-requirements.txt'
+
+export function authToolchainLayout(platform, arch) {
+  const layout = AUTH_TOOLCHAIN_TARGETS[`${platform}-${arch}`]
+
+  if (!layout) {
+    throw new Error(`unsupported authentication toolchain target: ${platform}-${arch}`)
+  }
+
+  return layout
+}
 
 function sha256File(filePath) {
   return createHash('sha256').update(readFileSync(filePath)).digest('hex')
@@ -81,9 +102,7 @@ function parseManifest(raw) {
   if (value.schemaVersion !== AUTH_TOOLCHAIN_SCHEMA_VERSION) {
     throw new Error(`authentication toolchain schemaVersion must be ${AUTH_TOOLCHAIN_SCHEMA_VERSION}`)
   }
-  if (value.platform !== AUTH_TOOLCHAIN_PLATFORM || value.arch !== AUTH_TOOLCHAIN_ARCH) {
-    throw new Error('authentication toolchain target must be darwin-arm64')
-  }
+  const layout = authToolchainLayout(value.platform, value.arch)
   if (!SAFE_VERSION_RE.test(String(value.uv?.version || ''))) {
     throw new Error('authentication toolchain uv version is invalid')
   }
@@ -91,9 +110,9 @@ function parseManifest(raw) {
     throw new Error('authentication toolchain Python version is invalid')
   }
 
-  parseAsset(value.uv, FIXED_FILES.uv, 'uv')
-  parseAsset(value.python, FIXED_FILES.python, 'Python')
-  parseAsset(value.requirements, FIXED_FILES.requirements, 'requirements')
+  parseAsset(value.uv, layout.uvFile, 'uv')
+  parseAsset(value.python, layout.pythonFile, 'Python')
+  parseAsset(value.requirements, REQUIREMENTS_FILE, 'requirements')
 
   if (!Array.isArray(value.wheels) || value.wheels.length === 0) {
     throw new Error('authentication toolchain wheel list is empty')
@@ -107,6 +126,13 @@ function parseManifest(raw) {
     }
     seen.add(file)
     parseAsset(wheel, file, 'wheel')
+    if (
+      layout.platform === 'win32' &&
+      !/-none-any\.whl$/i.test(file) &&
+      !/-win_amd64\.whl$/i.test(file)
+    ) {
+      throw new Error(`authentication toolchain wheel is not Windows x64 compatible: ${file}`)
+    }
   }
 
   return value
@@ -184,9 +210,7 @@ export function buildAuthToolchain(options) {
     pythonVersion
   } = options
 
-  if (platform !== AUTH_TOOLCHAIN_PLATFORM || arch !== AUTH_TOOLCHAIN_ARCH) {
-    throw new Error('authentication toolchain target must be darwin-arm64')
-  }
+  const layout = authToolchainLayout(platform, arch)
   if (!SAFE_VERSION_RE.test(String(uvVersion || '')) || !SAFE_VERSION_RE.test(String(pythonVersion || ''))) {
     throw new Error('authentication toolchain versions are invalid')
   }
@@ -207,18 +231,19 @@ export function buildAuthToolchain(options) {
   mkdirSync(path.join(stagingRoot, 'wheelhouse'), { recursive: true })
 
   try {
-    writeFileSync(
-      path.join(stagingRoot, FIXED_FILES.uv),
-      gzipSync(readFileSync(uvPath), { level: 9 })
-    )
+    if (layout.platform === 'darwin') {
+      writeFileSync(path.join(stagingRoot, layout.uvFile), gzipSync(readFileSync(uvPath), { level: 9 }))
+    } else {
+      copyRegularFile(uvPath, path.join(stagingRoot, layout.uvFile), 'uv input')
+    }
     copyRegularFile(
       pythonArchivePath,
-      path.join(stagingRoot, FIXED_FILES.python),
+      path.join(stagingRoot, layout.pythonFile),
       'Python archive input'
     )
     copyRegularFile(
       requirementsPath,
-      path.join(stagingRoot, FIXED_FILES.requirements),
+      path.join(stagingRoot, REQUIREMENTS_FILE),
       'requirements input'
     )
 
@@ -233,9 +258,9 @@ export function buildAuthToolchain(options) {
       schemaVersion: AUTH_TOOLCHAIN_SCHEMA_VERSION,
       platform,
       arch,
-      uv: assetRecord(stagingRoot, FIXED_FILES.uv, uvVersion),
-      python: assetRecord(stagingRoot, FIXED_FILES.python, pythonVersion),
-      requirements: assetRecord(stagingRoot, FIXED_FILES.requirements),
+      uv: assetRecord(stagingRoot, layout.uvFile, uvVersion),
+      python: assetRecord(stagingRoot, layout.pythonFile, pythonVersion),
+      requirements: assetRecord(stagingRoot, REQUIREMENTS_FILE),
       wheels: wheelFiles.map(file => assetRecord(stagingRoot, file))
     }
 
@@ -270,14 +295,17 @@ function requiredEnvironmentVersion(env, key) {
 }
 
 export function buildAuthToolchainFromEnvironment(env = process.env) {
+  const platform = env.HERMES_AUTH_TOOLCHAIN_PLATFORM || AUTH_TOOLCHAIN_PLATFORM
+  const arch = env.HERMES_AUTH_TOOLCHAIN_ARCH || AUTH_TOOLCHAIN_ARCH
+
   return buildAuthToolchain({
     outputDir: requiredEnvironmentPath(env, 'HERMES_AUTH_TOOLCHAIN_OUTPUT_DIR'),
     uvPath: requiredEnvironmentPath(env, 'HERMES_AUTH_TOOLCHAIN_UV_PATH'),
     pythonArchivePath: requiredEnvironmentPath(env, 'HERMES_AUTH_TOOLCHAIN_PYTHON_ARCHIVE'),
     requirementsPath: requiredEnvironmentPath(env, 'HERMES_AUTH_TOOLCHAIN_REQUIREMENTS'),
     wheelhousePath: requiredEnvironmentPath(env, 'HERMES_AUTH_TOOLCHAIN_WHEELHOUSE'),
-    platform: AUTH_TOOLCHAIN_PLATFORM,
-    arch: AUTH_TOOLCHAIN_ARCH,
+    platform,
+    arch,
     uvVersion: requiredEnvironmentVersion(env, 'HERMES_AUTH_TOOLCHAIN_UV_VERSION'),
     pythonVersion: requiredEnvironmentVersion(env, 'HERMES_AUTH_TOOLCHAIN_PYTHON_VERSION')
   })

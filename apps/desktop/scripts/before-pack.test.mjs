@@ -4,7 +4,11 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'vitest'
 
-import beforePack, { cleanStaleAppOutDir, preserveRollbackBackup } from '../scripts/before-pack.mjs'
+import beforePack, {
+  cleanStaleAppOutDir,
+  preserveRollbackBackup,
+  verifyPreparedPackageInputs
+} from '../scripts/before-pack.mjs'
 
 test('cleanStaleAppOutDir removes a populated unpacked directory', () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-before-pack-'))
@@ -42,6 +46,20 @@ test('cleanStaleAppOutDir ignores empty or invalid input', () => {
   assert.equal(cleanStaleAppOutDir(undefined), false)
   assert.equal(cleanStaleAppOutDir(null), false)
   assert.equal(cleanStaleAppOutDir(42), false)
+})
+
+test('beforePack package input gate rejects a missing Windows resource closure', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-before-pack-inputs-'))
+  const desktopRoot = path.join(root, 'apps', 'desktop')
+  fs.mkdirSync(desktopRoot, { recursive: true })
+  try {
+    assert.throws(
+      () => verifyPreparedPackageInputs('win32', 'x64', desktopRoot),
+      /ENOENT|prepared package input/
+    )
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('beforePack default export resolves even when cleanup throws', async () => {

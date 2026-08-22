@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -10,12 +11,110 @@ const VERSION_RE = /^[0-9]+(?:\.[0-9]+){2}$/
 const PYTHON_PRIMARY = 'https://mirrors.ustc.edu.cn/pypi/simple'
 const PYTHON_FALLBACK = 'https://pypi.tuna.tsinghua.edu.cn/simple'
 
+export const WINDOWS_PYTHON_VERSION = '3.13.15'
+export const WINDOWS_PYTHON_ARCHIVE = 'python-3.13.15-embed-amd64.zip'
+export const WINDOWS_PYTHON_SHA256 = 'd1f04d990aee1253d8569e8e5104e30fa9f5fa830899f14843448872d936a2cf'
+export const WINDOWS_PYTHON_SOURCES = Object.freeze([
+  `https://mirrors.huaweicloud.com/python/${WINDOWS_PYTHON_VERSION}/${WINDOWS_PYTHON_ARCHIVE}`,
+  `https://www.python.org/ftp/python/${WINDOWS_PYTHON_VERSION}/${WINDOWS_PYTHON_ARCHIVE}`
+])
+export const WINDOWS_UV_VERSION = UV_VERSION
+export const WINDOWS_UV_WHEEL = `uv-${WINDOWS_UV_VERSION}-py3-none-win_amd64.whl`
+export const WINDOWS_UV_SHA256 = '455c3e57602e2141e66e2f0bf685898c9c5e5a70377d14c9a71554a3baf3ddbf'
+
 function defaultExecute(command, args) {
   return execFileSync(command, args, {
     encoding: 'utf8',
     maxBuffer: 16 * 1024 * 1024,
     stdio: ['ignore', 'pipe', 'pipe']
   })
+}
+
+function defaultSha256File(filePath) {
+  return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
+}
+
+async function defaultDownloadFile({ sources, destination, expectedSha256 }) {
+  let lastError = null
+
+  for (const source of sources) {
+    fs.rmSync(destination, { force: true })
+    try {
+      defaultExecute(process.platform === 'win32' ? 'curl.exe' : '/usr/bin/curl', [
+        '-fL',
+        '--connect-timeout',
+        '30',
+        '--max-time',
+        '600',
+        '--retry',
+        '2',
+        '--output',
+        destination,
+        source
+      ])
+      const observed = defaultSha256File(destination)
+      if (observed !== expectedSha256) {
+        throw new Error(`SHA-256 mismatch: expected ${expectedSha256}, got ${observed}`)
+      }
+
+      return { source, sha256: observed }
+    } catch (error) {
+      lastError = error
+    }
+  }
+
+  fs.rmSync(destination, { force: true })
+  throw new Error(`all approved download sources failed: ${lastError?.message || String(lastError)}`)
+}
+
+function windowsPowerShellPath(env = process.env) {
+  const systemRoot = env.SystemRoot || env.SYSTEMROOT || env.windir || env.WINDIR || 'C:\\Windows'
+  return path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+}
+
+function defaultExtractUvExecutable({ archivePath, destination }) {
+  if (process.platform === 'win32') {
+    const extractionRoot = `${archivePath}.extract-${process.pid}`
+    fs.rmSync(extractionRoot, { recursive: true, force: true })
+    fs.mkdirSync(extractionRoot, { recursive: true })
+    try {
+      defaultExecute(windowsPowerShellPath(), [
+        '-NoProfile',
+        '-NonInteractive',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        'Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force',
+        archivePath,
+        extractionRoot
+      ])
+      const candidates = []
+      const visit = directory => {
+        for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+          const candidate = path.join(directory, entry.name)
+          if (entry.isDirectory()) visit(candidate)
+          else if (entry.isFile() && entry.name.toLowerCase() === 'uv.exe') candidates.push(candidate)
+        }
+      }
+      visit(extractionRoot)
+      if (candidates.length !== 1) throw new Error('uv wheel must contain exactly one uv.exe')
+      fs.copyFileSync(candidates[0], destination)
+    } finally {
+      fs.rmSync(extractionRoot, { recursive: true, force: true })
+    }
+    return
+  }
+
+  const listing = String(defaultExecute('/usr/bin/unzip', ['-Z1', archivePath]))
+    .split(/\r?\n/)
+    .filter(candidate => /(^|\/)uv\.exe$/i.test(candidate))
+  if (listing.length !== 1) throw new Error('uv wheel must contain exactly one uv.exe')
+  const contents = execFileSync('/usr/bin/unzip', ['-p', archivePath, listing[0]], {
+    encoding: null,
+    maxBuffer: 64 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  fs.writeFileSync(destination, contents)
 }
 
 function requireRegularFile(filePath, label) {
@@ -71,6 +170,219 @@ function downloadLockedWheels({ execute, pythonPath, requirementsPath, wheelhous
     '--disable-pip-version-check',
     '--no-input'
   ])
+}
+
+function downloadWindowsWheels({ execute, pythonPath, requirementsPath, wheelhousePath, indexUrl }) {
+  return execute(pythonPath, [
+    '-m',
+    'pip',
+    'download',
+    '--require-hashes',
+    '--only-binary=:all:',
+    '--platform',
+    'win_amd64',
+    '--python-version',
+    '313',
+    '--implementation',
+    'cp',
+    '--dest',
+    wheelhousePath,
+    '--requirement',
+    requirementsPath,
+    '--index-url',
+    indexUrl,
+    '--disable-pip-version-check',
+    '--no-input'
+  ])
+}
+
+function normalizedDistributionName(value) {
+  return value.toLowerCase().replace(/[._-]+/g, '-')
+}
+
+function lockedRequirementNames(requirements) {
+  const names = new Set()
+  for (const line of requirements.split(/\r?\n/)) {
+    const match = /^([A-Za-z0-9_.-]+)(?:\[[^\]]+\])?==/.exec(line.trim())
+    if (match) names.add(normalizedDistributionName(match[1]))
+  }
+  return names
+}
+
+function validateWindowsWheelhouse(wheelhousePath, requirements) {
+  const authorized = lockedRequirementNames(requirements)
+  const entries = fs.readdirSync(wheelhousePath, { withFileTypes: true })
+  if (entries.length === 0) throw new Error('Windows authentication wheelhouse is empty')
+
+  for (const entry of entries) {
+    if (!entry.isFile() || (!/-none-any\.whl$/i.test(entry.name) && !/-win_amd64\.whl$/i.test(entry.name))) {
+      throw new Error(`authentication wheel is not Windows x64 compatible: ${entry.name}`)
+    }
+    const distribution = normalizedDistributionName(entry.name.split('-')[0])
+    if (!authorized.has(distribution)) {
+      throw new Error(`authentication wheel is not authorized by the lock export: ${entry.name}`)
+    }
+  }
+}
+
+function downloadWindowsUvWheel({ execute, pythonPath, destinationRoot }) {
+  let lastError = null
+  for (const indexUrl of [PYTHON_PRIMARY, PYTHON_FALLBACK]) {
+    fs.rmSync(destinationRoot, { recursive: true, force: true })
+    fs.mkdirSync(destinationRoot, { recursive: true })
+    try {
+      execute(pythonPath, [
+        '-m',
+        'pip',
+        'download',
+        `uv==${WINDOWS_UV_VERSION}`,
+        '--no-deps',
+        '--only-binary=:all:',
+        '--platform',
+        'win_amd64',
+        '--python-version',
+        '313',
+        '--implementation',
+        'cp',
+        '--dest',
+        destinationRoot,
+        '--index-url',
+        indexUrl,
+        '--disable-pip-version-check',
+        '--no-input'
+      ])
+      const wheelPath = path.join(destinationRoot, WINDOWS_UV_WHEEL)
+      requireRegularFile(wheelPath, 'Windows uv wheel')
+      return { indexUrl, wheelPath }
+    } catch (error) {
+      lastError = error
+    }
+  }
+  throw new Error(`Windows uv wheel download failed from approved mirrors: ${lastError?.message || String(lastError)}`)
+}
+
+export async function prepareWindowsAuthToolchainInputs({
+  execute = defaultExecute,
+  outputDir,
+  projectRoot,
+  hostUvPath,
+  hostPythonPath,
+  downloadFile = defaultDownloadFile,
+  sha256File = defaultSha256File,
+  extractUvExecutable = defaultExtractUvExecutable
+}) {
+  if (![outputDir, projectRoot, hostUvPath, hostPythonPath].every(value => path.isAbsolute(value))) {
+    throw new Error('Windows authentication toolchain preparation paths must be absolute')
+  }
+  requireRegularFile(hostUvPath, 'host uv')
+  requireRegularFile(hostPythonPath, 'host Python')
+
+  const authProject = path.join(projectRoot, 'desktop_auth_runtime')
+  requireRegularFile(path.join(authProject, 'pyproject.toml'), 'authentication pyproject')
+  requireRegularFile(path.join(authProject, 'uv.lock'), 'authentication lock')
+
+  const stagingRoot = `${outputDir}.tmp-${process.pid}`
+  const wheelhousePath = path.join(stagingRoot, 'wheelhouse')
+  const uvDownloadRoot = path.join(stagingRoot, 'uv-wheel')
+  const requirementsPath = path.join(stagingRoot, 'auth-requirements.txt')
+  const pythonArchivePath = path.join(stagingRoot, 'python-embed.zip')
+  const stagedUvPath = path.join(stagingRoot, 'uv.exe')
+  fs.rmSync(stagingRoot, { recursive: true, force: true })
+  fs.mkdirSync(wheelhousePath, { recursive: true })
+
+  try {
+    const pythonDownload = await downloadFile({
+      sources: WINDOWS_PYTHON_SOURCES,
+      destination: pythonArchivePath,
+      expectedSha256: WINDOWS_PYTHON_SHA256,
+      label: 'CPython Windows embeddable x64'
+    })
+    requireRegularFile(pythonArchivePath, 'Windows Python archive')
+    if (pythonDownload?.sha256 !== WINDOWS_PYTHON_SHA256 || sha256File(pythonArchivePath) !== WINDOWS_PYTHON_SHA256) {
+      throw new Error('Windows Python archive SHA-256 mismatch')
+    }
+
+    execute(hostUvPath, [
+      'export',
+      '--project',
+      authProject,
+      '--locked',
+      '--no-dev',
+      '--no-emit-project',
+      '--format',
+      'requirements-txt',
+      '--output-file',
+      requirementsPath
+    ])
+    const requirements = fs.readFileSync(requirementsPath, 'utf8')
+    if (!requirements.includes('--hash=sha256:')) {
+      throw new Error('authentication requirements export is not hash locked')
+    }
+    if (/github\.com|raw\.githubusercontent\.com|git\+|file:/i.test(requirements)) {
+      throw new Error('authentication requirements export contains a forbidden source')
+    }
+
+    const uvDownload = downloadWindowsUvWheel({
+      execute,
+      pythonPath: hostPythonPath,
+      destinationRoot: uvDownloadRoot
+    })
+    if (sha256File(uvDownload.wheelPath) !== WINDOWS_UV_SHA256) {
+      throw new Error('Windows uv wheel SHA-256 mismatch')
+    }
+    extractUvExecutable({ archivePath: uvDownload.wheelPath, destination: stagedUvPath })
+    requireRegularFile(stagedUvPath, 'extracted Windows uv executable')
+
+    let wheelIndex = null
+    let wheelError = null
+    for (const indexUrl of [PYTHON_PRIMARY, PYTHON_FALLBACK]) {
+      fs.rmSync(wheelhousePath, { recursive: true, force: true })
+      fs.mkdirSync(wheelhousePath, { recursive: true })
+      try {
+        downloadWindowsWheels({
+          execute,
+          pythonPath: hostPythonPath,
+          requirementsPath,
+          wheelhousePath,
+          indexUrl
+        })
+        validateWindowsWheelhouse(wheelhousePath, requirements)
+        wheelIndex = indexUrl
+        break
+      } catch (error) {
+        wheelError = error
+      }
+    }
+    if (!wheelIndex) {
+      throw wheelError || new Error('Windows authentication wheels could not be prepared')
+    }
+
+    const metadata = {
+      schemaVersion: 1,
+      platform: 'win32',
+      arch: 'x64',
+      uvVersion: WINDOWS_UV_VERSION,
+      pythonVersion: WINDOWS_PYTHON_VERSION,
+      pythonSource: pythonDownload.source,
+      uvIndex: uvDownload.indexUrl,
+      pythonIndexes: [PYTHON_PRIMARY, PYTHON_FALLBACK],
+      selectedWheelIndex: wheelIndex
+    }
+    fs.writeFileSync(path.join(stagingRoot, 'metadata.json'), `${JSON.stringify(metadata, null, 2)}\n`)
+    fs.rmSync(uvDownloadRoot, { recursive: true, force: true })
+    replaceDirectory(stagingRoot, outputDir)
+
+    return {
+      ...metadata,
+      outputDir,
+      uvPath: path.join(outputDir, 'uv.exe'),
+      pythonArchivePath: path.join(outputDir, 'python-embed.zip'),
+      requirementsPath: path.join(outputDir, 'auth-requirements.txt'),
+      wheelhousePath: path.join(outputDir, 'wheelhouse')
+    }
+  } finally {
+    fs.rmSync(stagingRoot, { recursive: true, force: true })
+  }
 }
 
 export function prepareAuthToolchainInputs({
@@ -203,7 +515,7 @@ export function prepareAuthToolchainInputs({
   }
 }
 
-function findUv(env, projectRoot) {
+export function findUv(env, projectRoot) {
   const candidates = [
     env.HERMES_AUTH_TOOLCHAIN_UV_PATH,
     env.HERMES_HOME ? path.join(env.HERMES_HOME, 'bin', 'uv') : null,
@@ -228,6 +540,25 @@ function findUv(env, projectRoot) {
   throw new Error(`uv ${UV_VERSION} was not found for the DMG build at ${projectRoot}`)
 }
 
+export async function prepareWindowsAuthToolchainInputsFromEnvironment(env = process.env) {
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url))
+  const projectRoot = path.resolve(moduleDir, '../../..')
+  const outputDir = path.resolve(
+    env.HERMES_AUTH_TOOLCHAIN_INPUT_DIR || path.join(projectRoot, 'apps/desktop/build/auth-toolchain-inputs-win32-x64')
+  )
+  const hostUvPath = findUv(env, projectRoot)
+  const hostPythonPath = env.HERMES_AUTH_TOOLCHAIN_HOST_PYTHON
+    ? path.resolve(env.HERMES_AUTH_TOOLCHAIN_HOST_PYTHON)
+    : String(defaultExecute(hostUvPath, ['python', 'find', '3.13'])).trim()
+
+  return prepareWindowsAuthToolchainInputs({
+    outputDir,
+    projectRoot,
+    hostUvPath,
+    hostPythonPath
+  })
+}
+
 export function prepareAuthToolchainInputsFromEnvironment(env = process.env) {
   const moduleDir = path.dirname(fileURLToPath(import.meta.url))
   const projectRoot = path.resolve(moduleDir, '../../..')
@@ -245,7 +576,12 @@ export function prepareAuthToolchainInputsFromEnvironment(env = process.env) {
 const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : null
 if (invokedPath === fileURLToPath(import.meta.url)) {
   try {
-    const result = prepareAuthToolchainInputsFromEnvironment()
+    const targetPlatform = process.argv.includes('--platform')
+      ? process.argv[process.argv.indexOf('--platform') + 1]
+      : process.platform
+    const result = targetPlatform === 'win32'
+      ? await prepareWindowsAuthToolchainInputsFromEnvironment()
+      : prepareAuthToolchainInputsFromEnvironment()
     process.stdout.write(`${JSON.stringify(result)}\n`)
   } catch (error) {
     process.stderr.write(`Hermes auth toolchain preparation failed: ${error.message || String(error)}\n`)

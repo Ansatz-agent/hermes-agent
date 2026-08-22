@@ -35,6 +35,7 @@ apps/desktop/electron/main.ts
 apps/desktop/electron/media-permission-policy.ts
 apps/desktop/electron/media-protocol.ts
 apps/desktop/electron/native-auth-decisions.ts
+apps/desktop/electron/package-runtime/windows-auth-toolchain.ts
 apps/desktop/electron/preload.ts
 apps/desktop/electron/preview-webview-policy.ts
 apps/desktop/electron/primary-backend-startup.ts
@@ -54,6 +55,7 @@ apps/desktop/scripts/build-backend-payload.mjs
 apps/desktop/scripts/exe-identity-options.mjs
 apps/desktop/scripts/package-audit.mjs
 apps/desktop/scripts/prepare-auth-toolchain-inputs.mjs
+apps/desktop/scripts/prepare-package-inputs.mjs
 apps/desktop/scripts/prepare-windows-git-runtime.mjs
 apps/desktop/scripts/set-exe-identity.mjs
 apps/desktop/scripts/stage-native-deps.mjs

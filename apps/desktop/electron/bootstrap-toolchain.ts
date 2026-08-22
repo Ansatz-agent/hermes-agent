@@ -6,16 +6,22 @@ import path from 'node:path'
 const MANIFEST_SCHEMA_VERSION = 1
 const SHA256_RE = /^[0-9a-f]{64}$/
 const VERSION_RE = /^[0-9]+(?:\.[0-9]+){1,3}$/
-const PLATFORM = 'darwin'
-const ARCH = 'arm64'
+type AuthToolchainTarget =
+  | { platform: 'darwin'; arch: 'arm64'; uvFile: 'uv.gz'; pythonFile: 'python.tar.gz' }
+  | { platform: 'win32'; arch: 'x64'; uvFile: 'uv.exe'; pythonFile: 'python-embed.zip' }
+
+const TARGETS: Record<string, AuthToolchainTarget> = {
+  'darwin-arm64': { platform: 'darwin', arch: 'arm64', uvFile: 'uv.gz', pythonFile: 'python.tar.gz' },
+  'win32-x64': { platform: 'win32', arch: 'x64', uvFile: 'uv.exe', pythonFile: 'python-embed.zip' }
+}
 
 type ToolchainAsset = { file: string; size: number; sha256: string }
 type VersionedToolchainAsset = ToolchainAsset & { version: string }
 
 export interface AuthToolchainManifest {
   schemaVersion: 1
-  platform: 'darwin'
-  arch: 'arm64'
+  platform: 'darwin' | 'win32'
+  arch: 'arm64' | 'x64'
   uv: VersionedToolchainAsset
   python: VersionedToolchainAsset
   requirements: ToolchainAsset
@@ -26,6 +32,7 @@ export interface BundledAuthToolchain {
   root: string
   manifest: AuthToolchainManifest
   manifestPath: string
+  uvAssetPath: string
   uvArchivePath: string
   pythonArchivePath: string
   requirementsPath: string
@@ -83,6 +90,16 @@ function parseVersionedAsset(value: unknown, expectedFile: string, label: string
   return asset
 }
 
+function targetFor(platform: unknown, arch: unknown): AuthToolchainTarget {
+  const target = TARGETS[`${String(platform)}-${String(arch)}`]
+
+  if (!target) {
+    throw new Error(`unsupported authentication toolchain target: ${String(platform)}-${String(arch)}`)
+  }
+
+  return target
+}
+
 function parseManifest(raw: unknown): AuthToolchainManifest {
   if (!raw || typeof raw !== 'object') {
     throw new Error('authentication toolchain manifest must be an object')
@@ -93,12 +110,10 @@ function parseManifest(raw: unknown): AuthToolchainManifest {
   if (value.schemaVersion !== MANIFEST_SCHEMA_VERSION) {
     throw new Error(`authentication toolchain schemaVersion must be ${MANIFEST_SCHEMA_VERSION}`)
   }
-  if (value.platform !== PLATFORM || value.arch !== ARCH) {
-    throw new Error('authentication toolchain target must be darwin-arm64')
-  }
+  const target = targetFor(value.platform, value.arch)
 
-  const uv = parseVersionedAsset(value.uv, 'uv.gz', 'uv')
-  const python = parseVersionedAsset(value.python, 'python.tar.gz', 'Python')
+  const uv = parseVersionedAsset(value.uv, target.uvFile, 'uv')
+  const python = parseVersionedAsset(value.python, target.pythonFile, 'Python')
   const requirements = parseAsset(value.requirements, 'auth-requirements.txt', 'requirements')
 
   if (!Array.isArray(value.wheels) || value.wheels.length === 0) {
@@ -119,8 +134,8 @@ function parseManifest(raw: unknown): AuthToolchainManifest {
 
   return {
     schemaVersion: 1,
-    platform: PLATFORM,
-    arch: ARCH,
+    platform: target.platform,
+    arch: target.arch,
     uv,
     python,
     requirements,
@@ -167,10 +182,11 @@ function assetPath(root: string, relativeFile: string): string {
   return resolved
 }
 
-export async function resolveBundledAuthToolchain(root: string): Promise<BundledAuthToolchain> {
-  if (process.platform !== PLATFORM || process.arch !== ARCH) {
-    throw new Error(`authentication toolchain requires ${PLATFORM}-${ARCH}`)
-  }
+export async function resolveBundledAuthToolchain(
+  root: string,
+  target = { platform: process.platform, arch: process.arch }
+): Promise<BundledAuthToolchain> {
+  const requestedTarget = targetFor(target.platform, target.arch)
 
   await requireRegularDirectory(root, 'authentication toolchain root')
   const manifestPath = path.join(root, 'manifest.json')
@@ -184,6 +200,11 @@ export async function resolveBundledAuthToolchain(root: string): Promise<Bundled
   }
 
   const manifest = parseManifest(raw)
+  if (manifest.platform !== requestedTarget.platform || manifest.arch !== requestedTarget.arch) {
+    throw new Error(
+      `authentication toolchain target mismatch: expected ${requestedTarget.platform}-${requestedTarget.arch}`
+    )
+  }
   const assets = [manifest.uv, manifest.python, manifest.requirements, ...manifest.wheels]
 
   for (const asset of assets) {
@@ -202,6 +223,7 @@ export async function resolveBundledAuthToolchain(root: string): Promise<Bundled
     root: path.resolve(root),
     manifest,
     manifestPath,
+    uvAssetPath: assetPath(root, manifest.uv.file),
     uvArchivePath: assetPath(root, manifest.uv.file),
     pythonArchivePath: assetPath(root, manifest.python.file),
     requirementsPath: assetPath(root, manifest.requirements.file),

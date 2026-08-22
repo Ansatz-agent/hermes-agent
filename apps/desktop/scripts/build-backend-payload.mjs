@@ -9,6 +9,7 @@
 import { createHash } from "node:crypto"
 import { execFileSync } from "node:child_process"
 import {
+  lstatSync,
   mkdirSync,
   readFileSync,
   renameSync,
@@ -19,6 +20,13 @@ import {
 import { join, resolve } from "node:path"
 
 import { isMain } from "./utils.mjs"
+import {
+  auditGitRuntimeArchive,
+  WINDOWS_GIT_RUNTIME_FILE,
+  WINDOWS_GIT_RUNTIME_PROVENANCE_FILE,
+  WINDOWS_PORTABLE_GIT_RELEASE_FILE,
+  WINDOWS_PORTABLE_GIT_RELEASE_SHA256
+} from "./prepare-windows-git-runtime.mjs"
 
 const MANIFEST_SCHEMA_VERSION = 1
 const INSTALL_STAMP_SCHEMA_VERSION = 1
@@ -29,6 +37,19 @@ const DESKTOP_ROOT = resolve(import.meta.dirname, "..")
 const REPO_ROOT = resolve(DESKTOP_ROOT, "..", "..")
 const DEFAULT_STAMP_PATH = join(DESKTOP_ROOT, "build", "install-stamp.json")
 const DEFAULT_OUTPUT_DIR = join(DESKTOP_ROOT, "build", "bootstrap")
+const DEFAULT_WINDOWS_GIT_RUNTIME_PATH = join(DESKTOP_ROOT, "build", "windows-prereqs", WINDOWS_GIT_RUNTIME_FILE)
+const DEFAULT_WINDOWS_GIT_RUNTIME_PROVENANCE_PATH = join(
+  DESKTOP_ROOT,
+  "build",
+  "package-input-evidence",
+  WINDOWS_GIT_RUNTIME_PROVENANCE_FILE
+)
+
+export function installerFileForPlatform(platform) {
+  if (platform === "darwin") return "install.sh"
+  if (platform === "win32") return "install.ps1"
+  throw new Error(`unsupported Desktop payload platform: ${platform}`)
+}
 
 export const RUNTIME_SCRIPT_FILES = Object.freeze([
   "desktop-update.ps1",
@@ -280,8 +301,18 @@ export function buildBackendPayload({
   outputDir = DEFAULT_OUTPUT_DIR,
   payloadPaths = PAYLOAD_PATHS,
   payloadExcludes = PAYLOAD_EXCLUDES,
-  requiredEntries = REQUIRED_ARCHIVE_ENTRIES
+  requiredEntries = REQUIRED_ARCHIVE_ENTRIES,
+  platform = "darwin",
+  gitRuntimePath = DEFAULT_WINDOWS_GIT_RUNTIME_PATH,
+  gitRuntimeProvenancePath = DEFAULT_WINDOWS_GIT_RUNTIME_PROVENANCE_PATH,
+  expectedPortableGitSourceSha256 = WINDOWS_PORTABLE_GIT_RELEASE_SHA256,
+  gitRuntimeAudit = auditGitRuntimeArchive
 } = {}) {
+  const installerFile = installerFileForPlatform(platform)
+  const effectiveExcludes = Array.from(new Set([
+    ...payloadExcludes,
+    `:(exclude)scripts/${installerFile}`
+  ]))
   const stamp = validateInstallStamp(readJson(stampPath, "install stamp"))
   const head = runGit(repoRoot, ["rev-parse", "HEAD"]).trim()
   if (head !== stamp.commit) {
@@ -292,11 +323,43 @@ export function buildBackendPayload({
     throw new Error("tracked working tree is dirty; distributable payloads require a clean checkout")
   }
 
+  let gitBashRuntime = null
+  if (platform === "win32") {
+    const runtimeStats = lstatSync(gitRuntimePath)
+    if (!runtimeStats.isFile() || runtimeStats.isSymbolicLink()) {
+      throw new Error("Bundled Git Bash runtime must be a regular non-link file")
+    }
+    const provenance = readJson(gitRuntimeProvenancePath, "Git Bash runtime provenance")
+    const runtimeSha256 = sha256File(gitRuntimePath)
+    const runtimeEntries = gitRuntimeAudit(gitRuntimePath)
+    if (
+      provenance?.schemaVersion !== 1 ||
+      provenance.source?.file !== WINDOWS_PORTABLE_GIT_RELEASE_FILE ||
+      provenance.source?.sha256 !== expectedPortableGitSourceSha256 ||
+      provenance.runtime?.file !== WINDOWS_GIT_RUNTIME_FILE ||
+      provenance.runtime?.size !== runtimeStats.size ||
+      provenance.runtime?.sha256 !== runtimeSha256 ||
+      provenance.runtime?.entries !== runtimeEntries.length
+    ) {
+      throw new Error("Bundled Git Bash runtime provenance, size, entries, or SHA-256 is invalid")
+    }
+    gitBashRuntime = {
+      file: WINDOWS_GIT_RUNTIME_FILE,
+      size: runtimeStats.size,
+      sha256: runtimeSha256,
+      entries: runtimeEntries.length,
+      source: {
+        file: WINDOWS_PORTABLE_GIT_RELEASE_FILE,
+        sha256: expectedPortableGitSourceSha256
+      }
+    }
+  }
+
   assertNoSelectedSymlinks(repoRoot, stamp.commit, payloadPaths)
   mkdirSync(outputDir, { recursive: true })
 
   const archivePath = join(outputDir, "hermes-backend.tar.gz")
-  const installerPath = join(outputDir, "install.sh")
+  const installerPath = join(outputDir, installerFile)
   const manifestPath = join(outputDir, "payload-manifest.json")
   const archiveTempPath = `${archivePath}.tmp-${process.pid}`
   const installerTempPath = `${installerPath}.tmp-${process.pid}`
@@ -310,7 +373,7 @@ export function buildBackendPayload({
       `--output=${archiveTempPath}`,
       stamp.commit,
       ...payloadPaths,
-      ...payloadExcludes
+      ...effectiveExcludes
     ])
 
     const entries = archiveEntries(archiveTempPath)
@@ -328,7 +391,7 @@ export function buildBackendPayload({
       throw new Error(`Backend payload contains forbidden entry ${forbidden}`)
     }
 
-    const installer = runGit(repoRoot, ["show", `${stamp.commit}:scripts/install.sh`], { encoding: null })
+    const installer = runGit(repoRoot, ["show", `${stamp.commit}:scripts/${installerFile}`], { encoding: null })
     writeFileSync(installerTempPath, installer)
 
     const archiveStat = statSync(archiveTempPath)
@@ -349,10 +412,11 @@ export function buildBackendPayload({
         sha256: archiveSha256
       },
       installer: {
-        file: "install.sh",
+        file: installerFile,
         size: installerStat.size,
         sha256: installerSha256
-      }
+      },
+      ...(gitBashRuntime ? { gitBashRuntime } : {})
     }
     writeFileSync(manifestTempPath, JSON.stringify(manifest, null, 2) + "\n", "utf8")
 

@@ -41,6 +41,7 @@ import path from 'node:path'
 import { prepareBundledSource, type PreparedBundledSource, resolveBundledPayload } from './bootstrap-payload'
 import { buildBootstrapEnvironment, runBootstrapProcess } from './bootstrap-process'
 import { resolveBundledAuthToolchain } from './bootstrap-toolchain'
+import { prepareWindowsPackagedAuthRuntime } from './package-runtime/windows-auth-toolchain'
 import { hiddenWindowsChildOptions } from './windows-child-options'
 
 const IS_WINDOWS = process.platform === 'win32'
@@ -585,6 +586,10 @@ function usesDomesticRuntimeMirrors({ bundledSource, bootstrapScope }) {
   return bundledSource === true && bootstrapScope === 'runtime'
 }
 
+function shouldPrepareWindowsPackagedAuthRuntime({ platform, bootstrapScope, bundledSource, bundledToolchain }) {
+  return platform === 'win32' && bootstrapScope === 'auth' && bundledSource === true && Boolean(bundledToolchain)
+}
+
 const LONG_PACKAGE_STAGES = new Set(['auth-prerequisites', 'python-auth-deps', 'python-deps', 'node-deps'])
 
 function progressHeartbeatMsForStage(stageName) {
@@ -611,6 +616,18 @@ function buildPinArgs(installStamp, { pinCommit = true } = {}) {
     args.push('-Branch', installStamp.branch)
   }
 
+  return args
+}
+
+function buildPowerShellBootstrapArgs({
+  installStamp,
+  activeRoot,
+  hermesHome,
+  pinCommit = true,
+  bundledSource = false
+}) {
+  const args = ['-HermesHome', hermesHome, '-InstallDir', activeRoot, ...buildPinArgs(installStamp, { pinCommit })]
+  if (bundledSource) args.push('-BundledSource', '-SkipComputerUse')
   return args
 }
 
@@ -683,7 +700,16 @@ async function fetchManifest({
           bootstrapScope
         })
       ]
-    : ['-Manifest', ...buildPinArgs(installStamp, { pinCommit })]
+    : [
+        '-Manifest',
+        ...buildPowerShellBootstrapArgs({
+          installStamp,
+          activeRoot,
+          hermesHome,
+          pinCommit,
+          bundledSource
+        })
+      ]
 
   const result = await (isPosix ? spawnBash : spawnPowerShell)(scriptPath, args, {
     abortSignal,
@@ -799,7 +825,19 @@ async function runStage({
           bootstrapScope
         })
       ]
-    : ['-Stage', stage.name, '-NonInteractive', '-Json', ...buildPinArgs(installStamp, { pinCommit })]
+    : [
+        '-Stage',
+        stage.name,
+        '-NonInteractive',
+        '-Json',
+        ...buildPowerShellBootstrapArgs({
+          installStamp,
+          activeRoot,
+          hermesHome,
+          pinCommit,
+          bundledSource
+        })
+      ]
 
   const result = await (isPosix ? spawnBash : spawnPowerShell)(scriptPath, args, {
     emit,
@@ -1087,6 +1125,40 @@ async function runBootstrap(opts) {
       })
     }
 
+    if (
+      shouldPrepareWindowsPackagedAuthRuntime({
+        platform: process.platform,
+        bootstrapScope,
+        bundledSource,
+        bundledToolchain
+      })
+    ) {
+      const stages = [
+        { name: 'auth-prerequisites', title: 'Prepare authentication runtime', category: 'auth', needs_user_input: false },
+        { name: 'python-auth-deps', title: 'Install authentication dependencies', category: 'auth', needs_user_input: false },
+        { name: 'auth-complete', title: 'Verify authentication runtime', category: 'auth', needs_user_input: false }
+      ]
+      emit({ type: 'manifest', stages, protocolVersion: 1, bootstrapScope })
+      for (const stage of stages) emit({ type: 'stage', name: stage.name, state: 'running' })
+
+      await prepareWindowsPackagedAuthRuntime({
+        toolchain: bundledToolchain,
+        activeRoot,
+        abortSignal,
+        emit
+      })
+
+      for (const stage of stages) emit({ type: 'stage', name: stage.name, state: 'succeeded' })
+      if (sourceTransaction) await sourceTransaction.finalize()
+      const marker = {
+        pinnedCommit: payload.manifest.commit,
+        pinnedBranch: payload.manifest.branch,
+        bootstrapScope
+      }
+      emit({ type: 'complete', marker })
+      return { ok: true, marker }
+    }
+
     // 1. Resolve the platform installer.
     const scriptInfo = await resolveInstallScript({
       installStamp,
@@ -1252,6 +1324,7 @@ async function runBootstrap(opts) {
 
 export {
   buildPinArgs,
+  buildPowerShellBootstrapArgs,
   buildPosixPinArgs,
   cachedScriptPath,
   hasExistingGitCheckout,
@@ -1266,5 +1339,6 @@ export {
   resolveLocalInstallScript,
   resolveMarkerPinnedCommit,
   runBootstrap,
+  shouldPrepareWindowsPackagedAuthRuntime,
   usesDomesticRuntimeMirrors
 }

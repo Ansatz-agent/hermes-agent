@@ -92,9 +92,41 @@ test('resolveBundledAuthToolchain rejects path traversal and the wrong target', 
     )
     wrongManifest.arch = 'x64'
     fs.writeFileSync(path.join(wrongTarget.root, 'manifest.json'), JSON.stringify(wrongManifest))
-    await assert.rejects(resolveBundledAuthToolchain(wrongTarget.root), /target must be darwin-arm64/)
+    await assert.rejects(resolveBundledAuthToolchain(wrongTarget.root), /unsupported authentication toolchain target/)
   } finally {
     fs.rmSync(traversal.root, { recursive: true, force: true })
     fs.rmSync(wrongTarget.root, { recursive: true, force: true })
+  }
+})
+
+test('resolveBundledAuthToolchain accepts the verified Windows x64 asset layout only for Windows x64', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-auth-toolchain-win32-'))
+
+  try {
+    fs.mkdirSync(path.join(root, 'wheelhouse'))
+    fs.writeFileSync(path.join(root, 'uv.exe'), 'fixture PE32+ x64 uv\n')
+    fs.writeFileSync(path.join(root, 'python-embed.zip'), 'fixture CPython embed archive\n')
+    fs.writeFileSync(path.join(root, 'auth-requirements.txt'), 'fixture requirements\n')
+    fs.writeFileSync(path.join(root, 'wheelhouse', 'keyring-25.7.0-py3-none-any.whl'), 'fixture wheel\n')
+    const manifest = {
+      schemaVersion: 1,
+      platform: 'win32',
+      arch: 'x64',
+      uv: asset(root, 'uv.exe', '0.12.5'),
+      python: asset(root, 'python-embed.zip', '3.13.15'),
+      requirements: asset(root, 'auth-requirements.txt'),
+      wheels: [asset(root, 'wheelhouse/keyring-25.7.0-py3-none-any.whl')]
+    }
+    fs.writeFileSync(path.join(root, 'manifest.json'), JSON.stringify(manifest))
+
+    const resolved = await resolveBundledAuthToolchain(root, { platform: 'win32', arch: 'x64' })
+    assert.equal(resolved.uvAssetPath, path.join(root, 'uv.exe'))
+    assert.equal(resolved.pythonArchivePath, path.join(root, 'python-embed.zip'))
+    await assert.rejects(
+      resolveBundledAuthToolchain(root, { platform: 'darwin', arch: 'arm64' }),
+      /target mismatch/
+    )
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
   }
 })

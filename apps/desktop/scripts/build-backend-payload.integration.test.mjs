@@ -22,6 +22,7 @@ function makeRepository(extraFiles = {}) {
   fs.mkdirSync(path.join(repoRoot, 'scripts'), { recursive: true })
   fs.writeFileSync(path.join(repoRoot, 'payload.txt'), 'committed payload\n')
   fs.writeFileSync(path.join(repoRoot, 'scripts', 'install.sh'), '#!/bin/sh\nexit 0\n')
+  fs.writeFileSync(path.join(repoRoot, 'scripts', 'install.ps1'), 'exit 0\r\n')
   for (const [relativePath, contents] of Object.entries(extraFiles)) {
     const target = path.join(repoRoot, relativePath)
     fs.mkdirSync(path.dirname(target), { recursive: true })
@@ -68,6 +69,47 @@ test('backend payload is generated only from the committed tree with matching ch
     assert.equal(result.manifest.installer.sha256, sha256(installerPath))
     assert.deepEqual(result.entries, ['hermes-agent/', 'hermes-agent/payload.txt'])
     assert.equal(result.entries.some(entry => entry.includes('untracked-secret')), false)
+  } finally {
+    fs.rmSync(fixture.repoRoot, { recursive: true, force: true })
+  }
+})
+
+test('Windows backend payload ships the committed PowerShell installer', () => {
+  const fixture = makeRepository()
+  try {
+    const gitRuntimePath = path.join(fixture.repoRoot, 'git-bash-runtime.tar.xz')
+    const gitRuntimeProvenancePath = path.join(fixture.repoRoot, 'git-bash-runtime.provenance.json')
+    fs.writeFileSync(gitRuntimePath, 'fixture Git Bash runtime')
+    fs.writeFileSync(gitRuntimeProvenancePath, JSON.stringify({
+      schemaVersion: 1,
+      source: {
+        file: 'PortableGit-2.55.0.3-64-bit.7z.exe',
+        sha256: 'ab00566336b5472120f9a52d34f2e79c5406535792acb0548001ffd0bd090e5d'
+      },
+      runtime: {
+        file: 'git-bash-runtime.tar.xz',
+        size: fs.statSync(gitRuntimePath).size,
+        sha256: sha256(gitRuntimePath),
+        entries: 1
+      }
+    }))
+    const result = buildBackendPayload({
+      repoRoot: fixture.repoRoot,
+      stampPath: fixture.stampPath,
+      outputDir: fixture.outputDir,
+      payloadPaths: ['payload.txt'],
+      payloadExcludes: [],
+      requiredEntries: ['hermes-agent/payload.txt'],
+      platform: 'win32',
+      gitRuntimePath,
+      gitRuntimeProvenancePath,
+      gitRuntimeAudit: () => ['cmd/git.exe']
+    })
+
+    assert.equal(result.manifest.installer.file, 'install.ps1')
+    assert.equal(fs.readFileSync(path.join(fixture.outputDir, 'install.ps1'), 'utf8'), 'exit 0\r\n')
+    assert.equal(fs.existsSync(path.join(fixture.outputDir, 'install.sh')), false)
+    assert.equal(result.manifest.gitBashRuntime.sha256, sha256(gitRuntimePath))
   } finally {
     fs.rmSync(fixture.repoRoot, { recursive: true, force: true })
   }

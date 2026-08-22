@@ -127,13 +127,72 @@ test('buildAuthToolchain rejects links and the wrong target', () => {
     assert.throws(() => buildAuthToolchain(buildOptions(fixture)), /regular non-link file/)
     fs.unlinkSync(linkedWheel)
     assert.throws(
-      () => buildAuthToolchain(buildOptions(fixture, { arch: 'x64' })),
-      /target must be darwin-arm64/
+      () => buildAuthToolchain(buildOptions(fixture, { arch: 'ia32' })),
+      /unsupported authentication toolchain target/
     )
     assert.throws(
       () => buildAuthToolchain(buildOptions(fixture, { platform: 'linux' })),
-      /target must be darwin-arm64/
+      /unsupported authentication toolchain target/
     )
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test('buildAuthToolchain writes a Windows x64 layout without a runtime download', () => {
+  const fixture = makeFixture()
+  const windowsUv = path.join(path.dirname(fixture.uvPath), 'uv.exe')
+  const windowsPython = path.join(path.dirname(fixture.pythonArchivePath), 'python-embed.zip')
+
+  try {
+    fs.writeFileSync(windowsUv, 'fixture win32 x64 uv executable\n')
+    fs.writeFileSync(windowsPython, 'fixture CPython 3.13.15 embed archive\n')
+    const result = buildAuthToolchain(
+      buildOptions(fixture, {
+        platform: 'win32',
+        arch: 'x64',
+        uvPath: windowsUv,
+        pythonArchivePath: windowsPython,
+        pythonVersion: '3.13.15'
+      })
+    )
+
+    assert.equal(result.manifest.platform, 'win32')
+    assert.equal(result.manifest.arch, 'x64')
+    assert.equal(result.manifest.uv.file, 'uv.exe')
+    assert.equal(result.manifest.python.file, 'python-embed.zip')
+    assert.equal(result.manifest.uv.version, '0.12.5')
+    assert.equal(result.manifest.python.version, '3.13.15')
+    assert.deepEqual(fs.readFileSync(path.join(fixture.outputDir, 'uv.exe')), fs.readFileSync(windowsUv))
+    assert.deepEqual(verifyAuthToolchain(fixture.outputDir), result.manifest)
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test('Windows toolchain rejects a non-Windows wheel before publishing', () => {
+  const fixture = makeFixture()
+
+  try {
+    fs.rmSync(fixture.wheelhousePath, { recursive: true, force: true })
+    fs.mkdirSync(fixture.wheelhousePath)
+    fs.writeFileSync(
+      path.join(fixture.wheelhousePath, 'keyring-25.7.0-cp313-cp313-macosx_11_0_arm64.whl'),
+      'wrong platform\n'
+    )
+
+    assert.throws(
+      () =>
+        buildAuthToolchain(
+          buildOptions(fixture, {
+            platform: 'win32',
+            arch: 'x64',
+            pythonVersion: '3.13.15'
+          })
+        ),
+      /not Windows x64 compatible/
+    )
+    assert.equal(fs.existsSync(fixture.outputDir), false)
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true })
   }

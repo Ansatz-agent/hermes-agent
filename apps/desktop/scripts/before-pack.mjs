@@ -61,37 +61,24 @@
  *    Keeping this in the platform-aware hook means generic development builds
  *    and Windows/Linux packages do not inherit the macOS clean-commit guard.
  */
-import { existsSync, rmSync, renameSync } from 'node:fs'
+import { existsSync, lstatSync, rmSync, renameSync } from 'node:fs'
 import path from 'node:path'
 import { Arch } from 'electron-builder'
-import { buildAuthToolchainFromEnvironment } from './build-auth-toolchain.mjs'
-import { buildBackendPayload } from './build-backend-payload.mjs'
+import { packageInputPlan } from './prepare-package-inputs.mjs'
 import { stageNodePty, stageGetWindows } from './stage-native-deps.mjs'
 
-let bundledMacPayloadPromise = null
-
-export async function ensureBundledMacPayloads(
-  platform,
-  { buildBackend = buildBackendPayload, buildAuth = buildAuthToolchainFromEnvironment } = {}
-) {
-  if (platform !== 'darwin') {
-    return false
+export function verifyPreparedPackageInputs(platform, arch, desktopRoot = path.resolve(import.meta.dirname, '..')) {
+  if (platform !== 'darwin' && platform !== 'win32') return false
+  const repoRoot = path.resolve(desktopRoot, '../..')
+  const plan = packageInputPlan({ platform, arch, repoRoot, desktopRoot })
+  for (const relativePath of plan.outputs) {
+    const filePath = path.join(desktopRoot, relativePath)
+    const stats = lstatSync(filePath)
+    if (!stats.isFile() || stats.isSymbolicLink() || stats.size <= 0) {
+      throw new Error(`prepared package input is invalid: ${relativePath}`)
+    }
   }
-
-  // electron-builder can invoke beforePack once per architecture. Share one
-  // promise so multi-arch macOS builds cannot race while replacing the same
-  // three bootstrap resources.
-  if (!bundledMacPayloadPromise) {
-    bundledMacPayloadPromise = Promise.resolve().then(() => Promise.all([buildBackend(), buildAuth()]))
-  }
-
-  await bundledMacPayloadPromise
-
   return true
-}
-
-export function resetBundledBackendPayloadForTests() {
-  bundledMacPayloadPromise = null
 }
 
 export function cleanStaleAppOutDir(appOutDir) {
@@ -146,11 +133,6 @@ export default async function beforePack(context) {
   const appOutDir = context && context.appOutDir
   const platformName = context && context.electronPlatformName
 
-  // The runtime payload is a macOS distribution resource. Keeping this out of
-  // generic `npm run build` preserves dirty developer builds and leaves the
-  // Windows/Linux packaging paths unchanged.
-  await ensureBundledMacPayloads(platformName)
-
   try {
     // Windows: keep the previous working build as rollback material for the
     // post-build integrity gate (#69179) instead of destroying it. Falls
@@ -179,6 +161,9 @@ export default async function beforePack(context) {
             'lipo-merge x64/arm64 .node files manually if you need a true universal build.'
         )
       } else {
+        if (platform === 'darwin' || platform === 'win32') {
+          verifyPreparedPackageInputs(platform, archName)
+        }
         await stageNodePty({ platform, arch: archName })
         console.log(`[before-pack] re-staged node-pty for target ${platform}-${archName}`)
       }

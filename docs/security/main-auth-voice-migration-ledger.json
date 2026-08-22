@@ -2159,6 +2159,16 @@
     },
     {
       "match": "exact",
+      "path": "apps/desktop/electron/package-runtime/windows-auth-toolchain.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/package-runtime/windows-auth-toolchain.ts",
+      "owner": "package-windows"
+    },
+    {
+      "match": "exact",
       "path": "apps/desktop/electron/preload.ts",
       "owner": "common-product"
     },
@@ -2279,6 +2289,11 @@
     },
     {
       "match": "exact",
+      "path": "apps/desktop/scripts/before-pack.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
       "path": "apps/desktop/scripts/build-auth-toolchain.mjs",
       "owner": "package-shared"
     },
@@ -2319,8 +2334,23 @@
     },
     {
       "match": "exact",
+      "path": "apps/desktop/scripts/prepare-package-inputs.mjs",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/prepare-package-inputs.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
       "path": "apps/desktop/scripts/prepare-windows-git-runtime.mjs",
       "owner": "package-windows"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/windows-auth-toolchain.integration.test.mjs",
+      "owner": "test-evidence"
     },
     {
       "match": "exact",

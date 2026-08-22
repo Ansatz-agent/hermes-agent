@@ -8,6 +8,7 @@ import { test } from 'vitest'
 import {
   buildPinArgs,
   buildPosixPinArgs,
+  buildPowerShellBootstrapArgs,
   cachedScriptPath,
   hasExistingGitCheckout,
   installedAgentInstallScript,
@@ -17,6 +18,7 @@ import {
   resolveInstallScript,
   resolveMarkerPinnedCommit,
   runBootstrap,
+  shouldPrepareWindowsPackagedAuthRuntime,
   usesDomesticRuntimeMirrors
 } from './bootstrap-runner'
 
@@ -97,6 +99,29 @@ test('fresh bootstrap args include the packaged commit pin', () => {
   )
 })
 
+test('Windows bundled runtime args keep the verified source and Git runtime local', () => {
+  assert.deepEqual(
+    buildPowerShellBootstrapArgs({
+      installStamp: { commit: 'a'.repeat(40), branch: 'main' },
+      activeRoot: 'C:\\Users\\tester\\AppData\\Local\\hermes\\hermes-agent',
+      hermesHome: 'C:\\Users\\tester\\AppData\\Local\\hermes',
+      bundledSource: true
+    }),
+    [
+      '-HermesHome',
+      'C:\\Users\\tester\\AppData\\Local\\hermes',
+      '-InstallDir',
+      'C:\\Users\\tester\\AppData\\Local\\hermes\\hermes-agent',
+      '-Commit',
+      'a'.repeat(40),
+      '-Branch',
+      'main',
+      '-BundledSource',
+      '-SkipComputerUse'
+    ]
+  )
+})
+
 test('auth bootstrap args select only the installer auth scope', () => {
   assert.deepEqual(
     buildPosixPinArgs({
@@ -149,6 +174,36 @@ test('domestic mirrors are limited to the post-login bundled runtime scope', () 
   assert.equal(usesDomesticRuntimeMirrors({ bundledSource: true, bootstrapScope: 'runtime' }), true)
   assert.equal(usesDomesticRuntimeMirrors({ bundledSource: true, bootstrapScope: 'auth' }), false)
   assert.equal(usesDomesticRuntimeMirrors({ bundledSource: false, bootstrapScope: 'runtime' }), false)
+})
+
+test('Windows packaged authentication uses only the verified local toolchain', () => {
+  assert.equal(
+    shouldPrepareWindowsPackagedAuthRuntime({
+      platform: 'win32',
+      bootstrapScope: 'auth',
+      bundledSource: true,
+      bundledToolchain: { root: 'C:\\Hermes\\auth-toolchain' }
+    }),
+    true
+  )
+  assert.equal(
+    shouldPrepareWindowsPackagedAuthRuntime({
+      platform: 'win32',
+      bootstrapScope: 'runtime',
+      bundledSource: true,
+      bundledToolchain: { root: 'C:\\Hermes\\auth-toolchain' }
+    }),
+    false
+  )
+  assert.equal(
+    shouldPrepareWindowsPackagedAuthRuntime({
+      platform: 'win32',
+      bootstrapScope: 'auth',
+      bundledSource: false,
+      bundledToolchain: null
+    }),
+    false
+  )
 })
 
 test('progress heartbeats are limited to known long package stages', () => {
