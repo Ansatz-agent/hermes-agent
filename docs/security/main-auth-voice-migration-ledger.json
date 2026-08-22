@@ -55,7 +55,8 @@
   ],
   "post_tip_commits": [
     "a6e8792b0c701287eecee97c692956e10a35b5d8",
-    "11bcf8976dc3f9511b4d021da686b4236b52e68c"
+    "11bcf8976dc3f9511b4d021da686b4236b52e68c",
+    "ff25f03ef33b7943269f5f8b62066040277b2186"
   ],
   "owner_enum": [
     "common-product",
@@ -1963,6 +1964,11 @@
     },
     {
       "match": "exact",
+      "path": "apps/desktop/electron/task4-auth-runtime.contract.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
       "path": "apps/desktop/electron/backend-ownership.test.ts",
       "owner": "test-evidence"
     },
@@ -2415,6 +2421,11 @@
       "match": "exact",
       "path": "apps/desktop/src/components/auth-gate.tsx",
       "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/components/task4-auth-ui.contract.test.tsx",
+      "owner": "test-evidence"
     },
     {
       "match": "exact",
