@@ -21,6 +21,8 @@ def _run_node_deps_stage(
     tmp_path: Path,
     *,
     fail_directory: str | None,
+    bundled_runtime: bool = False,
+    fail_playwright: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], Path, list[str]]:
     install_dir = tmp_path / "install"
     tui_dir = install_dir / "ui-tui"
@@ -28,6 +30,7 @@ def _run_node_deps_stage(
     hermes_home = tmp_path / "home"
     managed_bin = hermes_home / "bin"
     npm_calls = tmp_path / "npm-calls"
+    npx_calls = tmp_path / "npx-calls"
 
     tui_dir.mkdir(parents=True)
     bin_dir.mkdir()
@@ -56,6 +59,17 @@ fi
 exit 0
 """,
     )
+    _write_executable(
+        bin_dir / "npx",
+        """#!/bin/sh
+printf '%s\n' "$*" >> "$NPX_CALLS"
+if [ "$NPX_FAIL" = "1" ]; then
+    echo "simulated Playwright download failure" >&2
+    exit 42
+fi
+exit 0
+""",
+    )
     _write_executable(managed_bin / "uv", "#!/bin/sh\necho 'uv probe'\n")
 
     env = os.environ.copy()
@@ -65,26 +79,42 @@ exit 0
             "HERMES_INSTALL_DIR": str(install_dir),
             "NPM_CALLS": str(npm_calls),
             "NPM_FAIL_DIRECTORY": fail_directory or "",
+            "NPX_CALLS": str(npx_calls),
+            "NPX_FAIL": "1" if fail_playwright else "0",
             "PATH": f"{bin_dir}:{env['PATH']}",
         }
     )
+    if bundled_runtime:
+        env.update(
+            {
+                "UV_DEFAULT_INDEX": "https://mirrors.ustc.edu.cn/pypi/simple",
+                "HERMES_UV_FALLBACK_INDEX": "https://pypi.tuna.tsinghua.edu.cn/simple",
+                "NPM_CONFIG_REGISTRY": "https://registry.npmmirror.com",
+                "HERMES_NODE_MIRROR": "https://registry.npmmirror.com/-/binary/node/",
+                "PLAYWRIGHT_DOWNLOAD_HOST": "https://registry.npmmirror.com/-/binary/playwright",
+            }
+        )
+    stage_args = [
+        "bash",
+        str(INSTALL_SH),
+        "--stage",
+        "node-deps",
+        "--json",
+        "--skip-computer-use",
+    ]
+    if bundled_runtime:
+        stage_args.extend(["--bundled-source", "--bootstrap-scope", "runtime"])
+    else:
+        stage_args.append("--skip-browser")
     proc = subprocess.run(
-        [
-            "bash",
-            str(INSTALL_SH),
-            "--stage",
-            "node-deps",
-            "--json",
-            "--skip-browser",
-            "--skip-computer-use",
-        ],
+        stage_args,
         cwd=REPO_ROOT,
         env=env,
         capture_output=True,
         text=True,
         check=False,
     )
-    calls = npm_calls.read_text(encoding="utf-8").splitlines()
+    calls = npm_calls.read_text(encoding="utf-8").splitlines() if npm_calls.exists() else []
     return proc, install_dir, calls
 
 
@@ -143,3 +173,21 @@ def test_node_dependency_success_remains_successful(tmp_path: Path) -> None:
     assert calls == [str(install_dir), str(install_dir / "ui-tui")]
     assert "Node.js dependencies installed" in proc.stdout
     assert "TUI dependencies installed" in proc.stdout
+    assert "Browser engine setup complete" not in proc.stdout
+
+
+def test_bundled_runtime_playwright_failure_is_fatal_and_never_reports_success(
+    tmp_path: Path,
+) -> None:
+    proc, install_dir, calls = _run_node_deps_stage(
+        tmp_path,
+        fail_directory=None,
+        bundled_runtime=True,
+        fail_playwright=True,
+    )
+
+    assert proc.returncode != 0
+    assert _stage_result(proc)["ok"] is False
+    assert calls == [str(install_dir)], proc.stdout + proc.stderr
+    assert "Browser engine setup complete" not in proc.stdout
+    assert "Playwright browser installation failed" in proc.stdout

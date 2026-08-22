@@ -17,7 +17,7 @@ PYTHON_PRIMARY = "https://mirrors.ustc.edu.cn/pypi/simple"
 PYTHON_FALLBACK = "https://pypi.tuna.tsinghua.edu.cn/simple"
 NPM_REGISTRY = "https://registry.npmmirror.com"
 NODE_MIRROR = "https://registry.npmmirror.com/-/binary/node/"
-PLAYWRIGHT_MIRROR = "https://registry.npmmirror.com/-/binary/playwright/"
+PLAYWRIGHT_MIRROR = "https://registry.npmmirror.com/-/binary/playwright"
 
 
 def _write_toolchain(tmp_path: Path, uv_body: str) -> Path:

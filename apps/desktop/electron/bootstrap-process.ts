@@ -19,7 +19,7 @@ export const DOMESTIC_BOOTSTRAP_MIRRORS = Object.freeze({
   pythonFallback: 'https://pypi.tuna.tsinghua.edu.cn/simple',
   npmRegistry: 'https://registry.npmmirror.com',
   nodeBase: 'https://registry.npmmirror.com/-/binary/node/',
-  playwrightBase: 'https://registry.npmmirror.com/-/binary/playwright/'
+  playwrightBase: 'https://registry.npmmirror.com/-/binary/playwright'
 })
 
 const SAFE_ENV_KEYS = new Set([

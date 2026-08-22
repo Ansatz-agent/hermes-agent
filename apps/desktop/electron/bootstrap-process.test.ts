@@ -62,13 +62,14 @@ test('buildBootstrapEnvironment replaces hostile package redirects with the fixe
     pythonFallback: 'https://pypi.tuna.tsinghua.edu.cn/simple',
     npmRegistry: 'https://registry.npmmirror.com',
     nodeBase: 'https://registry.npmmirror.com/-/binary/node/',
-    playwrightBase: 'https://registry.npmmirror.com/-/binary/playwright/'
+    playwrightBase: 'https://registry.npmmirror.com/-/binary/playwright'
   })
   assert.equal(env.UV_DEFAULT_INDEX, DOMESTIC_BOOTSTRAP_MIRRORS.pythonPrimary)
   assert.equal(env.HERMES_UV_FALLBACK_INDEX, DOMESTIC_BOOTSTRAP_MIRRORS.pythonFallback)
   assert.equal(env.NPM_CONFIG_REGISTRY, DOMESTIC_BOOTSTRAP_MIRRORS.npmRegistry)
   assert.equal(env.HERMES_NODE_MIRROR, DOMESTIC_BOOTSTRAP_MIRRORS.nodeBase)
   assert.equal(env.PLAYWRIGHT_DOWNLOAD_HOST, DOMESTIC_BOOTSTRAP_MIRRORS.playwrightBase)
+  assert.equal(`${env.PLAYWRIGHT_DOWNLOAD_HOST}/builds/example.zip`.includes('//builds/'), false)
   assert.equal(JSON.stringify(env).includes('attacker.invalid'), false)
 })
 

@@ -178,7 +178,7 @@ def test_bundled_runtime_hash_sync_failure_never_installs_the_local_project(tmp_
             "HERMES_UV_FALLBACK_INDEX": "https://pypi.tuna.tsinghua.edu.cn/simple",
             "NPM_CONFIG_REGISTRY": "https://registry.npmmirror.com",
             "HERMES_NODE_MIRROR": "https://registry.npmmirror.com/-/binary/node/",
-            "PLAYWRIGHT_DOWNLOAD_HOST": "https://registry.npmmirror.com/-/binary/playwright/",
+            "PLAYWRIGHT_DOWNLOAD_HOST": "https://registry.npmmirror.com/-/binary/playwright",
         }
     )
 
