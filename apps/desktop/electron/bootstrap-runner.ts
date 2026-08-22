@@ -532,6 +532,7 @@ function spawnPowerShell(
     hardTimeoutMs,
     idleTimeoutMs,
     killGraceMs,
+    progressHeartbeatMs,
     useDomesticRuntimeMirrors
   }: any = {}
 ) {
@@ -546,6 +547,7 @@ function spawnPowerShell(
     hardTimeoutMs,
     idleTimeoutMs,
     killGraceMs,
+    progressHeartbeatMs,
     stageName
   })
 }
@@ -561,6 +563,7 @@ function spawnBash(
     hardTimeoutMs,
     idleTimeoutMs,
     killGraceMs,
+    progressHeartbeatMs,
     useDomesticRuntimeMirrors
   }: any = {}
 ) {
@@ -573,12 +576,19 @@ function spawnBash(
     hardTimeoutMs,
     idleTimeoutMs,
     killGraceMs,
+    progressHeartbeatMs,
     stageName
   })
 }
 
 function usesDomesticRuntimeMirrors({ bundledSource, bootstrapScope }) {
   return bundledSource === true && bootstrapScope === 'runtime'
+}
+
+const LONG_PACKAGE_STAGES = new Set(['auth-prerequisites', 'python-auth-deps', 'python-deps', 'node-deps'])
+
+function progressHeartbeatMsForStage(stageName) {
+  return LONG_PACKAGE_STAGES.has(stageName) ? 10_000 : undefined
 }
 
 // ---------------------------------------------------------------------------
@@ -798,7 +808,9 @@ async function runStage({
     hermesHome,
     hardTimeoutMs: processTimeout.hardTimeoutMs,
     idleTimeoutMs,
-    killGraceMs
+    killGraceMs,
+    progressHeartbeatMs: progressHeartbeatMsForStage(stage.name),
+    useDomesticRuntimeMirrors: usesDomesticRuntimeMirrors({ bundledSource, bootstrapScope })
   })
 
   const durationMs = Date.now() - startedAt
@@ -1059,6 +1071,7 @@ async function runBootstrap(opts) {
     const payload = bundledBootstrapRoot
       ? await resolveBundledPayload({ bootstrapRoot: bundledBootstrapRoot, installStamp })
       : null
+
     const bundledToolchain = payload
       ? await resolveBundledAuthToolchain(path.join(bundledBootstrapRoot, 'auth-toolchain'))
       : null
@@ -1247,6 +1260,7 @@ export {
   isPinnedCommit,
   // Exposed for testability
   parseStageResult,
+  progressHeartbeatMsForStage,
   resolveCheckoutHead,
   resolveInstallScript,
   resolveLocalInstallScript,

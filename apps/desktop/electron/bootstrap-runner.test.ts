@@ -13,6 +13,7 @@ import {
   installedAgentInstallScript,
   installRefForStamp,
   isPinnedCommit,
+  progressHeartbeatMsForStage,
   resolveInstallScript,
   resolveMarkerPinnedCommit,
   runBootstrap,
@@ -148,6 +149,16 @@ test('domestic mirrors are limited to the post-login bundled runtime scope', () 
   assert.equal(usesDomesticRuntimeMirrors({ bundledSource: true, bootstrapScope: 'runtime' }), true)
   assert.equal(usesDomesticRuntimeMirrors({ bundledSource: true, bootstrapScope: 'auth' }), false)
   assert.equal(usesDomesticRuntimeMirrors({ bundledSource: false, bootstrapScope: 'runtime' }), false)
+})
+
+test('progress heartbeats are limited to known long package stages', () => {
+  for (const stage of ['auth-prerequisites', 'python-auth-deps', 'python-deps', 'node-deps']) {
+    assert.ok((progressHeartbeatMsForStage(stage) || 0) > 0)
+  }
+
+  for (const stage of ['repository', 'venv', 'path', 'config', 'complete']) {
+    assert.equal(progressHeartbeatMsForStage(stage), undefined)
+  }
 })
 
 test('existing-checkout bootstrap args keep branch but skip the packaged commit pin', () => {

@@ -108,6 +108,49 @@ test('runBootstrapProcess turns an idle child into a terminal idle timeout', asy
   assert.ok(Date.now() - startedAt < 1_000)
 })
 
+test('runBootstrapProcess heartbeat keeps a silent active package stage alive', async () => {
+  const events: any[] = []
+
+  const result = await runBootstrapProcess({
+    command: process.execPath,
+    args: ['-e', 'setTimeout(() => process.exit(0), 220)'],
+    emit: event => events.push(event),
+    stageName: 'python-deps',
+    hardTimeoutMs: 500,
+    idleTimeoutMs: 80,
+    killGraceMs: 50,
+    progressHeartbeatMs: 30
+  })
+
+  assert.equal(result.termination, null)
+  assert.ok(
+    events.some(
+      event =>
+        event.type === 'progress' &&
+        event.stage === 'python-deps' &&
+        event.completed === 0 &&
+        event.total === null &&
+        event.unit === 'items' &&
+        event.label === 'python-deps' &&
+        typeof event.updatedAt === 'number'
+    )
+  )
+})
+
+test('runBootstrapProcess heartbeat never weakens the hard deadline', async () => {
+  const result = await runBootstrapProcess({
+    command: process.execPath,
+    args: ['-e', 'setInterval(() => {}, 1_000)'],
+    stageName: 'node-deps',
+    hardTimeoutMs: 150,
+    idleTimeoutMs: 80,
+    killGraceMs: 50,
+    progressHeartbeatMs: 30
+  })
+
+  assert.equal(result.termination, 'hard-timeout')
+})
+
 test('runBootstrapProcess enforces a hard deadline even while output is active', async () => {
   const result = await runBootstrapProcess({
     command: process.execPath,

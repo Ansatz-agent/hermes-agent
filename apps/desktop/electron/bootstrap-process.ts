@@ -79,6 +79,7 @@ type RunBootstrapProcessOptions = {
   hardTimeoutMs?: number
   idleTimeoutMs?: number
   killGraceMs?: number
+  progressHeartbeatMs?: number
   stageName?: string
 }
 
@@ -157,6 +158,7 @@ export function runBootstrapProcess(options: RunBootstrapProcessOptions): Promis
     hardTimeoutMs = DEFAULT_HARD_TIMEOUT_MS,
     idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS,
     killGraceMs = DEFAULT_KILL_GRACE_MS,
+    progressHeartbeatMs,
     stageName
   } = options
 
@@ -190,6 +192,7 @@ export function runBootstrapProcess(options: RunBootstrapProcessOptions): Promis
     let settled = false
     let killTimer: ReturnType<typeof setTimeout> | null = null
     let idleTimer: ReturnType<typeof setTimeout> | null = null
+    let progressTimer: ReturnType<typeof setInterval> | null = null
 
     const parseStructuredProgress = (line: string): BootstrapProcessEvent | null => {
       if (!line.startsWith(STRUCTURED_PROGRESS_PREFIX) || !stageName) {
@@ -283,6 +286,12 @@ export function runBootstrapProcess(options: RunBootstrapProcessOptions): Promis
       }
 
       termination = reason
+
+      if (progressTimer) {
+        clearInterval(progressTimer)
+        progressTimer = null
+      }
+
       signalProcessTree('SIGTERM')
       killTimer = setTimeout(() => signalProcessTree('SIGKILL'), Math.max(0, killGraceMs))
     }
@@ -300,6 +309,25 @@ export function runBootstrapProcess(options: RunBootstrapProcessOptions): Promis
 
     abortSignal?.addEventListener('abort', onAbort, { once: true })
     resetIdleTimer()
+
+    if (progressHeartbeatMs && progressHeartbeatMs > 0 && stageName) {
+      progressTimer = setInterval(() => {
+        if (settled || termination) {
+          return
+        }
+
+        emit?.({
+          type: 'progress',
+          stage: stageName,
+          completed: 0,
+          total: null,
+          unit: 'items',
+          label: stageName,
+          updatedAt: Date.now()
+        })
+        resetIdleTimer()
+      }, Math.max(1, progressHeartbeatMs))
+    }
 
     child.stdout.on('data', (value: Buffer | string) => {
       const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value)
@@ -328,6 +356,8 @@ export function runBootstrapProcess(options: RunBootstrapProcessOptions): Promis
 
       if (killTimer) {clearTimeout(killTimer)}
 
+      if (progressTimer) {clearInterval(progressTimer)}
+
       abortSignal?.removeEventListener('abort', onAbort)
       reject(error)
     })
@@ -343,6 +373,8 @@ export function runBootstrapProcess(options: RunBootstrapProcessOptions): Promis
       if (idleTimer) {clearTimeout(idleTimer)}
 
       if (killTimer) {clearTimeout(killTimer)}
+
+      if (progressTimer) {clearInterval(progressTimer)}
 
       abortSignal?.removeEventListener('abort', onAbort)
       emitLine(stdoutLine, 'stdout')
