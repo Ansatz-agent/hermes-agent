@@ -1,0 +1,9 @@
+name: profile_memory
+version: 0.2.0
+description: "Local user-profile and work-preference directories with main-model extraction and BGE category routing."
+pip_dependencies:
+  - "llama-cpp-python>=0.3.35,<0.4"
+requires_env: []
+hooks:
+  - on_session_end
+  - on_pre_compress

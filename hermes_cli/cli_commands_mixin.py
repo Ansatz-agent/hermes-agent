@@ -765,18 +765,48 @@ class CLICommandsMixin:
         self.new_session()
         _cprint(f"{_DIM}Session reset. New tool configuration is active.{_RST}")
 
-    def _handle_profile_command(self):
-        """Display active profile name and home directory."""
-        from hermes_cli.slash_exec import CommandContext, execute_command
+    def _handle_profile_command(self, cmd_original: str = "/profile"):
+        """Browse user preferences, or show the runtime profile explicitly."""
+        from hermes_cli.profile_command import (
+            ProfileBrowseError,
+            format_profile_category,
+            format_profile_directory,
+            read_profile_payload,
+        )
 
-        reply = execute_command("profile", CommandContext(surface="cli"))
-        profile_name = reply.data["profile"]
-        display = reply.data["home"]
+        parts = str(cmd_original or "/profile").split(maxsplit=1)
+        category = parts[1].strip() if len(parts) > 1 else ""
+        if category.casefold() in {"runtime", "home", "config"}:
+            from hermes_cli.slash_exec import CommandContext, execute_command
 
-        print()
-        print(f"  Profile: {profile_name}")
-        print(f"  Home:    {display}")
-        print()
+            reply = execute_command("profile", CommandContext(surface="cli"))
+            profile_name = reply.data["profile"]
+            display = reply.data["home"]
+            print()
+            print(f"  Profile: {profile_name}")
+            print(f"  Home:    {display}")
+            print()
+            return
+
+        try:
+            payload = read_profile_payload(
+                agent=getattr(self, "agent", None),
+                session_id=str(getattr(self, "session_id", "") or ""),
+                scope=category,
+            )
+        except ProfileBrowseError as exc:
+            print()
+            print(f"  Could not read user preferences: {exc}")
+            print("  Use /profile runtime to show the active Hermes runtime profile.")
+            print()
+            return
+
+        lines = (
+            format_profile_category(payload, category)
+            if category
+            else format_profile_directory(payload)
+        )
+        print("\n".join(lines))
 
     def _handle_handoff_command(self, cmd_original: str) -> bool:
         """Handle ``/handoff <platform>`` — transfer this CLI session to a gateway platform.

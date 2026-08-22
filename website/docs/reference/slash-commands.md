@@ -137,7 +137,7 @@ Type `/` in the CLI to open the autocomplete menu. Built-in commands are case-in
 | `/image <path>` | Attach a local image file for your next prompt. |
 | `/debug` | Upload debug report (system info + logs) and get shareable links. Also available in messaging. |
 | `/update` | Update Hermes Agent to the latest version. |
-| `/profile` | Show active profile name and home directory |
+| `/profile [category \| runtime]` | In the interactive CLI, bare `/profile` lists the stored user-preference directory and a category argument shows its atomic profile items; `runtime` shows the active Hermes profile name and home. Messaging gateways retain their source-runtime profile report. |
 
 ### Exit
 

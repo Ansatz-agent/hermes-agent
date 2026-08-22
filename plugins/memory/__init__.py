@@ -591,6 +591,18 @@ class _ProviderCollector:
     def register_cli_command(self, *args, **kwargs):
         pass  # CLI registration happens via discover_plugin_cli_commands()
 
+    @property
+    def llm(self):
+        """Expose the host-owned plugin LLM facade to memory providers.
+
+        Memory providers are loaded through this collector so activation can
+        remain exclusive, but they are still trusted plugins and should see
+        the same credential-safe ``ctx.llm`` surface as every other plugin.
+        The facade resolves the user's active model and auth inside the host;
+        providers never receive raw credentials.
+        """
+        return self._plugin_context().llm
+
     def __getattr__(self, attr: str):
         """Delegate any other ``register_*`` call to a real ``PluginContext``.
 

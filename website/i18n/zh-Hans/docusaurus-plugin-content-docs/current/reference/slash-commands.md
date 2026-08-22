@@ -114,7 +114,7 @@ Hermes 有两个斜杠命令入口，均由 `hermes_cli/commands.py` 中的中�
 | `/copy [number]` | 将最后一条助手回复复制到剪贴板（或用数字指定倒数第 N 条）。仅限 CLI。 |
 | `/image <path>` | 为下一条 prompt 附加本地图片文件。 |
 | `/debug` | 上传调试报告（系统信息 + 日志）并获取可分享链接。消息平台中也可用。 |
-| `/profile` | 显示活动 profile 名称和主目录 |
+| `/profile [分类 \| runtime]` | 在交互式 CLI 中，直接运行 `/profile` 会列出已存储的用户偏好目录，跟分类名称会显示该类的原子画像条目；`runtime` 显示当前 Hermes 运行 profile 名称和主目录。消息网关仍显示来源对应的运行 profile。 |
 
 ### 退出
 

@@ -7,7 +7,6 @@ Covers:
 - Original issue: 'Built-in: always active' was misleading when features were disabled
 """
 
-import pytest
 from unittest.mock import patch
 
 
@@ -53,5 +52,41 @@ class TestMemoryStatusLabels:
         assert "Memory injection:" in out
         assert "disabled ✗" in out
 
+    def test_hides_memory_tool_when_both_backing_stores_are_disabled(self, capfd):
+        out = _run_cmd_status(
+            capfd,
+            mem_config={
+                "memory_enabled": False,
+                "user_profile_enabled": False,
+                "provider": "profile_memory",
+            },
+            memory_tools={"memory"},
+        )
+
+        assert "Memory tool:        disabled ✗" in out
+
+    def test_memory_tool_stays_enabled_for_builtin_user_profile(self, capfd):
+        out = _run_cmd_status(
+            capfd,
+            mem_config={
+                "memory_enabled": False,
+                "user_profile_enabled": True,
+            },
+            memory_tools={"memory"},
+        )
+
+        assert "Memory tool:        enabled ✓" in out
+
+    def test_memory_tool_respects_platform_tool_selection(self, capfd):
+        out = _run_cmd_status(
+            capfd,
+            mem_config={
+                "memory_enabled": True,
+                "user_profile_enabled": True,
+            },
+            memory_tools=set(),
+        )
+
+        assert "Memory tool:        disabled ✗" in out
 
 
