@@ -150,12 +150,15 @@ def test_checked_in_ledger_has_locked_authorities_and_exact_enums() -> None:
         "fe5ab1a6845db6b6305dd8fbc916061082c70848",
     ]
     assert ledger["contract_bookkeeping_paths"] == [
+        ".github/workflows/desktop-macos-package.yml",
+        ".github/workflows/desktop-windows-package.yml",
         "docs/security/hermes-managed-download-origins.json",
         "docs/security/main-auth-voice-migration-ledger.json",
         "docs/security/main-auth-voice-product-paths.txt",
         "scripts/check_hermes_managed_downloads.py",
         "scripts/check_main_auth_voice_migration.py",
         "scripts/check_main_auth_voice_parity.py",
+        "tests/test_desktop_packaging_workflows.py",
         "tests/test_hermes_managed_downloads.py",
         "tests/test_main_auth_voice_dependencies.py",
         "tests/test_main_auth_voice_migration.py",

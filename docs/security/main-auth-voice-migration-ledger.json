@@ -45,12 +45,15 @@
   "dmg_integration_reference": "403e1c3873d1679720c1403d7e38acd289804d69",
   "windows_integration_reference": "56b402c63b22da81f906ff1f7398a90cfd17bd81",
   "contract_bookkeeping_paths": [
+    ".github/workflows/desktop-macos-package.yml",
+    ".github/workflows/desktop-windows-package.yml",
     "docs/security/hermes-managed-download-origins.json",
     "docs/security/main-auth-voice-migration-ledger.json",
     "docs/security/main-auth-voice-product-paths.txt",
     "scripts/check_hermes_managed_downloads.py",
     "scripts/check_main_auth_voice_migration.py",
     "scripts/check_main_auth_voice_parity.py",
+    "tests/test_desktop_packaging_workflows.py",
     "tests/test_hermes_managed_downloads.py",
     "tests/test_main_auth_voice_dependencies.py",
     "tests/test_main_auth_voice_migration.py",
@@ -4259,6 +4262,16 @@
       "match": "exact",
       "path": "tools/computer_use/cua_backend.py",
       "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": ".github/workflows/desktop-macos-package.yml",
+      "owner": "ci-infrastructure"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_desktop_packaging_workflows.py",
+      "owner": "test-evidence"
     },
     {
       "match": "exact",
