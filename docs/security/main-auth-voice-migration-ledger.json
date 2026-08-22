@@ -17,17 +17,7 @@
     "tests/test_hermes_managed_downloads.py",
     "tests/test_main_auth_voice_migration.py"
   ],
-  "post_tip_subjects": [
-    "fix: reconcile main packaging and voice baseline",
-    "merge: add central remote auth hard gate",
-    "fix: reconcile final dmg auth behavior with main",
-    "feat(desktop): add dual-platform packaged auth runtime",
-    "fix(installer): enforce recursive domestic mirror policy",
-    "feat(desktop): add Windows clean-install auth voice package",
-    "build: lock cross-platform auth voice package parity",
-    "ci: verify clean macOS and Windows packages",
-    "docs: record cross-platform auth voice acceptance"
-  ],
+  "post_tip_commits": [],
   "owner_enum": [
     "common-product",
     "package-shared",

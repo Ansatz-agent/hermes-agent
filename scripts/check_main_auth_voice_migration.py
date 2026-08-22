@@ -238,22 +238,28 @@ def validate_locked_commit_coverage(
         violations.append("locked commit coverage has unexpected entries: " + ", ".join(extra))
 
     contract_paths_raw = ledger.get("contract_bookkeeping_paths")
-    post_tip_subjects_raw = ledger.get("post_tip_subjects")
+    post_tip_commits_raw = ledger.get("post_tip_commits")
     if not isinstance(contract_paths_raw, list) or not contract_paths_raw:
         raise MigrationError("contract_bookkeeping_paths must be a non-empty list")
-    if not isinstance(post_tip_subjects_raw, list):
-        raise MigrationError("post_tip_subjects must be a list")
+    if "post_tip_subjects" in ledger:
+        raise MigrationError(
+            "post_tip_subjects is forbidden; register exact post_tip_commits instead"
+        )
+    if not isinstance(post_tip_commits_raw, list):
+        raise MigrationError("post_tip_commits must be a list")
     contract_paths = {
         normalized_repo_path(path, field="contract bookkeeping path")
         for path in contract_paths_raw
     }
-    post_tip_subjects = {
-        subject
-        for subject in post_tip_subjects_raw
-        if isinstance(subject, str) and subject
+    post_tip_commits = {
+        sha
+        for sha in post_tip_commits_raw
+        if isinstance(sha, str)
+        and len(sha) == 40
+        and all(character in "0123456789abcdef" for character in sha)
     }
-    if len(post_tip_subjects) != len(post_tip_subjects_raw):
-        raise MigrationError("post_tip_subjects must contain unique non-empty strings")
+    if len(post_tip_commits) != len(post_tip_commits_raw):
+        raise MigrationError("post_tip_commits must contain unique full lowercase SHAs")
 
     source_strategies = {
         entry["sha"]: entry["strategy"] for entry in ledger["commits"]
@@ -265,6 +271,7 @@ def validate_locked_commit_coverage(
         "--format=%H%x00%s%x00%P",
         f"{required_refs['candidate_tip']}..HEAD",
     ).splitlines()
+    observed_post_tip_commits: set[str] = set()
     for row in rows:
         if not row:
             continue
@@ -272,10 +279,11 @@ def validate_locked_commit_coverage(
         if len(parts) != 3:
             raise MigrationError("cannot parse post-tip commit metadata")
         sha, subject, parent_text = parts
+        observed_post_tip_commits.add(sha)
         changed = commit_changed_paths(repo, sha)
         if changed and changed <= contract_paths:
             continue
-        if subject in post_tip_subjects:
+        if sha in post_tip_commits:
             continue
         message = git(repo, "show", "-s", "--format=%B", sha)
         cherry_pick = CHERRY_PICK_RE.search(message)
@@ -292,6 +300,12 @@ def validate_locked_commit_coverage(
                 continue
         violations.append(
             f"post-tip commit is not covered by migration policy: {sha} {subject}"
+        )
+    orphaned = sorted(post_tip_commits - observed_post_tip_commits)
+    if orphaned:
+        violations.append(
+            "registered post-tip commits are not present after candidate_tip: "
+            + ", ".join(orphaned)
         )
     return violations
 

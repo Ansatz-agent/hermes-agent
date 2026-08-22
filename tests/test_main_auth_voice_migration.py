@@ -102,6 +102,16 @@ def test_checked_in_ledger_has_locked_authorities_and_exact_enums() -> None:
     assert ledger["common_baseline"] == "4ef56cef4c6eecc009e2284fe2f1df20664f357a"
     assert ledger["dmg_integration_reference"] == "403e1c3873d1679720c1403d7e38acd289804d69"
     assert ledger["windows_integration_reference"] == "56b402c63b22da81f906ff1f7398a90cfd17bd81"
+    assert ledger["post_tip_commits"] == []
+    assert ledger["contract_bookkeeping_paths"] == [
+        "docs/security/hermes-managed-download-origins.json",
+        "docs/security/main-auth-voice-migration-ledger.json",
+        "docs/security/main-auth-voice-product-paths.txt",
+        "scripts/check_hermes_managed_downloads.py",
+        "scripts/check_main_auth_voice_migration.py",
+        "tests/test_hermes_managed_downloads.py",
+        "tests/test_main_auth_voice_migration.py",
+    ]
 
 
 def test_every_locked_source_commit_has_one_owner_and_strategy() -> None:
@@ -205,6 +215,83 @@ def test_checker_itself_rejects_incomplete_locked_commit_coverage(
 
     assert result.returncode != 0
     assert "commit coverage" in result.stderr.lower()
+
+
+def write_locked_fixture_contract(
+    tmp_path: Path,
+    *,
+    base: str,
+    owned_paths: list[str],
+    post_tip_commits: list[str],
+    post_tip_subjects: list[str] | None = None,
+) -> tuple[Path, Path]:
+    ledger, product = write_fixture_contract(
+        tmp_path,
+        base=base,
+        owned_paths=owned_paths,
+    )
+    value = json.loads(ledger.read_text(encoding="utf-8"))
+    value.update(
+        {
+            "enforce_locked_commit_coverage": True,
+            "common_baseline": base,
+            "dmg_integration_reference": base,
+            "windows_integration_reference": base,
+            "candidate_tip": base,
+            "contract_bookkeeping_paths": ["docs/security/migration-contract.json"],
+            "post_tip_commits": post_tip_commits,
+        }
+    )
+    if post_tip_subjects is not None:
+        value["post_tip_subjects"] = post_tip_subjects
+    ledger.write_text(json.dumps(value) + "\n", encoding="utf-8")
+    return ledger, product
+
+
+def commit_fixture_path(tmp_path: Path, path: str, subject: str) -> str:
+    candidate = tmp_path / path
+    candidate.parent.mkdir(parents=True, exist_ok=True)
+    candidate.write_text("candidate\n", encoding="utf-8")
+    assert run(tmp_path, "git", "add", path).returncode == 0
+    assert run(tmp_path, "git", "commit", "-qm", subject).returncode == 0
+    return git_lines(tmp_path, "rev-parse", "HEAD")[0]
+
+
+def test_locked_coverage_rejects_reused_planned_subject(tmp_path: Path) -> None:
+    base = initialize_fixture_repo(tmp_path)
+    path = "src/owned.py"
+    subject = "fix: reconcile main packaging and voice baseline"
+    commit_fixture_path(tmp_path, path, subject)
+    ledger, product = write_locked_fixture_contract(
+        tmp_path,
+        base=base,
+        owned_paths=[path],
+        post_tip_commits=[],
+        post_tip_subjects=[subject],
+    )
+
+    result = invoke(tmp_path, base=base, ledger=ledger, product_paths=product)
+
+    assert result.returncode != 0
+    assert "post_tip_subjects is forbidden" in result.stderr
+
+
+def test_locked_coverage_accepts_exact_registered_post_tip_commit(
+    tmp_path: Path,
+) -> None:
+    base = initialize_fixture_repo(tmp_path)
+    path = "src/owned.py"
+    sha = commit_fixture_path(tmp_path, path, "implementation commit")
+    ledger, product = write_locked_fixture_contract(
+        tmp_path,
+        base=base,
+        owned_paths=[path],
+        post_tip_commits=[sha],
+    )
+
+    result = invoke(tmp_path, base=base, ledger=ledger, product_paths=product)
+
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def initialize_fixture_repo(tmp_path: Path) -> str:
