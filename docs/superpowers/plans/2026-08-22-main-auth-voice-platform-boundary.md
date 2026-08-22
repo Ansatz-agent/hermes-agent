@@ -1,5 +1,7 @@
 # Main Authentication and Voice Platform Boundary Implementation Plan
 
+> **SUPERSEDED — DO NOT EXECUTE:** The approved design was materially revised on 2026-08-22. `main` must now own the clean-install macOS/Windows packaging foundation and domestic-mirror-first authentication/runtime dependency policy. This common-only plan remains only as an audit record until it is replaced and reviewed.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Do not use subagents for this repository migration. Stop at every explicit review checkpoint.
 
 **Goal:** Produce a reviewed `integration/main-auth-voice-base` branch based on the current remote `ansatz/main` that contains the complete common authentication hard gate and the complete Voice/SenseVoice behavior of the accepted macOS DMG, supports source execution on macOS and Windows, and contains no platform release overlay.
