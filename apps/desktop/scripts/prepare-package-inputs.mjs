@@ -178,8 +178,8 @@ function defaultResolveSource({ repoRoot }) {
   return { commit, branch: branch === 'HEAD' ? null : branch, dirty }
 }
 
-async function defaultPrepareAuth({ platform, outputDir, env }) {
-  const preparationEnv = { ...env, HERMES_AUTH_TOOLCHAIN_INPUT_DIR: `${outputDir}.inputs` }
+async function defaultPrepareAuth({ platform, outputDir, inputDir, env }) {
+  const preparationEnv = { ...env, HERMES_AUTH_TOOLCHAIN_INPUT_DIR: inputDir }
   const inputs = platform === 'win32'
     ? await prepareWindowsAuthToolchainInputsFromEnvironment(preparationEnv)
     : prepareAuthToolchainInputsFromEnvironment(preparationEnv)
@@ -227,6 +227,7 @@ export async function preparePackageInputs({
   const buildRoot = path.join(desktopRoot, 'build')
   const transactionRoot = path.join(buildRoot, `.package-inputs-stage-${process.pid}-${Date.now()}`)
   const bootstrapStage = path.join(transactionRoot, 'bootstrap')
+  const authInputStage = path.join(transactionRoot, 'auth-inputs')
   const windowsStage = path.join(transactionRoot, 'windows-prereqs')
   const stampStage = path.join(transactionRoot, 'install-stamp.json')
   fs.rmSync(transactionRoot, { recursive: true, force: true })
@@ -273,6 +274,7 @@ export async function preparePackageInputs({
       repoRoot,
       desktopRoot,
       outputDir: path.join(bootstrapStage, 'auth-toolchain'),
+      inputDir: authInputStage,
       env
     })
     deps.verifyPayload(bootstrapStage, target.installer)

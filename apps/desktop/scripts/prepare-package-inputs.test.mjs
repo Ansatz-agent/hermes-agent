@@ -61,6 +61,7 @@ test('preparePackageInputs atomically publishes only the declared outputs', asyn
   const desktopRoot = path.join(root, 'apps', 'desktop')
   fs.mkdirSync(path.join(desktopRoot, 'build'), { recursive: true })
   const commit = 'a'.repeat(40)
+  let observedAuthInputDir = null
 
   try {
     const result = await preparePackageInputs({
@@ -77,7 +78,12 @@ test('preparePackageInputs atomically publishes only the declared outputs', asyn
           fs.writeFileSync(path.join(outputDir, 'hermes-backend.tar.gz'), 'backend')
           fs.writeFileSync(path.join(outputDir, 'payload-manifest.json'), '{}')
         },
-        prepareAuth: async ({ outputDir }) => {
+        prepareAuth: async ({ outputDir, inputDir }) => {
+          observedAuthInputDir = inputDir
+          assert.ok(path.isAbsolute(inputDir))
+          assert.equal(inputDir.includes(`${path.sep}bootstrap${path.sep}`), false)
+          fs.mkdirSync(inputDir, { recursive: true })
+          fs.writeFileSync(path.join(inputDir, 'transient-wheel-download'), 'temporary')
           fs.mkdirSync(path.join(outputDir, 'wheelhouse'), { recursive: true })
           fs.writeFileSync(path.join(outputDir, 'uv.exe'), 'uv')
           fs.writeFileSync(path.join(outputDir, 'python-embed.zip'), 'python')
@@ -107,6 +113,7 @@ test('preparePackageInputs atomically publishes only the declared outputs', asyn
     for (const relative of WINDOWS_OUTPUTS) {
       assert.ok(fs.statSync(path.join(desktopRoot, relative)).isFile(), relative)
     }
+    assert.equal(fs.existsSync(observedAuthInputDir), false)
     assert.equal(fs.existsSync(path.join(desktopRoot, 'build', 'bootstrap', 'unexpected.txt')), false)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
