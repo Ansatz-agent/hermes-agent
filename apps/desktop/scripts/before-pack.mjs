@@ -64,12 +64,16 @@
 import { existsSync, rmSync, renameSync } from 'node:fs'
 import path from 'node:path'
 import { Arch } from 'electron-builder'
+import { buildAuthToolchainFromEnvironment } from './build-auth-toolchain.mjs'
 import { buildBackendPayload } from './build-backend-payload.mjs'
 import { stageNodePty, stageGetWindows } from './stage-native-deps.mjs'
 
-let bundledBackendPayloadPromise = null
+let bundledMacPayloadPromise = null
 
-export async function ensureBundledBackendPayload(platform, build = buildBackendPayload) {
+export async function ensureBundledMacPayloads(
+  platform,
+  { buildBackend = buildBackendPayload, buildAuth = buildAuthToolchainFromEnvironment } = {}
+) {
   if (platform !== 'darwin') {
     return false
   }
@@ -77,17 +81,17 @@ export async function ensureBundledBackendPayload(platform, build = buildBackend
   // electron-builder can invoke beforePack once per architecture. Share one
   // promise so multi-arch macOS builds cannot race while replacing the same
   // three bootstrap resources.
-  if (!bundledBackendPayloadPromise) {
-    bundledBackendPayloadPromise = Promise.resolve().then(() => build())
+  if (!bundledMacPayloadPromise) {
+    bundledMacPayloadPromise = Promise.resolve().then(() => Promise.all([buildBackend(), buildAuth()]))
   }
 
-  await bundledBackendPayloadPromise
+  await bundledMacPayloadPromise
 
   return true
 }
 
 export function resetBundledBackendPayloadForTests() {
-  bundledBackendPayloadPromise = null
+  bundledMacPayloadPromise = null
 }
 
 export function cleanStaleAppOutDir(appOutDir) {
@@ -145,7 +149,7 @@ export default async function beforePack(context) {
   // The runtime payload is a macOS distribution resource. Keeping this out of
   // generic `npm run build` preserves dirty developer builds and leaves the
   // Windows/Linux packaging paths unchanged.
-  await ensureBundledBackendPayload(platformName)
+  await ensureBundledMacPayloads(platformName)
 
   try {
     // Windows: keep the previous working build as rollback material for the

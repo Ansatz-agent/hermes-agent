@@ -234,6 +234,10 @@
         {
           "from": "build/bootstrap/payload-manifest.json",
           "to": "bootstrap/payload-manifest.json"
+        },
+        {
+          "from": "build/bootstrap/auth-toolchain",
+          "to": "bootstrap/auth-toolchain"
         }
       ],
       "entitlements": "electron/entitlements.mac.plist",

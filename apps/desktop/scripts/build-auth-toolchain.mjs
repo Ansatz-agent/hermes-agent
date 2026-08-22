@@ -247,3 +247,37 @@ export function buildAuthToolchain(options) {
     rmSync(stagingRoot, { recursive: true, force: true })
   }
 }
+
+function requiredEnvironmentPath(env, key) {
+  const value = env[key]
+
+  if (typeof value !== 'string' || value.trim() === '' || !path.isAbsolute(value)) {
+    throw new Error(`${key} must be an absolute path`)
+  }
+
+  return path.resolve(value)
+}
+
+function requiredEnvironmentVersion(env, key) {
+  const value = env[key]
+
+  if (typeof value !== 'string' || !SAFE_VERSION_RE.test(value)) {
+    throw new Error(`${key} must be a dotted numeric version`)
+  }
+
+  return value
+}
+
+export function buildAuthToolchainFromEnvironment(env = process.env) {
+  return buildAuthToolchain({
+    outputDir: requiredEnvironmentPath(env, 'HERMES_AUTH_TOOLCHAIN_OUTPUT_DIR'),
+    uvPath: requiredEnvironmentPath(env, 'HERMES_AUTH_TOOLCHAIN_UV_PATH'),
+    pythonArchivePath: requiredEnvironmentPath(env, 'HERMES_AUTH_TOOLCHAIN_PYTHON_ARCHIVE'),
+    requirementsPath: requiredEnvironmentPath(env, 'HERMES_AUTH_TOOLCHAIN_REQUIREMENTS'),
+    wheelhousePath: requiredEnvironmentPath(env, 'HERMES_AUTH_TOOLCHAIN_WHEELHOUSE'),
+    platform: AUTH_TOOLCHAIN_PLATFORM,
+    arch: AUTH_TOOLCHAIN_ARCH,
+    uvVersion: requiredEnvironmentVersion(env, 'HERMES_AUTH_TOOLCHAIN_UV_VERSION'),
+    pythonVersion: requiredEnvironmentVersion(env, 'HERMES_AUTH_TOOLCHAIN_PYTHON_VERSION')
+  })
+}

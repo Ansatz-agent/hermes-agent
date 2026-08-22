@@ -10,6 +10,7 @@ import {
   AUTH_TOOLCHAIN_ARCH,
   AUTH_TOOLCHAIN_PLATFORM,
   buildAuthToolchain,
+  buildAuthToolchainFromEnvironment,
   verifyAuthToolchain
 } from './build-auth-toolchain.mjs'
 
@@ -112,6 +113,28 @@ test('buildAuthToolchain rejects links and the wrong target', () => {
       () => buildAuthToolchain(buildOptions(fixture, { platform: 'linux' })),
       /target must be darwin-arm64/
     )
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
+test('buildAuthToolchainFromEnvironment requires explicit release inputs', () => {
+  const fixture = makeFixture()
+
+  try {
+    assert.throws(() => buildAuthToolchainFromEnvironment({}), /HERMES_AUTH_TOOLCHAIN_OUTPUT_DIR/)
+
+    const result = buildAuthToolchainFromEnvironment({
+      HERMES_AUTH_TOOLCHAIN_OUTPUT_DIR: fixture.outputDir,
+      HERMES_AUTH_TOOLCHAIN_UV_PATH: fixture.uvPath,
+      HERMES_AUTH_TOOLCHAIN_PYTHON_ARCHIVE: fixture.pythonArchivePath,
+      HERMES_AUTH_TOOLCHAIN_REQUIREMENTS: fixture.requirementsPath,
+      HERMES_AUTH_TOOLCHAIN_WHEELHOUSE: fixture.wheelhousePath,
+      HERMES_AUTH_TOOLCHAIN_UV_VERSION: '0.12.5',
+      HERMES_AUTH_TOOLCHAIN_PYTHON_VERSION: '3.11.14'
+    })
+
+    assert.deepEqual(verifyAuthToolchain(fixture.outputDir), result.manifest)
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true })
   }
