@@ -32,6 +32,14 @@ Plugin engines are **never auto-activated** — the user must explicitly set `co
 
 Configure via `ansatz plugins` → Provider Plugins → Context Engine, or edit `config.yaml` directly.
 
+The bundled `object_context` V1 engine composes with the default summarizer
+rather than replacing its role. It projects only structured objects in the
+currently verbatim conversation region into stable Cards. Provider requests
+and later whole-history summarizer inputs see that rendered Card view; the
+durable raw trace remains an audit/restart source and is not automatically
+rehydrated into summarizer prompts. Thus object virtualization and semantic
+multi-turn compaction retain independent triggers and state.
+
 For building a context engine plugin, see [Context Engine Plugins](/developer-guide/context-engine-plugin).
 
 ## Dual Compression System

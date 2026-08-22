@@ -5667,6 +5667,67 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             return "class:status-bar-warn"
         return "class:status-bar-dim"
 
+    @staticmethod
+    def _status_bar_nonnegative_int(value: Any) -> int:
+        try:
+            return max(0, int(value or 0))
+        except (TypeError, ValueError, OverflowError):
+            return 0
+
+    @staticmethod
+    def _status_bar_v1_savings_labels(
+        snapshot: Mapping[str, Any], width: int
+    ) -> list[str]:
+        """Return width-aware Object Context savings labels.
+
+        The caller has already collected an I/O-free engine snapshot. Keep
+        this formatter pure because it runs on prompt-toolkit's hot repaint
+        path for both plain-text and styled status bars.
+        """
+        if width < 76 or not snapshot.get("v1_savings_active"):
+            return []
+        last_saved = HermesCLI._status_bar_nonnegative_int(
+            snapshot.get("v1_last_tokens_saved")
+        )
+        session_saved = HermesCLI._status_bar_nonnegative_int(
+            snapshot.get("v1_session_tokens_saved")
+        )
+        projection_count = HermesCLI._status_bar_nonnegative_int(
+            snapshot.get("v1_request_projection_count")
+        )
+        labels: list[str] = []
+        if last_saved > 0:
+            latest = f"V1↓{format_token_count_compact(last_saved)}"
+            if width >= 110:
+                try:
+                    percent = float(
+                        snapshot.get("v1_last_reduction_percent", 0) or 0
+                    )
+                except (TypeError, ValueError, OverflowError):
+                    percent = 0.0
+                if 0.0 < percent <= 100.0:
+                    latest += f" {percent:.0f}%"
+            labels.append(latest)
+        elif session_saved > 0:
+            # A retrieval-heavy latest request can save zero while the session
+            # has still accumulated substantial prior savings. Do not make the
+            # indicator disappear in that case.
+            labels.append(f"V1Σ↓{format_token_count_compact(session_saved)}")
+        else:
+            # Keep activation observable in a fresh/no-op conversation. A
+            # hidden zero is indistinguishable from an inactive engine or a
+            # broken status-bar integration when the user is validating V1.
+            labels.append("V1↓0")
+
+        if (
+            width >= 110
+            and last_saved > 0
+            and session_saved > 0
+            and projection_count > 1
+        ):
+            labels.append(f"Σ↓{format_token_count_compact(session_saved)}")
+        return labels
+
     def _build_context_bar(self, percent_used: Optional[int], width: int = 10) -> str:
         safe_percent = max(0, min(100, percent_used or 0))
         filled = round((safe_percent / 100) * width)
@@ -5773,6 +5834,11 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             "session_total_tokens": 0,
             "session_api_calls": 0,
             "compressions": 0,
+            "v1_savings_active": False,
+            "v1_last_tokens_saved": 0,
+            "v1_last_reduction_percent": 0.0,
+            "v1_session_tokens_saved": 0,
+            "v1_request_projection_count": 0,
             "active_background_tasks": 0,
             "active_background_processes": 0,
             "active_background_subagents": 0,
@@ -5885,6 +5951,47 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             snapshot["compressions"] = getattr(compressor, "compression_count", 0) or 0
             if context_length:
                 snapshot["context_percent"] = max(0, min(100, round((context_tokens / context_length) * 100)))
+
+            # Context-engine-specific hot-path metrics must be in-memory only:
+            # prompt-toolkit can repaint several times per second. The base
+            # engine returns {}, while Object Context returns a cheap immutable
+            # snapshot restored once at session start and updated per request.
+            status_bar_metrics = getattr(
+                compressor, "get_status_bar_metrics", None
+            )
+            if callable(status_bar_metrics):
+                try:
+                    engine_metrics = status_bar_metrics()
+                    if isinstance(engine_metrics, Mapping) and engine_metrics.get(
+                        "object_context_active"
+                    ):
+                        try:
+                            last_percent = float(
+                                engine_metrics.get("last_reduction_percent", 0) or 0
+                            )
+                        except (TypeError, ValueError, OverflowError):
+                            last_percent = 0.0
+                        if not 0.0 <= last_percent <= 100.0:
+                            last_percent = 0.0
+                        snapshot["v1_savings_active"] = True
+                        snapshot["v1_last_tokens_saved"] = (
+                            self._status_bar_nonnegative_int(
+                                engine_metrics.get("last_tokens_saved")
+                            )
+                        )
+                        snapshot["v1_last_reduction_percent"] = last_percent
+                        snapshot["v1_session_tokens_saved"] = (
+                            self._status_bar_nonnegative_int(
+                                engine_metrics.get("session_tokens_saved")
+                            )
+                        )
+                        snapshot["v1_request_projection_count"] = (
+                            self._status_bar_nonnegative_int(
+                                engine_metrics.get("request_projection_count")
+                            )
+                        )
+                except Exception:
+                    pass
 
         return snapshot
 
@@ -6552,6 +6659,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             parts = [f"⚕ {snapshot['model_short']}", context_label, percent_label]
             if battery_label:
                 parts.insert(0, battery_label)
+            parts.extend(self._status_bar_v1_savings_labels(snapshot, width))
             if compressions:
                 parts.append(f"🗜️ {compressions}")
             bg_count = snapshot.get("active_background_tasks", 0)
@@ -6679,6 +6787,11 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                         ("class:status-bar-dim", " "),
                         (bar_style, percent_label),
                     ]
+                    for savings_label in self._status_bar_v1_savings_labels(
+                        snapshot, width
+                    ):
+                        frags.append(("class:status-bar-dim", " │ "))
+                        frags.append(("class:status-bar-good", savings_label))
                     if compressions:
                         frags.append(("class:status-bar-dim", " │ "))
                         frags.append((self._compression_count_style(compressions), f"🗜️ {compressions}"))
@@ -11246,6 +11359,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             self._handle_reasoning_command(cmd_original)
         elif canonical == "fast":
             self._handle_fast_command(cmd_original)
+        elif canonical == "object_context":
+            self._handle_object_context_command(cmd_original)
         elif canonical == "compress":
             self._manual_compress(cmd_original)
         elif canonical == "usage":

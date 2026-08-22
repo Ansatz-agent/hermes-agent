@@ -3327,6 +3327,38 @@ class CLICommandsMixin:
         else:
             _cprint("  Failed to save timestamps setting to config.yaml")
 
+    def _handle_object_context_command(self, cmd_original: str) -> None:
+        """Configure Object Context V1 without mutating the live agent.
+
+        The selected engine owns both request projection and a model-visible
+        retrieval tool.  Persist changes for the next process instead of
+        swapping either surface in the middle of an existing conversation.
+        """
+        from hermes_cli.object_context_command import (
+            ObjectContextCommandError,
+            active_context_engine_name,
+            active_context_engine_status,
+            run_object_context_command,
+        )
+
+        parts = str(cmd_original or "/object_context").strip().split(None, 1)
+        args_raw = parts[1] if len(parts) > 1 else ""
+        agent = getattr(self, "agent", None)
+        try:
+            result = run_object_context_command(
+                args_raw,
+                active_engine=active_context_engine_name(agent),
+                engine_status=active_context_engine_status(agent),
+            )
+        except ObjectContextCommandError as exc:
+            print(f"  Object Context V1: {exc}")
+            return
+
+        print()
+        for line in result.lines:
+            print(f"  {line}" if line else "")
+        print()
+
     def _handle_reasoning_command(self, cmd: str):
         """Handle /reasoning — manage effort level and display toggle.
 

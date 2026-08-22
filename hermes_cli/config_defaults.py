@@ -1742,6 +1742,20 @@ DEFAULT_CONFIG = {
     # a plugin in plugins/context_engine/<name>/ or ~/.hermes/plugins/.
     "context": {
         "engine": "compressor",
+        # Optional Context Compression Strategy V1 engine. These settings are
+        # inert unless context.engine is explicitly set to "object_context".
+        "object_context": {
+            "hot_tail_max_deltas": 8,
+            "hot_tail_token_budget_ratio": 0.25,
+            "context_soft_limit_ratio": 0.75,
+            "object_prefilter_min_tokens": 256,
+            "min_absolute_saving_tokens": 128,
+            "min_relative_saving_ratio": 0.25,
+            "summary_max_tokens": 64,
+            "wm_grace_deltas": 20,
+            "recent_retrieval_active_deltas": 20,
+            "retrieval_max_tokens_ratio": 0.50,
+        },
         # Return freed glibc allocator pages after long-running agent/TUI
         # cleanup boundaries. Unsupported platforms are safe no-ops.
         "memory_trim": {

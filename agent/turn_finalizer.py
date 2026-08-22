@@ -608,7 +608,29 @@ def finalize_turn(
     # per-request select_context() hook (selection before the request;
     # observation after the turn). No-op default, fail-open.
     try:
-        from agent.conversation_loop import _notify_context_engine_turn_complete
+        from agent.conversation_loop import (
+            _notify_context_engine_delta_committed,
+            _notify_context_engine_turn_complete,
+        )
+        from agent.turn_context import reanchor_current_turn_user_idx
+
+        # Give observing engines the exact current-turn boundary.  Deriving it
+        # independently from "the last user message" is unsafe after
+        # verification continuations, compression handoffs, or other synthetic
+        # user scaffolding.  The helper already owns those semantics for the
+        # live loop and returns -1 when no user-authored anchor survives.
+        _turn_start_index = reanchor_current_turn_user_idx(
+            messages, original_user_message
+        )
+        if (
+            getattr(agent, "_context_engine_real_turn_id", turn_id) != turn_id
+            or _turn_start_index < 0
+        ):
+            # A display-typed auto-continue or reference-only handoff can
+            # exactly match ``original_user_message`` and therefore re-anchor
+            # for ordinary persistence purposes. It still must not become a
+            # V1 User/Inference Delta boundary.
+            _turn_start_index = -1
         # Forward the turn's canonical usage when the host has it. The loop
         # stashes the most recent API response's usage dict (the same
         # canonical buckets fed to ``update_from_response``) on the agent as
@@ -616,12 +638,58 @@ def finalize_turn(
         # provider response (early failure / interrupt), which is exactly the
         # contract: real usage when available, ``None`` otherwise.
         _turn_usage = getattr(agent, "_last_turn_usage", None)
+
+        # Tool-free terminal model output is the final inference Delta. Tool
+        # Deltas and verification-interim outputs are emitted inside the loop;
+        # the deterministic Delta id makes this finalization fallback idempotent
+        # if a recovery path reaches both seams.
+        if (
+            not interrupted
+            and not failed
+            and final_response
+            and _turn_start_index >= 0
+        ):
+            _final_assistant_index = -1
+            for _idx in range(len(messages) - 1, _turn_start_index, -1):
+                _candidate = messages[_idx]
+                if not isinstance(_candidate, dict):
+                    continue
+                if _candidate.get("role") != "assistant":
+                    continue
+                if _candidate.get("tool_calls"):
+                    break
+                if any(
+                    _candidate.get(_marker)
+                    for _marker in (
+                        "_empty_recovery_synthetic",
+                        "_empty_terminal_sentinel",
+                        "_dropped_toolcall_nudge",
+                        "_kanban_stop_synthetic",
+                    )
+                ):
+                    break
+                _final_assistant_index = _idx
+                break
+            if _final_assistant_index >= 0:
+                _notify_context_engine_delta_committed(
+                    agent,
+                    kind="inference",
+                    turn_id=turn_id,
+                    sequence=api_call_count,
+                    inference_id=f"{turn_id}:inference:{api_call_count}",
+                    delta_messages=[messages[_final_assistant_index]],
+                    logger=logger,
+                    source_start_index=_final_assistant_index,
+                    usage=_turn_usage,
+                )
+
         _notify_context_engine_turn_complete(
             agent,
             messages,
             usage=_turn_usage,
             logger=logger,
             turn_id=turn_id,
+            turn_start_index=_turn_start_index,
             task_id=effective_task_id,
             api_call_count=api_call_count,
             interrupted=interrupted,

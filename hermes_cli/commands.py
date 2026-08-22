@@ -246,6 +246,15 @@ COMMAND_REGISTRY: list[CommandDef] = [
                "Configuration", aliases=("codex_runtime",),
                args_hint="[auto|codex_app_server]",
                busy_policy="reject", busy_handler="codex-runtime"),
+    CommandDef(
+        "object_context",
+        "Configure Context Compression V1 for the next CLI launch",
+        "Configuration",
+        aliases=("object-context", "oc"),
+        args_hint="[status|stats|on|off|set <key> <value>|reset [key|all]|help]",
+        subcommands=("status", "stats", "on", "off", "set", "reset", "help"),
+        cli_only=True,
+    ),
 
     CommandDef("personality", "Set a predefined personality", "Configuration",
                args_hint="[name]"),

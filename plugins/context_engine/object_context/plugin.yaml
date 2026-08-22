@@ -1,0 +1,3 @@
+name: object_context
+version: 1.0.0
+description: Losslessly virtualize structured objects with stable Cards and exact turn-scoped retrieval.

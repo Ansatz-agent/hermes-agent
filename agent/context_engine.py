@@ -26,7 +26,8 @@ Lifecycle:
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple
 
 from agent.redact import redact_sensitive_text
 
@@ -35,6 +36,33 @@ MEMORY_CONTEXT_MAX_CHARS = 6_000
 _MEMORY_CONTEXT_HEAD_CHARS = 4_000
 _MEMORY_CONTEXT_TAIL_CHARS = 1_500
 _MEMORY_CONTEXT_TRUNCATION_MARKER = "\n...[memory provider context truncated]...\n"
+
+
+@dataclass(frozen=True)
+class ContextDelta:
+    """One immutable causal addition observed by a Context Engine.
+
+    ``kind="user"`` represents a real user-authored input. An
+    ``kind="inference"`` Delta represents one successful model output plus the
+    complete tool-call/result batch caused by that output. Runtime recovery
+    scaffolding is deliberately excluded by the host.
+
+    The message dictionaries are structural copies and must be treated as
+    read-only. ``sequence`` is local to the real user turn: user input is zero
+    and successful provider inferences use their API-call sequence. The engine
+    owns any durable, conversation-global ordering it needs.
+    """
+
+    delta_id: str
+    kind: str
+    conversation_id: str
+    session_id: str
+    turn_id: str
+    sequence: int
+    messages: Tuple[Dict[str, Any], ...]
+    inference_id: str = ""
+    source_start_index: int = -1
+    usage: Optional[Dict[str, Any]] = None
 
 
 def sanitize_memory_context(memory_context: str) -> str:
@@ -310,7 +338,9 @@ class ContextEngine(ABC):
         ``messages`` is a shallow copy and should be treated as read-only:
         return values are ignored and this hook must not rely on transcript
         mutation for persistence. ``kwargs`` may include ``turn_id``,
-        ``task_id``, ``api_call_count``, ``interrupted``, ``failed``, and
+        ``turn_start_index`` (the current human turn's user-message index in
+        ``messages``, or ``-1`` when no safe anchor exists), ``task_id``,
+        ``api_call_count``, ``interrupted``, ``failed``, and
         ``turn_exit_reason``.
 
         ``usage`` carries the completed turn's canonical token usage (the same
@@ -324,6 +354,24 @@ class ContextEngine(ABC):
         must treat it as optional.
 
         Default is a no-op.
+        """
+        return None
+
+    def on_delta_committed(self, delta: ContextDelta) -> None:
+        """Observe one newly committed real-user or inference Delta.
+
+        The host calls this after the raw causal unit is present in the live
+        transcript. User Deltas are emitted once before the first provider
+        request. Inference Deltas are emitted only after the assistant output
+        and every tool result caused by that output are available; tool-free
+        final outputs are emitted from the finalization seam. Provider retries
+        and runtime-synthetic recovery turns are not Deltas.
+
+        This hook is fail-open and optional. The default is a no-op so existing
+        engines pay no per-Delta copying/callback cost: the host detects this
+        base implementation and returns before constructing ``ContextDelta``.
+        Engines must not mutate ``delta.messages`` or rely on transcript
+        mutation for persistence.
         """
         return None
 
@@ -431,6 +479,16 @@ class ContextEngine(ABC):
         return json.dumps({"error": f"Unknown context engine tool: {name}"})
 
     # -- Optional: status / display ----------------------------------------
+
+    def get_status_bar_metrics(self) -> Dict[str, Any]:
+        """Return cheap, non-blocking metrics for frequently repainted UI.
+
+        Status bars may poll this method many times per second. Implementations
+        must only return an in-memory snapshot: no database, filesystem,
+        network, tokenizer, or model work belongs on this hot path. Detailed
+        operator views should continue to use :meth:`get_status`.
+        """
+        return {}
 
     def get_status(self) -> Dict[str, Any]:
         """Return status dict for display/logging.

@@ -1608,6 +1608,104 @@ def _notify_context_engine_turn_complete(
         )
 
 
+def _notify_context_engine_delta_committed(
+    agent: Any,
+    *,
+    kind: str,
+    turn_id: str,
+    sequence: int,
+    delta_messages: List[Dict[str, Any]],
+    logger: Any,
+    inference_id: str = "",
+    source_start_index: int = -1,
+    usage: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Publish one immutable causal Delta to the active Context Engine.
+
+    This is the single host choke point for both real user inputs and provider
+    inferences. It skips the base no-op before cloning messages, deduplicates
+    repeated finalization paths by deterministic Delta id, and fails open so a
+    context backend cannot break the agent loop.
+    """
+
+    engine = getattr(agent, "context_compressor", None)
+    hook = getattr(engine, "on_delta_committed", None)
+    if engine is None or not callable(hook) or not delta_messages:
+        return
+
+    try:
+        from agent.context_engine import ContextDelta, ContextEngine
+
+        if getattr(hook, "__func__", None) is ContextEngine.on_delta_committed:
+            return
+    except Exception:
+        return
+
+    normalized_kind = str(kind or "").strip().lower()
+    if normalized_kind not in {"user", "inference"}:
+        logger.warning("Ignoring invalid Context Delta kind: %r", kind)
+        return
+
+    stable_turn_id = str(turn_id or "")
+    declared_real_turn = getattr(agent, "_context_engine_real_turn_id", None)
+    if declared_real_turn is not None and str(declared_real_turn) != stable_turn_id:
+        # Auto-continue, compression handoff, delegation completion, and other
+        # display-typed/synthetic runs may still produce provider responses,
+        # but they are not V1 real-user lifecycle boundaries.
+        return
+    stable_sequence = max(0, int(sequence))
+    delta_id = f"{stable_turn_id}:{normalized_kind}:{stable_sequence}"
+    committed = getattr(agent, "_context_engine_committed_delta_ids", None)
+    if not isinstance(committed, set):
+        committed = set()
+        agent._context_engine_committed_delta_ids = committed
+    if delta_id in committed:
+        return
+
+    conversation_id = ""
+    root_resolver = getattr(agent, "_conversation_root_id", None)
+    if callable(root_resolver):
+        try:
+            conversation_id = str(root_resolver() or "")
+        except Exception:
+            conversation_id = ""
+    if not conversation_id:
+        conversation_id = str(
+            getattr(agent, "_gateway_session_key", "")
+            or getattr(agent, "session_id", "")
+            or stable_turn_id
+        )
+
+    try:
+        delta = ContextDelta(
+            delta_id=delta_id,
+            kind=normalized_kind,
+            conversation_id=conversation_id,
+            session_id=str(getattr(agent, "session_id", "") or ""),
+            turn_id=stable_turn_id,
+            sequence=stable_sequence,
+            messages=tuple(_clone_message_for_send(m) for m in delta_messages),
+            inference_id=str(inference_id or ""),
+            source_start_index=(
+                source_start_index
+                if isinstance(source_start_index, int)
+                and not isinstance(source_start_index, bool)
+                else -1
+            ),
+            usage=dict(usage) if isinstance(usage, dict) else None,
+        )
+        hook(delta)
+        committed.add(delta_id)
+    except Exception:
+        logger.warning(
+            "Context engine on_delta_committed hook failed "
+            "(session=%s, delta=%s)",
+            getattr(agent, "session_id", None) or "-",
+            delta_id,
+            exc_info=True,
+        )
+
+
 def run_conversation(
     agent,
     user_message: Any,
@@ -1746,6 +1844,34 @@ def run_conversation(
     _should_review_memory = _ctx.should_review_memory
     _plugin_user_context = _ctx.plugin_user_context
     _ext_prefetch_cache = _ctx.ext_prefetch_cache
+
+    # The turn prologue has already persisted the clean inbound user content
+    # and its provider-side api_content, so eager object registration cannot
+    # outrun the authoritative raw trace. Runtime-generated handoff/recovery
+    # rows are not real User Deltas.
+    agent._context_engine_committed_delta_ids = set()
+    agent._context_engine_real_turn_id = ""
+    if 0 <= current_turn_user_idx < len(messages):
+        _current_user_delta_message = messages[current_turn_user_idx]
+        try:
+            from agent.context_compressor import is_user_originated_turn
+
+            _is_real_user_delta = is_user_originated_turn(
+                _current_user_delta_message
+            )
+        except Exception:
+            _is_real_user_delta = False
+        if _is_real_user_delta:
+            agent._context_engine_real_turn_id = turn_id
+            _notify_context_engine_delta_committed(
+                agent,
+                kind="user",
+                turn_id=turn_id,
+                sequence=0,
+                delta_messages=[_current_user_delta_message],
+                logger=logger,
+                source_start_index=current_turn_user_idx,
+            )
 
     # Commentary deduplication spans all provider continuations and tool calls
     # within one user turn, but must not suppress the same phrase next turn.
@@ -6994,6 +7120,7 @@ def run_conversation(
                     and previous_msg.get("finish_reason") == "incomplete"
                     and previous_interim_visible == current_interim_visible
                 )
+                _inference_delta_start = len(messages)
                 append_message(messages, assistant_msg)
 
                 # Mixed batch: error-result the invalid calls and strip them
@@ -7080,6 +7207,18 @@ def run_conversation(
                     final_response = ""
                     failed = True
                     break
+
+                _notify_context_engine_delta_committed(
+                    agent,
+                    kind="inference",
+                    turn_id=turn_id,
+                    sequence=api_call_count,
+                    inference_id=f"{turn_id}:inference:{api_call_count}",
+                    delta_messages=messages[_inference_delta_start:],
+                    logger=logger,
+                    source_start_index=_inference_delta_start,
+                    usage=getattr(agent, "_last_turn_usage", None),
+                )
 
                 if agent._tool_guardrail_halt_decision is not None:
                     decision = agent._tool_guardrail_halt_decision
@@ -7791,6 +7930,17 @@ def run_conversation(
                         agent._flush_messages_to_session_db(messages, conversation_history)
                     except Exception:
                         logger.debug("verify-on-stop interim flush failed", exc_info=True)
+                    _notify_context_engine_delta_committed(
+                        agent,
+                        kind="inference",
+                        turn_id=turn_id,
+                        sequence=api_call_count,
+                        inference_id=f"{turn_id}:inference:{api_call_count}",
+                        delta_messages=[final_msg],
+                        logger=logger,
+                        source_start_index=len(messages) - 1,
+                        usage=getattr(agent, "_last_turn_usage", None),
+                    )
                     append_message(messages, {
                         "role": "user",
                         "content": _verify_nudge,
@@ -7863,6 +8013,17 @@ def run_conversation(
                         agent._flush_messages_to_session_db(messages, conversation_history)
                     except Exception:
                         logger.debug("pre_verify interim flush failed", exc_info=True)
+                    _notify_context_engine_delta_committed(
+                        agent,
+                        kind="inference",
+                        turn_id=turn_id,
+                        sequence=api_call_count,
+                        inference_id=f"{turn_id}:inference:{api_call_count}",
+                        delta_messages=[final_msg],
+                        logger=logger,
+                        source_start_index=len(messages) - 1,
+                        usage=getattr(agent, "_last_turn_usage", None),
+                    )
                     append_message(messages, {
                         "role": "user",
                         "content": _verify_nudge2,

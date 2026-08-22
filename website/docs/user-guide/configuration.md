@@ -994,6 +994,34 @@ context:
   engine: "lcm"          # must match the plugin's name
 ```
 
+The bundled `object_context` engine implements Context Compression Strategy
+V1. It losslessly externalizes large structured objects from recent verbatim
+user/assistant/tool Deltas into stable in-place Cards, while keeping the normal
+whole-history summarizer as an independent safety net:
+
+```yaml
+context:
+  engine: object_context
+  object_context:
+    hot_tail_max_deltas: 8
+    hot_tail_token_budget_ratio: 0.25
+    context_soft_limit_ratio: 0.75
+    object_prefilter_min_tokens: 256
+    min_absolute_saving_tokens: 128
+    min_relative_saving_ratio: 0.25
+    summary_max_tokens: 64
+    wm_grace_deltas: 20
+    recent_retrieval_active_deltas: 20
+    retrieval_max_tokens_ratio: 0.50
+```
+
+The model receives exact content only after calling
+`retrieve_object(object_ref, reason)`. Exact retrieval is full-object,
+SHA-256-verified, and limited to the current real user turn; it is never a
+semantic search or a partial/range read. See the bundled
+`plugins/context_engine/object_context/README.md` for lifecycle, storage,
+failure, and metric details.
+
 Plugin engines are **never auto-activated** — you must explicitly set `context.engine` to the plugin name. Available engines can be browsed and selected via `ansatz plugins` → Provider Plugins → Context Engine.
 
 See [Memory Providers](/user-guide/features/memory-providers) for the analogous single-select system for memory plugins.
