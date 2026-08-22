@@ -1803,7 +1803,7 @@ install_deps() {
     # Install the main package in editable mode with all extras.
     #
     # Hash-verified install (Tier 0) — when uv.lock is present, prefer
-    # `uv sync --locked`. The lockfile records SHA256 hashes for every
+    # a lock-backed install. The lockfile records SHA256 hashes for every
     # transitive, so a compromised transitive (different hash than what
     # we shipped) is REJECTED by the resolver. This is the *only* path
     # that protects against the "direct dep is fine, but the dep's dep
@@ -1848,24 +1848,78 @@ install_deps() {
         if [ -n "$release_uv_config" ]; then
             release_uv_args=(--config-file "$release_uv_config")
         fi
-        if UV_PROJECT_ENVIRONMENT="$INSTALL_DIR/venv" "$UV_CMD" sync --extra all --locked "${release_uv_args[@]}"; then
+
+        # A packaged Desktop install uses fixed domestic mirrors, but uv treats
+        # the default index URL as part of lock identity. Running `uv sync
+        # --locked` with a mirror override therefore rejects an otherwise
+        # current, generic PyPI lock before downloading anything. Export the
+        # already-signed lock without network/index overrides, then make both
+        # approved mirrors install that exact hash set. This keeps the lock
+        # mirror-independent and preserves fail-closed hash verification.
+        if [ "$BUNDLED_SOURCE" = true ]; then
+            local runtime_requirements_dir="$HERMES_HOME/tmp"
+            local runtime_requirements=""
+            local bundled_python="${UV_PYTHON:-$INSTALL_DIR/venv/bin/python}"
+            mkdir -p "$runtime_requirements_dir"
+            runtime_requirements="$(mktemp "$runtime_requirements_dir/runtime-requirements.XXXXXX")" || {
+                log_error "Could not create the signed Desktop dependency export."
+                return 1
+            }
+
+            if ! env -u UV_DEFAULT_INDEX UV_OFFLINE=1 "$UV_CMD" export \
+                --frozen \
+                --extra all \
+                --no-dev \
+                --no-emit-project \
+                --format requirements.txt \
+                --output-file "$runtime_requirements" \
+                "${release_uv_args[@]}"; then
+                rm -f "$runtime_requirements"
+                log_error "The signed Desktop dependency lock could not be exported."
+                return 1
+            fi
+
+            if [ ! -s "$runtime_requirements" ] || \
+               ! grep -q -- '--hash=sha256:' "$runtime_requirements" || \
+               grep -Eiq '(https?://|git\+)' "$runtime_requirements"; then
+                rm -f "$runtime_requirements"
+                log_error "The signed Desktop dependency export failed its safety checks."
+                return 1
+            fi
+
+            if ! UV_DEFAULT_INDEX="$DESKTOP_PYTHON_PRIMARY_MIRROR" \
+                "$UV_CMD" pip sync --require-hashes \
+                --python "$bundled_python" "$runtime_requirements"; then
+                log_info "Primary Python mirror failed; retrying the same signed hashes with the approved fallback mirror..."
+                if ! UV_DEFAULT_INDEX="$HERMES_UV_FALLBACK_INDEX" \
+                    "$UV_CMD" pip sync --require-hashes \
+                    --python "$bundled_python" "$runtime_requirements"; then
+                    rm -f "$runtime_requirements"
+                    log_error "The signed Desktop dependency lock could not be installed."
+                    log_info "Packaged Hermes will not fall back to an unlocked package resolve."
+                    return 1
+                fi
+            fi
+
+            rm -f "$runtime_requirements"
+            if ! env -u UV_DEFAULT_INDEX UV_OFFLINE=1 "$UV_CMD" pip install \
+                --no-deps \
+                --no-build-isolation \
+                --editable "$INSTALL_DIR" \
+                --python "$bundled_python"; then
+                log_error "The signed Desktop project could not be installed offline."
+                return 1
+            fi
+
             log_success "Main package installed (hash-verified via uv.lock)"
             log_success "All dependencies installed"
             return 0
         fi
 
-        if [ "$BUNDLED_SOURCE" = true ]; then
-            log_info "Primary Python mirror failed; retrying the signed lock with the approved fallback mirror..."
-            if UV_DEFAULT_INDEX="$HERMES_UV_FALLBACK_INDEX" \
-                UV_PROJECT_ENVIRONMENT="$INSTALL_DIR/venv" \
-                "$UV_CMD" sync --extra all --locked "${release_uv_args[@]}"; then
-                log_success "Main package installed (hash-verified via fallback mirror)"
-                log_success "All dependencies installed"
-                return 0
-            fi
-            log_error "The signed Desktop dependency lock could not be installed."
-            log_info "Packaged Hermes will not fall back to an unlocked package resolve."
-            return 1
+        if UV_PROJECT_ENVIRONMENT="$INSTALL_DIR/venv" "$UV_CMD" sync --extra all --locked "${release_uv_args[@]}"; then
+            log_success "Main package installed (hash-verified via uv.lock)"
+            log_success "All dependencies installed"
+            return 0
         fi
 
         log_warn "uv.lock sync failed (see uv output above), falling back to PyPI resolve..."

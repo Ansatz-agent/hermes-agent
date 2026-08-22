@@ -67,11 +67,28 @@ HERMES_AUTH_TOOLCHAIN_UV_VERSION
 HERMES_AUTH_TOOLCHAIN_PYTHON_VERSION
 ```
 
+Before npm or Electron Builder runs, the build uses the exact prepared uv
+binary to run `uv lock --check` without a mirror override or network access.
+A stale `uv.lock` therefore stops the build before an App or DMG can be
+produced.
+
 At first launch, authentication preparation is fully offline from these
 packaged assets. After successful online account validation, full runtime
 downloads use the fixed USTC/Tsinghua Python mirrors and the npmmirror npm,
 Node, and Playwright endpoints. This automatic first-launch chain has no
 GitHub, Astral, or nodejs.org fallback.
+
+The post-login Python install deliberately does not run `uv sync --locked`
+under a mirror override: uv includes the default index URL in lock identity,
+so a generic PyPI lock would be reported as stale merely because a domestic
+mirror is selected. Instead, the installer exports the already packaged lock
+offline as pinned requirements with SHA-256 hashes, excludes the local project
+from that export, and runs `uv pip sync --require-hashes` against USTC. A retry
+uses the exact same hash set against Tsinghua. After dependency sync, the local
+packaged project is installed editable with dependency resolution, build
+isolation, and networking disabled. A missing hash, a URL/git requirement, a
+failed mirror sync, or a failed offline project install stops bootstrap; there
+is no unlocked package fallback.
 
 The backend archive and App resources are product-only. `.github`, CI evidence
 publishers, Gatekeeper verifiers, credential-login drivers, tests, and build

@@ -353,6 +353,10 @@ all = [
   # [all], `uv sync --locked` on Windows tried to build it from sdist
   # and failed on `make`. Lazy-install routes that build to first use,
   # where the user is expected to have a toolchain available.
+  # The bundled Desktop runtime installs this local project offline with
+  # build isolation disabled after syncing the lock-exported dependency set.
+  # Keep the exact build backend in [all] so that step never downloads it.
+  "setuptools==83.0.0",
   "hermes-agent[cron]",
   "hermes-agent[pty]",
   "hermes-agent[mcp]",

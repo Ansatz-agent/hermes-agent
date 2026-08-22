@@ -28,7 +28,8 @@ function runPipeline({
   builderBinariesMirror,
   signatureValid = true,
   builderVolumeDenied = false,
-  prepareAuthInputs = false
+  prepareAuthInputs = false,
+  lockCurrent = true
 }) {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-dmg-pipeline-'))
   const releaseDir = path.join(tempRoot, 'release')
@@ -37,6 +38,7 @@ function runPipeline({
   const fakeNpm = path.join(tempRoot, 'npm')
   const fakeCodesign = path.join(tempRoot, 'codesign')
   const fakeHdiutil = path.join(tempRoot, 'hdiutil')
+  const fakeUv = path.join(tempRoot, 'uv')
   const recordPath = path.join(tempRoot, 'npm-record.txt')
   const authInputDir = path.join(tempRoot, 'auth-inputs')
   const authOutputDir = path.join(tempRoot, 'auth-output')
@@ -54,7 +56,28 @@ function runPipeline({
 
   fs.writeFileSync(
     fakeNode,
-    `#!/bin/sh\nif [ "\${1:-}" = "--version" ]; then\n  printf '%s\\n' 'v26.7.0'\n  exit 0\nfi\nif [ "\${HERMES_DMG_TEST_PREPARE_AUTH:-0}" = "1" ] && [ "\${1:-}" = "$HERMES_DMG_TEST_PREPARE_SCRIPT" ]; then\n  printf '%s\\n' 'prepare-auth-toolchain' >> "$HERMES_DMG_TEST_RECORD"\n  mkdir -p "$HERMES_AUTH_TOOLCHAIN_INPUT_DIR/wheelhouse"\n  printf '%s\\n' 'uv' > "$HERMES_AUTH_TOOLCHAIN_INPUT_DIR/uv"\n  printf '%s\\n' 'python' > "$HERMES_AUTH_TOOLCHAIN_INPUT_DIR/python.tar.gz"\n  printf '%s\\n' 'httpx==0.28.1 --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' > "$HERMES_AUTH_TOOLCHAIN_INPUT_DIR/auth-requirements.txt"\n  printf '%s\\n' 'wheel' > "$HERMES_AUTH_TOOLCHAIN_INPUT_DIR/wheelhouse/httpx.whl"\n  printf '%s\\n' '{"uvVersion":"0.12.5","pythonVersion":"3.11.16"}' > "$HERMES_AUTH_TOOLCHAIN_INPUT_DIR/metadata.json"\n  exit 0\nfi\nexec '${process.execPath}' "$@"\n`,
+    `#!/bin/sh
+if [ "\${1:-}" = "--version" ]; then
+  printf '%s\\n' 'v26.7.0'
+  exit 0
+fi
+if [ "\${HERMES_DMG_TEST_PREPARE_AUTH:-0}" = "1" ] && [ "\${1:-}" = "$HERMES_DMG_TEST_PREPARE_SCRIPT" ]; then
+  printf '%s\\n' 'prepare-auth-toolchain' >> "$HERMES_DMG_TEST_RECORD"
+  mkdir -p "$HERMES_AUTH_TOOLCHAIN_INPUT_DIR/wheelhouse"
+  cp "$HERMES_DMG_TEST_FAKE_UV" "$HERMES_AUTH_TOOLCHAIN_INPUT_DIR/uv"
+  printf '%s\\n' 'python' > "$HERMES_AUTH_TOOLCHAIN_INPUT_DIR/python.tar.gz"
+  printf '%s\\n' 'httpx==0.28.1 --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' > "$HERMES_AUTH_TOOLCHAIN_INPUT_DIR/auth-requirements.txt"
+  printf '%s\\n' 'wheel' > "$HERMES_AUTH_TOOLCHAIN_INPUT_DIR/wheelhouse/httpx.whl"
+  printf '%s\\n' '{"uvVersion":"0.12.5","pythonVersion":"3.11.16"}' > "$HERMES_AUTH_TOOLCHAIN_INPUT_DIR/metadata.json"
+  exit 0
+fi
+exec '${process.execPath}' "$@"
+`,
+    { mode: 0o755 }
+  )
+  fs.writeFileSync(
+    fakeUv,
+    '#!/bin/sh\nprintf \'uv-lock-check|%s\\n\' "$*" >> "$HERMES_DMG_TEST_RECORD"\n[ "$HERMES_DMG_TEST_LOCK_CURRENT" = "1" ]\n',
     { mode: 0o755 }
   )
   fs.writeFileSync(
@@ -74,7 +97,9 @@ function runPipeline({
   )
 
   fs.mkdirSync(path.join(authInputDir, 'wheelhouse'), { recursive: true })
-  for (const file of ['uv', 'python.tar.gz', 'auth-requirements.txt']) {
+  fs.copyFileSync(fakeUv, path.join(authInputDir, 'uv'))
+  fs.chmodSync(path.join(authInputDir, 'uv'), 0o755)
+  for (const file of ['python.tar.gz', 'auth-requirements.txt']) {
     fs.writeFileSync(path.join(authInputDir, file), `${file}\n`)
   }
   fs.writeFileSync(path.join(authInputDir, 'wheelhouse', 'httpx.whl'), 'wheel\n')
@@ -93,6 +118,8 @@ function runPipeline({
         HERMES_DMG_TEST_VOLUME_DENIED: builderVolumeDenied ? '1' : '0',
         HERMES_DMG_TEST_SIGNATURE_VALID: signatureValid ? '1' : '0',
         HERMES_DMG_TEST_PREPARE_AUTH: prepareAuthInputs ? '1' : '0',
+        HERMES_DMG_TEST_LOCK_CURRENT: lockCurrent ? '1' : '0',
+        HERMES_DMG_TEST_FAKE_UV: fakeUv,
         HERMES_DMG_TEST_PREPARE_SCRIPT: prepareScript,
         HERMES_AUTH_TOOLCHAIN_INPUT_DIR: authInputDir,
         HERMES_AUTH_TOOLCHAIN_OUTPUT_DIR: authOutputDir,
@@ -147,8 +174,18 @@ test('pipeline installs locked dependencies and builds the desktop DMG', () => {
     record,
     /1\|https:\/\/npmmirror\.com\/mirrors\/electron\/\|https:\/\/npmmirror\.com\/mirrors\/electron-builder-binaries\/\|run --workspace apps\/desktop dist:mac:dmg -- --config\.mac\.identity=-/
   )
+  assert.match(record, /uv-lock-check\|lock --check --config-file .+\/uv\.toml/)
   assert.match(record, /codesign\|--verify --deep --strict .+\/release\/mac-arm64\/Hermes\.app/)
   assert.match(result.stdout, /Hermes-test-.+-mac-arm64\.dmg/)
+})
+
+test('pipeline fails before npm when the signed runtime lock is stale', () => {
+  const { result, record } = runPipeline({ produceDmg: true, lockCurrent: false })
+
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /uv\.lock is not current/)
+  assert.match(record, /uv-lock-check\|lock --check --config-file .+\/uv\.toml/)
+  assert.doesNotMatch(record, /\|ci$/m)
 })
 
 test('pipeline prepares verified authentication toolchain inputs when they are not prebuilt', () => {

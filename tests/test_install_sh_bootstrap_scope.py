@@ -129,7 +129,7 @@ def test_auth_complete_publishes_cli_launchers_in_a_clean_home(tmp_path: Path) -
     assert install_dir.joinpath(".hermes-auth-bootstrap-complete").is_file()
 
 
-def test_bundled_runtime_lock_failure_never_falls_back_to_unlocked_pip(tmp_path: Path) -> None:
+def test_bundled_runtime_hash_sync_failure_never_installs_the_local_project(tmp_path: Path) -> None:
     install_dir = tmp_path / "hermes-agent"
     hermes_home = tmp_path / "home"
     uv_path = hermes_home / "bin" / "uv"
@@ -154,8 +154,16 @@ def test_bundled_runtime_lock_failure_never_falls_back_to_unlocked_pip(tmp_path:
                 'if [ "$1" = "--version" ]; then echo "uv 0.12.5"; exit 0; fi',
                 f'if [ "$1 $2" = "python find" ]; then echo {shlex.quote(sys.executable)}; exit 0; fi',
                 'if [ "$1 $2" = "python install" ]; then exit 0; fi',
-                'if [ "$1" = "sync" ]; then exit 42; fi',
-                'if [ "$1" = "pip" ]; then exit 0; fi',
+                'if [ "$1" = "export" ]; then',
+                '  while [ "$#" -gt 0 ]; do',
+                '    if [ "$1" = "--output-file" ]; then output="$2"; break; fi',
+                '    shift',
+                '  done',
+                '  printf "%s\\n" "setuptools==83.0.0 --hash=sha256:' + "a" * 64 + '" > "$output"',
+                '  exit 0',
+                'fi',
+                'if [ "$1 $2" = "pip sync" ]; then exit 42; fi',
+                'if [ "$1 $2" = "pip install" ]; then exit 99; fi',
                 "exit 0",
             ]
         ),
@@ -198,9 +206,12 @@ def test_bundled_runtime_lock_failure_never_falls_back_to_unlocked_pip(tmp_path:
 
     assert result.returncode != 0
     calls = uv_log.read_text(encoding="utf-8").splitlines()
-    assert any(call.startswith("sync ") for call in calls)
-    assert any("--config-file" in call and str(install_dir / "uv.toml") in call for call in calls)
-    assert not any(call.startswith("pip ") for call in calls)
+    assert any(call.startswith("export ") for call in calls)
+    sync_calls = [call for call in calls if call.startswith("pip sync ")]
+    assert len(sync_calls) == 2
+    assert all("--require-hashes" in call for call in sync_calls)
+    assert not any(call.startswith("pip install ") for call in calls)
+    assert not any(call.startswith("sync ") for call in calls)
 
 
 def test_bundled_auth_prerequisites_install_uv_and_python_without_network(tmp_path: Path) -> None:

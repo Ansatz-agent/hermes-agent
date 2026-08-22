@@ -88,7 +88,7 @@ def _stage_args(
 
 
 @pytest.mark.macos_only
-def test_bundled_runtime_locked_python_sync_retries_only_named_domestic_indexes(
+def test_bundled_runtime_exports_hashes_then_syncs_only_named_domestic_indexes(
     tmp_path: Path,
 ) -> None:
     install_dir = tmp_path / "hermes-agent"
@@ -103,13 +103,22 @@ def test_bundled_runtime_locked_python_sync_retries_only_named_domestic_indexes(
     uv_body = "\n".join(
         [
             "#!/bin/bash",
-            f"printf '%s|index=%s\\n' \"$*\" \"${{UV_DEFAULT_INDEX:-}}\" >> {shlex.quote(str(uv_log))}",
+            f"printf '%s|index=%s|offline=%s\\n' \"$*\" \"${{UV_DEFAULT_INDEX:-}}\" \"${{UV_OFFLINE:-}}\" >> {shlex.quote(str(uv_log))}",
             'if [ "$1" = "--version" ]; then echo "uv 0.12.5"; exit 0; fi',
             'if [ "$1 $2" = "python find" ]; then '
             'echo "$HERMES_HOME/python/cpython-3.11.16-macos-aarch64-none/bin/python3.11"; exit 0; fi',
-            'if [ "$1" = "sync" ] && [ "$UV_DEFAULT_INDEX" = "' + PYTHON_PRIMARY + '" ]; then exit 42; fi',
-            'if [ "$1" = "sync" ] && [ "$UV_DEFAULT_INDEX" = "' + PYTHON_FALLBACK + '" ]; then exit 0; fi',
-            'if [ "$1" = "sync" ]; then exit 99; fi',
+            'if [ "$1" = "export" ]; then',
+            '  while [ "$#" -gt 0 ]; do',
+            '    if [ "$1" = "--output-file" ]; then output="$2"; break; fi',
+            '    shift',
+            '  done',
+            '  printf "%s\\n" "setuptools==83.0.0 --hash=sha256:' + "a" * 64 + '" > "$output"',
+            '  exit 0',
+            'fi',
+            'if [ "$1 $2" = "pip sync" ] && [ "$UV_DEFAULT_INDEX" = "' + PYTHON_PRIMARY + '" ]; then exit 42; fi',
+            'if [ "$1 $2" = "pip sync" ] && [ "$UV_DEFAULT_INDEX" = "' + PYTHON_FALLBACK + '" ]; then exit 0; fi',
+            'if [ "$1 $2" = "pip install" ] && [ "$UV_OFFLINE" = "1" ]; then exit 0; fi',
+            'if [ "$1" = "sync" ] || [ "$1" = "pip" ]; then exit 99; fi',
             "exit 0",
         ]
     ) + "\n"
@@ -141,10 +150,27 @@ def test_bundled_runtime_locked_python_sync_retries_only_named_domestic_indexes(
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    sync_calls = [line for line in uv_log.read_text(encoding="utf-8").splitlines() if line.startswith("sync ")]
+    calls = uv_log.read_text(encoding="utf-8").splitlines()
+    export_calls = [line for line in calls if line.startswith("export ")]
+    sync_calls = [line for line in calls if line.startswith("pip sync ")]
+    project_calls = [line for line in calls if line.startswith("pip install ")]
+
+    assert len(export_calls) == 1
+    assert "--frozen" in export_calls[0]
+    assert "--extra all" in export_calls[0]
+    assert "--no-dev" in export_calls[0]
+    assert "--no-emit-project" in export_calls[0]
+    assert "--format requirements.txt" in export_calls[0]
     assert len(sync_calls) == 2
-    assert sync_calls[0].endswith(f"index={PYTHON_PRIMARY}")
-    assert sync_calls[1].endswith(f"index={PYTHON_FALLBACK}")
+    assert f"index={PYTHON_PRIMARY}" in sync_calls[0]
+    assert f"index={PYTHON_FALLBACK}" in sync_calls[1]
+    assert all("--require-hashes" in call for call in sync_calls)
+    assert len(project_calls) == 1
+    assert "--no-deps" in project_calls[0]
+    assert "--no-build-isolation" in project_calls[0]
+    assert "--editable" in project_calls[0]
+    assert "offline=1" in project_calls[0]
+    assert not any(line.startswith("sync ") for line in calls)
     assert not network_log.exists()
     assert not any("github.com" in line or "releases.astral.sh" in line for line in sync_calls)
 

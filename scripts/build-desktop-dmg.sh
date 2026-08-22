@@ -100,6 +100,11 @@ if ! auth_toolchain_env_complete; then
 fi
 
 cd "$REPO_ROOT"
+[[ -x "$HERMES_AUTH_TOOLCHAIN_UV_PATH" ]] || fail "prepared authentication uv is not executable"
+if ! run_logged env -u UV_DEFAULT_INDEX UV_OFFLINE=1 \
+  "$HERMES_AUTH_TOOLCHAIN_UV_PATH" lock --check --config-file "$REPO_ROOT/uv.toml"; then
+  fail "uv.lock is not current with pyproject.toml"
+fi
 run_logged npm ci
 if run_logged npm run --workspace apps/desktop dist:mac:dmg -- --config.mac.identity=-; then
   BUILDER_STATUS=0
