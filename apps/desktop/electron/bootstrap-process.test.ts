@@ -110,19 +110,30 @@ test('runBootstrapProcess turns an idle child into a terminal idle timeout', asy
 
 test('runBootstrapProcess heartbeat keeps a silent active package stage alive', async () => {
   const events: any[] = []
+  const controller = new AbortController()
 
   const result = await runBootstrapProcess({
     command: process.execPath,
-    args: ['-e', 'setTimeout(() => process.exit(0), 220)'],
-    emit: event => events.push(event),
+    args: ['-e', 'setInterval(() => {}, 1_000)'],
+    abortSignal: controller.signal,
+    emit: event => {
+      events.push(event)
+
+      if (events.filter(candidate => candidate.type === 'progress').length >= 4) {
+        controller.abort()
+      }
+    },
     stageName: 'python-deps',
-    hardTimeoutMs: 500,
-    idleTimeoutMs: 80,
+    hardTimeoutMs: 5_000,
+    idleTimeoutMs: 250,
     killGraceMs: 50,
-    progressHeartbeatMs: 30
+    progressHeartbeatMs: 100
   })
 
-  assert.equal(result.termination, null)
+  // Four heartbeats span longer than the original 250 ms idle deadline. The
+  // controller ends the child from an observed event instead of racing a
+  // sub-second child-exit timer on a busy test runner.
+  assert.equal(result.termination, 'cancelled')
   assert.ok(
     events.some(
       event =>
