@@ -1,48 +1,66 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
-import { afterEach, test } from 'vitest'
+import { test } from 'vitest'
 
-import {
-  ensureBundledMacPayloads,
-  resetBundledBackendPayloadForTests
-} from './before-pack.mjs'
+import { verifyPreparedPackageInputs } from './before-pack.mjs'
 
-afterEach(() => resetBundledBackendPayloadForTests())
+const PLATFORM_OUTPUTS = {
+  darwin: [
+    'build/bootstrap/install.sh',
+    'build/bootstrap/hermes-backend.tar.gz',
+    'build/bootstrap/payload-manifest.json',
+    'build/bootstrap/auth-toolchain/manifest.json'
+  ],
+  win32: [
+    'build/bootstrap/install.ps1',
+    'build/bootstrap/hermes-backend.tar.gz',
+    'build/bootstrap/payload-manifest.json',
+    'build/bootstrap/auth-toolchain/manifest.json',
+    'build/windows-prereqs/git-bash-runtime.tar.xz'
+  ]
+}
 
-test('bundled payload generation is skipped outside macOS packaging', async () => {
-  let backendCalls = 0
-  let authCalls = 0
-  const builders = {
-    buildBackend: () => { backendCalls += 1 },
-    buildAuth: () => { authCalls += 1 }
+function writePreparedOutputs(desktopRoot, outputs) {
+  for (const relativePath of outputs) {
+    const outputPath = path.join(desktopRoot, relativePath)
+    fs.mkdirSync(path.dirname(outputPath), { recursive: true })
+    fs.writeFileSync(outputPath, `fixture for ${relativePath}`)
   }
+}
 
-  assert.equal(await ensureBundledMacPayloads('linux', builders), false)
-  assert.equal(await ensureBundledMacPayloads('win32', builders), false)
-  assert.equal(backendCalls, 0)
-  assert.equal(authCalls, 0)
+test('prepared payload validation is skipped outside packaged Desktop platforms', () => {
+  assert.equal(verifyPreparedPackageInputs('linux', 'x64', '/unused'), false)
 })
 
-test('concurrent macOS beforePack hooks share both verified payload builds', async () => {
-  let backendCalls = 0
-  let authCalls = 0
-  const builders = {
-    buildBackend: async () => {
-      backendCalls += 1
-      await Promise.resolve()
-    },
-    buildAuth: async () => {
-      authCalls += 1
-      await Promise.resolve()
+for (const [platform, arch] of [['darwin', 'arm64'], ['win32', 'x64']]) {
+  test(`beforePack accepts the complete prepared ${platform} payload closure`, () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-before-pack-payload-'))
+    const desktopRoot = path.join(root, 'apps', 'desktop')
+
+    try {
+      writePreparedOutputs(desktopRoot, PLATFORM_OUTPUTS[platform])
+      assert.equal(verifyPreparedPackageInputs(platform, arch, desktopRoot), true)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
     }
+  })
+}
+
+test('beforePack rejects an empty prepared payload file', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-before-pack-payload-'))
+  const desktopRoot = path.join(root, 'apps', 'desktop')
+
+  try {
+    writePreparedOutputs(desktopRoot, PLATFORM_OUTPUTS.darwin)
+    fs.writeFileSync(path.join(desktopRoot, 'build/bootstrap/hermes-backend.tar.gz'), '')
+    assert.throws(
+      () => verifyPreparedPackageInputs('darwin', 'arm64', desktopRoot),
+      /prepared package input is invalid/
+    )
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
   }
-
-  const results = await Promise.all([
-    ensureBundledMacPayloads('darwin', builders),
-    ensureBundledMacPayloads('darwin', builders)
-  ])
-
-  assert.deepEqual(results, [true, true])
-  assert.equal(backendCalls, 1)
-  assert.equal(authCalls, 1)
 })

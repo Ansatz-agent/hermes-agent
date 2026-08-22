@@ -133,8 +133,14 @@ function isPositiveSafeInteger(value: unknown): value is number {
 }
 
 function installerFileForPlatform(platform: NodeJS.Platform): DesktopInstallerFile {
-  if (platform === 'darwin') return 'install.sh'
-  if (platform === 'win32') return 'install.ps1'
+  if (platform === 'darwin') {
+    return 'install.sh'
+  }
+
+  if (platform === 'win32') {
+    return 'install.ps1'
+  }
+
   throw new Error(`unsupported bundled payload platform: ${platform}`)
 }
 

@@ -52,7 +52,9 @@ function makePayloadFixture({
   const gitRuntimePath = path.join(bootstrapRoot, 'git-bash-runtime.tar.xz')
   execFileSync('tar', ['-czf', archivePath, '-C', path.join(tempRoot, 'source'), 'hermes-agent'])
   fs.writeFileSync(installerPath, platform === 'win32' ? 'exit 0\r\n' : '#!/bin/sh\nexit 0\n')
-  if (platform === 'win32') fs.writeFileSync(gitRuntimePath, 'fixture Git Bash runtime')
+  if (platform === 'win32') {
+    fs.writeFileSync(gitRuntimePath, 'fixture Git Bash runtime')
+  }
 
   const manifest = {
     schemaVersion: 1,
