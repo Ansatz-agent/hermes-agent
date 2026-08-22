@@ -17,6 +17,42 @@ BASE = "9bd88c530716279a089ed18428dc785732b6e1be"
 DMG_REFERENCE = "80db6d8265f805cec46817d913982e4c5f6405c4"
 WINDOWS_REFERENCE = "c2d3d09aab921130171ff611e260c13e9c6d477c"
 PLANNED_CANDIDATE_TIP = "b0a9dfc4e212cd9f25a0e9474e65f77f4adbf6f1"
+TASK4_REPLAY_ORDER = [
+    "89503cfb2b48a29f9996cf9dba2088d6b4a8d463",
+    "08a2eedf67bcd6537dc048a77411cee5f21b1345",
+    "706c5a4d0d034a8ab43914d45cef24f7f1d0fde2",
+    "6aed1cc0f122cbe3aeba14203b11bcab2e915064",
+    "e042ce38614967acd47cf70b00922e5d8d3ea308",
+    "bffdd26edf190e6fa9798c3c8ff702baacfa4301",
+    "f28a0f4b585899dae16bf181b9d036133ed35cc7",
+    "8af9e3eefec781929fd16c788dba54d7f7cae254",
+    "cdc12484f1326279c4fe215db453dd50b5c9e94c",
+    "27567163b3759018af72030701dfb0f130ba146c",
+    "366fb3f5a850abdd0f2e02ff014487deca1bc456",
+    "cdb5c65bc8eca0d8fe37981ffc2e25e712a25ce4",
+    "df34e9da62a19e7be209612da4c6fe6c9f022602",
+    "c478db4d2f917a4216bee2827dcb6f2082702a1e",
+    "e51e448669ac8a8e33dca12607382a1633f04b36",
+    "f68510d9054119b0bd1de9db69411bfc3df3abbd",
+    "817a5d0a6aef96027f3eda39a09b8648d058b5f0",
+    "b22bdb8d310cca553218c706a5e61058838e94ee",
+    "af19ce56b1a94792d084c2bb40ea98a8b570a80b",
+    "50609240e290cb85b4d2024973b875cb5ffe642b",
+    "bddbec2abb469700abbb5f603d48badae04102d9",
+    "6e57ead9693ab16f8a6e9d3b4fabf87d1c0927a6",
+    "c4d5ae2d4087f5a92290597562e93456c0d0b802",
+    "f8d7c05fadcc0d405f0f5e89c2af3508a948c277",
+    "34026f76276d2f4667652036e59751c7829b9bdd",
+    "a41608712672b766f0855e658f7d09ffaf76cc25",
+    "34f1c119e212d993f8685635ab44d92ca273e2e3",
+    "c8fad50c49260feb0373aceb8a509a829e70c390",
+    "363d464a85c8a6ce408a4af34963b3426a0fcba3",
+    "a756c93e35b7d15037cfcb11de83d6198aa5f04c",
+    "f5a7372e4c20d3fa1c66bacbebba2d51bf2956bb",
+    "c893e264e99de1ee0293688ce59223d57f432a17",
+    "38230a6c9fbe24382782cb52b4d3adc638f51cd0",
+    "4e4a5d42c785e25f940531a9831ff2c591bfb412",
+]
 
 OWNER_ENUM = {
     "common-product",
@@ -96,6 +132,7 @@ def test_checked_in_ledger_has_locked_authorities_and_exact_enums() -> None:
     assert ledger["dmg_reference"] == DMG_REFERENCE
     assert ledger["windows_reference"] == WINDOWS_REFERENCE
     assert ledger["candidate_tip"] == PLANNED_CANDIDATE_TIP
+    assert ledger["task4_replay_order"] == TASK4_REPLAY_ORDER
     assert set(ledger["owner_enum"]) == OWNER_ENUM
     assert set(ledger["strategy_enum"]) == STRATEGY_ENUM
     assert ledger["enforce_locked_commit_coverage"] is True
