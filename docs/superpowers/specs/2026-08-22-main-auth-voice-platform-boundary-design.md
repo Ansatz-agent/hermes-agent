@@ -104,7 +104,7 @@ The default ordered policy is:
 | npm packages | `https://registry.npmmirror.com` | official registry after a bounded failure |
 | Node distributions | `https://registry.npmmirror.com/-/binary/node/` | pinned official distribution after a bounded failure |
 | Playwright browsers | `https://registry.npmmirror.com/-/binary/playwright` | pinned official download after a bounded failure |
-| Electron distributions | `https://npmmirror.com/mirrors/electron/` | existing official source/fallback ordering, bounded by timeout |
+| Electron distributions | `https://npmmirror.com/mirrors/electron/` | pinned official distribution only after a bounded domestic failure |
 
 Mirror priority never weakens supply-chain validation:
 
@@ -129,7 +129,7 @@ Domestic-first is an end-to-end installation invariant, not an environment setti
 - Browser Use, Computer Use, and other optional Hermes features when Hermes performs their installation;
 - child installers and subprocesses launched by `install.sh`, `install.ps1`, Electron bootstrap, repair, update, or feature-enablement code.
 
-Every Hermes-owned download entrypoint is registered in a versioned origin manifest with its domestic primary, domestic secondary when available, official fallback, timeout, expected integrity mechanism, and owning test. An unregistered network origin in an installation or lazy-dependency path fails the boundary check.
+Every Hermes-owned download entrypoint is registered in a versioned origin manifest with its domestic primary, domestic secondary when available, official fallback, timeout, expected integrity mechanism, and owning test. The manifest is not a hand-maintained aspirational list: a checker inventories literal URLs, archive/model identifiers, package-manager invocations, subprocess download sinks, and known library download APIs from the candidate and the locked reference trees. Every discovered sink must be classified as a managed dependency, product/API traffic, or an exact path-and-call-site exception, and every manifest entry must resolve to at least one discovered sink or packaged output. An unregistered or orphaned entry fails the boundary check.
 
 Child processes receive the sanitized mirror policy through the variables understood by that tool, not through an unrestricted inherited environment. A child script may not clear the policy, switch to an official source first, execute an unverified remote script, or resolve an unlocked dependency. If a third-party installer cannot honor the policy and integrity contract, Hermes must replace it with a pinned direct download, bundle the dependency, or fail with a clear manual-action message.
 
@@ -151,6 +151,12 @@ This policy applies to downloads managed by Hermes. It does not rewrite user-con
 - Package-content tests proving required resources are present and disallowed secrets or CI material are absent.
 
 Generated payload archives, downloaded runtimes, credentials, certificates, notarization tickets, logs, and installers are build artifacts. They are not committed to `main`.
+
+### Exact packaged-resource closure
+
+The shared packaging source owns explicit platform-scoped resource lists. The macOS build copies the bundled `install.sh`, backend archive, payload manifest, and `darwin-arm64` authentication toolchain from `build/bootstrap`. The Windows build copies the bundled `install.ps1`, backend archive, payload manifest, and `windows-x64` authentication toolchain from `build/bootstrap`, plus the pinned Git/Bash runtime from `build/windows-prereqs` into the packaged `bootstrap` directory. Tests compare these `build.mac.extraResources` and `build.win.extraResources` entries one-for-one with the package input plan. Producing inputs that Electron Builder does not copy, or copying an input that was not declared and verified, is a build failure.
+
+The Windows authentication toolchain is a new first-class payload, not a textual generalization of the accepted macOS implementation or the earlier Windows installer. It contains a hash-pinned Windows Python runtime, `uv.exe`, the platform-complete authentication requirement export, and all `win_amd64` wheels required for the pre-login bridge. Build inputs come from registered domestic sources first: the pinned CPython Windows embeddable archive from Huawei Cloud's Python mirror and Python/uv wheels from USTC then Tsinghua. Their hashes are checked against the upstream release metadata before packaging. A clean Windows machine extracts and installs only those bundled files before login; it does not reach GitHub, PyPI, npm, or a Python installer. Windows payload construction and extraction have their own tests and acceptance gate.
 
 Platform-specific code is allowed in `main` when it is required by `dist:mac:dmg` or `dist:win:nsis`, implements the same product contract, and has target-platform tests. Platform differences may affect paths, process APIs, credential stores, signing mechanisms, and installer formats; they may not fork authentication or Voice policy.
 

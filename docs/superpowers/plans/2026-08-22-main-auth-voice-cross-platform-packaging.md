@@ -110,6 +110,10 @@ Run:
 test "$(git branch --show-current)" = "integration/main-auth-voice-base"
 test "$(git merge-base ansatz/main HEAD)" = "9bd88c530716279a089ed18428dc785732b6e1be"
 git status --short --branch
+test "$(git ls-files --others --exclude-standard | LC_ALL=C sort)" = "$(printf '%s\n' \
+  docs/security/main-auth-voice-common-paths.txt \
+  scripts/check_main_platform_boundary.py \
+  tests/test_main_platform_boundary.py | LC_ALL=C sort)"
 ```
 
 Expected: the branch matches, the merge base matches, and the only untracked paths are the three obsolete Task 1 drafts:
@@ -142,14 +146,17 @@ Expected: all commands exit zero. If remote `main` moved, stop and revise the de
 Run:
 
 ```bash
-export PATH="/private/tmp/hermes-node-v26.7.0-20260822/node-v26.7.0-darwin-arm64/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH="/private/tmp/hermes-main-auth-uv/bin:/private/tmp/hermes-node-v26.7.0-20260822/node-v26.7.0-darwin-arm64/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 test "$(node --version)" = "v26.7.0"
 test "$(npm --version)" = "11.19.0"
+test "$(uv --version)" = "uv 0.12.5 (210d1f678 2026-08-14 aarch64-apple-darwin)"
+test "$(shasum -a 256 /private/tmp/hermes-main-auth-uv/bin/uv | cut -d' ' -f1)" = \
+  "ad3564874e19defa0debefcf48e8381ac1d087c584190c1323c247bd351dd25f"
 env NPM_CONFIG_REGISTRY=https://registry.npmmirror.com \
   NPM_CONFIG_REPLACE_REGISTRY_HOST=always npm ci
 ```
 
-Expected: all assertions pass and `npm ci` completes. The archive at this verified local path previously matched the official Node SHA-256 `7ee659a7768e641bbfd5360940660b8e8fd0052f77488f365562bac522fc15d4`. If the temporary toolchain is no longer present, stop and recreate a checksum-verified Node 26.7.0 toolchain before continuing. Do not use Node 25 or npm 12 for parity/build evidence.
+Expected: all assertions pass and `npm ci` completes. The Node archive at this verified local path previously matched official SHA-256 `7ee659a7768e641bbfd5360940660b8e8fd0052f77488f365562bac522fc15d4`; the local uv executable is the same 0.12.5 version required by the accepted DMG auth-toolchain builder. If either temporary toolchain is absent, stop and recreate it from a registered domestic source with upstream checksum verification before continuing. Do not use Node 25, npm 12, a different uv version, or an ambient executable for parity/build evidence.
 
 - [ ] **Step 4: Run the branch baseline**
 
@@ -225,6 +232,9 @@ an official-first origin where a domestic primary is required
 a child installer with no sanitized mirror environment
 a download entry with no hash/signature contract
 a runtime-generated download with only a GitHub source
+an unclassified requests/httpx/fetch/curl/Invoke-WebRequest download sink
+a HuggingFace/ModelScope model identifier with no registered origin policy
+a manifest entry with no discovered caller or packaged output
 ```
 
 It permits account-server traffic and user-configured provider endpoints because they are not dependency downloads.
@@ -239,11 +249,12 @@ Expected: FAIL because the origin manifest and checker do not yet exist.
 
 - [ ] **Step 3: Create the complete origin-manifest schema and seed entries**
 
-Before writing the origin entries, populate `main-auth-voice-migration-ledger.json` with every commit returned by both commands below, in branch order. Each commit receives exactly one owner/strategy; historical documentation and superseded CI use explicit `historical-drop` or `test-evidence` entries rather than disappearing from the ledger:
+Before writing the origin entries, populate `main-auth-voice-migration-ledger.json` with every commit returned by all three commands below, in branch order. Each commit receives exactly one owner/strategy; historical documentation and superseded CI use explicit `historical-drop` or `test-evidence` entries rather than disappearing from the ledger. Existing candidate-only commit `2938971f77` owns `tools/transcription_tools.py` as `common-product`; the planning commits own only their documentation paths as `test-evidence`:
 
 ```bash
 git log --reverse --format=%H 4ef56cef4c..403e1c3873
 git log --reverse --format=%H 4ef56cef4c..56b402c63b
+git log --reverse --format=%H ansatz/main..HEAD
 ```
 
 Use schema version 1. Every entry has the following complete shape:
@@ -264,7 +275,16 @@ Use schema version 1. Every entry has the following complete shape:
 }
 ```
 
-The initial manifest contains these exact IDs:
+Before the first manifest is accepted, run the checker in inventory mode over the candidate plus all locked references:
+
+```bash
+python scripts/check_hermes_managed_downloads.py --inventory \
+  --source-ref ansatz/main \
+  --source-ref release/desktop-dmg-auth-e2e \
+  --source-ref integration/desktop-windows-auth-e2e
+```
+
+The inventory includes literal URLs, model/archive identifiers, package-manager and npm lifecycle invocations, subprocess download commands, and known download APIs such as `requests`, `httpx`, `fetch`, HuggingFace, ModelScope, and Playwright. Every result is assigned a stable ID and exact caller records. The initial known set must include the following when its caller is present; the checker, not this prose list, is authoritative and may require additional IDs:
 
 ```text
 python-packages
@@ -275,15 +295,20 @@ electron-builder-binaries
 playwright-browser
 sensevoice-model
 managed-uv
-managed-python
+managed-python-macos
+managed-python-windows-x64
 portable-git
-ripgrep
-ffmpeg
 browser-use-cli
 cua-driver
+kitten-tts-wheel
+hermes-source-archive
+huggingface-model
+model-catalog
+system-package-ripgrep
+system-package-ffmpeg
 ```
 
-Use `delivery: bundled` when no reviewed domestic source exists. Such an entry has `domestic_primary: null`, `official_fallback: null`, a non-null build-time provenance and SHA-256, and no clean-machine runtime download. Do not invent an unreviewed GitHub proxy.
+Each manifest entry has non-empty `callers` containing exact production path plus sink kind, or non-empty `packaged_outputs` for a build-only artifact; orphan entries are rejected. `kitten-tts-wheel`, `hermes-source-archive`, and `huggingface-model` are mandatory classifications for the existing GitHub wheel/source and HuggingFace model paths. `managed-uv` includes `hermes_cli/managed_uv.py` as an owner. Use `delivery: bundled` when no reviewed domestic source exists. Such an entry has `domestic_primary: null`, `official_fallback: null`, a non-null build-time provenance and SHA-256, and no clean-machine runtime download. Do not invent an unreviewed GitHub proxy.
 
 - [ ] **Step 4: Implement the two checkers**
 
@@ -299,6 +324,8 @@ a ledger path listed under two owners
 ```
 
 `check_hermes_managed_downloads.py` must scan only Hermes-managed dependency paths and compare every literal URL and download subprocess to `hermes-managed-download-origins.json`. It must ignore tests' `.invalid` fixtures and product API/provider traffic by explicit path and call-site rule, never by a broad URL-domain exemption.
+
+It also checks library download sinks and non-URL identifiers, reports every unclassified caller, rejects every orphan manifest entry, and can inventory each locked Git tree without checking it out. Task 1 replaces the three obsolete untracked drafts before this checker becomes the gate; after replacement, `git ls-files --others --exclude-standard` must contain only the new Task 1 files until they are committed.
 
 - [ ] **Step 5: Make the contract tests pass and commit**
 
@@ -326,7 +353,7 @@ git add docs/security/main-auth-voice-migration-ledger.json \
 git commit -m "build: define auth voice package ownership contracts"
 ```
 
-## Task 2: Replay the accepted Desktop packaging baseline and complete Voice feature
+## Task 2: Replay the accepted Desktop packaging baseline, package contracts, and complete Voice feature
 
 **Files:**
 
@@ -365,6 +392,12 @@ e28883110d  build: mirror electron builder tool downloads
 3ad4a12660  feat(desktop): add automatic SenseVoice dictation
 abbc79d0cd  feat(desktop): bundle backend bootstrap payload
 904d435685  fix(desktop): exclude dependency tests from package
+936ede7953  test(desktop): lock packaged bootstrap contract
+89503cfb2b  test(desktop): add backend payload integration coverage
+11d2143924  fix(desktop): close packaged payload validation gaps
+7666fc4da5  fix(desktop): harden package audit inputs
+42bbebadf9  test(desktop): add Gatekeeper payload verification
+527eb97a19  fix(desktop): close package verification findings
 ```
 
 After each commit run:
@@ -450,7 +483,9 @@ Expected: PASS. Account-server traffic remains fixed at `https://c2sml.cn/agent`
 Run:
 
 ```bash
-scripts/run_tests.sh tests/hermes_cli/client_auth/test_store.py \
+scripts/run_tests.sh tests/hermes_cli/client_auth/test_client.py \
+  tests/hermes_cli/client_auth/test_guard.py \
+  tests/hermes_cli/client_auth/test_boundaries.py \
   tests/hermes_cli/client_auth/test_runtime.py -q
 rg -n -i 'password|session|cookie|csrf|keychain' \
   apps/desktop/build/logs tests/.artifacts 2>/dev/null
@@ -542,6 +577,16 @@ git cherry-pick -x 38230a6c9f
 git cherry-pick -x 4e4a5d42c7
 ```
 
+The two owner-recovery planning documents modified by `4e4a5d42c7` were created by a historical documentation commit that is intentionally not replayed. If that cherry-pick pauses with modify/delete conflicts, resolve all product conflicts by Appendix B, then remove only these absent historical documents and continue:
+
+```bash
+git rm -q -f --ignore-unmatch -- \
+  docs/superpowers/plans/2026-08-21-auth-owner-idle-recovery.md \
+  docs/superpowers/specs/2026-08-21-auth-owner-idle-recovery-design.md
+test -z "$(git diff --name-only --diff-filter=U)"
+git cherry-pick --continue
+```
+
 These commits are no longer split between a common branch and a macOS overlay: the approved design now places their accepted product and clean-install package behavior in `main`. CI/evidence commits remain excluded and are reconstructed in Task 9.
 
 - [ ] **Step 4: Run the complete final-DMG behavior gate**
@@ -552,7 +597,7 @@ Run:
 scripts/run_tests.sh tests/hermes_cli/client_auth \
   tests/hermes_cli/test_auth_commands.py \
   tests/tui_gateway/test_account_auth.py tests/acp/test_entry.py \
-  tests/test_auth_entrypoint_manifest.py -q
+  tests/hermes_cli/client_auth/test_entrypoints.py -q
 python scripts/check_auth_entrypoints.py --check
 python scripts/generate_auth_free_help.py --check
 npm run test --workspace apps/desktop -- \
@@ -578,33 +623,16 @@ git add apps/desktop/electron/main.ts apps/desktop/electron/preload.ts \
 git commit -m "fix: reconcile final dmg auth behavior with main"
 ```
 
-## Task 5: Make the authentication and backend payload foundation cross-platform
+## Task 5: Import and freeze the accepted macOS authentication toolchain
 
 **Files:**
 
 - Create/modify: `desktop_auth_runtime/pyproject.toml`, `desktop_auth_runtime/uv.lock`, `desktop_auth_runtime/uv.toml`
-- Create/modify: `apps/desktop/scripts/build-auth-toolchain.mjs`, `build-auth-toolchain.test.mjs`, `prepare-auth-toolchain-inputs.mjs`, `prepare-auth-toolchain-inputs.test.mjs`, `build-backend-payload.mjs`, `build-backend-payload.integration.test.mjs`
-- Create: `apps/desktop/scripts/prepare-package-inputs.mjs`, `prepare-package-inputs.test.mjs`
-- Modify: `apps/desktop/package.json`, `apps/desktop/scripts/before-pack.mjs`
-- Create/modify: `apps/desktop/electron/package-runtime/**`, `bootstrap-payload*`, `bootstrap-toolchain*`, `bootstrap-process*`, `bootstrap-runner*`
-- Modify: `scripts/install.sh`, `scripts/install.ps1`
+- Create/modify: `apps/desktop/scripts/build-auth-toolchain.mjs`, `build-auth-toolchain.test.mjs`, `prepare-auth-toolchain-inputs.mjs`, `prepare-auth-toolchain-inputs.test.mjs`
+- Create/modify: `apps/desktop/electron/bootstrap-toolchain*`, `bootstrap-process*`, `bootstrap-runner*`
+- Modify: `scripts/install.sh`
 
-- [ ] **Step 1: Import accepted package contracts and payload validation**
-
-Replay these accepted package fixes/tests before generalizing the payload builders:
-
-```bash
-git cherry-pick -x 936ede7953
-git cherry-pick -x 89503cfb2b
-git cherry-pick -x 11d2143924
-git cherry-pick -x 7666fc4da5
-git cherry-pick -x 42bbebadf9
-git cherry-pick -x 527eb97a19
-```
-
-After each commit run conflict, whitespace, migration, and package-content checks. Do not import the corresponding credential workflows or historical evidence.
-
-- [ ] **Step 2: Import the accepted bundled-auth toolchain implementation**
+- [ ] **Step 1: Import the accepted bundled-auth toolchain implementation**
 
 Replay in order, one command at a time:
 
@@ -622,52 +650,165 @@ git cherry-pick -x 9689aefd08
 git cherry-pick -x bf090797fe
 ```
 
-Keep final DMG behavior for macOS. Generalize only platform selection, paths, archive format, executable names, and process APIs.
+The two domestic-bootstrap documents modified by `82b23ebde6`/`9689aefd08` were created by an intentionally dropped historical documentation commit. When either cherry-pick pauses, resolve product conflicts normally, remove only these absent documents, assert that no other unmerged path remains, and continue:
 
-- [ ] **Step 3: Write the failing dual-platform preparation contract**
+```bash
+git rm -q -f --ignore-unmatch -- \
+  docs/superpowers/plans/2026-08-22-desktop-first-launch-domestic-bootstrap.md \
+  docs/superpowers/specs/2026-08-22-desktop-first-launch-domestic-bootstrap-design.md
+test -z "$(git diff --name-only --diff-filter=U)"
+git cherry-pick --continue
+```
 
-`prepare-package-inputs.test.mjs` must assert:
+Keep the accepted `darwin-arm64` manifest layout, extraction, repair, progress, and fail-closed behavior byte-equivalent unless a later path-specific parity waiver is approved. Do not claim Windows support in this task.
 
-```javascript
-assert.deepEqual(planFor('darwin', 'arm64').outputs, [
-  'bootstrap/install.sh',
-  'bootstrap/hermes-backend.tar.gz',
-  'bootstrap/payload-manifest.json',
-  'bootstrap/auth-toolchain/manifest.json'
-])
-assert.deepEqual(planFor('win32', 'x64').outputs, [
-  'bootstrap/install.ps1',
-  'bootstrap/hermes-backend.tar.gz',
-  'bootstrap/payload-manifest.json',
-  'bootstrap/auth-toolchain/manifest.json',
-  'bootstrap/git-bash-runtime.tar.xz'
-])
-assert.throws(() => planFor('darwin', 'x64-on-arm64-builder'))
-assert.throws(() => publishWithMissingHash())
+- [ ] **Step 2: Prove the imported macOS toolchain before extending it**
+
+Run:
+
+```bash
+node --test apps/desktop/scripts/build-auth-toolchain.test.mjs \
+  apps/desktop/scripts/prepare-auth-toolchain-inputs.test.mjs
+npm run test --workspace apps/desktop -- \
+  electron/bootstrap-toolchain.integration.test.ts \
+  electron/bootstrap-process.test.ts
+scripts/run_tests.sh tests/test_install_sh_bootstrap_marker.py -q
+git diff --check
+```
+
+Expected: PASS and the accepted DMG auth toolchain still uses uv 0.12.5, its pinned macOS Python archive, hashed wheels, and no pre-login network.
+
+## Task 5A: Build a real Windows x64 offline authentication payload and close both resource lists
+
+**Files:**
+
+- Modify: `desktop_auth_runtime/pyproject.toml`, `desktop_auth_runtime/uv.lock`, `desktop_auth_runtime/uv.toml`
+- Modify: `apps/desktop/scripts/build-auth-toolchain.mjs`, `build-auth-toolchain.test.mjs`, `prepare-auth-toolchain-inputs.mjs`, `prepare-auth-toolchain-inputs.test.mjs`, `build-backend-payload.mjs`, `build-backend-payload.integration.test.mjs`
+- Create: `apps/desktop/scripts/prepare-package-inputs.mjs`, `prepare-package-inputs.test.mjs`, `windows-auth-toolchain.integration.test.mjs`
+- Extract/modify: `apps/desktop/scripts/prepare-windows-git-runtime.mjs`
+- Modify: `apps/desktop/package.json`, `apps/desktop/scripts/before-pack.mjs`, `before-pack.test.mjs`
+- Create/modify: `apps/desktop/electron/package-runtime/**`, `bootstrap-payload*`, `bootstrap-toolchain*`, `bootstrap-process*`, `bootstrap-runner*`
+- Modify: `scripts/install.sh`, `scripts/install.ps1`
+
+- [ ] **Step 1: Lock the independent Windows build inputs**
+
+Add the following exact `windows-x64` sources to the origin manifest and tests:
+
+```text
+Python: 3.13.15 Windows embeddable x64
+domestic primary: https://mirrors.huaweicloud.com/python/3.13.15/python-3.13.15-embed-amd64.zip
+upstream SHA-256: d1f04d990aee1253d8569e8e5104e30fa9f5fa830899f14843448872d936a2cf
+
+uv: 0.12.5 win_amd64 wheel, fetched through USTC then Tsinghua PyPI
+filename: uv-0.12.5-py3-none-win_amd64.whl
+upstream SHA-256: 455c3e57602e2141e66e2f0bf685898c9c5e5a70377d14c9a71554a3baf3ddbf
+```
+
+All authentication wheels are exported from `desktop_auth_runtime/uv.lock` for CPython 3.13 / `win_amd64`, downloaded through USTC then Tsinghua, and verified against lock/upstream hashes. Build-time official fallback is bounded and recorded; the installed App never performs it. Do not reuse a macOS wheel, host Python, ambient uv, or the earlier Windows online installer as evidence.
+
+- [ ] **Step 2: Write failing Windows offline-toolchain tests**
+
+Tests assert:
+
+```text
+manifest platform=win32, arch=x64, Python=3.13.15, uv=0.12.5
+the Python archive and uv wheel match the exact hashes above
+uv.exe is extracted at build time; the clean machine never downloads uv
+the wheelhouse contains only lock-authorized Windows-compatible wheels
+Python's ._pth enables only the packaged stdlib and local site-packages
+installation uses --no-index and the bundled wheelhouse
+Expand-Archive runs through System32 PowerShell with -NoProfile/-NonInteractive and a bounded process tree
+no auth bridge process starts from a partially extracted directory
+corrupt/missing/wrong-architecture inputs fail before the login form is enabled
 ```
 
 Run:
 
 ```bash
-node --test apps/desktop/scripts/prepare-package-inputs.test.mjs
+node --test apps/desktop/scripts/build-auth-toolchain.test.mjs \
+  apps/desktop/scripts/prepare-auth-toolchain-inputs.test.mjs \
+  apps/desktop/scripts/windows-auth-toolchain.integration.test.mjs
+npm run test --workspace apps/desktop -- \
+  electron/bootstrap-toolchain.integration.test.ts electron/bootstrap-process.test.ts
 ```
 
-Expected: FAIL because the shared dispatcher does not exist.
+Expected: FAIL because no Windows offline auth toolchain exists in any reference.
 
-- [ ] **Step 4: Implement the shared package-input dispatcher**
+- [ ] **Step 3: Implement and prove the Windows auth toolchain**
+
+Extend the manifest schema with an explicit platform asset layout: macOS retains `uv.gz` plus `python.tar.gz`; Windows uses build-extracted `uv.exe` plus the pinned `python-embed.zip`. Runtime extraction occurs in a private staging directory, verifies every asset before use, installs only from the local hashed wheelhouse with `--no-index`, verifies imports and `https://c2sml.cn/agent` bridge startup, then atomically publishes. No renderer URL, inherited package index, remote script, or runtime download is accepted.
+
+The same `desktop_auth_runtime` lock must export both `darwin-arm64` and `windows-x64`. Add an installed-Windows integration assertion that imports `keyring`, selects Windows Credential Manager, performs a loopback bridge health check, and never contacts the network.
+
+- [ ] **Step 4: Implement the package-input dispatcher with both build roots**
+
+First extract the accepted Windows Git builder, then adapt it without changing its verified archive/audit semantics:
+
+```bash
+git restore --source=c2d3d09aab -- \
+  apps/desktop/scripts/prepare-windows-git-runtime.mjs
+git add apps/desktop/scripts/prepare-windows-git-runtime.mjs
+```
 
 The public interface is exact:
 
 ```javascript
 export function packageInputPlan({ platform, arch, repoRoot, desktopRoot })
+export function packageResourcePlan({ platform, arch })
 export async function preparePackageInputs({ platform, arch, repoRoot, desktopRoot, env })
 ```
 
-The dispatcher calls existing focused builders, verifies every manifest size/SHA-256, and atomically publishes only to `apps/desktop/build/bootstrap`. It rejects symlinks, unsupported platform/arch pairs, dirty or zero commit stamps, missing locks, and any output outside the build directory.
+`packageInputPlan` declares build-relative outputs. The exact platform outputs are:
 
-- [ ] **Step 5: Wire direct build commands to preparation**
+```javascript
+assert.deepEqual(planFor('darwin', 'arm64').outputs, [
+  'build/bootstrap/install.sh',
+  'build/bootstrap/hermes-backend.tar.gz',
+  'build/bootstrap/payload-manifest.json',
+  'build/bootstrap/auth-toolchain/manifest.json'
+])
+assert.deepEqual(planFor('win32', 'x64').outputs, [
+  'build/bootstrap/install.ps1',
+  'build/bootstrap/hermes-backend.tar.gz',
+  'build/bootstrap/payload-manifest.json',
+  'build/bootstrap/auth-toolchain/manifest.json',
+  'build/windows-prereqs/git-bash-runtime.tar.xz'
+])
+```
 
-`apps/desktop/package.json` must contain:
+The dispatcher verifies every size/SHA-256 and atomically publishes only under `apps/desktop/build/bootstrap` or `apps/desktop/build/windows-prereqs`. The Git builder keeps its accepted `build/windows-prereqs` output; it is not falsely rewritten as a bootstrap output. Symlinks, unsupported pairs, dirty/zero commit stamps, missing locks, extra outputs, and any path outside those two build roots are rejected.
+
+- [ ] **Step 5: Write the exact Electron Builder resource closure and direct commands**
+
+`apps/desktop/package.json` must retain the global stamp/icon resources and contain these exact platform-scoped mappings:
+
+```json
+{
+  "build": {
+    "mac": {
+      "extraResources": [
+        {"from":"build/bootstrap/install.sh","to":"bootstrap/install.sh"},
+        {"from":"build/bootstrap/hermes-backend.tar.gz","to":"bootstrap/hermes-backend.tar.gz"},
+        {"from":"build/bootstrap/payload-manifest.json","to":"bootstrap/payload-manifest.json"},
+        {"from":"build/bootstrap/auth-toolchain","to":"bootstrap/auth-toolchain"}
+      ]
+    },
+    "win": {
+      "extraResources": [
+        {"from":"build/bootstrap/install.ps1","to":"bootstrap/install.ps1"},
+        {"from":"build/bootstrap/hermes-backend.tar.gz","to":"bootstrap/hermes-backend.tar.gz"},
+        {"from":"build/bootstrap/payload-manifest.json","to":"bootstrap/payload-manifest.json"},
+        {"from":"build/bootstrap/auth-toolchain","to":"bootstrap/auth-toolchain"},
+        {"from":"build/windows-prereqs/git-bash-runtime.tar.xz","to":"bootstrap/git-bash-runtime.tar.xz"}
+      ]
+    }
+  }
+}
+```
+
+`prepare-package-inputs.test.mjs` compares each `from`/`to` entry one-for-one with `packageInputPlan`/`packageResourcePlan`; an output with no mapping or a mapping with no verified output fails.
+
+The package scripts are exact:
 
 ```json
 {
@@ -678,35 +819,39 @@ The dispatcher calls existing focused builders, verifies every manifest size/SHA
 }
 ```
 
-Tests assert these commands cannot bypass preparation. The existing generic `dist:mac`, `dist:win`, ZIP, and MSI commands may remain but must either invoke the same preparation or be explicitly marked non-release development builds.
+Tests prove neither direct command can bypass preparation. Generic DMG/ZIP/NSIS/MSI commands either invoke the same dispatcher or are explicitly non-release development commands.
 
-- [ ] **Step 6: Run payload contracts and commit**
+- [ ] **Step 6: Run payload/resource contracts and commit**
 
 Run:
 
 ```bash
 node --test apps/desktop/scripts/build-auth-toolchain.test.mjs \
   apps/desktop/scripts/prepare-auth-toolchain-inputs.test.mjs \
+  apps/desktop/scripts/windows-auth-toolchain.integration.test.mjs \
   apps/desktop/scripts/prepare-package-inputs.test.mjs \
   apps/desktop/scripts/before-pack.test.mjs
 npm run test --workspace apps/desktop -- \
   electron/bootstrap-payload.integration.test.ts \
   electron/bootstrap-toolchain.integration.test.ts \
-  electron/bundled-runtime.integration.test.ts
+  electron/bundled-runtime.integration.test.ts electron/bootstrap-process.test.ts
 scripts/run_tests.sh tests/test_install_sh_bootstrap_marker.py \
   tests/test_install_ps1_uv_powershell_host.py -q
 bash -n scripts/install.sh
+python scripts/check_main_auth_voice_migration.py --base ansatz/main
+python scripts/check_hermes_managed_downloads.py
 git diff --check
 ```
 
-Expected: PASS on macOS units and Windows fakes without downloading runtime dependencies.
+Expected: PASS on macOS units and Windows fakes; both package resource lists are complete; the Windows auth payload is fully local and hash-verified.
 
 Commit:
 
 ```bash
 git add desktop_auth_runtime apps/desktop/electron apps/desktop/scripts \
-  apps/desktop/package.json scripts/install.sh scripts/install.ps1
-git commit -m "feat(desktop): add cross-platform packaged runtime foundation"
+  apps/desktop/package.json scripts/install.sh scripts/install.ps1 \
+  docs/security/hermes-managed-download-origins.json
+git commit -m "feat(desktop): add dual-platform packaged auth runtime"
 ```
 
 ## Task 6: Enforce recursive domestic-mirror-first behavior
@@ -719,8 +864,9 @@ git commit -m "feat(desktop): add cross-platform packaged runtime foundation"
 - Modify: `apps/desktop/scripts/prepare-auth-toolchain-inputs.mjs`, tests
 - Modify: `scripts/install.sh`, `scripts/install.ps1`
 - Modify: `tools/lazy_deps.py`, `tools/sensevoice_stt.py`, `tools/browser_use_cli.py`, `tools/computer_use/cua_backend.py`
-- Modify: `hermes_cli/tools_config.py`
-- Modify: `tests/tools/test_lazy_deps.py`, `tests/tools/test_sensevoice_stt.py`, `tests/tools/test_browser_use_cli.py`, `tests/hermes_cli/test_tools_config.py`, `tests/test_install_sh_browser_install.py`, `tests/test_install_ps1_browser_install.py`
+- Modify: `hermes_cli/tools_config.py`, `hermes_cli/managed_uv.py`, `hermes_cli/setup.py`, `hermes_cli/update_cmd.py`, `hermes_cli/model_catalog.py`, `hermes_cli/config_defaults.py`
+- Modify: `tools/neutts_synth.py`
+- Modify: `tests/tools/test_lazy_deps.py`, `tests/tools/test_sensevoice_stt.py`, `tests/tools/test_browser_use_cli.py`, `tests/hermes_cli/test_tools_config.py`, `tests/hermes_cli/test_managed_uv.py`, `tests/hermes_cli/test_setup.py`, `tests/hermes_cli/test_model_catalog.py`, `tests/cli/test_update_command.py`, `tests/test_install_sh_browser_install.py`, `tests/test_install_ps1_browser_install.py`
 
 - [ ] **Step 1: Write failing recursive propagation tests**
 
@@ -736,6 +882,9 @@ repair/update/lazy feature paths use the same policy as first install
 inherited attacker PIP_*, UV_*, npm, Node, Electron, Playwright, and HF variables are removed
 an unregistered third-party installer cannot execute
 official fallback occurs only after bounded domestic failures
+Electron install/repair tries npmmirror first rather than preserving the current official-first fallback order
+KittenTTS, Hermes source update, model-catalog, and HuggingFace model paths are registered or fail safely without a GitHub-first request
+managed_uv never executes astral.sh install.sh/install.ps1 or any downloaded script
 ```
 
 Run:
@@ -743,7 +892,9 @@ Run:
 ```bash
 scripts/run_tests.sh tests/test_hermes_managed_downloads.py \
   tests/tools/test_lazy_deps.py tests/tools/test_sensevoice_stt.py \
-  tests/tools/test_browser_use_cli.py tests/hermes_cli/test_tools_config.py -q
+  tests/tools/test_browser_use_cli.py tests/hermes_cli/test_tools_config.py \
+  tests/hermes_cli/test_managed_uv.py tests/hermes_cli/test_setup.py \
+  tests/hermes_cli/test_model_catalog.py tests/cli/test_update_command.py -q
 npm run test --workspace apps/desktop -- \
   electron/runtime-download-policy.test.ts electron/bootstrap-process.test.ts
 ```
@@ -791,6 +942,9 @@ irm URL | iex
 raw.githubusercontent.com installer execution
 official-first uv/Node/Git archive lookup
 lazy uv tool install without mirror environment
+the current official-first Electron attempt guarded only by DESKTOP_ELECTRON_FALLBACK_MIRROR
+the direct KittenTTS GitHub wheel and Hermes GitHub archive/clone paths
+an unregistered HuggingFace model identifier or raw model-catalog URL
 ```
 
 with one of:
@@ -803,6 +957,10 @@ a clear manual-action failure when no trusted domestic/bundled path exists
 ```
 
 Do not silently disable Computer Use or Browser Use. The UI/CLI must report why automatic installation is unavailable and how an administrator can supply the pinned artifact.
+
+`scripts/install.sh` and `scripts/install.ps1` must rename/restructure the current fallback-only Electron constant so `https://npmmirror.com/mirrors/electron/` is the first bounded attempt for install, repair, and rebuild. The official Electron distribution is attempted only after the domestic timeout/failure and only with the pinned version/hash policy. Tests reject the old `DESKTOP_ELECTRON_FALLBACK_MIRROR`/`DesktopElectronFallbackMirror` behavior if it still performs an official request first.
+
+`hermes_cli/managed_uv.py` must use the registered bundled or domestic-PyPI uv wheel path and never `curl`/`irm` an Astral script. KittenTTS's GitHub-only wheel and Hermes source archives cannot run automatically on a clean packaged installation unless a reviewed domestic origin and hash are registered; otherwise the product gives a clear administrator-supplied-artifact/update message. HuggingFace-backed models use the registered domestic endpoint first with pinned repository revision/file hashes and sanitized headers. The origin checker derives these obligations from discovered callers, so adding a later download sink without updating policy and tests fails the gate.
 
 - [ ] **Step 4: Add a controlled-proxy integration test**
 
@@ -825,6 +983,8 @@ Run:
 scripts/run_tests.sh tests/test_hermes_managed_downloads.py \
   tests/tools/test_lazy_deps.py tests/tools/test_sensevoice_stt.py \
   tests/tools/test_browser_use_cli.py tests/hermes_cli/test_tools_config.py \
+  tests/hermes_cli/test_managed_uv.py tests/hermes_cli/test_setup.py \
+  tests/hermes_cli/test_model_catalog.py tests/cli/test_update_command.py \
   tests/test_install_sh_browser_install.py tests/test_install_ps1_browser_install.py -q
 npm run test --workspace apps/desktop -- \
   electron/runtime-download-policy.test.ts electron/bootstrap-process.test.ts
@@ -847,9 +1007,13 @@ git add docs/security/hermes-managed-download-origins.json \
   apps/desktop/scripts/prepare-auth-toolchain-inputs.test.mjs \
   scripts/install.sh scripts/install.ps1 tools/lazy_deps.py \
   tools/sensevoice_stt.py tools/browser_use_cli.py \
-  tools/computer_use/cua_backend.py hermes_cli/tools_config.py \
+  tools/computer_use/cua_backend.py tools/neutts_synth.py \
+  hermes_cli/tools_config.py hermes_cli/managed_uv.py hermes_cli/setup.py \
+  hermes_cli/update_cmd.py hermes_cli/model_catalog.py hermes_cli/config_defaults.py \
   tests/test_hermes_managed_downloads.py tests/tools \
-  tests/hermes_cli/test_tools_config.py \
+  tests/hermes_cli/test_tools_config.py tests/hermes_cli/test_managed_uv.py \
+  tests/hermes_cli/test_setup.py tests/hermes_cli/test_model_catalog.py \
+  tests/cli/test_update_command.py \
   tests/test_install_sh_browser_install.py tests/test_install_ps1_browser_install.py
 git commit -m "fix(installer): enforce recursive domestic mirror policy"
 ```
@@ -859,8 +1023,8 @@ git commit -m "fix(installer): enforce recursive domestic mirror policy"
 **Files:**
 
 - Create/modify: `apps/desktop/electron/windows-auth-owner*`, `auth-runtime-contract*`
-- Create/modify: `apps/desktop/scripts/prepare-windows-git-runtime.mjs`, `package-audit.mjs`
-- Create/modify: `scripts/build-desktop-windows.mjs`, `build-desktop-windows.test.mjs`, `desktop-windows-contract.mjs`, `desktop-windows-contract.test.mjs`
+- Modify: `apps/desktop/scripts/prepare-windows-git-runtime.mjs`; create/modify: `apps/desktop/scripts/package-audit.mjs`
+- Create/modify: `scripts/build-desktop-windows.mjs`, `build-desktop-windows.test.mjs`, `desktop-windows-contract.mjs`, `desktop-windows-contract.test.mjs`, `desktop-credential-login.test.mjs`
 - Create/modify: `scripts/test-desktop-windows-install.ps1`, `test-desktop-windows-auth-host.ps1`
 - Create/modify: `scripts/tests/test-install-ps1-managed-uv.ps1`, `test-install-ps1-packaged-lock.ps1`
 - Create/modify: `apps/desktop/e2e/installed-windows-smoke.spec.ts`, `installed-windows-auth.spec.ts`
@@ -876,7 +1040,6 @@ git restore --source=c2d3d09aab -- \
   apps/desktop/electron/windows-auth-owner.test.ts \
   apps/desktop/electron/auth-runtime-contract.ts \
   apps/desktop/electron/auth-runtime-contract.test.ts \
-  apps/desktop/scripts/prepare-windows-git-runtime.mjs \
   apps/desktop/scripts/package-audit.mjs \
   apps/desktop/e2e/installed-windows-smoke.spec.ts \
   apps/desktop/e2e/installed-windows-auth.spec.ts \
@@ -884,6 +1047,7 @@ git restore --source=c2d3d09aab -- \
   scripts/build-desktop-windows.test.mjs \
   scripts/desktop-windows-contract.mjs \
   scripts/desktop-windows-contract.test.mjs \
+  scripts/desktop-credential-login.test.mjs \
   scripts/test-desktop-windows-install.ps1 \
   scripts/test-desktop-windows-auth-host.ps1 \
   scripts/tests/test-install-ps1-managed-uv.ps1 \
@@ -945,16 +1109,16 @@ No Windows adapter may maintain a private copy of `client_auth/runtime.py` or by
 
 - [ ] **Step 3: Make the direct NSIS command self-contained**
 
-Root `package.json` retains:
+Root `package.json` adds these scripts from the accepted Windows reference; they do not exist on `ansatz/main`:
 
 ```json
 {
   "build:desktop:windows": "node scripts/build-desktop-windows.mjs",
-  "test:desktop:windows-contract": "node --test scripts/desktop-windows-contract.test.mjs scripts/build-desktop-windows.test.mjs"
+  "test:desktop:windows-contract": "node --test scripts/desktop-windows-contract.test.mjs scripts/build-desktop-windows.test.mjs scripts/desktop-credential-login.test.mjs"
 }
 ```
 
-`apps/desktop` `dist:win:nsis` must prepare payloads itself as defined in Task 5. `build:desktop:windows` may wrap it with logging/audit but cannot be the only route that produces a valid clean-install package.
+`apps/desktop` `dist:win:nsis` must prepare payloads itself as defined in Task 5A. `build:desktop:windows` may wrap it with logging/audit but cannot be the only route that produces a valid clean-install package.
 
 - [ ] **Step 4: Run Windows contracts on macOS with fakes**
 
@@ -986,6 +1150,7 @@ git add apps/desktop/electron apps/desktop/scripts apps/desktop/e2e \
   apps/desktop/package.json package.json scripts/install.ps1 \
   scripts/build-desktop-windows.mjs scripts/build-desktop-windows.test.mjs \
   scripts/desktop-windows-contract.mjs scripts/desktop-windows-contract.test.mjs \
+  scripts/desktop-credential-login.test.mjs \
   scripts/test-desktop-windows-install.ps1 \
   scripts/test-desktop-windows-auth-host.ps1 scripts/tests
 git commit -m "feat(desktop): add Windows clean-install auth voice package"
@@ -1046,12 +1211,25 @@ The checker compares the candidate with `80db6d8265` over the ledger-derived com
 ```json
 {
   "path": "apps/desktop/electron/package-runtime/platform.ts",
-  "reason": "adds Windows adapter without changing macOS behavior",
+  "reason": "windows-adapter-addition",
+  "owner": "package-shared",
+  "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
   "tests": ["apps/desktop/electron/package-runtime/platform.test.ts"]
 }
 ```
 
-No directory-level waiver is allowed. Voice paths from `3ad4a12660` require blob equality unless the waiver identifies an authentication integration test.
+`reason` is an enum, never free text:
+
+```text
+windows-adapter-addition
+package-producer-interface-extraction
+neutral-platform-wording
+dependency-lock-regeneration
+upstream-main-preservation
+auth-integration
+```
+
+Every waiver has exactly one path, a ledger owner, the full reference SHA, and at least one path-specific test. Preassign `docs/security/remote-auth-release-evidence.md` to `neutral-platform-wording` and the reconciled `hermes_cli/main.py` producer/entrypoint interface to `package-producer-interface-extraction` when their hashes differ for only those reviewed reasons. No directory-level waiver is allowed. Voice paths from `3ad4a12660` require blob equality unless the waiver uses `auth-integration` and names the exact authentication integration test.
 
 - [ ] **Step 4: Run the full static gate and commit**
 
@@ -1445,13 +1623,15 @@ Equivalent macOS behavior is not replayed a second time from Windows. Unique pla
 
 | Surface | Required result | Rejected resolution |
 | --- | --- | --- |
-| `apps/desktop/package.json` | Existing main macOS/Windows targets plus payload preparation for both direct release commands. | Taking the DMG or Windows file wholesale. |
+| `apps/desktop/package.json` | Existing main macOS/Windows targets, both direct preparation commands, four exact macOS payload resources, and five exact Windows payload resources. | Taking either reference wholesale, generating unshipped inputs, or omitting `build.win.extraResources`. |
 | `apps/desktop/electron/main.ts` | Final DMG Auth Guard/epoch/progress behavior plus Windows adapter injection. | Platform-specific duplicate authentication flow. |
 | `apps/desktop/src/hermes.ts` | Voice APIs and protected authenticated APIs together. | Dropping either feature set. |
 | localization | Complete main catalog plus login/logout/progress/Voice strings in every supported language. | Replacing current catalogs with an older branch. |
 | `hermes_cli/main.py` | Central gate for every entrypoint plus current main CLI features. | Early bootstrap before auth or DMG-only CLI fork. |
 | `hermes_cli/client_auth/runtime.py` | Shared policy, Unix socket on macOS, SID-validated named pipe on Windows. | Windows private copy or insecure TCP fallback. |
 | `scripts/install.sh` / `.ps1` | Same stage protocol and recursive mirror contract; only command/path syntax differs. | Official-first nested installer or raw remote script execution. |
+| authentication toolchain | Accepted `darwin-arm64` payload plus independently built, hash-pinned `windows-x64` Python/uv/wheelhouse payload. | Treating Windows as a path rename, using host Python, or downloading before login. |
+| Windows Git runtime | Builder publishes under `build/windows-prereqs`; Electron maps it to packaged `bootstrap/git-bash-runtime.tar.xz`. | Claiming the builder publishes under `build/bootstrap` or leaving the generated archive unmapped. |
 | `pyproject.toml` / `uv.lock` | Current main dependencies plus auth/Voice, regenerated locks, hashed packaged export. | Copying a stale lock or hand editing. |
 | SenseVoice | ModelScope first, pinned size/SHA-256, resumable download, Voice failure isolated from auth. | Provider requirement or unverified model source. |
 | workflows | Same local build commands and artifact behavior; excluded from packages. | CI-only source patch, auth bypass, or runtime dependency. |
@@ -1462,10 +1642,11 @@ Stop and obtain review after:
 
 1. Task 1 ownership/download contracts.
 2. Task 4 final-DMG authentication behavior replay.
-3. Task 7 Windows package reconciliation.
-4. Task 9 workflow repair.
-5. Task 10 full pre-build regression.
-6. Task 11 macOS clean-install acceptance.
-7. Task 12 Windows clean-install acceptance.
+3. Task 5A Windows offline-auth payload and exact resource closure.
+4. Task 7 Windows package reconciliation.
+5. Task 9 workflow repair.
+6. Task 10 full pre-build regression.
+7. Task 11 macOS clean-install acceptance.
+8. Task 12 Windows clean-install acceptance.
 
 At each checkpoint report current commit, changed paths, exact test commands/results, parity waivers, and unresolved risks. Never collapse multiple failed checkpoints into one undocumented repair.
