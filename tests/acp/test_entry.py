@@ -43,6 +43,15 @@ def test_main_skips_configured_mcp_discovery_when_requested(monkeypatch):
 
     assert discovery_calls == []
 
+
+
+
+
+
+
+
+
+
 def test_main_setup_offers_browser_install_when_tty(monkeypatch):
     """When stdin is a TTY and the user answers yes, model setup is followed
     by a browser-tools bootstrap call."""
@@ -65,6 +74,15 @@ def test_main_setup_offers_browser_install_when_tty(monkeypatch):
     entry.main(["--setup"])
 
     assert bootstrap_calls == [False]
+
+
+
+
+
+
+
+
+
 
 def test_main_setup_browser_propagates_browser_failure(monkeypatch):
     """If browser install fails, exit code is 1."""

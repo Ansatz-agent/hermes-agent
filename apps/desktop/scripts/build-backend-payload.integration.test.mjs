@@ -129,3 +129,26 @@ test('backend payload rejects CI-only files even under an allowed runtime path',
     fs.rmSync(fixture.repoRoot, { recursive: true, force: true })
   }
 })
+
+test('backend payload rejects a credential-login driver nested under an allowed runtime path', () => {
+  const fixture = makeRepository({
+    'apps/shared/runtime.txt': 'runtime payload\n',
+    'apps/shared/desktop-dmg-credential-login.mjs': 'throw new Error("CI only")\n'
+  })
+  try {
+    assert.throws(
+      () =>
+        buildBackendPayload({
+          repoRoot: fixture.repoRoot,
+          stampPath: fixture.stampPath,
+          outputDir: fixture.outputDir,
+          payloadPaths: ['apps/shared'],
+          payloadExcludes: [],
+          requiredEntries: ['hermes-agent/apps/shared/runtime.txt']
+        }),
+      /CI-only entry/
+    )
+  } finally {
+    fs.rmSync(fixture.repoRoot, { recursive: true, force: true })
+  }
+})

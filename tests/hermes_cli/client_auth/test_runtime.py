@@ -53,6 +53,7 @@ from hermes_cli.client_auth.runtime import (
     start_runtime_owner,
     wait_until_authorized,
     _read_runtime_frame,
+    _test_runtime_suffix,
 )
 
 
@@ -2258,7 +2259,7 @@ def test_macos_runtime_endpoint_uses_darwin_private_temp_and_short_path():
     endpoint = runtime_endpoint()
 
     assert isinstance(endpoint, UnixEndpoint)
-    assert endpoint.root.name.startswith("ha-t")
+    assert endpoint.root.name == f"ha{_test_runtime_suffix()}"
     assert endpoint.root.stat().st_mode & 0o777 == 0o700
     assert len(os.fsencode(endpoint.socket_path)) < 104
 

@@ -160,7 +160,7 @@ const DECLARATION_TEST_RE = /\.(test|spec)-d\.ts$/
 const NESTED_DOCS_RE = /(^|\/)docs(\/|$)/
 const GIT_METADATA_RE = /(^|\/)\.(gitignore|gitattributes|gitmodules)$/
 const CI_ONLY_ENTRY_RE =
-  /(^|\/)\.github\/|^hermes-agent\/scripts\/(?:desktop-dmg-|verify-desktop-dmg-)/
+  /(^|\/)\.github\/|^hermes-agent\/scripts\/(?:desktop-dmg-|verify-desktop-dmg-)|(^|\/)(?:desktop-dmg-credential-login|verify-desktop-dmg-gatekeeper)(?:\.|\/|$)/
 
 function runtimeScriptEntryIsAllowed(entry) {
   const prefix = "hermes-agent/scripts"
