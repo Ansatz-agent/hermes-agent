@@ -42,6 +42,13 @@ MODEL_PATTERNS = (
     re.compile(r"\bsnapshot_download\s*\(\s*[\"']([^\"']+)[\"']"),
     re.compile(r"\bhf_hub_download\s*\([^)]*?repo_id\s*=\s*[\"']([^\"']+)[\"']", re.DOTALL),
 )
+DOWNLOAD_API_PATTERNS = (
+    (re.compile(r"\brequests\.get\s*\("), "requests.get"),
+    (re.compile(r"\brequests\.Session\s*\([^)]*\)\.get\s*\("), "requests.Session.get"),
+    (re.compile(r"\bhttpx\.get\s*\("), "httpx.get"),
+    (re.compile(r"\bhttpx\.stream\s*\("), "httpx.stream"),
+    (re.compile(r"\bfetch\s*\("), "fetch"),
+)
 PACKAGE_MANAGER_RE = re.compile(
     r"uv[\"']?\s*[, ]+\s*[\"']?tool[\"']?\s*[, ]+\s*[\"']?install[\"']?\s*[, ]+\s*[\"']?browser-use",
     re.IGNORECASE,
@@ -226,6 +233,15 @@ def discover_sinks(
                 Sink(path, "model-id", match.group(1), source_line(source, match.start()))
             )
 
+    executable = dict(executable_lines(path, source))
+    for pattern, api_name in DOWNLOAD_API_PATTERNS:
+        for match in pattern.finditer(source):
+            line_number = source_line(source, match.start())
+            line = executable.get(line_number)
+            if line is None or "https://" in line:
+                continue
+            sinks.append(Sink(path, "download-api", api_name, line_number))
+
     for match in PACKAGE_MANAGER_RE.finditer(source):
         sinks.append(
             Sink(
@@ -293,7 +309,7 @@ def caller_key(raw: object) -> tuple[str, str, str]:
     path = normalize_path(raw.get("path"), field="caller path")
     kind = raw.get("kind")
     value = raw.get("value")
-    if kind not in {"literal-url", "model-id", "package-manager"}:
+    if kind not in {"literal-url", "model-id", "package-manager", "download-api"}:
         raise DownloadPolicyError(f"invalid caller kind for {path}: {kind!r}")
     if not isinstance(value, str) or not value:
         raise DownloadPolicyError(f"invalid caller value for {path}")
@@ -305,6 +321,8 @@ def validate_entries(
     sinks: list[Sink],
     sources: dict[str, str],
     temporary_legacy_unmanaged_children: set[tuple[str, str, str]],
+    temporary_legacy_bundled_callers: set[tuple[str, str, str]],
+    temporary_legacy_official_only_callers: set[tuple[str, str, str]],
 ) -> list[str]:
     entries = manifest.get("entries")
     if not isinstance(entries, list):
@@ -382,6 +400,24 @@ def validate_entries(
             registered[key] = entry_id
             if key in discovered:
                 matched = True
+                if delivery == "bundled" and key not in temporary_legacy_bundled_callers:
+                    violations.append(
+                        f"{entry_id}: bundled delivery still has a runtime caller: {key[0]}"
+                    )
+                if delivery == "domestic-first":
+                    primary = entry.get("domestic_primary")
+                    official = entry.get("official_fallback")
+                    source = sources.get(key[0], "")
+                    if (
+                        isinstance(primary, str)
+                        and isinstance(official, str)
+                        and key[2].startswith(official)
+                        and primary not in source
+                        and key not in temporary_legacy_official_only_callers
+                    ):
+                        violations.append(
+                            f"{entry_id}: domestic primary is absent before official fallback in {key[0]}"
+                        )
         if callers and not matched and not output_paths:
             violations.append(f"{entry_id}: orphan manifest entry")
         if not callers and not output_paths:
@@ -419,6 +455,14 @@ def validate_entries(
             "orphan temporary legacy unmanaged child caller: "
             + " | ".join(orphan)
         )
+    for label, declared in (
+        ("bundled runtime", temporary_legacy_bundled_callers),
+        ("official-only", temporary_legacy_official_only_callers),
+    ):
+        for orphan in sorted(declared - set(discovered)):
+            violations.append(
+                f"orphan temporary legacy {label} caller: " + " | ".join(orphan)
+            )
     return violations
 
 
@@ -457,11 +501,16 @@ def main() -> int:
             return 0
 
         manifest = load_manifest(manifest_path)
-        raw_origins = manifest.get("account_server_origins", DEFAULT_ACCOUNT_ORIGINS)
-        if not isinstance(raw_origins, list) or not all(
-            isinstance(origin, str) and origin.startswith("https://") for origin in raw_origins
-        ):
-            raise DownloadPolicyError("account_server_origins must be HTTPS URLs")
+        raw_origins = manifest.get("account_server_origins")
+        if raw_origins != list(DEFAULT_ACCOUNT_ORIGINS):
+            raise DownloadPolicyError(
+                "account_server_origins must contain only the fixed Hermes account server"
+            )
+        raw_endpoint_paths = manifest.get("user_configured_endpoint_paths")
+        if raw_endpoint_paths != sorted(NON_DOWNLOAD_LITERAL_PATHS):
+            raise DownloadPolicyError(
+                "user_configured_endpoint_paths must equal the narrow reviewed path list"
+            )
         account_origins = tuple(raw_origins)
         sources = source_sets[0]
         sinks, violations = inventory([sources], account_origins=account_origins)
@@ -481,7 +530,22 @@ def main() -> int:
                 "temporary_legacy_unmanaged_child_callers must be a caller list"
             )
         legacy_children = {caller_key(item) for item in raw_legacy_children}
-        violations.extend(validate_entries(manifest, sinks, sources, legacy_children))
+        raw_bundled_callers = manifest.get("temporary_legacy_bundled_runtime_callers", [])
+        raw_official_callers = manifest.get("temporary_legacy_official_only_callers", [])
+        if not isinstance(raw_bundled_callers, list) or not isinstance(raw_official_callers, list):
+            raise DownloadPolicyError("temporary legacy caller fields must be caller lists")
+        bundled_callers = {caller_key(item) for item in raw_bundled_callers}
+        official_callers = {caller_key(item) for item in raw_official_callers}
+        violations.extend(
+            validate_entries(
+                manifest,
+                sinks,
+                sources,
+                legacy_children,
+                bundled_callers,
+                official_callers,
+            )
+        )
     except DownloadPolicyError as exc:
         print(f"hermes managed downloads: {exc}", file=sys.stderr)
         return 1

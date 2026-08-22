@@ -157,6 +157,20 @@ def test_product_path_manifest_equals_ledger_projection() -> None:
     ]
     assert actual == sorted(actual)
     assert actual == expected
+    assert all(not path.endswith("/") for path in actual), (
+        "product ownership must use exact paths so test/CI descendants cannot be packaged"
+    )
+    assert all(
+        not path.startswith((".github/", "tests/"))
+        and (
+            not path.startswith("docs/")
+            or path == "docs/security/hermes-managed-download-origins.json"
+        )
+        and "/e2e/" not in path
+        and ".test." not in path
+        and ".spec." not in path
+        for path in actual
+    )
 
 
 def test_current_candidate_has_one_owner_and_no_generated_or_secret_artifacts() -> None:

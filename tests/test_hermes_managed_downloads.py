@@ -233,6 +233,82 @@ def test_runtime_github_only_entry_is_rejected(tmp_path: Path) -> None:
     assert "github" in result.stderr.lower()
 
 
+def test_dynamic_download_api_is_rejected_without_registered_policy(
+    tmp_path: Path,
+) -> None:
+    path = "tools/lazy_deps.py"
+    write_source(
+        tmp_path,
+        path,
+        "import requests\nruntime_url = configured_url()\nrequests.get(runtime_url)\n",
+    )
+    manifest = write_manifest(tmp_path, entries=[])
+
+    result = invoke(tmp_path, manifest)
+
+    assert result.returncode != 0
+    assert path in result.stderr
+    assert "requests.get" in result.stderr
+
+
+def test_account_origin_list_cannot_be_broadened_to_hide_dependencies(
+    tmp_path: Path,
+) -> None:
+    path = "tools/lazy_deps.py"
+    value = "https://github.com/example/runtime/releases/download/v1/runtime.zip"
+    write_source(tmp_path, path, f"import requests\nrequests.get('{value}')\n")
+    manifest = write_manifest(tmp_path, entries=[])
+    value_json = json.loads(manifest.read_text(encoding="utf-8"))
+    value_json["account_server_origins"].append("https://github.com")
+    manifest.write_text(json.dumps(value_json) + "\n", encoding="utf-8")
+
+    result = invoke(tmp_path, manifest)
+
+    assert result.returncode != 0
+    assert "account_server_origins" in result.stderr
+
+
+def test_domestic_first_entry_requires_primary_to_be_present_before_fallback(
+    tmp_path: Path,
+) -> None:
+    path = "scripts/install.sh"
+    official = "https://pypi.org/simple"
+    write_source(tmp_path, path, f"curl -fL {official}\n")
+    entry = valid_entry(path=path, value=official)
+    manifest = write_manifest(tmp_path, entries=[entry])
+
+    result = invoke(tmp_path, manifest)
+
+    assert result.returncode != 0
+    assert "domestic" in result.stderr.lower()
+
+
+def test_bundled_entry_rejects_runtime_download_caller_without_exact_legacy_exception(
+    tmp_path: Path,
+) -> None:
+    path = "tools/lazy_deps.py"
+    value = "https://github.com/example/runtime/releases/download/v1/runtime.zip"
+    write_source(tmp_path, path, f"import requests\nrequests.get('{value}')\n")
+    entry = valid_entry(path=path, value=value)
+    entry.update(
+        {
+            "delivery": "bundled",
+            "domestic_primary": None,
+            "domestic_secondary": None,
+            "official_fallback": None,
+            "packaged_outputs": ["build/bootstrap/runtime.zip"],
+            "build_provenance": "locked build input",
+            "sha256": "a" * 64,
+        }
+    )
+    manifest = write_manifest(tmp_path, entries=[entry])
+
+    result = invoke(tmp_path, manifest)
+
+    assert result.returncode != 0
+    assert "bundled" in result.stderr.lower()
+
+
 def test_child_installer_requires_sanitized_managed_environment(tmp_path: Path) -> None:
     path = "tools/lazy_deps.py"
     write_source(

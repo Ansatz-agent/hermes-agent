@@ -1724,9 +1724,29 @@
   ],
   "path_owners": [
     {
-      "match": "prefix",
-      "path": ".github/",
+      "match": "exact",
+      "path": ".github/workflows/desktop-dmg-gatekeeper.yml",
       "owner": "ci-infrastructure"
+    },
+    {
+      "match": "exact",
+      "path": ".github/workflows/desktop-windows-package.yml",
+      "owner": "ci-infrastructure"
+    },
+    {
+      "match": "exact",
+      "path": ".github/workflows/tests-os.yml",
+      "owner": "ci-infrastructure"
+    },
+    {
+      "match": "exact",
+      "path": ".github/workflows/tests.yml",
+      "owner": "ci-infrastructure"
+    },
+    {
+      "match": "exact",
+      "path": ".gitignore",
+      "owner": "common-product"
     },
     {
       "match": "exact",
@@ -1734,13 +1754,443 @@
       "owner": "package-shared"
     },
     {
-      "match": "prefix",
-      "path": "apps/desktop/e2e/",
+      "match": "exact",
+      "path": ".nvmrc",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "SECURITY.md",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "acp_adapter/__main__.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "acp_adapter/entry.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "acp_adapter/server.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "agent/agent_runtime_helpers.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "agent/conversation_loop.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "agent/learning_graph.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "agent/tool_executor.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "agent/transcription_registry.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "agent/transports/codex_app_server_session.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "agent/transports/hermes_tools_mcp_server.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/e2e/auth-assertions.ts",
       "owner": "test-evidence"
     },
     {
-      "match": "prefix",
-      "path": "apps/desktop/electron/",
+      "match": "exact",
+      "path": "apps/desktop/e2e/auth-hard-gate.spec.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/e2e/fixed-auth-contract-server.spec.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/e2e/fixed-auth-contract-server.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/e2e/fixtures.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/e2e/installed-windows-auth.spec.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/e2e/installed-windows-smoke.spec.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/e2e/windows-process-tree.spec.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/e2e/windows-process-tree.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/auth-bridge.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/auth-bridge.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/auth-coordinator.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/auth-coordinator.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/auth-runtime-contract.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/auth-runtime-contract.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/auth-scope-token.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/auth-scope-token.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/authenticated-runtime-preparation.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/authenticated-runtime-preparation.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/backend-ownership.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/backend-ownership.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/backend-probes.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/backend-probes.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/bootstrap-payload.integration.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/bootstrap-payload.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/bootstrap-process.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/bootstrap-process.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/bootstrap-progress.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/bootstrap-progress.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/bootstrap-runner.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/bootstrap-runner.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/bootstrap-toolchain.integration.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/bootstrap-toolchain.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/bundled-runtime-state.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/bundled-runtime.integration.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/connection-apply.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/connection-apply.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/connection-config.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/connection-config.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/connection-registry.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/connection-registry.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/desktop-runtime-gate.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/desktop-runtime-gate.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/external-open-policy.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/external-open-policy.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/first-run-setup-main-process.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/guarded-ipc.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/guarded-ipc.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/hardening.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/main.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/media-permission-policy.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/media-permission-policy.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/media-protocol.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/media-protocol.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/native-auth-decisions.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/native-auth-decisions.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/preload.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/preview-webview-policy.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/preview-webview-policy.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/primary-backend-startup.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/primary-backend-startup.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/profile-session-routing.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/profile-session-routing.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/renderer-log.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/renderer-log.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/ssh-bootstrap-coordinator.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/ssh-bootstrap-coordinator.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/ssh-config.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/ssh-config.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/ssh-connection.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/ssh-connection.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/trusted-renderer.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/trusted-renderer.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/windows-auth-owner.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/windows-auth-owner.ts",
+      "owner": "package-windows"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/eslint.config.mjs",
       "owner": "common-product"
     },
     {
@@ -1749,19 +2199,449 @@
       "owner": "package-shared"
     },
     {
-      "match": "prefix",
-      "path": "apps/desktop/scripts/",
+      "match": "exact",
+      "path": "apps/desktop/scripts/after-pack.mjs",
       "owner": "package-shared"
     },
     {
-      "match": "prefix",
-      "path": "apps/desktop/src/",
+      "match": "exact",
+      "path": "apps/desktop/scripts/before-pack-payload.integration.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/before-pack.mjs",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/build-auth-toolchain.mjs",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/build-auth-toolchain.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/build-backend-payload.integration.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/build-backend-payload.mjs",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/exe-identity-options.mjs",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/package-audit.mjs",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/prepare-auth-toolchain-inputs.mjs",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/prepare-auth-toolchain-inputs.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/prepare-windows-git-runtime.mjs",
+      "owner": "package-windows"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/set-exe-identity.mjs",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/stage-native-deps.mjs",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/chat/composer/controls.tsx",
       "owner": "common-product"
     },
     {
-      "match": "prefix",
-      "path": "desktop_auth_runtime/",
+      "match": "exact",
+      "path": "apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/chat/composer/hooks/use-voice-conversation.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/chat/composer/hooks/use-voice-recorder.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/chat/composer/index.tsx",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/chat/composer/types.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/chat/index.tsx",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/contrib/surfaces.test.tsx",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/contrib/surfaces.tsx",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/contrib/wiring.tsx",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/session/hooks/use-hermes-config.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/settings/constants.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/settings/helpers.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/settings/helpers.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/shell/hooks/use-account-statusbar-item.tsx",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/components/auth-bootstrap-progress.test.tsx",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/components/auth-bootstrap-progress.tsx",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/components/auth-gate.test.tsx",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/components/auth-gate.tsx",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/components/desktop-install-overlay.test.tsx",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/components/desktop-install-overlay.tsx",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/global.d.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/hermes-profile-scope.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/hermes.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/i18n/auth-catalog.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/i18n/en.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/i18n/ja.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/i18n/types.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/i18n/zh-hant.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/i18n/zh.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/lib/api-request-target.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/lib/auth-bootstrap-progress.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/lib/auth-bootstrap-progress.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/lib/gateway-ws-url.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/lib/icons.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/lib/media.remote.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/lib/media.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/lib/voice-barge-in.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/lib/voice-timing.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/main.tsx",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/protected-root.tsx",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/store/gateway.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/types/hermes.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/vitest.setup.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/shared/src/websocket-url.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "batch_runner.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "cli-config.yaml.example",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "cli.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "cron/__init__.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "cron/scheduler.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "cron/scripts/classify_items.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "desktop_auth_runtime/pyproject.toml",
       "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "desktop_auth_runtime/uv.lock",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "desktop_auth_runtime/uv.toml",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "docker/cont-init.d/02-reconcile-profiles",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "docker/main-wrapper.sh",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "docker/s6-rc.d/dashboard/dependencies.d/hermes-auth-runtime",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "docker/s6-rc.d/dashboard/down",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "docker/s6-rc.d/dashboard/run",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "docker/s6-rc.d/hermes-auth-runtime/finish",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "docker/s6-rc.d/hermes-auth-runtime/run",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "docker/s6-rc.d/hermes-auth-runtime/type",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "docker/s6-rc.d/main-hermes/dependencies.d/hermes-auth-runtime",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "docker/s6-rc.d/main-hermes/down",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "docker/s6-rc.d/user/contents.d/hermes-auth-runtime",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "docker/stage2-hook.sh",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "docs/desktop-dmg-build.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/security/desktop-auth-bootstrap-progress-acceptance-2026-08-20.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/security/desktop-clean-machine-bootstrap-recovery-2026-08-19.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/security/desktop-dmg-auth-artifact-review-2026-08-20.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/security/desktop-dmg-auth-e2e-acceptance-2026-08-19.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/security/desktop-dmg-auth-owner-acceptance-2026-08-21.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/security/desktop-dmg-auth-replacement-acceptance-2026-08-20.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/security/desktop-dmg-domestic-first-launch-acceptance-2026-08-22.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/security/hermes-login-hard-gate-implementation.md",
+      "owner": "test-evidence"
     },
     {
       "match": "exact",
@@ -1779,19 +2659,514 @@
       "owner": "test-evidence"
     },
     {
-      "match": "prefix",
-      "path": "docs/superpowers/",
+      "match": "exact",
+      "path": "docs/security/remote-auth-release-evidence.md",
       "owner": "test-evidence"
     },
     {
-      "match": "prefix",
-      "path": "hermes_cli/",
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-15-hermes-desktop-dmg.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-18-remote-auth-hard-gate-01-server-contract.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-18-remote-auth-hard-gate-02-core-runtime-cli.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-18-remote-auth-hard-gate-03-desktop-tui-ssh.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-18-remote-auth-hard-gate-04-background-docker-release.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-18-remote-auth-hard-gate-implementation.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-19-desktop-bootstrap-recovery.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-19-desktop-gui-logout.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-20-auth-bootstrap-elapsed-focus-resync.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-20-desktop-auth-bootstrap-progress.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-20-desktop-auth-bridge-recovery.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-20-desktop-dmg-credential-login-ci.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-20-desktop-dmg-github-actions-gatekeeper.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-20-dmg-auth-entrypoint-closure.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-20-final-dmg-artifact-review-documentation.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-20-logout-stale-runtime-status.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-21-auth-owner-idle-recovery.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-21-windows-auth-owner-recovery-parity.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-21-windows-auth-runtime-progress-parity.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-22-desktop-first-launch-domestic-bootstrap.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-22-main-auth-voice-cross-platform-packaging.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-22-main-auth-voice-platform-boundary.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-15-hermes-cloud-auth-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-15-hermes-desktop-dmg-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-18-remote-auth-hard-gate-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-19-desktop-clean-machine-bootstrap-recovery.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-19-desktop-gui-logout-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-20-auth-bootstrap-elapsed-focus-resync-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-20-desktop-auth-bootstrap-progress-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-20-desktop-auth-bridge-recovery-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-20-desktop-dmg-credential-login-ci-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-20-desktop-dmg-github-actions-gatekeeper-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-20-dmg-auth-entrypoint-closure-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-20-final-dmg-artifact-review-documentation-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-20-logout-stale-runtime-status-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-21-auth-owner-idle-recovery-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-21-windows-auth-owner-recovery-parity-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-21-windows-auth-runtime-progress-parity-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-22-desktop-first-launch-domestic-bootstrap-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-22-main-auth-voice-platform-boundary-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-22-windows-x64-auth-runtime-parity-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "gateway/__init__.py",
       "owner": "common-product"
     },
     {
       "match": "exact",
-      "path": "package-lock.json",
-      "owner": "package-shared"
+      "path": "gateway/cgroup_cleanup.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "gateway/platforms/api_server.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "gateway/run.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/_parser.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/_scan_venv_blockers.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/auth.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/auth_commands.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/cli_agent_setup_mixin.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/client_auth/__init__.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/client_auth/bridge.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/client_auth/cli.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/client_auth/client.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/client_auth/entrypoint_wrappers.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/client_auth/entrypoints.json",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/client_auth/guard.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/client_auth/runtime.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/client_auth/static_help.txt",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/config.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/config_defaults.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/console_engine.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/container_boot.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/credential_lifecycle.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/curator.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/dashboard_auth/routes.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/dashboard_auth/ws_tickets.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/dashboard_register.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/dump.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/gateway.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/gateway_enroll.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/gateway_windows.py",
+      "owner": "package-windows"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/journey.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/main.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/managed_uv.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/model_setup_flows.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/models.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/observability/schemas/hermes.shared_metrics.v2.schema.json",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/observability/shared_metrics_contract.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/portal_cli.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/proxy/adapters/nous_portal.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/proxy/adapters/xai.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/proxy/cli.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/runtime_provider.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/service_manager.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/setup.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/status.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/stderr_timestamp.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/subcommands/auth.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/subcommands/login.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/subcommands/logout.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/subcommands/provider.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/tips.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/tools_config.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/uninstall.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/update_cmd.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/web_server.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/windows_ssh_runtime.py",
+      "owner": "package-windows"
+    },
+    {
+      "match": "exact",
+      "path": "mcp_serve.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "mini_swe_runner.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "model_tools.py",
+      "owner": "common-product"
     },
     {
       "match": "exact",
@@ -1800,32 +3175,607 @@
     },
     {
       "match": "exact",
+      "path": "plugins/google_meet/cli.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "plugins/google_meet/meet_bot.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "plugins/kanban/dashboard/plugin_api.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "plugins/kanban/systemd/hermes-kanban-dispatcher.service",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "plugins/platforms/feishu/feishu_comment_rules.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "plugins/platforms/google_chat/oauth.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "plugins/web/ddgs/_search_worker.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
       "path": "pyproject.toml",
       "owner": "common-product"
     },
     {
       "match": "exact",
-      "path": "ruff.toml",
+      "path": "run_agent.py",
       "owner": "common-product"
     },
     {
-      "match": "prefix",
-      "path": "scripts/",
-      "owner": "package-shared"
+      "match": "exact",
+      "path": "scripts/build-desktop-dmg.sh",
+      "owner": "package-macos"
     },
     {
-      "match": "prefix",
-      "path": "tests/",
+      "match": "exact",
+      "path": "scripts/build-desktop-dmg.test.mjs",
       "owner": "test-evidence"
     },
     {
-      "match": "prefix",
-      "path": "tools/",
+      "match": "exact",
+      "path": "scripts/build-desktop-windows.mjs",
+      "owner": "package-windows"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/build-desktop-windows.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/check_auth_entrypoints.py",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/check_auth_native_artifacts.py",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/check_hermes_managed_downloads.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/check_main_auth_voice_migration.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/desktop-credential-login.mjs",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/desktop-credential-login.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/desktop-dmg-contract.mjs",
+      "owner": "package-macos"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/desktop-dmg-contract.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/desktop-dmg-credential-login.mjs",
+      "owner": "package-macos"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/desktop-dmg-credential-login.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/desktop-dmg-gatekeeper-contract.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/desktop-windows-contract.mjs",
+      "owner": "package-windows"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/desktop-windows-contract.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/discord-voice-doctor.py",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/generate_auth_free_help.py",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/hermes-gateway",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/install.ps1",
+      "owner": "package-windows"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/install.sh",
+      "owner": "package-macos"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/keystroke_diagnostic.py",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/run_tests.sh",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/test-desktop-windows-auth-host.ps1",
+      "owner": "package-windows"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/test-desktop-windows-install.ps1",
+      "owner": "package-windows"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/tests/test-install-ps1-managed-uv.ps1",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/tests/test-install-ps1-packaged-lock.ps1",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/tests/test-install-ps1-stage-protocol.ps1",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/verify-desktop-dmg-gatekeeper.sh",
+      "owner": "package-macos"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/write_auth_native_artifact.py",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/write_desktop_windows_electron_artifact.py",
+      "owner": "package-windows"
+    },
+    {
+      "match": "exact",
+      "path": "tests/acp/test_entry.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/conftest.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/docker/test_auth_hard_gate.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/client_auth/auth_site/sitecustomize.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/client_auth/subprocess_harness.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/client_auth/test_account_commands.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/client_auth/test_background_modes.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/client_auth/test_boundaries.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/client_auth/test_bridge.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/client_auth/test_client.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/client_auth/test_entrypoints.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/client_auth/test_guard.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/client_auth/test_native_artifacts.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/client_auth/test_runtime.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/client_auth/test_service_locked_waiting.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/conftest.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_anthropic_oauth_routes_to_messages_api.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_auth_codex_provider.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_auth_commands.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_auth_nous_provider.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_auth_xai_oauth_provider.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_console_engine.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_container_boot.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_copilot_catalog_oauth_fallback.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_dashboard_admin_endpoints.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_dashboard_auth_ws_auth.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_gateway_service.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_graphical_browser_detection.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_managed_uv.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_resolve_provider_openrouter_pool.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_status.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_subcommands_batch.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_web_oauth_dispatch.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_hermes_managed_downloads.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_install_ps1_uv_install_fallback.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_install_ps1_uv_powershell_host.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_install_ps1_venv_process_tree.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_install_sh_bootstrap_scope.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_install_sh_desktop_mirrors.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_install_sh_install_method_stamp.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_install_sh_node_deps_failure.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_install_unmerged_index.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_main_auth_voice_migration.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_project_metadata.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/tui_gateway/test_account_auth.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/tui_gateway/test_compute_host.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/tui_gateway/test_entry_picker_prewarm.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/tui_gateway/test_slash_worker_mcp_discovery.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tools/browser_tool.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/delegate_tool.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/image_generation_tool.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/lazy_deps.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/mcp_stdio_watchdog.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/neutts_synth.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/sensevoice_stt.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/skill_linter.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/skills_sync.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/skills_tool.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/terminal_tool.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/transcription_tools.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/tts_tool.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/vision_tools.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/web_tools.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "toolset_distributions.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "toolsets.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "trajectory_compressor.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tui_gateway/compute_host.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tui_gateway/entry.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tui_gateway/server.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tui_gateway/slash_worker.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tui_gateway/ws.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "ui-tui/src/__tests__/authGate.test.tsx",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "ui-tui/src/__tests__/gatewayClient.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "ui-tui/src/authGate.tsx",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "ui-tui/src/entry.tsx",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "ui-tui/src/gatewayClient.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "ui-tui/src/gatewayTypes.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "ui-tui/src/sdk/apps/index.ts",
       "owner": "common-product"
     },
     {
       "match": "exact",
       "path": "uv.lock",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "uv.toml",
       "owner": "common-product"
     }
   ]

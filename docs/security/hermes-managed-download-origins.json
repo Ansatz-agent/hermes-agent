@@ -29,7 +29,10 @@
     }
   ],
   "temporary_legacy_notes": {
-    "unmanaged_child_callers": "Exact inherited callers are removed in Task 6; new or orphan callers fail closed."
+    "unsafe_callers": "Exact inherited download-and-execute lines are removed in Task 6; line or command changes fail closed.",
+    "unmanaged_child_callers": "Exact inherited callers are removed in Task 6; new or orphan callers fail closed.",
+    "bundled_runtime_callers": "Exact inherited runtime downloads are removed or converted to verified build-time payloads in Task 6.",
+    "official_only_callers": "Exact inherited official-only callers are converted to bounded domestic-first behavior in Task 6."
   },
   "entries": [
     {
@@ -819,6 +822,160 @@
       "build_provenance": "platform ffmpeg executable is staged from a pinned release and hash-audited before packaging",
       "sha256": null,
       "sha256_manifest_field": "apps/desktop/build/bootstrap/system-tools/ffmpeg#asset.sha256"
+    }
+  ],
+  "temporary_legacy_bundled_runtime_callers": [
+    {
+      "path": "hermes_cli/managed_uv.py",
+      "kind": "literal-url",
+      "value": "https://astral.sh/uv/install.ps1"
+    },
+    {
+      "path": "hermes_cli/managed_uv.py",
+      "kind": "literal-url",
+      "value": "https://astral.sh/uv/install.sh"
+    },
+    {
+      "path": "hermes_cli/model_catalog.py",
+      "kind": "literal-url",
+      "value": "https://hermes-agent.nousresearch.com/docs/api/model-catalog.json"
+    },
+    {
+      "path": "hermes_cli/model_catalog.py",
+      "kind": "literal-url",
+      "value": "https://raw.githubusercontent.com/NousResearch/hermes-agent/main/website/static/api/model-catalog.json"
+    },
+    {
+      "path": "hermes_cli/setup.py",
+      "kind": "literal-url",
+      "value": "https://github.com/KittenML/KittenTTS/releases/download/"
+    },
+    {
+      "path": "hermes_cli/tools_config.py",
+      "kind": "literal-url",
+      "value": "https://github.com/KittenML/KittenTTS/releases/download/"
+    },
+    {
+      "path": "hermes_cli/tools_config.py",
+      "kind": "literal-url",
+      "value": "https://raw.githubusercontent.com/trycua/cua/main/"
+    },
+    {
+      "path": "hermes_cli/update_cmd.py",
+      "kind": "literal-url",
+      "value": "https://github.com/NousResearch/hermes-agent.git"
+    },
+    {
+      "path": "hermes_cli/update_cmd.py",
+      "kind": "literal-url",
+      "value": "https://github.com/NousResearch/hermes-agent/archive/refs/heads/{branch"
+    },
+    {
+      "path": "hermes_cli/update_cmd.py",
+      "kind": "literal-url",
+      "value": "https://hermes-agent.nousresearch.com/install.sh"
+    },
+    {
+      "path": "scripts/install.ps1",
+      "kind": "literal-url",
+      "value": "https://astral.sh/uv/install.ps1"
+    },
+    {
+      "path": "scripts/install.ps1",
+      "kind": "literal-url",
+      "value": "https://github.com/astral-sh/uv/releases/latest/download/uv-installer.ps1"
+    },
+    {
+      "path": "scripts/install.ps1",
+      "kind": "literal-url",
+      "value": "https://github.com/git-for-windows/git/releases/download/$gitTag/$assetName"
+    },
+    {
+      "path": "scripts/install.ps1",
+      "kind": "literal-url",
+      "value": "https://github.com/NousResearch/hermes-agent.git"
+    },
+    {
+      "path": "scripts/install.ps1",
+      "kind": "literal-url",
+      "value": "https://github.com/NousResearch/hermes-agent/archive/$Commit.zip"
+    },
+    {
+      "path": "scripts/install.ps1",
+      "kind": "literal-url",
+      "value": "https://github.com/NousResearch/hermes-agent/archive/refs/heads/$Branch.zip"
+    },
+    {
+      "path": "scripts/install.ps1",
+      "kind": "literal-url",
+      "value": "https://github.com/NousResearch/hermes-agent/archive/refs/tags/$Tag.zip"
+    },
+    {
+      "path": "scripts/install.ps1",
+      "kind": "literal-url",
+      "value": "https://hermes-agent.nousresearch.com/install.ps1"
+    },
+    {
+      "path": "scripts/install.ps1",
+      "kind": "literal-url",
+      "value": "https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.ps1"
+    },
+    {
+      "path": "scripts/install.sh",
+      "kind": "literal-url",
+      "value": "https://astral.sh/uv/install.sh"
+    },
+    {
+      "path": "scripts/install.sh",
+      "kind": "literal-url",
+      "value": "https://github.com/NousResearch/hermes-agent.git"
+    },
+    {
+      "path": "scripts/install.sh",
+      "kind": "literal-url",
+      "value": "https://hermes-agent.nousresearch.com/install.ps1"
+    },
+    {
+      "path": "scripts/install.sh",
+      "kind": "literal-url",
+      "value": "https://hermes-agent.nousresearch.com/install.sh"
+    },
+    {
+      "path": "scripts/install.sh",
+      "kind": "literal-url",
+      "value": "https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.sh"
+    },
+    {
+      "path": "tools/computer_use/cua_backend.py",
+      "kind": "literal-url",
+      "value": "https://raw.githubusercontent.com/trycua/cua/main/"
+    },
+    {
+      "path": "tools/computer_use/cua_backend.py",
+      "kind": "literal-url",
+      "value": "https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.ps1"
+    },
+    {
+      "path": "tools/computer_use/cua_backend.py",
+      "kind": "literal-url",
+      "value": "https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.sh"
+    }
+  ],
+  "temporary_legacy_official_only_callers": [
+    {
+      "path": "scripts/install.ps1",
+      "kind": "literal-url",
+      "value": "https://nodejs.org/dist/latest-v${NodeVersion"
+    },
+    {
+      "path": "scripts/install.sh",
+      "kind": "literal-url",
+      "value": "https://nodejs.org/dist/latest-v${NODE_VERSION"
+    },
+    {
+      "path": "scripts/install.sh",
+      "kind": "literal-url",
+      "value": "https://pypi.org/simple/"
     }
   ]
 }
