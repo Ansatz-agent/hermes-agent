@@ -65,6 +65,7 @@ hermes [global-options] <command> [subcommand/options]
 | `ansatz security audit` | On-demand supply-chain audit (OSV.dev) for the venv, plugin requirements, and pinned MCP servers. |
 | `ansatz approvals` | Approval-prompt tools — mine approval history into allowlist proposals. |
 | `ansatz dump` | Copy-pasteable setup summary for support/debugging. |
+| `ansatz prompt-monitor` | Follow redacted finalized main and auxiliary LLM request bodies in a separate terminal. |
 | `ansatz prompt-size` | Show a byte breakdown of the system prompt + tool schemas (skills index, memory, profile). Runs offline. |
 | `ansatz debug` | Debug tools — upload logs and system info for support. |
 | `ansatz backup` | Back up Hermes home directory to a zip file. |
@@ -1051,6 +1052,51 @@ Lines without a parseable timestamp are included when `--since` is active (they 
 ### Log rotation
 
 Hermes uses Python's `RotatingFileHandler`. Old logs are rotated automatically — look for `agent.log.1`, `agent.log.2`, etc. The `ansatz logs list` subcommand shows all log files including rotated ones.
+
+
+## `ansatz prompt-monitor`
+
+```bash
+ansatz prompt-monitor [-n COUNT] [--once] [--source all|main|auxiliary]
+                      [--session ID] [--task NAME] [--json]
+```
+
+Prints the finalized request body handed to each LLM provider adapter. Run it
+in a second terminal: it never writes prompt text to the TUI, gateway, ACP, or
+other structured stdout channel.
+
+Capture is disabled by default. Enable it for the active profile, then start
+the viewer:
+
+```bash
+ansatz config set logging.prompt_monitor.enabled true
+ansatz prompt-monitor
+```
+
+The default command watches only requests created after it starts. Use `-n 3`
+to print the three newest retained snapshots before following, or `--once` to
+print the latest matching snapshot and exit. `--source auxiliary` isolates
+summarizer, Object Card description, title, vision, and other side-model
+requests; `--session` and `--task` accept substring filters. `--json` emits one
+compact JSON record per request.
+
+Snapshots contain the complete provider-adapter payload after Context View
+projection, provider decoration, preflight, and middleware. That includes
+`messages` or Responses `input`, `system`/`instructions`, tool schemas, Object
+Cards, and exact retrieved-object reinsertion. A retry or provider fallback is
+captured as a separate outbound attempt.
+
+Files are profile-scoped under
+`~/.hermes/logs/prompt-monitor/` (or `<profile>/logs/prompt-monitor/`), use
+private permissions, are written atomically, and are count-retained according
+to `logging.prompt_monitor.max_files` (default `100`). Recognized credentials
+are redacted before persistence, but prompts still contain private
+conversation and tool data; treat the directory as sensitive. Disable capture
+when finished:
+
+```bash
+ansatz config set logging.prompt_monitor.enabled false
+```
 
 
 ## `ansatz prompt-size`

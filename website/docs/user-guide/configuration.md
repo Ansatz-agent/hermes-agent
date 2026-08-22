@@ -792,6 +792,37 @@ You can also list gitignored files to copy into worktrees via `.worktreeinclude`
 node_modules/
 ```
 
+## Final LLM Prompt Monitor
+
+For local debugging, Hermes can persist and print the finalized request body
+handed to every main or auxiliary LLM provider adapter:
+
+```yaml
+logging:
+  prompt_monitor:
+    enabled: false            # default
+    include_auxiliary: true   # summarizer, Object Card summaries, title, vision, ...
+    max_files: 100            # count-based retention
+```
+
+Enable it with `hermes config set logging.prompt_monitor.enabled true`, then
+run `hermes prompt-monitor` in a second terminal. Keeping the viewer separate
+prevents prompt text from corrupting TUI, gateway, ACP, or other structured
+stdout transports.
+
+Snapshots are written under the active profile's
+`logs/prompt-monitor/` directory with private permissions. Each contains the
+complete redacted provider-adapter payload after Context View projection,
+provider decoration, preflight, and middleware, including messages/input,
+system/instructions, tools, Object Cards, and retrieved-object reinsertion.
+Retries and provider fallbacks appear as separate attempts.
+
+:::warning Sensitive local diagnostic data
+Known credential shapes are redacted before a snapshot is written, but prompt
+content still contains private messages, documents, code, and tool output.
+Treat the directory as sensitive and disable capture when testing is complete.
+:::
+
 ## Context Compression
 
 Hermes automatically compresses long conversations to stay within your model's context window. The compression summarizer is a separate LLM call — you can point it at any provider or endpoint.

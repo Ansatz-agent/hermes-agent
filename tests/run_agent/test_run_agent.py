@@ -2827,6 +2827,32 @@ class TestRunConversation:
         assert result["final_response"] == "Final answer"
         assert result["completed"] is True
 
+    def test_prompt_monitor_observes_the_final_main_provider_payload(self, agent):
+        """The observer sees exactly what the client receives and changes neither."""
+        self._setup_agent(agent)
+        agent.client.chat.completions.create.return_value = _mock_response(
+            content="Final answer", finish_reason="stop"
+        )
+        with (
+            patch.object(agent, "_persist_session"),
+            patch.object(agent, "_save_trajectory"),
+            patch.object(agent, "_cleanup_task_resources"),
+            patch("agent.prompt_monitor.capture_llm_request") as capture,
+        ):
+            result = agent.run_conversation("hello")
+
+        assert result["completed"] is True
+        assert capture.call_count == 1
+        observed = capture.call_args.args[0]
+        dispatched = agent.client.chat.completions.create.call_args.kwargs
+        assert observed == dispatched
+        assert capture.call_args.kwargs["source"] == "main"
+        assert capture.call_args.kwargs["task"] == "conversation"
+        assert any(
+            message.get("role") == "user" and message.get("content") == "hello"
+            for message in observed["messages"]
+        )
+
     def test_prompt_cache_marks_static_system_prefix_on_wire(self, agent):
         self._setup_agent(agent)
         agent._cached_system_prompt = "stable instructions\n\nsession context"

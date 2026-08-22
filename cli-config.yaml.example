@@ -686,6 +686,24 @@ context:
     retrieval_max_tokens_ratio: 0.50
 
 # =============================================================================
+# Final LLM prompt monitor (local debugging)
+# =============================================================================
+# Disabled by default. When enabled, Hermes writes a private, redacted JSON
+# snapshot of the finalized request body handed to each provider adapter. This
+# includes messages/input, system/instructions, tool schemas, Object Context
+# Cards, and turn-scoped retrieve_object reinsertion. View new snapshots safely
+# from a second terminal with `hermes prompt-monitor`.
+#
+# Prompt bodies can contain private conversation data. Redaction catches known
+# credential shapes but is not a substitute for treating these files as
+# sensitive. Files live under the active profile's logs/prompt-monitor/ folder.
+logging:
+  prompt_monitor:
+    enabled: false
+    include_auxiliary: true  # summarizer, Card summaries, title, vision, etc.
+    max_files: 100           # oldest snapshots are removed after each capture
+
+# =============================================================================
 # Anthropic prompt caching TTL
 # =============================================================================
 # When prompt caching is active (Claude via OpenRouter or native Anthropic),

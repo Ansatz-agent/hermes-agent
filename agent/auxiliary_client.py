@@ -59,7 +59,7 @@ import time
 import uuid
 from pathlib import Path  # noqa: F401 — used by test mocks
 from types import SimpleNamespace
-from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Callable, Dict, List, Mapping, NamedTuple, Optional, Tuple, TYPE_CHECKING
 from urllib.parse import urlparse, parse_qs, urlunparse
 
 # NOTE: `from openai import OpenAI` is deliberately NOT at module top — the
@@ -3265,6 +3265,55 @@ def _relay_auxiliary_metadata(
     }
 
 
+def _capture_auxiliary_prompt(
+    request: Mapping[str, Any],
+    *,
+    provider: str | None,
+    api_mode: str | None,
+    metadata: Optional[Mapping[str, Any]] = None,
+) -> None:
+    """Best-effort snapshot at the shared auxiliary provider-dispatch seam."""
+
+    context = _RELAY_AUX_CALL_CONTEXT.get() or {}
+    task = str(
+        (metadata or {}).get("auxiliary_task")
+        or context.get("task")
+        or "unknown"
+    )
+    session_id = ""
+    try:
+        from agent.aux_accounting import get_accounting_context
+
+        accounting = get_accounting_context()
+        if accounting is not None:
+            session_id = str(accounting[1] or "")
+    except Exception:
+        pass
+    if not session_id:
+        try:
+            from agent.portal_tags import get_conversation_context
+
+            session_id = str(get_conversation_context() or "")
+        except Exception:
+            pass
+
+    attempt_value = (metadata or {}).get("retry_count")
+    if attempt_value is None:
+        attempt_value = context.get("attempt_count")
+    from agent.prompt_monitor import capture_llm_request
+
+    capture_llm_request(
+        request,
+        source="auxiliary",
+        session_id=session_id,
+        provider=provider or str(context.get("provider") or "auxiliary"),
+        api_mode=api_mode or str(context.get("api_mode") or "chat_completions"),
+        task=task,
+        attempt=int(attempt_value) if attempt_value is not None else None,
+        request_id=str((metadata or {}).get("api_request_id") or context.get("request_id") or ""),
+    )
+
+
 def _relay_sync_completion(
     client: Any,
     kwargs: dict[str, Any],
@@ -3275,17 +3324,28 @@ def _relay_sync_completion(
 ) -> Any:
     callback = create or (lambda request: client.chat.completions.create(**request))
     route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode)
+
+    def dispatch(request: dict[str, Any]) -> Any:
+        metadata = route[2] if route is not None else None
+        _capture_auxiliary_prompt(
+            request,
+            provider=route[0] if route is not None else provider,
+            api_mode=(metadata or {}).get("api_mode") or api_mode,
+            metadata=metadata,
+        )
+        return _run_protected_sync_provider_call(callback, request)
+
     # Protected compression calls isolate only the provider callback and stream
     # aggregation.  The owning thread remains free to unwind its lease/DB
     # transaction on hard cancel without touching the process-shared client.
     if route is None:
-        return _run_protected_sync_provider_call(callback, kwargs)
+        return dispatch(kwargs)
     provider_name, fallback_model, metadata = route
     from agent import relay_llm
 
     return relay_llm.execute_current(
         kwargs,
-        lambda request: _run_protected_sync_provider_call(callback, request),
+        dispatch,
         name=provider_name,
         model_name=str(kwargs.get("model") or fallback_model),
         metadata=metadata,
@@ -3303,14 +3363,25 @@ async def _relay_async_completion(
 ) -> Any:
     callback = create or (lambda request: client.chat.completions.create(**request))
     route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode)
+
+    async def dispatch(request: dict[str, Any]) -> Any:
+        metadata = route[2] if route is not None else None
+        _capture_auxiliary_prompt(
+            request,
+            provider=route[0] if route is not None else provider,
+            api_mode=(metadata or {}).get("api_mode") or api_mode,
+            metadata=metadata,
+        )
+        return await callback(request)
+
     if route is None:
-        return await callback(kwargs)
+        return await dispatch(kwargs)
     provider_name, fallback_model, metadata = route
     from agent import relay_llm
 
     return await relay_llm.execute_current_async(
         kwargs,
-        callback,
+        dispatch,
         name=provider_name,
         model_name=str(kwargs.get("model") or fallback_model),
         metadata=metadata,
@@ -3326,14 +3397,25 @@ def _relay_sync_stream(
     api_mode: str | None = None,
 ) -> Any:
     route = _relay_auxiliary_metadata(provider=provider, api_mode=api_mode)
+
+    def dispatch(request: dict[str, Any]) -> Any:
+        metadata = route[2] if route is not None else None
+        _capture_auxiliary_prompt(
+            request,
+            provider=route[0] if route is not None else provider,
+            api_mode=(metadata or {}).get("api_mode") or api_mode,
+            metadata=metadata,
+        )
+        return client.chat.completions.create(**request)
+
     if route is None:
-        return client.chat.completions.create(**kwargs)
+        return dispatch(kwargs)
     provider_name, fallback_model, metadata = route
     from agent import relay_llm
 
     return relay_llm.stream_current(
         kwargs,
-        lambda request: client.chat.completions.create(**request),
+        dispatch,
         name=provider_name,
         model_name=str(kwargs.get("model") or fallback_model),
         finalizer=dict,
@@ -9357,6 +9439,11 @@ def _call_llm_impl(
             # Return the provider call directly; the MoA facade converts a
             # completed response into a one-chunk delta iterator at its
             # boundary.
+            _capture_auxiliary_prompt(
+                kwargs,
+                provider=request_provider,
+                api_mode=resolved_api_mode,
+            )
             return client.chat.completions.create(**kwargs)
         return _relay_sync_stream(
             client,

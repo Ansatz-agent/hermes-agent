@@ -55,6 +55,7 @@ hermes [global-options] <command> [subcommand/options]
 | `ansatz doctor` | 诊断配置和依赖问题。 |
 | `ansatz security audit` | 对 venv、plugin 依赖和固定 MCP 服务器进行按需供应链审计（OSV.dev）。 |
 | `ansatz dump` | 可直接复制粘贴的设置摘要，用于支持/调试。 |
+| `ansatz prompt-monitor` | 在独立终端中跟踪经过脱敏的主模型与辅助模型最终请求体。 |
 | `ansatz debug` | 调试工具——上传日志和系统信息以获取支持。 |
 | `ansatz backup` | 将 Hermes 主目录备份为 zip 文件。 |
 | `ansatz checkpoints` | 检查/修剪/清除 `~/.hermes/checkpoints/`（`/rollback` 使用的影子存储）。不带参数运行可查看状态概览。 |
@@ -752,6 +753,36 @@ ansatz logs --level WARNING --since 2h --session tg-12345
 ### 日志轮转
 
 Hermes 使用 Python 的 `RotatingFileHandler`。旧日志会自动轮转——查找 `agent.log.1`、`agent.log.2` 等。`ansatz logs list` 子命令显示所有日志文件，包括已轮转的。
+
+## `ansatz prompt-monitor`
+
+```bash
+ansatz prompt-monitor [-n COUNT] [--once] [--source all|main|auxiliary]
+                      [--session ID] [--task NAME] [--json]
+```
+
+打印实际交给 LLM provider adapter 的最终请求体。该功能默认关闭；先为
+当前 profile 启用捕获，再在另一个终端启动查看器：
+
+```bash
+ansatz config set logging.prompt_monitor.enabled true
+ansatz prompt-monitor
+```
+
+默认只跟踪命令启动后产生的新请求。`-n 3` 会先打印最近保留的三条，
+`--once` 打印最近一条后退出。`--source auxiliary` 可单独查看 summarizer、
+Object Card 描述、标题、视觉等辅助模型调用；`--session` 和 `--task` 可做
+子串过滤，`--json` 每次输出一行紧凑 JSON。
+
+快照在 Context View 投影、provider 装饰、preflight 和 middleware 之后捕获，
+因此会完整包含 messages/input、system/instructions、工具 schema、Object
+Card 以及精确对象检索后的回填。重试和 provider fallback 会显示为独立条目。
+
+文件位于当前 profile 的 `logs/prompt-monitor/`，采用私有权限，并按
+`logging.prompt_monitor.max_files`（默认 `100`）保留。已知凭据格式会在落盘
+前脱敏，但 prompt 仍包含私有对话、代码、文档与工具输出；请把该目录视为
+敏感数据，并在测试后运行
+`ansatz config set logging.prompt_monitor.enabled false` 关闭捕获。
 
 ## `ansatz config`
 

@@ -38,6 +38,18 @@ context:
 
 关于构建上下文引擎插件，请参阅 [Context Engine 插件](/developer-guide/context-engine-plugin)。
 
+要查看真正送达模型的 Context View，可运行：
+
+```bash
+hermes config set logging.prompt_monitor.enabled true
+hermes prompt-monitor
+```
+
+主 Agent 快照在 Object Context 投影后捕获，因此冷对象会显示为完整 Card，
+`retrieve_object` 的轮次级精确回填也会出现在下一次请求的实际位置。辅助模型
+快照则会单独显示整体对话 summarizer 和 Object Card 描述请求，方便确认两套
+压缩机制彼此独立。测试结束后请关闭捕获，因为这些快照包含私有上下文。
+
 ## 双重压缩系统
 
 Hermes 有两个独立运行的压缩层：

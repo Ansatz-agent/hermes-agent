@@ -28,7 +28,7 @@ from hermes_cli.subcommands.logout import build_logout_parser
 from hermes_cli.subcommands.logs import build_logs_parser
 from hermes_cli.subcommands.model import build_model_parser
 from hermes_cli.subcommands.provider import build_provider_parser
-
+from hermes_cli.subcommands.prompt_monitor import build_prompt_monitor_parser
 from hermes_cli.subcommands.prompt_size import build_prompt_size_parser
 from hermes_cli.subcommands.security import build_security_parser
 from hermes_cli.subcommands.setup import build_setup_parser
@@ -74,6 +74,12 @@ SINGLE_HANDLER_CASES = [
     ("uninstall", build_uninstall_parser, "cmd_uninstall", ["uninstall"]),
     ("gui", build_gui_parser, "cmd_gui", ["gui"]),
     ("logs", build_logs_parser, "cmd_logs", ["logs"]),
+    (
+        "prompt-monitor",
+        build_prompt_monitor_parser,
+        "cmd_prompt_monitor",
+        ["prompt-monitor", "--once"],
+    ),
     ("prompt-size", build_prompt_size_parser, "cmd_prompt_size", ["prompt-size"]),
 ]
 

@@ -2955,6 +2955,24 @@ def run_conversation(
                 if env_var_enabled("HERMES_DUMP_REQUESTS"):
                     agent._dump_api_request_debug(api_kwargs, reason="preflight")
 
+                # Passive, config-gated capture of the exact provider-adapter
+                # payload after Context View projection, provider decoration,
+                # preflight, middleware, and observability hooks. The helper
+                # copies/redacts the mapping and never mutates ``api_kwargs``;
+                # monitoring therefore cannot alter prompt-cache identity.
+                from agent.prompt_monitor import capture_llm_request
+
+                capture_llm_request(
+                    api_kwargs,
+                    source="main",
+                    session_id=agent.session_id,
+                    provider=agent.provider,
+                    api_mode=agent.api_mode,
+                    task="conversation",
+                    attempt=retry_count,
+                    request_id=api_request_id,
+                )
+
                 # This object is private to the in-process MoA facade.  Add it
                 # only after middleware, hooks, and debug dumps so none of them
                 # attempts to serialize it as part of the provider payload.

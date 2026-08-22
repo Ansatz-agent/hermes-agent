@@ -2589,6 +2589,15 @@ DEFAULT_CONFIG = {
         "level": "INFO",       # Minimum level for agent.log: DEBUG, INFO, WARNING
         "max_size_mb": 5,      # Max size per log file before rotation
         "backup_count": 3,     # Number of rotated backup files to keep
+        # Passive snapshots of the finalized payload handed to each LLM
+        # provider adapter. Disabled by default because prompts may contain
+        # private conversation data. View in a second terminal with
+        # ``hermes prompt-monitor`` so TUI/gateway stdout stays untouched.
+        "prompt_monitor": {
+            "enabled": False,
+            "include_auxiliary": True,
+            "max_files": 100,
+        },
     },
 
     # Optional operator-hosted model catalog. No public remote is contacted
