@@ -155,8 +155,11 @@ def test_checked_in_ledger_has_locked_authorities_and_exact_enums() -> None:
         "docs/security/main-auth-voice-product-paths.txt",
         "scripts/check_hermes_managed_downloads.py",
         "scripts/check_main_auth_voice_migration.py",
+        "scripts/check_main_auth_voice_parity.py",
         "tests/test_hermes_managed_downloads.py",
+        "tests/test_main_auth_voice_dependencies.py",
         "tests/test_main_auth_voice_migration.py",
+        "tests/test_main_auth_voice_parity.py",
     ]
 
 

@@ -50,8 +50,11 @@
     "docs/security/main-auth-voice-product-paths.txt",
     "scripts/check_hermes_managed_downloads.py",
     "scripts/check_main_auth_voice_migration.py",
+    "scripts/check_main_auth_voice_parity.py",
     "tests/test_hermes_managed_downloads.py",
-    "tests/test_main_auth_voice_migration.py"
+    "tests/test_main_auth_voice_dependencies.py",
+    "tests/test_main_auth_voice_migration.py",
+    "tests/test_main_auth_voice_parity.py"
   ],
   "post_tip_commits": [
     "a6e8792b0c701287eecee97c692956e10a35b5d8",
@@ -62,6 +65,318 @@
     "e9501893d88243105e87ae758c0574d3ee46e0e6",
     "6c7b59a1ac422d3dc5f59d4192bb238d8968293c",
     "fe5ab1a6845db6b6305dd8fbc916061082c70848"
+  ],
+  "parity_reason_enum": [
+    "windows-adapter-addition",
+    "package-producer-interface-extraction",
+    "neutral-platform-wording",
+    "dependency-lock-regeneration",
+    "upstream-main-preservation",
+    "auth-integration",
+    "domestic-mirror-policy"
+  ],
+  "parity_waivers": [
+    {
+      "path": "apps/desktop/electron/auth-bridge.ts",
+      "reason": "auth-integration",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/electron/auth-bridge.test.ts"]
+    },
+    {
+      "path": "apps/desktop/electron/auth-runtime-contract.ts",
+      "reason": "windows-adapter-addition",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/electron/auth-runtime-contract.test.ts"]
+    },
+    {
+      "path": "apps/desktop/electron/bootstrap-payload.ts",
+      "reason": "windows-adapter-addition",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/electron/bootstrap-payload.integration.test.ts"]
+    },
+    {
+      "path": "apps/desktop/electron/bootstrap-process.ts",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/electron/bootstrap-process.test.ts"]
+    },
+    {
+      "path": "apps/desktop/electron/bootstrap-runner.ts",
+      "reason": "windows-adapter-addition",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/electron/bootstrap-runner.test.ts"]
+    },
+    {
+      "path": "apps/desktop/electron/bootstrap-toolchain.ts",
+      "reason": "windows-adapter-addition",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/electron/bootstrap-toolchain.integration.test.ts"]
+    },
+    {
+      "path": "apps/desktop/electron/main.ts",
+      "reason": "auth-integration",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/src/components/auth-gate.test.tsx"]
+    },
+    {
+      "path": "apps/desktop/electron/package-runtime/windows-auth-toolchain.ts",
+      "reason": "windows-adapter-addition",
+      "owner": "package-windows",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/electron/package-runtime/windows-auth-toolchain.test.ts"]
+    },
+    {
+      "path": "apps/desktop/electron/runtime-download-policy.ts",
+      "reason": "domestic-mirror-policy",
+      "owner": "package-shared",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/electron/runtime-download-policy.test.ts"]
+    },
+    {
+      "path": "apps/desktop/electron/windows-auth-owner.ts",
+      "reason": "windows-adapter-addition",
+      "owner": "package-windows",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/electron/windows-auth-owner.test.ts"]
+    },
+    {
+      "path": "apps/desktop/package.json",
+      "reason": "package-producer-interface-extraction",
+      "owner": "package-shared",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/scripts/prepare-package-inputs.test.mjs"]
+    },
+    {
+      "path": "apps/desktop/scripts/before-pack.mjs",
+      "reason": "package-producer-interface-extraction",
+      "owner": "package-shared",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/scripts/before-pack.test.mjs"]
+    },
+    {
+      "path": "apps/desktop/scripts/build-auth-toolchain.mjs",
+      "reason": "windows-adapter-addition",
+      "owner": "package-shared",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/scripts/build-auth-toolchain.test.mjs"]
+    },
+    {
+      "path": "apps/desktop/scripts/build-backend-payload.mjs",
+      "reason": "package-producer-interface-extraction",
+      "owner": "package-shared",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/scripts/build-backend-payload.integration.test.mjs"]
+    },
+    {
+      "path": "apps/desktop/scripts/exe-identity-options.mjs",
+      "reason": "windows-adapter-addition",
+      "owner": "package-shared",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["scripts/desktop-windows-contract.test.mjs"]
+    },
+    {
+      "path": "apps/desktop/scripts/package-audit.mjs",
+      "reason": "windows-adapter-addition",
+      "owner": "package-shared",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["scripts/desktop-windows-contract.test.mjs"]
+    },
+    {
+      "path": "apps/desktop/scripts/prepare-auth-toolchain-inputs.mjs",
+      "reason": "windows-adapter-addition",
+      "owner": "package-shared",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/scripts/prepare-auth-toolchain-inputs.test.mjs"]
+    },
+    {
+      "path": "apps/desktop/scripts/prepare-package-inputs.mjs",
+      "reason": "package-producer-interface-extraction",
+      "owner": "package-shared",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/scripts/prepare-package-inputs.test.mjs"]
+    },
+    {
+      "path": "apps/desktop/scripts/prepare-windows-git-runtime.mjs",
+      "reason": "windows-adapter-addition",
+      "owner": "package-windows",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["scripts/desktop-windows-contract.test.mjs"]
+    },
+    {
+      "path": "docs/security/hermes-managed-download-origins.json",
+      "reason": "domestic-mirror-policy",
+      "owner": "package-shared",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/test_hermes_managed_downloads.py"]
+    },
+    {
+      "path": "hermes_cli/client_auth/runtime.py",
+      "reason": "windows-adapter-addition",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/hermes_cli/client_auth/test_runtime.py"]
+    },
+    {
+      "path": "hermes_cli/config_defaults.py",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/test_hermes_managed_downloads.py"]
+    },
+    {
+      "path": "hermes_cli/data/managed-download-origins.json",
+      "reason": "domestic-mirror-policy",
+      "owner": "package-shared",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/hermes_cli/test_managed_downloads.py"]
+    },
+    {
+      "path": "hermes_cli/managed_downloads.py",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/hermes_cli/test_managed_downloads.py"]
+    },
+    {
+      "path": "hermes_cli/managed_uv.py",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/hermes_cli/test_managed_uv.py"]
+    },
+    {
+      "path": "hermes_cli/model_catalog.py",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/hermes_cli/test_model_catalog.py"]
+    },
+    {
+      "path": "hermes_cli/setup.py",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/hermes_cli/test_setup.py"]
+    },
+    {
+      "path": "hermes_cli/tools_config.py",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/hermes_cli/test_tools_config.py"]
+    },
+    {
+      "path": "hermes_cli/update_cmd.py",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/cli/test_update_command.py"]
+    },
+    {
+      "path": "package.json",
+      "reason": "windows-adapter-addition",
+      "owner": "package-shared",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["scripts/desktop-windows-contract.test.mjs"]
+    },
+    {
+      "path": "scripts/build-desktop-windows.mjs",
+      "reason": "windows-adapter-addition",
+      "owner": "package-windows",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["scripts/build-desktop-windows.test.mjs"]
+    },
+    {
+      "path": "scripts/desktop-windows-contract.mjs",
+      "reason": "windows-adapter-addition",
+      "owner": "package-windows",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["scripts/desktop-windows-contract.test.mjs"]
+    },
+    {
+      "path": "scripts/install.ps1",
+      "reason": "windows-adapter-addition",
+      "owner": "package-windows",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/test_install_ps1_browser_install.py"]
+    },
+    {
+      "path": "scripts/install.sh",
+      "reason": "domestic-mirror-policy",
+      "owner": "package-macos",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/test_install_sh_browser_install.py"]
+    },
+    {
+      "path": "scripts/test-desktop-windows-auth-host.ps1",
+      "reason": "windows-adapter-addition",
+      "owner": "package-windows",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["scripts/desktop-windows-contract.test.mjs"]
+    },
+    {
+      "path": "scripts/test-desktop-windows-install.ps1",
+      "reason": "windows-adapter-addition",
+      "owner": "package-windows",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["scripts/desktop-windows-contract.test.mjs"]
+    },
+    {
+      "path": "tools/browser_use_cli.py",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/tools/test_browser_use_cli.py"]
+    },
+    {
+      "path": "tools/computer_use/cua_backend.py",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/computer_use/test_cua_spawn_env_sanitization.py"]
+    },
+    {
+      "path": "tools/lazy_deps.py",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/tools/test_lazy_deps.py"]
+    },
+    {
+      "path": "tools/neutts_synth.py",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/test_hermes_managed_downloads.py"]
+    },
+    {
+      "path": "tools/sensevoice_stt.py",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/tools/test_sensevoice_stt.py"]
+    },
+    {
+      "path": "tools/transcription_tools.py",
+      "reason": "upstream-main-preservation",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/tools/test_transcription_tools.py"]
+    },
+    {
+      "path": "tools/tts_tool.py",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/test_hermes_managed_downloads.py"]
+    }
   ],
   "owner_enum": [
     "common-product",
@@ -3944,6 +4259,21 @@
       "match": "exact",
       "path": "tools/computer_use/cua_backend.py",
       "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/check_main_auth_voice_parity.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_main_auth_voice_dependencies.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_main_auth_voice_parity.py",
+      "owner": "test-evidence"
     },
     {
       "match": "exact",
