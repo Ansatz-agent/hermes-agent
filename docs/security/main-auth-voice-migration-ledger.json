@@ -3609,6 +3609,11 @@
     },
     {
       "match": "exact",
+      "path": "tests/test_main_auth_voice_reference_contract.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
       "path": "tests/test_project_metadata.py",
       "owner": "test-evidence"
     },
