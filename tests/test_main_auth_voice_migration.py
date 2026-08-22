@@ -296,6 +296,47 @@ def test_locked_coverage_accepts_exact_registered_post_tip_commit(
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_locked_coverage_accepts_registered_commits_imported_by_merge(
+    tmp_path: Path,
+) -> None:
+    base = initialize_fixture_repo(tmp_path)
+    path = "src/auth.py"
+    assert run(tmp_path, "git", "switch", "-qc", "auth-feature").returncode == 0
+    source_sha = commit_fixture_path(tmp_path, path, "auth source")
+    assert run(tmp_path, "git", "switch", "-").returncode == 0
+    assert run(
+        tmp_path,
+        "git",
+        "merge",
+        "--no-ff",
+        "auth-feature",
+        "-m",
+        "merge auth source",
+    ).returncode == 0
+
+    ledger, product = write_locked_fixture_contract(
+        tmp_path,
+        base=base,
+        owned_paths=[path],
+        post_tip_commits=[],
+    )
+    value = json.loads(ledger.read_text(encoding="utf-8"))
+    value["dmg_integration_reference"] = source_sha
+    value["commits"] = [
+        {
+            "sha": source_sha,
+            "owner": "common-product",
+            "strategy": "merge",
+            "paths": [],
+        }
+    ]
+    ledger.write_text(json.dumps(value) + "\n", encoding="utf-8")
+
+    result = invoke(tmp_path, base=base, ledger=ledger, product_paths=product)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def initialize_fixture_repo(tmp_path: Path) -> str:
     assert run(tmp_path, "git", "init", "-q").returncode == 0
     assert run(tmp_path, "git", "config", "user.email", "migration@example.invalid").returncode == 0

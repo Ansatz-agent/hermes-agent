@@ -267,6 +267,7 @@ def validate_locked_commit_coverage(
     rows = git(
         repo,
         "log",
+        "--first-parent",
         "--reverse",
         "--format=%H%x00%s%x00%P",
         f"{required_refs['candidate_tip']}..HEAD",
