@@ -169,6 +169,8 @@ The common branch must reject:
 - Packaged-only PowerShell and shell tests, while retaining the existing generic source-installer tests already present in `main`.
 - DMG/Windows release evidence and platform packaging design documents.
 
+The two pre-existing generic Electron hooks `apps/desktop/scripts/before-pack.mjs` and `after-pack.mjs` are frozen legacy base files during this migration: they may remain only blob-identical to the locked `ansatz/main`. This is not new common ownership; moving or removing them is deferred to platform-overlay reconstruction.
+
 ## Dependency ownership
 
 `main` owns dependencies required to run common authentication and Voice from source, including `keyring` and the `sensevoice` extra. Release-only dependency pinning, bundled offline projects, and packaged-browser/toolchain locks remain overlays.

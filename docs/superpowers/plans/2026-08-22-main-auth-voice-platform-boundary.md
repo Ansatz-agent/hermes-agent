@@ -218,6 +218,8 @@ scripts/tests/test-install-ps1-longpath.ps1
 scripts/tests/test-install-ps1-stage-protocol.ps1
 ```
 
+Add a dedicated frozen-legacy test fixture that commits `apps/desktop/scripts/before-pack.mjs` and `after-pack.mjs` in `boundary-base`. A candidate changing only an allowed common path must pass while both hook blobs remain identical; modifying either hook or adding another `before-pack`/`after-pack` path must fail.
+
 - [ ] **Step 3: Run the tests and confirm failure**
 
 ```bash
@@ -235,6 +237,7 @@ The checker must:
 3. Reject every unapproved changed path.
 4. Reject tracked delivery paths by exact directory/name tokens: `desktop_auth_runtime`, `desktop-dmg`, `desktop-windows-package`, `dmg-gatekeeper`, `nsis`, `bootstrap-payload`, `bootstrap-process`, `bootstrap-toolchain`, `bundled-runtime`, `windows-auth-owner`, `auth-runtime-contract`, `installed-windows-`, `windows-process-tree`, `before-pack`, `after-pack`, `stage-native-deps`, `set-exe-identity`, `exe-identity-options`, `package-audit`, `build-backend-payload`, `build-auth-toolchain`, `build-desktop-windows`, `desktop-windows-contract`, `desktop-credential-login`, `prepare-auth-toolchain-inputs`, `prepare-windows-git-runtime`, `write_desktop_windows_electron_artifact`, `test-desktop-windows-`, and exact-artifact credential drivers.
 5. Never use the broad prefix `scripts/tests/test-install-ps1-`; only the packaged-only files `test-install-ps1-managed-uv.ps1` and `test-install-ps1-packaged-lock.ps1` are forbidden.
+6. Treat `apps/desktop/scripts/before-pack.mjs` and `apps/desktop/scripts/after-pack.mjs` as frozen legacy exceptions already present in `ansatz/main`: they pass only while their blobs equal the locked base. They are not added to the common allowlist, and any modification, replacement, or new similarly named path fails. Their later removal belongs to platform-overlay reconstruction, not this behavior migration.
 
 The CLI is:
 
@@ -413,7 +416,9 @@ git restore --source=HEAD --staged --worktree -- \
   apps/desktop/electron/bundled-runtime.integration.test.ts \
   apps/desktop/scripts/before-pack-payload.integration.test.mjs \
   apps/desktop/scripts/build-backend-payload.integration.test.mjs
+git diff --check
 git diff --cached --check
+test -z "$(git diff --name-only --diff-filter=U)"
 git diff --cached --name-only
 python scripts/check_main_platform_boundary.py --base ansatz/main \
   --allowlist docs/security/main-auth-voice-common-paths.txt
@@ -442,14 +447,24 @@ Expected: each commit lands in original branch order. Run the focused tests intr
 
 ```bash
 
-git cherry-pick --no-commit c478db4d2f
-git restore --source=HEAD --staged --worktree -- \
+if ! git cherry-pick --no-commit c478db4d2f; then
+  test -n "$(git diff --name-only --diff-filter=U)"
+fi
+git rm -q -r -f --ignore-unmatch -- \
+  apps/desktop/scripts/build-backend-payload.mjs \
+  desktop_auth_runtime tests/test_install_sh_bootstrap_scope.py uv.toml
+git checkout HEAD -- \
   apps/desktop/electron/bootstrap-runner.ts \
   apps/desktop/electron/bootstrap-runner.test.ts \
-  apps/desktop/scripts/build-backend-payload.mjs \
-  desktop_auth_runtime pyproject.toml scripts/install.sh \
-  tests/test_install_sh_bootstrap_scope.py uv.lock uv.toml
+  pyproject.toml scripts/install.sh uv.lock
+```
+
+Resolve and stage only any remaining ledger `main_paths`, then run:
+
+```bash
+git diff --check
 git diff --cached --check
+test -z "$(git diff --name-only --diff-filter=U)"
 git diff --cached --name-only
 python scripts/check_main_platform_boundary.py --base ansatz/main \
   --allowlist docs/security/main-auth-voice-common-paths.txt
@@ -461,10 +476,19 @@ Expected: the staged set equals the ledger's common runtime-gate paths. `bootstr
 - [ ] **Step 6: Extract the common pre-runtime CLI side of `e51e448669`**
 
 ```bash
-git cherry-pick --no-commit e51e448669
-git restore --source=HEAD --staged --worktree -- \
-  scripts/install.sh tests/test_install_sh_bootstrap_scope.py
+if ! git cherry-pick --no-commit e51e448669; then
+  test -n "$(git diff --name-only --diff-filter=U)"
+fi
+git rm -q -f --ignore-unmatch -- tests/test_install_sh_bootstrap_scope.py
+git checkout HEAD -- scripts/install.sh
+```
+
+Resolve and stage only any remaining ledger `main_paths`, then run:
+
+```bash
+git diff --check
 git diff --cached --check
+test -z "$(git diff --name-only --diff-filter=U)"
 git diff --cached --name-only
 python scripts/check_main_platform_boundary.py --base ansatz/main \
   --allowlist docs/security/main-auth-voice-common-paths.txt
@@ -517,11 +541,20 @@ Run the Step 8 regressions again. Expected: PASS; raw `hermes:bootstrap:get` rem
 - [ ] **Step 10: Extract the common lint side of `a416087126`**
 
 ```bash
-git cherry-pick --no-commit a416087126
-git restore --source=HEAD --staged --worktree -- \
+if ! git cherry-pick --no-commit a416087126; then
+  test -n "$(git diff --name-only --diff-filter=U)"
+fi
+git rm -q -f --ignore-unmatch -- \
   apps/desktop/electron/bootstrap-process.ts \
   apps/desktop/electron/bootstrap-process.test.ts
+```
+
+Resolve and stage only `apps/desktop/electron/main.ts` and `apps/desktop/src/components/auth-bootstrap-progress.test.tsx`, then run:
+
+```bash
+git diff --check
 git diff --cached --check
+test -z "$(git diff --name-only --diff-filter=U)"
 git diff --cached --name-only
 python scripts/check_main_platform_boundary.py --base ansatz/main \
   --allowlist docs/security/main-auth-voice-common-paths.txt
@@ -547,11 +580,20 @@ Expected: Retry appears only after declared failure, and `c8fad50c49` changes on
 
 ```bash
 
-git cherry-pick --no-commit f5a7372e4c
-git restore --source=HEAD --staged --worktree -- \
+if ! git cherry-pick --no-commit f5a7372e4c; then
+  test -n "$(git diff --name-only --diff-filter=U)"
+fi
+git rm -q -f --ignore-unmatch -- \
   apps/desktop/electron/bootstrap-payload.ts \
   apps/desktop/electron/bootstrap-payload.integration.test.ts
+```
+
+Resolve and stage only any remaining ledger `main_paths`, then run:
+
+```bash
+git diff --check
 git diff --cached --check
+test -z "$(git diff --name-only --diff-filter=U)"
 git diff --cached --name-only
 python scripts/check_main_platform_boundary.py --base ansatz/main \
   --allowlist docs/security/main-auth-voice-common-paths.txt
@@ -560,10 +602,10 @@ git commit -C f5a7372e4c
 
 Expected: the staged list equals the ledger's `main_paths` exactly; `git commit -C` preserves author/message.
 
-- [ ] **Step 13: Replay the final common reliability segment**
+- [ ] **Step 13: Replay focus and epoch reliability before owner recovery**
 
 ```bash
-final_common_segment=(c893e264e9 38230a6c9f 4e4a5d42c7)
+final_common_segment=(c893e264e9 38230a6c9f)
 for replay_sha in "${final_common_segment[@]}"; do
   git cherry-pick "$replay_sha"
   python scripts/check_main_platform_boundary.py --base ansatz/main \
@@ -571,7 +613,7 @@ for replay_sha in "${final_common_segment[@]}"; do
 done
 ```
 
-Expected: focus resync precedes epoch suppression, which precedes native-owner recovery.
+Expected: focus resync precedes epoch suppression. Native-owner recovery is applied with its explicit conflict protocol in Step 14.
 
 - [ ] **Step 14: Resolve the known conflicts by accepted dependency semantics**
 
@@ -592,6 +634,31 @@ Resolution rules:
 - Preserve lease-clock alignment from `6aed1cc0f1` before applying owner expiry recovery.
 - The historical owner-recovery design/plan from `280751398d` is intentionally classified `drop`; resolve the two later modify/delete conflicts by leaving those documents absent from `main`.
 - Never resolve by exposing `hermes:bootstrap:get` to signed-out code.
+
+The rules for `366fb3f5a8` and `af19ce56b1` are invoked immediately when their earlier replay loops stop; do not defer an unresolved cherry-pick. Resolve and stage the named common path, then run both diff checks plus the unmerged-path assertion before `git cherry-pick --continue`.
+
+Apply `4e4a5d42c7` explicitly:
+
+```bash
+if ! git cherry-pick 4e4a5d42c7; then
+  test -n "$(git diff --name-only --diff-filter=U)"
+fi
+git rev-parse --verify -q CHERRY_PICK_HEAD
+git rm -q -f --ignore-unmatch -- \
+  docs/superpowers/plans/2026-08-21-auth-owner-idle-recovery.md \
+  docs/superpowers/specs/2026-08-21-auth-owner-idle-recovery-design.md
+```
+
+Resolve and stage only the remaining common auth-owner paths, then run:
+
+```bash
+git diff --check
+git diff --cached --check
+test -z "$(git diff --name-only --diff-filter=U)"
+python scripts/check_main_platform_boundary.py --base ansatz/main \
+  --allowlist docs/security/main-auth-voice-common-paths.txt
+git cherry-pick --continue
+```
 
 Immediately run the focused test named by each conflicted path before continuing.
 
@@ -732,26 +799,44 @@ b2b6a610b1  platform-neutral authenticated Electron hardening parts only
 For `45eb464242` and `9a32e19153`, extract the exact common paths in one patch each:
 
 ```bash
-git show 45eb464242 -- \
+if ! git show 45eb464242 -- \
   apps/desktop/electron/auth-bridge.ts apps/desktop/electron/auth-bridge.test.ts \
   apps/desktop/src/components/auth-gate.tsx apps/desktop/src/components/auth-gate.test.tsx \
   hermes_cli/client_auth/bridge.py hermes_cli/client_auth/runtime.py \
   tests/hermes_cli/client_auth/test_background_modes.py \
   tests/hermes_cli/client_auth/test_bridge.py tests/hermes_cli/client_auth/test_runtime.py | \
-  git apply --index -3
+  git apply --index -3; then
+  test -n "$(git diff --name-only --diff-filter=U)"
+fi
+```
+
+Resolve and stage only the listed common paths, then run:
+
+```bash
+git diff --check
 git diff --cached --check
+test -z "$(git diff --name-only --diff-filter=U)"
 git diff --cached --name-only
 python scripts/check_main_platform_boundary.py --base ansatz/main \
   --allowlist docs/security/main-auth-voice-common-paths.txt
 git commit -C 45eb464242
 
-git show 9a32e19153 -- \
+if ! git show 9a32e19153 -- \
   apps/desktop/electron/auth-bridge.ts apps/desktop/electron/auth-bridge.test.ts \
   apps/desktop/src/components/auth-gate.tsx apps/desktop/src/components/auth-gate.test.tsx \
   hermes_cli/client_auth/runtime.py scripts/write_auth_native_artifact.py \
   tests/hermes_cli/client_auth/test_native_artifacts.py \
-  tests/hermes_cli/client_auth/test_runtime.py | git apply --index -3
+  tests/hermes_cli/client_auth/test_runtime.py | git apply --index -3; then
+  test -n "$(git diff --name-only --diff-filter=U)"
+fi
+```
+
+Resolve and stage only the listed common paths, then run:
+
+```bash
+git diff --check
 git diff --cached --check
+test -z "$(git diff --name-only --diff-filter=U)"
 git diff --cached --name-only
 python scripts/check_main_platform_boundary.py --base ansatz/main \
   --allowlist docs/security/main-auth-voice-common-paths.txt
@@ -797,7 +882,7 @@ b2b6a610b1:
   apps/desktop/electron/trusted-renderer.test.ts
 ```
 
-For `d282099faf`, `772903c824`, and `b2b6a610b1`, run `git diff --cached --check` immediately after each staged extraction so conflict markers cannot survive. For `b2b6a610b1`, reconcile only the corresponding guarded wiring hunks in `apps/desktop/electron/main.ts`; stage that file only after the check shows no packaged bootstrap/process-tree/resource lookup. The machine-readable ledger must contain the lists above before applying any patch, and the boundary/parity tests must fail if the staged set differs.
+For `d282099faf`, `772903c824`, and `b2b6a610b1`, run `git diff --check`, `git diff --cached --check`, and `test -z "$(git diff --name-only --diff-filter=U)"` immediately after each staged extraction. The first check detects worktree conflict markers, the second checks staged whitespace/markers, and the third makes unresolved index entries fatal. For `b2b6a610b1`, reconcile only the corresponding guarded wiring hunks in `apps/desktop/electron/main.ts`; stage that file only after all three checks show no packaged bootstrap/process-tree/resource lookup. The machine-readable ledger must contain the lists above before applying any patch, and the boundary/parity tests must fail if the staged set differs.
 
 Expected: no `windows-auth-owner.ts`, workflow, installer, packaged runtime, installed-Windows E2E, or `desktop_auth_runtime` path is staged.
 
@@ -1003,6 +1088,20 @@ source-mode-no-packaged-progress-producer
 ```
 
 No wildcard waiver is allowed. A waiver never permits weaker auth behavior. At minimum, `pyproject.toml` and `uv.lock` use `source-dependency-policy`; the accepted source-only hunk set in `scripts/install.sh` uses `source-install-scope`; and the absence of the packaged producer's indeterminate progress event in source mode uses `source-mode-no-packaged-progress-producer`. Every waiver records its invariant and reference SHA.
+
+Preassign the known overlap surface so implementation cannot stall on ad hoc interpretation:
+
+```text
+apps/desktop/electron/bootstrap-runner.ts       source-mode-no-packaged-progress-producer
+apps/desktop/electron/bootstrap-runner.test.ts  source-mode-no-packaged-progress-producer
+apps/desktop/electron/main.ts                   packaging-producer-interface-extraction
+docs/security/remote-auth-release-evidence.md   neutral-platform-wording
+hermes_cli/main.py                              packaging-producer-interface-extraction
+hermes_cli/web_server.py                        neutral-platform-wording
+pyproject.toml                                  source-dependency-policy
+scripts/install.sh                              source-install-scope
+uv.lock                                         source-dependency-policy
+```
 
 - [ ] **Step 4: Run the complete parity gate**
 
