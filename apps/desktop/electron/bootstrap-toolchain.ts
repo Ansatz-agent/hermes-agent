@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import fs from 'node:fs'
+import type { Stats } from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 
@@ -128,8 +128,8 @@ function parseManifest(raw: unknown): AuthToolchainManifest {
   }
 }
 
-async function requireRegularFile(filePath: string, label: string): Promise<fs.Stats> {
-  let stats: fs.Stats
+async function requireRegularFile(filePath: string, label: string): Promise<Stats> {
+  let stats: Stats
 
   try {
     stats = await fsp.lstat(filePath)
