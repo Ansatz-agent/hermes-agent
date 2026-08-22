@@ -24,11 +24,34 @@ export ELECTRON_MIRROR="${ELECTRON_MIRROR:-https://npmmirror.com/mirrors/electro
 export ELECTRON_BUILDER_BINARIES_MIRROR="${ELECTRON_BUILDER_BINARIES_MIRROR:-https://npmmirror.com/mirrors/electron-builder-binaries/}"
 export CSC_IDENTITY_AUTO_DISCOVERY=false
 
+AUTH_TOOLCHAIN_ENV_KEYS=(
+  HERMES_AUTH_TOOLCHAIN_OUTPUT_DIR
+  HERMES_AUTH_TOOLCHAIN_UV_PATH
+  HERMES_AUTH_TOOLCHAIN_PYTHON_ARCHIVE
+  HERMES_AUTH_TOOLCHAIN_REQUIREMENTS
+  HERMES_AUTH_TOOLCHAIN_WHEELHOUSE
+  HERMES_AUTH_TOOLCHAIN_UV_VERSION
+  HERMES_AUTH_TOOLCHAIN_PYTHON_VERSION
+)
+
+auth_toolchain_env_complete() {
+  local key
+  for key in "${AUTH_TOOLCHAIN_ENV_KEYS[@]}"; do
+    [[ -n "${!key:-}" ]] || return 1
+  done
+  return 0
+}
+
 if [[ "${1:-}" == "--check" ]]; then
   printf 'Node=%s\n' "$ACTUAL_NODE_VERSION"
   printf 'PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=%s\n' "$PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD"
   printf 'ELECTRON_MIRROR=%s\n' "$ELECTRON_MIRROR"
   printf 'ELECTRON_BUILDER_BINARIES_MIRROR=%s\n' "$ELECTRON_BUILDER_BINARIES_MIRROR"
+  if auth_toolchain_env_complete; then
+    printf 'AUTH_TOOLCHAIN_INPUTS=prebuilt\n'
+  else
+    printf 'AUTH_TOOLCHAIN_INPUTS=prepare-at-build\n'
+  fi
   exit 0
 fi
 
@@ -48,6 +71,33 @@ run_logged() {
   printf '\n>>> %s\n' "$*" | tee -a "$BUILD_LOG"
   "$@" 2>&1 | tee -a "$BUILD_LOG"
 }
+
+if ! auth_toolchain_env_complete; then
+  AUTH_INPUT_DIR="${HERMES_AUTH_TOOLCHAIN_INPUT_DIR:-$REPO_ROOT/apps/desktop/build/auth-toolchain-inputs}"
+  AUTH_METADATA="$AUTH_INPUT_DIR/metadata.json"
+  AUTH_PREPARE_SCRIPT="$REPO_ROOT/apps/desktop/scripts/prepare-auth-toolchain-inputs.mjs"
+
+  export HERMES_AUTH_TOOLCHAIN_INPUT_DIR="$AUTH_INPUT_DIR"
+  export HERMES_AUTH_TOOLCHAIN_OUTPUT_DIR="${HERMES_AUTH_TOOLCHAIN_OUTPUT_DIR:-$REPO_ROOT/apps/desktop/build/bootstrap/auth-toolchain}"
+  run_logged node "$AUTH_PREPARE_SCRIPT"
+
+  [[ -f "$AUTH_INPUT_DIR/uv" ]] || fail "prepared authentication uv is missing"
+  [[ -f "$AUTH_INPUT_DIR/python.tar.gz" ]] || fail "prepared authentication Python archive is missing"
+  [[ -f "$AUTH_INPUT_DIR/auth-requirements.txt" ]] || fail "prepared authentication requirements are missing"
+  [[ -d "$AUTH_INPUT_DIR/wheelhouse" ]] || fail "prepared authentication wheelhouse is missing"
+  [[ -f "$AUTH_METADATA" ]] || fail "prepared authentication metadata is missing"
+
+  read_auth_metadata() {
+    node -e 'const fs=require("node:fs"); const data=JSON.parse(fs.readFileSync(process.argv[1], "utf8")); const value=data[process.argv[2]]; if (typeof value !== "string" || value.length === 0) process.exit(2); process.stdout.write(value)' "$AUTH_METADATA" "$1"
+  }
+
+  export HERMES_AUTH_TOOLCHAIN_UV_PATH="$AUTH_INPUT_DIR/uv"
+  export HERMES_AUTH_TOOLCHAIN_PYTHON_ARCHIVE="$AUTH_INPUT_DIR/python.tar.gz"
+  export HERMES_AUTH_TOOLCHAIN_REQUIREMENTS="$AUTH_INPUT_DIR/auth-requirements.txt"
+  export HERMES_AUTH_TOOLCHAIN_WHEELHOUSE="$AUTH_INPUT_DIR/wheelhouse"
+  export HERMES_AUTH_TOOLCHAIN_UV_VERSION="$(read_auth_metadata uvVersion)"
+  export HERMES_AUTH_TOOLCHAIN_PYTHON_VERSION="$(read_auth_metadata pythonVersion)"
+fi
 
 cd "$REPO_ROOT"
 run_logged npm ci

@@ -27,7 +27,8 @@ function runPipeline({
   produceDmg,
   builderBinariesMirror,
   signatureValid = true,
-  builderVolumeDenied = false
+  builderVolumeDenied = false,
+  prepareAuthInputs = false
 }) {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-dmg-pipeline-'))
   const releaseDir = path.join(tempRoot, 'release')
@@ -37,6 +38,15 @@ function runPipeline({
   const fakeCodesign = path.join(tempRoot, 'codesign')
   const fakeHdiutil = path.join(tempRoot, 'hdiutil')
   const recordPath = path.join(tempRoot, 'npm-record.txt')
+  const authInputDir = path.join(tempRoot, 'auth-inputs')
+  const authOutputDir = path.join(tempRoot, 'auth-output')
+  const prepareScript = path.join(
+    repoRoot,
+    'apps',
+    'desktop',
+    'scripts',
+    'prepare-auth-toolchain-inputs.mjs'
+  )
   const artifactPath = path.join(
     releaseDir,
     `Hermes-test-${process.pid}-${Date.now()}-mac-arm64.dmg`
@@ -44,7 +54,7 @@ function runPipeline({
 
   fs.writeFileSync(
     fakeNode,
-    `#!/bin/sh\nif [ "\${1:-}" = "--version" ]; then\n  printf '%s\\n' 'v26.7.0'\n  exit 0\nfi\nexec '${process.execPath}' "$@"\n`,
+    `#!/bin/sh\nif [ "\${1:-}" = "--version" ]; then\n  printf '%s\\n' 'v26.7.0'\n  exit 0\nfi\nif [ "\${HERMES_DMG_TEST_PREPARE_AUTH:-0}" = "1" ] && [ "\${1:-}" = "$HERMES_DMG_TEST_PREPARE_SCRIPT" ]; then\n  printf '%s\\n' 'prepare-auth-toolchain' >> "$HERMES_DMG_TEST_RECORD"\n  mkdir -p "$HERMES_AUTH_TOOLCHAIN_INPUT_DIR/wheelhouse"\n  printf '%s\\n' 'uv' > "$HERMES_AUTH_TOOLCHAIN_INPUT_DIR/uv"\n  printf '%s\\n' 'python' > "$HERMES_AUTH_TOOLCHAIN_INPUT_DIR/python.tar.gz"\n  printf '%s\\n' 'httpx==0.28.1 --hash=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' > "$HERMES_AUTH_TOOLCHAIN_INPUT_DIR/auth-requirements.txt"\n  printf '%s\\n' 'wheel' > "$HERMES_AUTH_TOOLCHAIN_INPUT_DIR/wheelhouse/httpx.whl"\n  printf '%s\\n' '{"uvVersion":"0.12.5","pythonVersion":"3.11.16"}' > "$HERMES_AUTH_TOOLCHAIN_INPUT_DIR/metadata.json"\n  exit 0\nfi\nexec '${process.execPath}' "$@"\n`,
     { mode: 0o755 }
   )
   fs.writeFileSync(
@@ -63,6 +73,12 @@ function runPipeline({
     { mode: 0o755 }
   )
 
+  fs.mkdirSync(path.join(authInputDir, 'wheelhouse'), { recursive: true })
+  for (const file of ['uv', 'python.tar.gz', 'auth-requirements.txt']) {
+    fs.writeFileSync(path.join(authInputDir, file), `${file}\n`)
+  }
+  fs.writeFileSync(path.join(authInputDir, 'wheelhouse', 'httpx.whl'), 'wheel\n')
+
   try {
     const result = spawnSync('/bin/bash', [buildScript], {
       cwd: repoRoot,
@@ -76,6 +92,20 @@ function runPipeline({
         HERMES_DMG_TEST_PRODUCE: produceDmg ? '1' : '0',
         HERMES_DMG_TEST_VOLUME_DENIED: builderVolumeDenied ? '1' : '0',
         HERMES_DMG_TEST_SIGNATURE_VALID: signatureValid ? '1' : '0',
+        HERMES_DMG_TEST_PREPARE_AUTH: prepareAuthInputs ? '1' : '0',
+        HERMES_DMG_TEST_PREPARE_SCRIPT: prepareScript,
+        HERMES_AUTH_TOOLCHAIN_INPUT_DIR: authInputDir,
+        HERMES_AUTH_TOOLCHAIN_OUTPUT_DIR: authOutputDir,
+        ...(!prepareAuthInputs
+          ? {
+              HERMES_AUTH_TOOLCHAIN_UV_PATH: path.join(authInputDir, 'uv'),
+              HERMES_AUTH_TOOLCHAIN_PYTHON_ARCHIVE: path.join(authInputDir, 'python.tar.gz'),
+              HERMES_AUTH_TOOLCHAIN_REQUIREMENTS: path.join(authInputDir, 'auth-requirements.txt'),
+              HERMES_AUTH_TOOLCHAIN_WHEELHOUSE: path.join(authInputDir, 'wheelhouse'),
+              HERMES_AUTH_TOOLCHAIN_UV_VERSION: '0.12.5',
+              HERMES_AUTH_TOOLCHAIN_PYTHON_VERSION: '3.11.16'
+            }
+          : {}),
         ...(builderBinariesMirror
           ? { ELECTRON_BUILDER_BINARIES_MIRROR: builderBinariesMirror }
           : {})
@@ -119,6 +149,13 @@ test('pipeline installs locked dependencies and builds the desktop DMG', () => {
   )
   assert.match(record, /codesign\|--verify --deep --strict .+\/release\/mac-arm64\/Hermes\.app/)
   assert.match(result.stdout, /Hermes-test-.+-mac-arm64\.dmg/)
+})
+
+test('pipeline prepares verified authentication toolchain inputs when they are not prebuilt', () => {
+  const { result, record } = runPipeline({ produceDmg: true, prepareAuthInputs: true })
+
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(record, /prepare-auth-toolchain/)
 })
 
 test('pipeline preserves a caller-provided builder binaries mirror', () => {
