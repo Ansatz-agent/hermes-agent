@@ -157,6 +157,17 @@ def test_bundled_runtime_lock_failure_never_falls_back_to_unlocked_pip(tmp_path:
     )
     uv_path.chmod(0o755)
 
+    env = os.environ.copy()
+    env.update(
+        {
+            "UV_DEFAULT_INDEX": "https://mirrors.ustc.edu.cn/pypi/simple",
+            "HERMES_UV_FALLBACK_INDEX": "https://pypi.tuna.tsinghua.edu.cn/simple",
+            "NPM_CONFIG_REGISTRY": "https://registry.npmmirror.com",
+            "HERMES_NODE_MIRROR": "https://registry.npmmirror.com/-/binary/node/",
+            "PLAYWRIGHT_DOWNLOAD_HOST": "https://registry.npmmirror.com/-/binary/playwright/",
+        }
+    )
+
     result = subprocess.run(
         [
             "bash",
@@ -174,6 +185,7 @@ def test_bundled_runtime_lock_failure_never_falls_back_to_unlocked_pip(tmp_path:
             str(hermes_home),
         ],
         cwd=REPO_ROOT,
+        env=env,
         capture_output=True,
         text=True,
     )

@@ -15,7 +15,8 @@ import {
   isPinnedCommit,
   resolveInstallScript,
   resolveMarkerPinnedCommit,
-  runBootstrap
+  runBootstrap,
+  usesDomesticRuntimeMirrors
 } from './bootstrap-runner'
 
 const SCRIPT_NAME = process.platform === 'win32' ? 'install.ps1' : 'install.sh'
@@ -141,6 +142,12 @@ test('bundled Desktop bootstrap args include the verified authentication toolcha
       'auth'
     ]
   )
+})
+
+test('domestic mirrors are limited to the post-login bundled runtime scope', () => {
+  assert.equal(usesDomesticRuntimeMirrors({ bundledSource: true, bootstrapScope: 'runtime' }), true)
+  assert.equal(usesDomesticRuntimeMirrors({ bundledSource: true, bootstrapScope: 'auth' }), false)
+  assert.equal(usesDomesticRuntimeMirrors({ bundledSource: false, bootstrapScope: 'runtime' }), false)
 })
 
 test('existing-checkout bootstrap args keep branch but skip the packaged commit pin', () => {

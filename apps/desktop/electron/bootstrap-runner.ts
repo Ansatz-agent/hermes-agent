@@ -524,7 +524,16 @@ function resolveWindowsPowerShell() {
 function spawnPowerShell(
   scriptPath,
   args,
-  { emit, stageName, abortSignal, hermesHome, hardTimeoutMs, idleTimeoutMs, killGraceMs }: any = {}
+  {
+    emit,
+    stageName,
+    abortSignal,
+    hermesHome,
+    hardTimeoutMs,
+    idleTimeoutMs,
+    killGraceMs,
+    useDomesticRuntimeMirrors
+  }: any = {}
 ) {
   const ps = process.platform === 'win32' ? resolveWindowsPowerShell() : 'pwsh'
 
@@ -533,7 +542,7 @@ function spawnPowerShell(
     args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...args],
     abortSignal,
     emit,
-    env: buildBootstrapEnvironment(process.env, { hermesHome }),
+    env: buildBootstrapEnvironment(process.env, { hermesHome, useDomesticRuntimeMirrors }),
     hardTimeoutMs,
     idleTimeoutMs,
     killGraceMs,
@@ -544,19 +553,32 @@ function spawnPowerShell(
 function spawnBash(
   scriptPath,
   args,
-  { emit, stageName, abortSignal, hermesHome, hardTimeoutMs, idleTimeoutMs, killGraceMs }: any = {}
+  {
+    emit,
+    stageName,
+    abortSignal,
+    hermesHome,
+    hardTimeoutMs,
+    idleTimeoutMs,
+    killGraceMs,
+    useDomesticRuntimeMirrors
+  }: any = {}
 ) {
   return runBootstrapProcess({
     command: 'bash',
     args: [scriptPath, ...args],
     abortSignal,
     emit,
-    env: buildBootstrapEnvironment(process.env, { hermesHome }),
+    env: buildBootstrapEnvironment(process.env, { hermesHome, useDomesticRuntimeMirrors }),
     hardTimeoutMs,
     idleTimeoutMs,
     killGraceMs,
     stageName
   })
+}
+
+function usesDomesticRuntimeMirrors({ bundledSource, bootstrapScope }) {
+  return bundledSource === true && bootstrapScope === 'runtime'
 }
 
 // ---------------------------------------------------------------------------
@@ -660,7 +682,8 @@ async function fetchManifest({
     hermesHome,
     hardTimeoutMs: processTimeout.hardTimeoutMs,
     idleTimeoutMs,
-    killGraceMs
+    killGraceMs,
+    useDomesticRuntimeMirrors: usesDomesticRuntimeMirrors({ bundledSource, bootstrapScope })
   })
 
   const terminalError = terminationError(result, processTimeout)
@@ -1228,5 +1251,6 @@ export {
   resolveInstallScript,
   resolveLocalInstallScript,
   resolveMarkerPinnedCommit,
-  runBootstrap
+  runBootstrap,
+  usesDomesticRuntimeMirrors
 }

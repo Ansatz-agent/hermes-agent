@@ -86,6 +86,12 @@ BUNDLED_SOURCE=false
 BUNDLED_TOOLCHAIN_ROOT=""
 BOOTSTRAP_SCOPE="runtime"
 
+DESKTOP_PYTHON_PRIMARY_MIRROR="https://mirrors.ustc.edu.cn/pypi/simple"
+DESKTOP_PYTHON_FALLBACK_MIRROR="https://pypi.tuna.tsinghua.edu.cn/simple"
+DESKTOP_NPM_REGISTRY="https://registry.npmmirror.com"
+DESKTOP_NODE_MIRROR="https://registry.npmmirror.com/-/binary/node/"
+DESKTOP_PLAYWRIGHT_MIRROR="https://registry.npmmirror.com/-/binary/playwright/"
+
 # Detect non-interactive mode (e.g. curl | bash)
 # When stdin is not a terminal, read -p will fail with EOF,
 # causing set -e to silently abort the entire script.
@@ -613,6 +619,23 @@ validate_bundled_toolchain_root() {
     return 0
 }
 
+validate_bundled_runtime_mirrors() {
+    if [ "$BUNDLED_SOURCE" != true ] || [ "$BOOTSTRAP_SCOPE" != "runtime" ]; then
+        return 0
+    fi
+
+    if [ "${UV_DEFAULT_INDEX:-}" != "$DESKTOP_PYTHON_PRIMARY_MIRROR" ] || \
+       [ "${HERMES_UV_FALLBACK_INDEX:-}" != "$DESKTOP_PYTHON_FALLBACK_MIRROR" ] || \
+       [ "${NPM_CONFIG_REGISTRY:-}" != "$DESKTOP_NPM_REGISTRY" ] || \
+       [ "${HERMES_NODE_MIRROR:-}" != "$DESKTOP_NODE_MIRROR" ] || \
+       [ "${PLAYWRIGHT_DOWNLOAD_HOST:-}" != "$DESKTOP_PLAYWRIGHT_MIRROR" ]; then
+        log_error "Bundled Desktop runtime mirror policy is unavailable"
+        return 1
+    fi
+
+    return 0
+}
+
 install_bundled_uv() {
     validate_bundled_toolchain_root || return 1
     mkdir -p "$HERMES_HOME/bin"
@@ -1069,8 +1092,11 @@ install_node() {
             ;;
     esac
 
-    # Resolve the latest v${NODE_VERSION}.x.x tarball name from the index page
-    local index_url="https://nodejs.org/dist/latest-v${NODE_VERSION}.x/"
+    # Resolve the latest v${NODE_VERSION}.x.x tarball name from the index page.
+    # Bundled Desktop runtime stages receive a fixed, validated domestic base;
+    # non-Desktop installers retain the upstream default.
+    local node_mirror="${HERMES_NODE_MIRROR:-https://nodejs.org/dist/}"
+    local index_url="${node_mirror%/}/latest-v${NODE_VERSION}.x/"
     local tarball_name
     tarball_name=$(curl -fsSL "$index_url" \
         | grep -oE "node-v${NODE_VERSION}\.[0-9]+\.[0-9]+-${node_os}-${node_arch}\.tar\.xz" \
@@ -1150,6 +1176,9 @@ check_network_prerequisites() {
     local url
     local failed=false
     local checks=("https://pypi.org/simple/" "https://duckduckgo.com/")
+    if [ "$BUNDLED_SOURCE" = true ] && [ "$BOOTSTRAP_SCOPE" = "runtime" ]; then
+        checks=("$UV_DEFAULT_INDEX" "$NPM_CONFIG_REGISTRY")
+    fi
 
     if ! command -v curl >/dev/null 2>&1; then
         log_warn "curl not found; skipping connectivity probes"
@@ -1815,13 +1844,21 @@ install_deps() {
         if [ -n "$release_uv_config" ]; then
             release_uv_args=(--config-file "$release_uv_config")
         fi
-        if UV_PROJECT_ENVIRONMENT="$INSTALL_DIR/venv" $UV_CMD sync --extra all --locked "${release_uv_args[@]}"; then
+        if UV_PROJECT_ENVIRONMENT="$INSTALL_DIR/venv" "$UV_CMD" sync --extra all --locked "${release_uv_args[@]}"; then
             log_success "Main package installed (hash-verified via uv.lock)"
             log_success "All dependencies installed"
             return 0
         fi
 
         if [ "$BUNDLED_SOURCE" = true ]; then
+            log_info "Primary Python mirror failed; retrying the signed lock with the approved fallback mirror..."
+            if UV_DEFAULT_INDEX="$HERMES_UV_FALLBACK_INDEX" \
+                UV_PROJECT_ENVIRONMENT="$INSTALL_DIR/venv" \
+                "$UV_CMD" sync --extra all --locked "${release_uv_args[@]}"; then
+                log_success "Main package installed (hash-verified via fallback mirror)"
+                log_success "All dependencies installed"
+                return 0
+            fi
             log_error "The signed Desktop dependency lock could not be installed."
             log_info "Packaged Hermes will not fall back to an unlocked package resolve."
             return 1
@@ -3601,6 +3638,7 @@ run_stage_body() {
             print_banner
             detect_os
             resolve_install_layout
+            validate_bundled_runtime_mirrors || return 1
             install_uv
             check_python
             if [ "$BUNDLED_SOURCE" != true ]; then
@@ -3629,6 +3667,7 @@ run_stage_body() {
         python-deps)
             detect_os
             resolve_install_layout
+            validate_bundled_runtime_mirrors || return 1
             require_install_dir
             install_uv
             check_python
@@ -3645,6 +3684,7 @@ run_stage_body() {
         node-deps)
             detect_os
             resolve_install_layout
+            validate_bundled_runtime_mirrors || return 1
             require_install_dir
             check_node
             install_node_deps || return

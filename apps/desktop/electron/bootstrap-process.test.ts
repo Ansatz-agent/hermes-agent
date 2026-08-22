@@ -2,7 +2,11 @@ import assert from 'node:assert/strict'
 
 import { test } from 'vitest'
 
-import { buildBootstrapEnvironment, runBootstrapProcess } from './bootstrap-process'
+import {
+  buildBootstrapEnvironment,
+  DOMESTIC_BOOTSTRAP_MIRRORS,
+  runBootstrapProcess
+} from './bootstrap-process'
 
 test('buildBootstrapEnvironment drops inherited package-manager redirects and Python injection', () => {
   const env = buildBootstrapEnvironment(
@@ -37,6 +41,35 @@ test('buildBootstrapEnvironment drops inherited package-manager redirects and Py
   assert.equal(env.PYTHONPATH, undefined)
   assert.equal(env.PYTHONHOME, undefined)
   assert.equal(env.PLAYWRIGHT_DOWNLOAD_HOST, undefined)
+})
+
+test('buildBootstrapEnvironment replaces hostile package redirects with the fixed domestic runtime policy', () => {
+  const env = buildBootstrapEnvironment(
+    {
+      HOME: '/Users/example',
+      PATH: '/usr/bin:/bin',
+      UV_DEFAULT_INDEX: 'https://attacker.invalid/pypi',
+      HERMES_UV_FALLBACK_INDEX: 'https://attacker.invalid/fallback',
+      NPM_CONFIG_REGISTRY: 'https://attacker.invalid/npm',
+      HERMES_NODE_MIRROR: 'https://attacker.invalid/node',
+      PLAYWRIGHT_DOWNLOAD_HOST: 'https://attacker.invalid/playwright'
+    },
+    { hermesHome: '/Users/example/.hermes', useDomesticRuntimeMirrors: true }
+  )
+
+  assert.deepEqual(DOMESTIC_BOOTSTRAP_MIRRORS, {
+    pythonPrimary: 'https://mirrors.ustc.edu.cn/pypi/simple',
+    pythonFallback: 'https://pypi.tuna.tsinghua.edu.cn/simple',
+    npmRegistry: 'https://registry.npmmirror.com',
+    nodeBase: 'https://registry.npmmirror.com/-/binary/node/',
+    playwrightBase: 'https://registry.npmmirror.com/-/binary/playwright/'
+  })
+  assert.equal(env.UV_DEFAULT_INDEX, DOMESTIC_BOOTSTRAP_MIRRORS.pythonPrimary)
+  assert.equal(env.HERMES_UV_FALLBACK_INDEX, DOMESTIC_BOOTSTRAP_MIRRORS.pythonFallback)
+  assert.equal(env.NPM_CONFIG_REGISTRY, DOMESTIC_BOOTSTRAP_MIRRORS.npmRegistry)
+  assert.equal(env.HERMES_NODE_MIRROR, DOMESTIC_BOOTSTRAP_MIRRORS.nodeBase)
+  assert.equal(env.PLAYWRIGHT_DOWNLOAD_HOST, DOMESTIC_BOOTSTRAP_MIRRORS.playwrightBase)
+  assert.equal(JSON.stringify(env).includes('attacker.invalid'), false)
 })
 
 test('runBootstrapProcess drains large stdout and stderr while bounding captured output', async () => {

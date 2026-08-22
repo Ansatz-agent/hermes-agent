@@ -14,6 +14,14 @@ const DEFAULT_KILL_GRACE_MS = 2_000
 const MAX_EMITTED_LINE_CHARS = 64 * 1024
 const STRUCTURED_PROGRESS_PREFIX = 'HERMES_BOOTSTRAP_PROGRESS '
 
+export const DOMESTIC_BOOTSTRAP_MIRRORS = Object.freeze({
+  pythonPrimary: 'https://mirrors.ustc.edu.cn/pypi/simple',
+  pythonFallback: 'https://pypi.tuna.tsinghua.edu.cn/simple',
+  npmRegistry: 'https://registry.npmmirror.com',
+  nodeBase: 'https://registry.npmmirror.com/-/binary/node/',
+  playwrightBase: 'https://registry.npmmirror.com/-/binary/playwright/'
+})
+
 const SAFE_ENV_KEYS = new Set([
   'APPDATA',
   'DBUS_SESSION_BUS_ADDRESS',
@@ -56,6 +64,7 @@ type BuildBootstrapEnvironmentOptions = {
   hermesHome?: string
   npmConfigPath?: string
   npmRegistry?: string
+  useDomesticRuntimeMirrors?: boolean
   uvIndexUrl?: string
 }
 
@@ -110,6 +119,14 @@ export function buildBootstrapEnvironment(
 
   if (options.npmRegistry) {
     env.NPM_CONFIG_REGISTRY = options.npmRegistry
+  }
+
+  if (options.useDomesticRuntimeMirrors) {
+    env.UV_DEFAULT_INDEX = DOMESTIC_BOOTSTRAP_MIRRORS.pythonPrimary
+    env.HERMES_UV_FALLBACK_INDEX = DOMESTIC_BOOTSTRAP_MIRRORS.pythonFallback
+    env.NPM_CONFIG_REGISTRY = DOMESTIC_BOOTSTRAP_MIRRORS.npmRegistry
+    env.HERMES_NODE_MIRROR = DOMESTIC_BOOTSTRAP_MIRRORS.nodeBase
+    env.PLAYWRIGHT_DOWNLOAD_HOST = DOMESTIC_BOOTSTRAP_MIRRORS.playwrightBase
   }
 
   return env
