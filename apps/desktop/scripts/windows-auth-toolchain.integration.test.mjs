@@ -27,6 +27,7 @@ function makeFixture() {
   fs.mkdirSync(authProject, { recursive: true })
   fs.writeFileSync(path.join(authProject, 'pyproject.toml'), '[project]\nname="auth"\n')
   fs.writeFileSync(path.join(authProject, 'uv.lock'), 'version = 1\n')
+  fs.writeFileSync(path.join(authProject, 'uv.toml'), 'exclude-newer = "2026-08-19T00:00:00Z"\n')
   fs.writeFileSync(hostUvPath, 'host uv\n')
   fs.writeFileSync(hostPythonPath, 'host Python\n')
 
@@ -123,6 +124,13 @@ test('prepareWindowsAuthToolchainInputs exports CPython 3.13 win_amd64 wheels an
     )
     assert.ok(uvDownload.args.includes('--platform'))
     assert.ok(uvDownload.args.includes('win_amd64'))
+
+    const exportCall = commands.calls.find(call => call.args[0] === 'export')
+    assert.ok(exportCall)
+    assert.equal(
+      exportCall.args[exportCall.args.indexOf('--config-file') + 1],
+      path.join(fixture.projectRoot, 'desktop_auth_runtime', 'uv.toml')
+    )
 
     const lockedDownload = commands.calls.find(
       call => call.args.slice(0, 3).join(' ') === '-m pip download' && call.args.includes('--requirement')

@@ -303,8 +303,10 @@ export async function prepareWindowsAuthToolchainInputs({
   requireRegularFile(hostPythonPath, 'host Python')
 
   const authProject = path.join(projectRoot, 'desktop_auth_runtime')
+  const authUvConfig = path.join(authProject, 'uv.toml')
   requireRegularFile(path.join(authProject, 'pyproject.toml'), 'authentication pyproject')
   requireRegularFile(path.join(authProject, 'uv.lock'), 'authentication lock')
+  requireRegularFile(authUvConfig, 'authentication uv config')
 
   const stagingRoot = `${outputDir}.tmp-${process.pid}`
   const wheelhousePath = path.join(stagingRoot, 'wheelhouse')
@@ -337,7 +339,9 @@ export async function prepareWindowsAuthToolchainInputs({
       '--format',
       'requirements-txt',
       '--output-file',
-      requirementsPath
+      requirementsPath,
+      '--config-file',
+      authUvConfig
     ])
     const requirements = fs.readFileSync(requirementsPath, 'utf8')
     if (!requirements.includes('--hash=sha256:')) {
@@ -447,8 +451,10 @@ export function prepareAuthToolchainInputs({
   }
 
   const authProject = path.join(projectRoot, 'desktop_auth_runtime')
+  const authUvConfig = path.join(authProject, 'uv.toml')
   requireRegularFile(path.join(authProject, 'pyproject.toml'), 'authentication pyproject')
   requireRegularFile(path.join(authProject, 'uv.lock'), 'authentication lock')
+  requireRegularFile(authUvConfig, 'authentication uv config')
 
   const stagingRoot = `${outputDir}.tmp-${process.pid}`
   const wheelhousePath = path.join(stagingRoot, 'wheelhouse')
@@ -479,7 +485,9 @@ export function prepareAuthToolchainInputs({
       '--format',
       'requirements-txt',
       '--output-file',
-      requirementsPath
+      requirementsPath,
+      '--config-file',
+      authUvConfig
     ])
 
     const requirements = fs.readFileSync(requirementsPath, 'utf8')

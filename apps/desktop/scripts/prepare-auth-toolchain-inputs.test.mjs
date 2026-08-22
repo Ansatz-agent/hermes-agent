@@ -62,6 +62,7 @@ function makeFixture() {
   fs.writeFileSync(uvPath, 'fixture uv\n', { mode: 0o755 })
   fs.writeFileSync(pythonPath, 'fixture python\n', { mode: 0o755 })
   fs.writeFileSync(path.join(projectRoot, 'desktop_auth_runtime', 'uv.lock'), 'version = 1\n')
+  fs.writeFileSync(path.join(projectRoot, 'desktop_auth_runtime', 'uv.toml'), 'exclude-newer = "2026-08-19T00:00:00Z"\n')
   fs.writeFileSync(path.join(projectRoot, 'desktop_auth_runtime', 'pyproject.toml'), '[project]\nname="auth"\n')
 
   return { root, outputDir, uvPath, pythonRoot, pythonPath, projectRoot }
@@ -134,6 +135,10 @@ test('prepareAuthToolchainInputs creates locked macOS arm64 build inputs from ap
     assert.ok(exportCall)
     assert.ok(exportCall.args.includes('--locked'))
     assert.ok(exportCall.args.includes('--no-emit-project'))
+    assert.equal(
+      exportCall.args[exportCall.args.indexOf('--config-file') + 1],
+      path.join(fixture.projectRoot, 'desktop_auth_runtime', 'uv.toml')
+    )
 
     const downloadCall = commands.calls.find(call => call.args.slice(0, 3).join(' ') === '-m pip download')
     assert.ok(downloadCall)
