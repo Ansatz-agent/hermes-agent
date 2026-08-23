@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+import { strToU8, zipSync } from 'fflate'
 import { test } from 'vitest'
 
 import {
@@ -13,6 +14,7 @@ import {
   WINDOWS_UV_SHA256,
   WINDOWS_UV_WHEEL,
   WINDOWS_UV_VERSION,
+  extractWindowsUvExecutable,
   prepareWindowsAuthToolchainInputs
 } from './prepare-auth-toolchain-inputs.mjs'
 
@@ -84,6 +86,20 @@ test('Windows auth toolchain build inputs are exact and domestic-first', () => {
   assert.equal(WINDOWS_UV_VERSION, '0.12.5')
   assert.equal(WINDOWS_UV_WHEEL, 'uv-0.12.5-py3-none-win_amd64.whl')
   assert.equal(WINDOWS_UV_SHA256, '455c3e57602e2141e66e2f0bf685898c9c5e5a70377d14c9a71554a3baf3ddbf')
+})
+
+test.skipIf(process.platform !== 'win32')('native Windows archive extraction uses the production PowerShell adapter', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-windows-native-extract-'))
+  const archivePath = path.join(root, 'uv.whl')
+  const destination = path.join(root, 'uv.exe')
+
+  try {
+    fs.writeFileSync(archivePath, Buffer.from(zipSync({ 'wheel/uv.exe': strToU8('native fixture uv') })))
+    extractWindowsUvExecutable({ archivePath, destination })
+    assert.equal(fs.readFileSync(destination, 'utf8'), 'native fixture uv')
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
 })
 
 test('prepareWindowsAuthToolchainInputs exports CPython 3.13 win_amd64 wheels and extracts uv.exe', async () => {

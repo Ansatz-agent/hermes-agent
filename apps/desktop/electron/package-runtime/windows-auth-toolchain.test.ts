@@ -17,6 +17,9 @@ import {
 const SOURCE_COMMIT = 'a'.repeat(40)
 const SOURCE_ARCHIVE_SHA256 = 'b'.repeat(64)
 
+const EXPAND_ARCHIVE_COMMAND =
+  'Expand-Archive -LiteralPath $env:HERMES_ARCHIVE_PATH -DestinationPath $env:HERMES_ARCHIVE_DESTINATION -Force'
+
 function sha256(filePath: string): string {
   return createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
 }
@@ -103,8 +106,8 @@ test('Windows auth runtime uses System32 PowerShell and only bundled local packa
       runProcess: async options => {
         calls.push(options)
 
-        if (options.args.includes('Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force')) {
-          const destination = options.args.at(-1)
+        if (options.args.includes(EXPAND_ARCHIVE_COMMAND)) {
+          const destination = options.env?.HERMES_ARCHIVE_DESTINATION
           fs.mkdirSync(destination, { recursive: true })
           writePeX64(path.join(destination, 'python.exe'))
           fs.writeFileSync(path.join(destination, 'python313.zip'), 'stdlib')
@@ -121,6 +124,9 @@ test('Windows auth runtime uses System32 PowerShell and only bundled local packa
     assert.equal(expand.command, 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
     assert.ok(expand.args.includes('-NoProfile'))
     assert.ok(expand.args.includes('-NonInteractive'))
+    assert.equal(expand.args.includes(fixture.toolchain.pythonArchivePath), false)
+    assert.equal(expand.env.HERMES_ARCHIVE_PATH, fixture.toolchain.pythonArchivePath)
+    assert.equal(expand.env.HERMES_ARCHIVE_DESTINATION?.includes('.auth-runtime-stage-'), true)
     assert.ok(expand.hardTimeoutMs > 0)
     assert.ok(expand.idleTimeoutMs > 0)
 
@@ -158,8 +164,8 @@ test('Windows auth runtime never publishes a partial extraction', async () => {
         activeRoot: fixture.activeRoot,
         env: { SystemRoot: 'C:\\Windows' },
         runProcess: async options => {
-          if (options.args.includes('Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force')) {
-            const destination = options.args.at(-1)
+          if (options.args.includes(EXPAND_ARCHIVE_COMMAND)) {
+            const destination = options.env?.HERMES_ARCHIVE_DESTINATION
             fs.mkdirSync(destination, { recursive: true })
             fs.writeFileSync(path.join(destination, 'python.exe'), 'wrong architecture')
           }
@@ -192,8 +198,8 @@ test('Windows auth runtime restores the previous published runtime when verifica
         activeRoot: fixture.activeRoot,
         env: { SystemRoot: 'C:\\Windows' },
         runProcess: async options => {
-          if (options.args.includes('Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force')) {
-            const destination = options.args.at(-1)
+          if (options.args.includes(EXPAND_ARCHIVE_COMMAND)) {
+            const destination = options.env?.HERMES_ARCHIVE_DESTINATION
             fs.mkdirSync(destination, { recursive: true })
             writePeX64(path.join(destination, 'python.exe'))
             fs.writeFileSync(path.join(destination, 'python313.zip'), 'stdlib')

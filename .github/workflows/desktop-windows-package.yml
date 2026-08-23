@@ -53,6 +53,7 @@ jobs:
         shell: pwsh
         run: |
           npm run test:desktop:windows-contract
+          npm exec --workspace apps/desktop vitest run scripts/windows-auth-toolchain.integration.test.mjs
           npm run typecheck --workspace apps/desktop
 
       - name: Fetch pinned PortableGit build input

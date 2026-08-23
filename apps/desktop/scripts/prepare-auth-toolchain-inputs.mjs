@@ -109,22 +109,34 @@ function windowsPowerShellPath(env = process.env) {
   return path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
 }
 
-function defaultExtractUvExecutable({ archivePath, destination }) {
-  if (process.platform === 'win32') {
+const EXPAND_ARCHIVE_COMMAND =
+  'Expand-Archive -LiteralPath $env:HERMES_ARCHIVE_PATH -DestinationPath $env:HERMES_ARCHIVE_DESTINATION -Force'
+
+export function extractWindowsUvExecutable({
+  archivePath,
+  destination,
+  execute = defaultExecute,
+  platform = process.platform
+}) {
+  if (platform === 'win32') {
     const extractionRoot = `${archivePath}.extract-${process.pid}`
     fs.rmSync(extractionRoot, { recursive: true, force: true })
     fs.mkdirSync(extractionRoot, { recursive: true })
     try {
-      defaultExecute(windowsPowerShellPath(), [
+      execute(windowsPowerShellPath(), [
         '-NoProfile',
         '-NonInteractive',
         '-ExecutionPolicy',
         'Bypass',
         '-Command',
-        'Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force',
-        archivePath,
-        extractionRoot
-      ])
+        EXPAND_ARCHIVE_COMMAND
+      ], {
+        env: {
+          ...buildAuthPayloadEnvironment(),
+          HERMES_ARCHIVE_PATH: archivePath,
+          HERMES_ARCHIVE_DESTINATION: extractionRoot
+        }
+      })
       const candidates = []
       const visit = directory => {
         for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -142,7 +154,7 @@ function defaultExtractUvExecutable({ archivePath, destination }) {
     return
   }
 
-  const listing = String(defaultExecute('/usr/bin/unzip', ['-Z1', archivePath]))
+  const listing = String(execute('/usr/bin/unzip', ['-Z1', archivePath]))
     .split(/\r?\n/)
     .filter(candidate => /(^|\/)uv\.exe$/i.test(candidate))
   if (listing.length !== 1) throw new Error('uv wheel must contain exactly one uv.exe')
@@ -306,7 +318,7 @@ export async function prepareWindowsAuthToolchainInputs({
   hostPythonPath,
   downloadFile = defaultDownloadFile,
   sha256File = defaultSha256File,
-  extractUvExecutable = defaultExtractUvExecutable
+  extractUvExecutable = extractWindowsUvExecutable
 }) {
   if (![outputDir, projectRoot, hostUvPath, hostPythonPath].every(value => path.isAbsolute(value))) {
     throw new Error('Windows authentication toolchain preparation paths must be absolute')

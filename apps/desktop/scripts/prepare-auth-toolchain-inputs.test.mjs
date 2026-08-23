@@ -8,6 +8,7 @@ import { test } from 'vitest'
 import {
   buildAuthLockEnvironment,
   buildAuthPayloadEnvironment,
+  extractWindowsUvExecutable,
   findManagedPython,
   findUv,
   prepareAuthToolchainInputs
@@ -100,6 +101,37 @@ test('Windows uv discovery reads the mixed-case runner Path before spawning a lo
 
   assert.equal(result, uvPath)
   assert.deepEqual(calls, [])
+})
+
+test('Windows uv extraction passes archive paths only through the child environment', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-windows-uv-extract-'))
+  const archivePath = path.join(root, 'uv.whl')
+  const destination = path.join(root, 'uv.exe')
+  const calls = []
+  fs.writeFileSync(archivePath, 'fixture wheel')
+
+  try {
+    extractWindowsUvExecutable({
+      archivePath,
+      destination,
+      platform: 'win32',
+      execute: (command, args, options) => {
+        calls.push({ command, args, options })
+        const extractionRoot = options.env.HERMES_ARCHIVE_DESTINATION
+        fs.mkdirSync(path.join(extractionRoot, 'wheel'), { recursive: true })
+        fs.writeFileSync(path.join(extractionRoot, 'wheel', 'uv.exe'), 'fixture uv')
+        return ''
+      }
+    })
+
+    assert.equal(fs.readFileSync(destination, 'utf8'), 'fixture uv')
+    assert.equal(calls.length, 1)
+    assert.equal(calls[0].args.includes(archivePath), false)
+    assert.equal(calls[0].options.env.HERMES_ARCHIVE_PATH, archivePath)
+    assert.match(calls[0].options.env.HERMES_ARCHIVE_DESTINATION, /uv\.whl\.extract-/)
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true })
+  }
 })
 
 function makeFixture() {

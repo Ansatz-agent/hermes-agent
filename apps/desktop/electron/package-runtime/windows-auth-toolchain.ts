@@ -6,7 +6,9 @@ import { type BootstrapProcessResult, buildBootstrapEnvironment, runBootstrapPro
 import type { BundledAuthToolchain } from '../bootstrap-toolchain'
 import { retireExactWindowsAuthOwners } from '../windows-auth-owner'
 
-const EXPAND_ARCHIVE_COMMAND = 'Expand-Archive -LiteralPath $args[0] -DestinationPath $args[1] -Force'
+const EXPAND_ARCHIVE_COMMAND =
+  'Expand-Archive -LiteralPath $env:HERMES_ARCHIVE_PATH -DestinationPath $env:HERMES_ARCHIVE_DESTINATION -Force'
+
 const PYTHON_PATH_FILE = 'python313._pth'
 const PYTHON_PATH_CONTENT = 'python313.zip\n.\nLib\\site-packages\n..\nimport site\n'
 const HARD_TIMEOUT_MS = 5 * 60_000
@@ -384,13 +386,15 @@ export async function prepareWindowsPackagedAuthRuntime(options: PrepareOptions)
           '-ExecutionPolicy',
           'Bypass',
           '-Command',
-          EXPAND_ARCHIVE_COMMAND,
-          toolchain.pythonArchivePath,
-          stagingRuntime
+          EXPAND_ARCHIVE_COMMAND
         ],
         abortSignal,
         emit,
-        env: safeEnv,
+        env: {
+          ...safeEnv,
+          HERMES_ARCHIVE_PATH: toolchain.pythonArchivePath,
+          HERMES_ARCHIVE_DESTINATION: stagingRuntime
+        },
         hardTimeoutMs: HARD_TIMEOUT_MS,
         idleTimeoutMs: IDLE_TIMEOUT_MS,
         killGraceMs: KILL_GRACE_MS,
