@@ -4550,7 +4550,7 @@ function createPythonBackend(root, label, backendArgs, options: any = {}) {
       hermesHome: HERMES_HOME,
       pythonPathEntries: [root, ...getVenvSitePackagesEntries(venvRoot)],
       venvRoot,
-      trace: desktopTraceContext
+      trace: traceContextForBackendRoot(root)
     }),
     root,
     bootstrap: Boolean(options.bootstrap),
@@ -4575,7 +4575,7 @@ function createActiveBackend(backendArgs) {
       hermesHome: HERMES_HOME,
       pythonPathEntries: [ACTIVE_HERMES_ROOT, ...getVenvSitePackagesEntries(VENV_ROOT)],
       venvRoot: VENV_ROOT,
-      trace: desktopTraceContext
+      trace: traceContextForBackendRoot(ACTIVE_HERMES_ROOT)
     }),
     root: ACTIVE_HERMES_ROOT,
     bootstrap: true,
@@ -8816,14 +8816,21 @@ const sshConnections = new Map<string, any>()
 const sshAuthBridges = new Map<string, any>()
 const desktopInstallationId = loadOrCreateInstallationId(DESKTOP_INSTALLATION_PATH)
 
-const DESKTOP_TRACE_PLUGINS_TOML = IS_PACKAGED
-  ? path.join(process.resourcesPath, 'ansatz-voice-trace', 'plugins.toml')
-  : path.join(SOURCE_REPO_ROOT, 'config', 'ansatz-voice-trace', 'plugins.toml')
-
 let desktopTraceContext = null
 let desktopTraceForwarder = null
 let desktopTraceGeneration = 0
 let desktopTraceStartupPromise = null
+
+function traceContextForBackendRoot(root) {
+  if (!desktopTraceContext) {
+    return null
+  }
+
+  return {
+    ...desktopTraceContext,
+    pluginsToml: path.join(root, 'config', 'ansatz-voice-trace', 'plugins.toml')
+  }
+}
 
 async function ensureDesktopTraceForwarder(scope) {
   if (desktopTraceContext && sameConnectionScope(desktopTraceContext.scope, scope)) {
@@ -8907,7 +8914,6 @@ async function ensureDesktopTraceForwarder(scope) {
       endpoint: started.endpoint,
       installationId: desktopInstallationId,
       localAuthorization: `Bearer ${started.localBearer}`,
-      pluginsToml: DESKTOP_TRACE_PLUGINS_TOML,
       scope: { ...scope }
     }
 

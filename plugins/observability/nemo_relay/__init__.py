@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from agent import relay_runtime
+from agent import ansatz_trace_policy, relay_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +44,7 @@ class _SubagentContext:
 
 @dataclass
 class _Settings:
+    product_mode: bool = False
     plugins_toml_path: str = ""
     plugins_config: dict[str, Any] | None = None
     dynamic_plugins: list[dict[str, Any]] = field(default_factory=list)
@@ -214,6 +215,10 @@ class _Runtime:
         )
         self._execution_consumer_retained = False
         self._plugin_activation: Any = None
+        self._product_otel_subscriber: Any = None
+        self._product_otel_subscriber_name = (
+            f"ansatz.voice_trace.otlp.{self.host.runtime_id}"
+        )
         self._shutdown_registered = False
         self._plugin_config_initialized = self._configure_plugins_toml()
         self._plugin_config_needs_reinit = False
@@ -237,6 +242,8 @@ class _Runtime:
     def _configure_plugins_toml(self) -> bool:
         if not self.settings.plugins_config:
             return False
+        if self.settings.product_mode:
+            return self._configure_product_otel()
         plugin_mod = getattr(self.nemo_relay, "plugin", None)
         if plugin_mod is None:
             return False
@@ -253,6 +260,37 @@ class _Runtime:
             self._ensure_shutdown_registered()
         return initialized
 
+    def _configure_product_otel(self) -> bool:
+        """Register exactly one sealed endpoint without config discovery."""
+        components = self.settings.plugins_config.get("components") or []
+        endpoint = components[0]["config"]["opentelemetry"]["endpoints"][0]
+        config = self.nemo_relay.OpenTelemetryConfig(
+            endpoint["type"],
+            endpoint["endpoint"],
+        )
+        for field_name in (
+            "transport",
+            "service_name",
+            "service_namespace",
+            "service_version",
+            "instrumentation_scope",
+            "timeout_millis",
+            "mark_projection",
+            "mark_exclude_names",
+            "attribute_mappings",
+        ):
+            if field_name in endpoint:
+                setattr(config, field_name, endpoint[field_name])
+        for header, env_name in (endpoint.get("header_env") or {}).items():
+            config.set_header(header, os.environ[env_name])
+        for key, value in (endpoint.get("resource_attributes") or {}).items():
+            config.set_resource_attribute(key, value)
+        subscriber = self.nemo_relay.OpenTelemetrySubscriber(config)
+        subscriber.register(self._product_otel_subscriber_name)
+        self._product_otel_subscriber = subscriber
+        self._ensure_shutdown_registered()
+        return True
+
     def _ensure_shutdown_registered(self) -> None:
         if self._shutdown_registered:
             return
@@ -261,6 +299,18 @@ class _Runtime:
 
     def _clear_plugins_toml(self) -> None:
         if not self._plugin_config_initialized:
+            return
+        if self.settings.product_mode:
+            subscriber = self._product_otel_subscriber
+            self._product_otel_subscriber = None
+            try:
+                if subscriber is not None:
+                    subscriber.force_flush()
+                    subscriber.deregister(self._product_otel_subscriber_name)
+                    subscriber.shutdown()
+            finally:
+                self._plugin_config_initialized = False
+                self._plugin_config_needs_reinit = True
             return
         try:
             _PLUGIN_CONFIGURATION.release(self, self.nemo_relay)
@@ -515,7 +565,7 @@ class _Runtime:
             self.nemo_relay.scope.event,
             name,
             handle=handle,
-            data=_jsonable(kwargs),
+            data=_trace_jsonable(kwargs),
             metadata=_metadata(kwargs),
         )
 
@@ -534,7 +584,7 @@ class _Runtime:
             self.nemo_relay.scope.event,
             "hermes.subagent.start",
             handle=parent_state.handle,
-            data=_jsonable(kwargs),
+            data=_trace_jsonable(kwargs),
             metadata=metadata,
         )
 
@@ -568,6 +618,19 @@ def register(ctx) -> None:
     ctx.register_hook("post_approval_response", on_post_approval_response)
     ctx.register_hook("subagent_start", on_subagent_start)
     ctx.register_hook("subagent_stop", on_subagent_stop)
+
+
+def activate_ansatz_product(host: relay_runtime.RelayRuntime) -> None:
+    """Activate the sealed product exporter without mutating user config."""
+    if not ansatz_trace_policy.ansatz_product_trace_enabled():
+        raise RuntimeError("Ansatz product trace runtime validation failed")
+    relay_runtime.SESSION_COORDINATOR.register_session_initializer(
+        _SESSION_INITIALIZER_NAME,
+        _prepare_core_session,
+    )
+    runtime = _get_runtime(profile_key=host.profile_key, host=host)
+    if runtime is None or not runtime.settings.product_mode:
+        raise RuntimeError("Ansatz product Relay exporter failed to initialize")
 
 
 def on_session_start(**kwargs: Any) -> None:
@@ -677,16 +740,32 @@ def _get_runtime(
 
 def _load_settings() -> _Settings:
     plugins_toml_path = _env("HERMES_NEMO_RELAY_PLUGINS_TOML")
-    plugins_config = _load_plugins_config(plugins_toml_path)
+    product_mode = ansatz_trace_policy.ansatz_product_trace_enabled()
+    if ansatz_trace_policy.ansatz_product_trace_requested() and not product_mode:
+        raise RuntimeError("Ansatz product trace runtime validation failed")
+    plugins_config = (
+        ansatz_trace_policy.product_plugins_config()
+        if product_mode
+        else _load_plugins_config(plugins_toml_path)
+    )
     return _Settings(
+        product_mode=product_mode,
         plugins_toml_path=plugins_toml_path,
         plugins_config=plugins_config,
         dynamic_plugins=_dynamic_plugin_specs(plugins_config, plugins_toml_path),
-        atof_enabled=_env_bool("HERMES_NEMO_RELAY_ATOF_ENABLED"),
+        atof_enabled=(
+            False
+            if product_mode
+            else _env_bool("HERMES_NEMO_RELAY_ATOF_ENABLED")
+        ),
         atof_output_directory=_env("HERMES_NEMO_RELAY_ATOF_OUTPUT_DIRECTORY"),
         atof_filename=_env("HERMES_NEMO_RELAY_ATOF_FILENAME") or "hermes-atof.jsonl",
         atof_mode=_env("HERMES_NEMO_RELAY_ATOF_MODE") or "append",
-        atif_enabled=_env_bool("HERMES_NEMO_RELAY_ATIF_ENABLED"),
+        atif_enabled=(
+            False
+            if product_mode
+            else _env_bool("HERMES_NEMO_RELAY_ATIF_ENABLED")
+        ),
         atif_output_directory=_env("HERMES_NEMO_RELAY_ATIF_OUTPUT_DIRECTORY"),
         atif_filename_template=_env("HERMES_NEMO_RELAY_ATIF_FILENAME_TEMPLATE") or "hermes-atif-{session_id}.json",
         atif_subagent_export_mode=_atif_subagent_export_mode(),
@@ -701,7 +780,7 @@ def _static_plugin_config(plugins_config: dict[str, Any]) -> dict[str, Any]:
     return {
         key: value
         for key, value in plugins_config.items()
-        if key not in {"dynamic_plugins", "plugins"}
+        if key not in {"ansatz_product", "dynamic_plugins", "plugins"}
     }
 
 
@@ -951,7 +1030,7 @@ def _metadata(kwargs: dict[str, Any]) -> dict[str, Any]:
         "reason",
     )
     metadata = {
-        key: _jsonable(kwargs[key])
+        key: _trace_jsonable(kwargs[key])
         for key in keys
         if key in kwargs and kwargs[key] is not None
     }
@@ -985,6 +1064,13 @@ def _jsonable(value: Any) -> Any:
         return json.loads(json.dumps(value, default=str))
     except Exception:
         return str(value)
+
+
+def _trace_jsonable(value: Any) -> Any:
+    rendered = _jsonable(value)
+    if ansatz_trace_policy.ansatz_product_trace_enabled():
+        return ansatz_trace_policy.redact_trace_value(rendered)
+    return rendered
 
 
 def _safe(fn) -> None:

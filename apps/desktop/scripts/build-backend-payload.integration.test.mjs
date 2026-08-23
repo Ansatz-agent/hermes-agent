@@ -9,6 +9,8 @@ import { test } from 'vitest'
 
 import {
   buildBackendPayload,
+  PAYLOAD_PATHS,
+  REQUIRED_ARCHIVE_ENTRIES,
   RUNTIME_SCRIPT_FILES,
   validateInstallStamp
 } from './build-backend-payload.mjs'
@@ -148,6 +150,16 @@ test('install stamp validation requires a real clean commit', () => {
 
 test('macOS backend payload excludes the Android-only psutil installer', () => {
   assert.equal(RUNTIME_SCRIPT_FILES.includes('install_psutil_android.py'), false)
+})
+
+test('backend payload hash-manifest covers the sealed Ansatz Relay config', () => {
+  assert.equal(PAYLOAD_PATHS.includes('config/ansatz-voice-trace'), true)
+  assert.equal(
+    REQUIRED_ARCHIVE_ENTRIES.includes(
+      'hermes-agent/config/ansatz-voice-trace/plugins.toml'
+    ),
+    true
+  )
 })
 
 test('backend payload rejects CI-only files even under an allowed runtime path', () => {

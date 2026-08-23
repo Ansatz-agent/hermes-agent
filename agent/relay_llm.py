@@ -11,7 +11,7 @@ from collections.abc import Callable, Iterator
 from types import SimpleNamespace
 from typing import Any
 
-from agent import relay_runtime
+from agent import ansatz_trace_policy, relay_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ def execute(
             callback_error = exc
             raise
         raw_response["value"] = raw
-        raw_response["json"] = _jsonable(raw)
+        raw_response["json"] = _trace_jsonable(raw)
         return raw_response["json"]
 
     try:
@@ -87,7 +87,7 @@ def execute(
                 relay_request,
                 invoke,
                 handle=parent,
-                metadata=_jsonable(metadata or {}),
+                metadata=_trace_jsonable(metadata or {}),
                 model_name=model_name,
                 codec=_codec(runtime.relay, metadata),
                 response_codec=_codec(runtime.relay, metadata),
@@ -170,7 +170,7 @@ async def execute_async(
             callback_error = exc
             raise
         raw_response["value"] = raw
-        raw_response["json"] = _jsonable(raw)
+        raw_response["json"] = _trace_jsonable(raw)
         return raw_response["json"]
 
     try:
@@ -181,7 +181,7 @@ async def execute_async(
             relay_request,
             invoke,
             handle=parent,
-            metadata=_jsonable(metadata or {}),
+            metadata=_trace_jsonable(metadata or {}),
             model_name=model_name,
             codec=_codec(runtime.relay, metadata),
             response_codec=_codec(runtime.relay, metadata),
@@ -482,8 +482,13 @@ class ManagedLlmStream(Iterator[Any]):
                         chunk,
                     ):
                         break
-                    encoded_chunk = _jsonable(chunk)
+                    encoded_chunk = _trace_jsonable(chunk)
                     self._raw_chunks.append((encoded_chunk, chunk))
+                    if (
+                        ansatz_trace_policy.ansatz_product_trace_enabled()
+                        and self._on_chunk is not None
+                    ):
+                        run_callback(self._on_chunk, _jsonable(chunk))
                     yield encoded_chunk
                 self._provider_completed = True
             except BaseException as exc:
@@ -499,6 +504,8 @@ class ManagedLlmStream(Iterator[Any]):
                         raise
 
         def observe_chunk(chunk: Any) -> None:
+            if ansatz_trace_policy.ansatz_product_trace_enabled():
+                return
             if self._on_chunk is not None:
                 run_callback(self._on_chunk, _jsonable(chunk))
 
@@ -515,7 +522,7 @@ class ManagedLlmStream(Iterator[Any]):
                     response = run_callback(finalizer)
                 if self._logical_model_name is not None:
                     self._logical_response_model_name = _response_model_name(response)
-                return _jsonable(response)
+                return _trace_jsonable(response)
             except BaseException as exc:
                 self._callback_error = exc
                 raise
@@ -534,7 +541,7 @@ class ManagedLlmStream(Iterator[Any]):
                     observe_chunk,
                     relay_finalizer,
                     handle=parent,
-                    metadata=_jsonable(metadata or {}),
+                    metadata=_trace_jsonable(metadata or {}),
                     model_name=model_name,
                     codec=_codec(runtime.relay, metadata),
                     response_codec=_codec(runtime.relay, metadata),
@@ -1035,7 +1042,7 @@ def _provider_request(
 def _relay_request_body(
     request: dict[str, Any], metadata: dict[str, Any] | None
 ) -> dict[str, Any]:
-    body = _jsonable(request)
+    body = _trace_jsonable(request)
     if not isinstance(body, dict):
         return {}
     # The Responses SDK accepts ``tools=None`` as "no tools", while Relay's
@@ -1232,6 +1239,13 @@ def _jsonable(value: Any) -> Any:
     except (TypeError, AttributeError):
         return str(value)
     return _jsonable(attributes) if attributes else str(value)
+
+
+def _trace_jsonable(value: Any) -> Any:
+    rendered = _jsonable(value)
+    if ansatz_trace_policy.ansatz_product_trace_enabled():
+        return ansatz_trace_policy.redact_trace_value(rendered)
+    return rendered
 
 
 def _namespace(value: Any) -> Any:

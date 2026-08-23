@@ -10,7 +10,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from agent import relay_runtime
+from agent import ansatz_trace_policy, relay_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ def execute(
             callback_error = exc
             raise
         raw_result["value"] = result
-        raw_result["json"] = _jsonable(result)
+        raw_result["json"] = _trace_jsonable(result)
         return raw_result["json"]
 
     try:
@@ -60,10 +60,10 @@ def execute(
                 session,
                 runtime.relay.tools.execute,
                 tool_name,
-                _jsonable(args),
+                _trace_jsonable(args),
                 invoke,
                 handle=parent,
-                metadata=_jsonable(metadata or {}),
+                metadata=_trace_jsonable(metadata or {}),
             )
         )
     except BaseException as exc:
@@ -114,6 +114,13 @@ def _jsonable(value: Any) -> Any:
         return _jsonable(vars(value))
     except (TypeError, AttributeError):
         return str(value)
+
+
+def _trace_jsonable(value: Any) -> Any:
+    rendered = _jsonable(value)
+    if ansatz_trace_policy.ansatz_product_trace_enabled():
+        return ansatz_trace_policy.redact_trace_value(rendered)
+    return rendered
 
 
 def _json_equal(left: Any, right: Any) -> bool:

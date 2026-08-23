@@ -1003,6 +1003,7 @@ class RelaySessionCoordinator:
         model: str = "",
     ) -> ConversationLease:
         host = self.registry.for_profile(profile_key)
+        _activate_ansatz_product_trace(host)
         if host is None:
             host = NoopRelayRuntime(profile_key, "Relay host creation was disabled")
         session = None
@@ -1381,6 +1382,20 @@ SESSION_COORDINATOR = RelaySessionCoordinator()
 def current_turn() -> RelayTurnContext | None:
     """Return the turn context inherited by current async and thread work."""
     return _CURRENT_TURN.get()
+
+
+def _activate_ansatz_product_trace(host: RelayHost | None) -> None:
+    """Fail closed and attach the sealed exporter for Desktop/Voice runtimes."""
+    from agent import ansatz_trace_policy
+
+    if not ansatz_trace_policy.ansatz_product_trace_requested():
+        return
+    if not ansatz_trace_policy.ansatz_product_trace_enabled():
+        raise RuntimeError("Ansatz product trace runtime validation failed")
+    if not isinstance(host, RelayRuntime):
+        raise RuntimeError("Ansatz product requires the NeMo Relay runtime")
+    product_plugin = importlib.import_module("plugins.observability.nemo_relay")
+    product_plugin.activate_ansatz_product(host)
 
 
 def relay_instrumentation_enabled() -> bool:

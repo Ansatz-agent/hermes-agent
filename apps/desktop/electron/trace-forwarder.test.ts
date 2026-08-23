@@ -230,5 +230,10 @@ test('desktop lifecycle starts Trace before local spawn and flushes it before ba
     cleanup.indexOf('await stopDesktopTraceForwarder(3_000)') <
       cleanup.indexOf('teardownPrimaryBackendAndWait({ soft: true })')
   )
-  assert.match(source, /trace: desktopTraceContext/)
+  assert.match(source, /trace: traceContextForBackendRoot\(root\)/)
+  assert.match(source, /trace: traceContextForBackendRoot\(ACTIVE_HERMES_ROOT\)/)
+  assert.match(
+    source,
+    /pluginsToml: path\.join\(root, 'config', 'ansatz-voice-trace', 'plugins\.toml'\)/
+  )
 })

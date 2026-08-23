@@ -9,7 +9,29 @@ import pytest
 
 pytest.importorskip("nemo_relay")
 
-from agent import relay_runtime, relay_tools
+from agent import ansatz_trace_policy, relay_runtime, relay_tools
+
+
+def test_product_tool_trace_keeps_arguments_and_result_but_redacts_secrets(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        ansatz_trace_policy,
+        "ansatz_product_trace_enabled",
+        lambda: True,
+    )
+    event = {
+        "arguments": {"command": "rg trace", "path": "/workspace"},
+        "result": {"stdout": "complete output", "exit_code": 0},
+        "api_key": "sk-tool-secret-value",
+    }
+
+    observed = relay_tools._trace_jsonable(event)
+
+    assert observed["arguments"] == event["arguments"]
+    assert observed["result"] == event["result"]
+    assert observed["api_key"] == "[REDACTED]"
+    assert event["api_key"] == "sk-tool-secret-value"
 
 
 @pytest.fixture()
@@ -132,7 +154,6 @@ def test_tool_error_is_preserved_from_relay_wrapper_suffix(relay_turn, monkeypat
         )
 
     assert caught.value is tool_error
-
 
 
 

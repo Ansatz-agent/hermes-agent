@@ -65,6 +65,8 @@ class _FakeNemoRelay:
         self.AtofExporterMode = SimpleNamespace(Append="append", Overwrite="overwrite")
         self.AtofExporter = self._make_atof_exporter
         self.AtifExporter = self._make_atif_exporter
+        self.OpenTelemetryConfig = _FakeOpenTelemetryConfig
+        self.OpenTelemetrySubscriber = self._make_otel_subscriber
         self.get_scope_stack = self._get_scope_stack
 
     def _scope_push(self, name, scope_type, **kwargs):
@@ -152,6 +154,9 @@ class _FakeNemoRelay:
     def _make_atif_exporter(self, session_id, agent_name, agent_version, **kwargs):
         return _FakeAtifExporter(self.events, session_id, agent_name, agent_version, kwargs)
 
+    def _make_otel_subscriber(self, config):
+        return _FakeOpenTelemetrySubscriber(self.events, config)
+
     async def _plugin_initialize(self, config):
         self.events.append(("plugin.initialize", config))
         return {"diagnostics": []}
@@ -230,6 +235,48 @@ class _FakeAtifExporter:
         return json.dumps({"session_id": self.session_id, "agent_name": self.agent_name})
 
 
+class _FakeOpenTelemetryConfig:
+    def __init__(self, otel_type, endpoint):
+        self.type = otel_type
+        self.endpoint = endpoint
+        self.transport = "http_binary"
+        self.service_name = "unknown_service"
+        self.service_namespace = None
+        self.service_version = None
+        self.instrumentation_scope = "opentelemetry"
+        self.timeout_millis = 3000
+        self.mark_projection = "inherit"
+        self.mark_exclude_names = []
+        self.headers = {}
+        self.resource_attributes = {}
+        self.attribute_mappings = []
+
+    def set_header(self, key, value):
+        self.headers[key] = value
+
+    def set_resource_attribute(self, key, value):
+        self.resource_attributes[key] = value
+
+
+class _FakeOpenTelemetrySubscriber:
+    def __init__(self, events, config):
+        self.events = events
+        self.config = config
+
+    def register(self, name):
+        self.events.append(("otel.register", name, self.config))
+
+    def deregister(self, name):
+        self.events.append(("otel.deregister", name))
+        return True
+
+    def force_flush(self):
+        self.events.append(("otel.flush",))
+
+    def shutdown(self):
+        self.events.append(("otel.shutdown",))
+
+
 def _fresh_plugin(monkeypatch, fake):
     existing = sys.modules.get("plugins.observability.nemo_relay")
     if existing is not None:
@@ -291,6 +338,114 @@ def test_nemo_relay_plugin_is_discoverable_as_bundled_plugin(tmp_path, monkeypat
     assert loaded.manifest.name == "nemo_relay"
     assert loaded.manifest.source == "bundled"
     assert not loaded.enabled
+
+
+def test_product_settings_force_full_otlp_to_validated_local_forwarder(monkeypatch):
+    fake = _FakeNemoRelay()
+    plugin = _fresh_plugin(monkeypatch, fake)
+    product_config = REPO_ROOT / "config" / "ansatz-voice-trace" / "plugins.toml"
+    monkeypatch.setenv("HERMES_NEMO_RELAY_PLUGINS_TOML", str(product_config))
+    monkeypatch.setenv(
+        "ANSATZ_TRACE_LOCAL_ENDPOINT",
+        "http://127.0.0.1:49152/v1/traces",
+    )
+    monkeypatch.setenv(
+        "ANSATZ_TRACE_LOCAL_AUTHORIZATION",
+        "Bearer " + "a" * 43,
+    )
+    monkeypatch.setenv(
+        "ANSATZ_TRACE_INSTALLATION_ID",
+        "11111111-1111-4111-8111-111111111111",
+    )
+    monkeypatch.setenv("ANSATZ_TRACE_ENTRYPOINT", "desktop")
+
+    settings = plugin._load_settings()
+
+    assert settings.product_mode is True
+    assert settings.atof_enabled is False
+    assert settings.atif_enabled is False
+    assert "ansatz_product" not in settings.plugins_config
+    observability = settings.plugins_config["components"][0]["config"]
+    assert observability["enable_full_payloads"] is True
+    endpoint = observability["opentelemetry"]["endpoints"][0]
+    assert endpoint["type"] == "full"
+    assert endpoint["transport"] == "http_binary"
+    assert endpoint["endpoint"] == "http://127.0.0.1:49152/v1/traces"
+    assert endpoint["header_env"] == {
+        "Authorization": "ANSATZ_TRACE_LOCAL_AUTHORIZATION"
+    }
+    assert endpoint["resource_attributes"]["ansatz.installation.id"] == (
+        "11111111-1111-4111-8111-111111111111"
+    )
+
+
+def test_product_auto_activation_shares_one_desktop_voice_coordinator(
+    tmp_path,
+    monkeypatch,
+):
+    fake = _FakeNemoRelay()
+    plugin = _fresh_plugin(monkeypatch, fake)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "product-profile"))
+    monkeypatch.setenv(
+        "HERMES_NEMO_RELAY_PLUGINS_TOML",
+        str(REPO_ROOT / "config" / "ansatz-voice-trace" / "plugins.toml"),
+    )
+    monkeypatch.setenv(
+        "ANSATZ_TRACE_LOCAL_ENDPOINT",
+        "http://127.0.0.1:49152/v1/traces",
+    )
+    monkeypatch.setenv(
+        "ANSATZ_TRACE_LOCAL_AUTHORIZATION",
+        "Bearer " + "a" * 43,
+    )
+    monkeypatch.setenv(
+        "ANSATZ_TRACE_INSTALLATION_ID",
+        "11111111-1111-4111-8111-111111111111",
+    )
+    monkeypatch.setenv("ANSATZ_TRACE_ENTRYPOINT", "desktop")
+
+    coordinator = relay_runtime.SESSION_COORDINATOR
+    desktop = coordinator.acquire_conversation(
+        profile_key=relay_runtime.current_profile_key(),
+        session_id="shared-conversation",
+        platform="desktop",
+    )
+    voice = coordinator.acquire_conversation(
+        profile_key=relay_runtime.current_profile_key(),
+        session_id="shared-conversation",
+        platform="voice",
+    )
+
+    assert desktop.host is voice.host
+    session_pushes = [
+        event
+        for event in fake.events
+        if event[0] == "scope.push" and event[1] == relay_runtime.SESSION_SCOPE
+    ]
+    assert len(session_pushes) == 1
+    assert not [event for event in fake.events if event[0] == "plugin.initialize"]
+    registrations = [event for event in fake.events if event[0] == "otel.register"]
+    assert len(registrations) == 1
+    otel_config = registrations[0][2]
+    assert otel_config.type == "full"
+    assert otel_config.endpoint == "http://127.0.0.1:49152/v1/traces"
+    assert otel_config.headers == {"Authorization": "Bearer " + "a" * 43}
+    assert otel_config.resource_attributes == {
+        "ansatz.product": "voice-trace-client",
+        "ansatz.telemetry.schema_version": "1",
+        "ansatz.installation.id": "11111111-1111-4111-8111-111111111111",
+    }
+    assert plugin._get_runtime() is not None
+
+    coordinator.release_conversation(desktop)
+    coordinator.release_conversation(voice)
+    plugin.reset_for_tests()
+    assert [
+        event[0]
+        for event in fake.events
+        if event[0] in {"otel.flush", "otel.deregister", "otel.shutdown"}
+    ] == ["otel.flush", "otel.deregister", "otel.shutdown"]
+    relay_runtime._reset_for_tests()
 
 
 def test_shared_metrics_and_rich_plugin_share_one_core_session(
@@ -480,5 +635,3 @@ def test_relay_tool_request_rewrite_precedes_hermes_authorization_boundary(
 
     assert result.payload == {"intercepted": True, "value": 1}
     assert result.trace[0] == {"source": "nemo_relay"}
-
-
