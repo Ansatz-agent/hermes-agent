@@ -5,6 +5,7 @@ import errno
 import hashlib
 import json
 import os
+import re
 import secrets
 import select
 import socket
@@ -31,6 +32,7 @@ from hermes_cli.client_auth.client import (
     CookieRecord,
     SessionRejected,
     SessionStatus,
+    TraceCredential,
 )
 
 AUTH_EXIT_CODE = 20
@@ -1311,6 +1313,52 @@ class _OwnerCore:
         finally:
             self._refresh_lock.release()
 
+    def trace_token(
+        self,
+        *,
+        installation_id: str,
+        client_version: str,
+        telemetry_schema_version: str,
+    ) -> TraceCredential:
+        record = self._load_record()
+        with self._lock:
+            if (
+                record is None
+                or self._record is not record
+                or self._snapshot.state is not AuthState.AUTHENTICATED
+            ):
+                raise AuthRequired("signed_out")
+            self._last_authenticated_activity = self._clock()
+        try:
+            credential = self._client.trace_token(
+                record.cookies,
+                installation_id=installation_id,
+                client_version=client_version,
+                telemetry_schema_version=telemetry_schema_version,
+            )
+        except AuthServiceError as error:
+            if isinstance(error, SessionRejected):
+                with self._lock:
+                    if self._record is record:
+                        self._record = None
+                        self._record_loaded = True
+                        try:
+                            self._secret_backend.delete()
+                        except Exception:
+                            pass
+                        self._publish_locked(
+                            self._snapshot.locked(error.reason, now=self._clock())
+                        )
+                        self._next_refresh_at = None
+            raise AuthRequired(error.reason) from None
+        with self._lock:
+            if (
+                self._record is not record
+                or self._snapshot.state is not AuthState.AUTHENTICATED
+            ):
+                raise AuthRequired("signed_out")
+        return credential
+
     def _refresh_once(self) -> RuntimeSnapshot:
         record = self._load_record()
         if record is None:
@@ -1567,6 +1615,14 @@ class _EntryPointOwner(Protocol):
 
     def logout(self) -> RuntimeSnapshot: ...
 
+    def trace_token(
+        self,
+        *,
+        installation_id: str,
+        client_version: str,
+        telemetry_schema_version: str,
+    ) -> TraceCredential: ...
+
     def snapshot(self) -> RuntimeSnapshot: ...
 
     def connect_consumer(self, *, profile: str | None = None) -> RuntimeConsumer: ...
@@ -1574,6 +1630,10 @@ class _EntryPointOwner(Protocol):
 
 _RUNTIME_FRAME_LIMIT = 65_536
 _RUNTIME_PROTOCOL_VERSION = 1
+_TRACE_INSTALLATION_ID = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
 
 
 class RemoteRuntimeConsumer:
@@ -1654,6 +1714,32 @@ class RemoteRuntimeOwner:
     def logout(self) -> RuntimeSnapshot:
         return self._request({"operation": "logout"})
 
+    def trace_token(
+        self,
+        *,
+        installation_id: str,
+        client_version: str,
+        telemetry_schema_version: str,
+    ) -> TraceCredential:
+        encoded = self._encode_request(
+            {
+                "operation": "trace_token",
+                "installation_id": installation_id,
+                "client_version": client_version,
+                "telemetry_schema_version": telemetry_schema_version,
+            }
+        )
+        response = self._exchange_response(
+            encoded,
+            timeout=_RUNTIME_REQUEST_TIMEOUT_SECONDS,
+        )
+        if set(response) != {"version", "ok", "credential"}:
+            raise AuthRequired("runtime_unavailable")
+        return _trace_credential_from_wire(
+            response.get("credential"),
+            expected_installation_id=installation_id,
+        )
+
     def connect_consumer(
         self,
         *,
@@ -1709,6 +1795,20 @@ class RemoteRuntimeOwner:
         *,
         timeout: float,
     ) -> RuntimeSnapshot:
+        response = self._exchange_response(encoded, timeout=timeout)
+        if set(response) != {"version", "ok", "snapshot"}:
+            raise AuthRequired("runtime_unavailable")
+        snapshot = _snapshot_from_public(response.get("snapshot"))
+        with self._lock:
+            self._snapshot = snapshot
+        return snapshot
+
+    def _exchange_response(
+        self,
+        encoded: bytearray,
+        *,
+        timeout: float,
+    ) -> dict[str, object]:
         if timeout <= 0:
             encoded[:] = b"\0" * len(encoded)
             raise AuthRequired("runtime_unavailable")
@@ -1746,12 +1846,7 @@ class RemoteRuntimeOwner:
             if not isinstance(reason, str) or not reason:
                 reason = "runtime_unavailable"
             raise AuthRequired(reason)
-        if set(response) != {"version", "ok", "snapshot"}:
-            raise AuthRequired("runtime_unavailable")
-        snapshot = _snapshot_from_public(response.get("snapshot"))
-        with self._lock:
-            self._snapshot = snapshot
-        return snapshot
+        return response
 
 
 class OwnerBroker:
@@ -1958,11 +2053,11 @@ class OwnerBroker:
         operation_locked = False
         if (
             isinstance(self._endpoint, UnixEndpoint)
-            and operation in {"login", "logout"}
+            and operation in {"login", "logout", "trace_token"}
         ):
             wait_seconds = (
                 _RUNTIME_LOGIN_OPERATION_WAIT_SECONDS
-                if operation == "login"
+                if operation in {"login", "trace_token"}
                 else _RUNTIME_LOGOUT_OPERATION_WAIT_SECONDS
             )
             operation_locked = self._operation_lock.acquire(timeout=wait_seconds)
@@ -2005,6 +2100,35 @@ class OwnerBroker:
                 snapshot = self._owner.snapshot()
                 consumer = self._owner.connect_consumer()
                 consumer.require_authorized(boundary, expected=expected)
+            elif operation == "trace_token" and set(request) == {
+                "version",
+                "operation",
+                "installation_id",
+                "client_version",
+                "telemetry_schema_version",
+            }:
+                installation_id = request.get("installation_id")
+                client_version = request.get("client_version")
+                telemetry_schema_version = request.get("telemetry_schema_version")
+                if not all(
+                    isinstance(value, str)
+                    for value in (
+                        installation_id,
+                        client_version,
+                        telemetry_schema_version,
+                    )
+                ):
+                    raise AuthRequired("runtime_unavailable")
+                credential = self._owner.trace_token(
+                    installation_id=installation_id,
+                    client_version=client_version,
+                    telemetry_schema_version=telemetry_schema_version,
+                )
+                return {
+                    "version": 1,
+                    "ok": True,
+                    "credential": _trace_credential_to_wire(credential),
+                }
             else:
                 raise AuthRequired("runtime_unavailable")
         except AuthRequired as error:
@@ -2466,6 +2590,63 @@ def authorize_entrypoint(boundary: str, *, interactive: bool) -> AuthScope:
     return scope
 
 
+def _trace_credential_to_wire(credential: TraceCredential) -> dict[str, object]:
+    return {
+        "access_token": credential.access_token,
+        "expires_at": credential.expires_at,
+        "expires_in": credential.expires_in,
+        "installation_id": credential.installation_id,
+    }
+
+
+def _trace_credential_from_wire(
+    value: object,
+    *,
+    expected_installation_id: str,
+) -> TraceCredential:
+    if not isinstance(value, dict) or set(value) != {
+        "access_token",
+        "expires_at",
+        "expires_in",
+        "installation_id",
+    }:
+        raise AuthRequired("runtime_unavailable")
+    access_token = value.get("access_token")
+    expires_at = value.get("expires_at")
+    expires_in = value.get("expires_in")
+    installation_id = value.get("installation_id")
+    if (
+        not isinstance(access_token, str)
+        or not 20 <= len(access_token) <= 4096
+        or any(character in access_token for character in "\r\n")
+        or not isinstance(expires_at, str)
+        or len(expires_at) > 128
+        or not isinstance(expires_in, int)
+        or isinstance(expires_in, bool)
+        or not 1 <= expires_in <= 900
+        or installation_id != expected_installation_id
+        or not isinstance(installation_id, str)
+        or _TRACE_INSTALLATION_ID.fullmatch(installation_id) is None
+    ):
+        raise AuthRequired("runtime_unavailable")
+    try:
+        expiry = datetime.fromisoformat(expires_at)
+    except ValueError:
+        raise AuthRequired("runtime_unavailable") from None
+    if (
+        expiry.tzinfo is None
+        or expiry.utcoffset() is None
+        or expiry <= datetime.now(tz=expiry.tzinfo)
+    ):
+        raise AuthRequired("runtime_unavailable")
+    return TraceCredential(
+        access_token=access_token,
+        expires_at=expires_at,
+        expires_in=expires_in,
+        installation_id=installation_id,
+    )
+
+
 def account_status() -> RuntimeSnapshot:
     with _entrypoint_owner_lock:
         owner = _entrypoint_owner
@@ -2551,6 +2732,29 @@ def account_logout() -> RuntimeSnapshot:
             raise
         replacement = _recover_entrypoint_owner(owner, force_start=True)
         return replacement.logout()
+
+
+def account_trace_token(
+    *,
+    installation_id: str,
+    client_version: str,
+    telemetry_schema_version: str,
+) -> TraceCredential:
+    with _entrypoint_owner_lock:
+        owner = _entrypoint_owner
+    if owner is None:
+        try:
+            owner = connect_runtime_owner(
+                timeout=_RUNTIME_RECOVERY_PROBE_SECONDS,
+            )
+        except AuthRequired as error:
+            raise AuthRequired(error.reason or "signed_out") from None
+        owner = _adopt_entrypoint_owner(owner)
+    return owner.trace_token(
+        installation_id=installation_id,
+        client_version=client_version,
+        telemetry_schema_version=telemetry_schema_version,
+    )
 
 
 @dataclass(frozen=True)

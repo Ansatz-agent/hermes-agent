@@ -17,6 +17,7 @@ from hermes_cli.client_auth.client import (
     CookieRecord,
     SessionRejected,
     SessionStatus,
+    TraceCredential,
 )
 from hermes_cli.client_auth.runtime import (
     LEASE_SECONDS,
@@ -41,6 +42,7 @@ from hermes_cli.client_auth.runtime import (
     account_login,
     account_logout,
     account_status,
+    account_trace_token,
     authorize_entrypoint,
     clear_entrypoint_owner,
     connect_runtime_owner,
@@ -417,6 +419,7 @@ class FakeAuthClient:
         self.login_calls = 0
         self.status_calls = 0
         self.logout_calls = 0
+        self.trace_token_calls: list[dict[str, str]] = []
         self.events: list[str] = []
         self.password_refs: list[bytearray] = []
 
@@ -442,6 +445,16 @@ class FakeAuthClient:
         assert cookies == self.record.cookies
         if self.logout_error is not None:
             raise self.logout_error
+
+    def trace_token(self, cookies: dict[str, str], **params: str) -> TraceCredential:
+        assert cookies == self.record.cookies
+        self.trace_token_calls.append(params)
+        return TraceCredential(
+            access_token="trace-token-sentinel-1234567890",
+            expires_at="2099-08-23T14:15:00+00:00",
+            expires_in=900,
+            installation_id=params["installation_id"],
+        )
 
 
 class RecordingHardener:
@@ -500,6 +513,28 @@ def test_owner_login_status_logout_and_rotation_are_identical(owner_factory):
     assert signed_out.state is AuthState.SIGNED_OUT
     assert signed_out.epoch == snapshot.epoch + 1
     assert secret_backend.read() is None
+
+
+@pytest.mark.parametrize("owner_factory", [vault_owner_factory, memory_owner_factory])
+def test_owner_issues_trace_credentials_only_for_its_authenticated_cookie_owner(owner_factory):
+    owner, _secret_backend, auth_client, _clock = owner_factory()
+    params = {
+        "installation_id": "11111111-1111-4111-8111-111111111111",
+        "client_version": "0.17.0",
+        "telemetry_schema_version": "1",
+    }
+
+    with pytest.raises(AuthRequired, match="signed_out"):
+        owner.trace_token(**params)
+
+    owner.login("alice", bytearray(b"secret"))
+    credential = owner.trace_token(**params)
+    assert credential.installation_id == params["installation_id"]
+    assert auth_client.trace_token_calls == [params]
+
+    owner.logout()
+    with pytest.raises(AuthRequired, match="signed_out"):
+        owner.trace_token(**params)
 
 
 @pytest.mark.parametrize("owner_factory", [vault_owner_factory, memory_owner_factory])
@@ -1301,6 +1336,47 @@ def test_account_logout_does_not_retry_non_runtime_failure(monkeypatch):
         clear_entrypoint_owner()
 
 
+def test_account_trace_token_uses_the_installed_owner_without_persisting_credential():
+    installation_id = "11111111-1111-4111-8111-111111111111"
+    credential = TraceCredential(
+        access_token="trace-token-sentinel-1234567890",
+        expires_at="2099-08-23T14:15:00+00:00",
+        expires_in=900,
+        installation_id=installation_id,
+    )
+
+    class TraceOwnerDouble(EntryPointOwnerDouble):
+        def __init__(self):
+            super().__init__(
+                RuntimeSnapshot.new_authenticated("alice", now=100.0, ttl=60.0)
+            )
+            self.trace_calls = []
+
+        def trace_token(self, **params):
+            self.trace_calls.append(params)
+            return credential
+
+    owner = TraceOwnerDouble()
+    install_entrypoint_owner(owner)
+    try:
+        result = account_trace_token(
+            installation_id=installation_id,
+            client_version="0.17.0",
+            telemetry_schema_version="1",
+        )
+    finally:
+        clear_entrypoint_owner()
+
+    assert result is credential
+    assert owner.trace_calls == [
+        {
+            "installation_id": installation_id,
+            "client_version": "0.17.0",
+            "telemetry_schema_version": "1",
+        }
+    ]
+
+
 def test_remote_owner_uses_short_timeout_for_recovery_probe():
     snapshot = RuntimeSnapshot.signed_out()
 
@@ -1388,6 +1464,102 @@ def test_remote_owner_wipes_serialized_login_frame_after_send():
 
     assert connection.sent_reference is not None
     assert bytes(connection.sent_reference).strip(b"\0") == b""
+
+
+def test_remote_owner_trace_credential_protocol_is_exact_and_installation_bound():
+    installation_id = "11111111-1111-4111-8111-111111111111"
+
+    class Connection:
+        def __init__(self):
+            self.sent = b""
+
+        def settimeout(self, _timeout):
+            return None
+
+        def sendall(self, data):
+            self.sent = bytes(data)
+
+        def recv(self, _size):
+            return json.dumps(
+                {
+                    "version": 1,
+                    "ok": True,
+                    "credential": {
+                        "access_token": "trace-token-sentinel-1234567890",
+                        "expires_at": "2099-08-23T14:15:00+00:00",
+                        "expires_in": 900,
+                        "installation_id": installation_id,
+                    },
+                }
+            ).encode("utf-8") + b"\n"
+
+        def close(self):
+            return None
+
+    connection = Connection()
+
+    class Endpoint:
+        def connect_current(self, *, timeout):
+            assert timeout > 0
+            return connection
+
+    result = RemoteRuntimeOwner(Endpoint()).trace_token(
+        installation_id=installation_id,
+        client_version="0.17.0",
+        telemetry_schema_version="1",
+    )
+
+    assert result.installation_id == installation_id
+    assert json.loads(connection.sent) == {
+        "version": 1,
+        "operation": "trace_token",
+        "installation_id": installation_id,
+        "client_version": "0.17.0",
+        "telemetry_schema_version": "1",
+    }
+
+
+def test_remote_owner_rejects_extra_trace_credential_fields_without_echoing_token():
+    sentinel = "trace-token-sentinel-1234567890"
+
+    class Connection:
+        def settimeout(self, _timeout):
+            return None
+
+        def sendall(self, _data):
+            return None
+
+        def recv(self, _size):
+            return json.dumps(
+                {
+                    "version": 1,
+                    "ok": True,
+                    "credential": {
+                        "access_token": sentinel,
+                        "expires_at": "2099-08-23T14:15:00+00:00",
+                        "expires_in": 900,
+                        "installation_id": "11111111-1111-4111-8111-111111111111",
+                        "extra": True,
+                    },
+                }
+            ).encode("utf-8") + b"\n"
+
+        def close(self):
+            return None
+
+    class Endpoint:
+        def connect_current(self, *, timeout):
+            assert timeout > 0
+            return Connection()
+
+    with pytest.raises(AuthRequired, match="runtime_unavailable") as caught:
+        RemoteRuntimeOwner(Endpoint()).trace_token(
+            installation_id="11111111-1111-4111-8111-111111111111",
+            client_version="0.17.0",
+            telemetry_schema_version="1",
+        )
+
+    assert sentinel not in repr(caught.value)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Unix runtime protocol")

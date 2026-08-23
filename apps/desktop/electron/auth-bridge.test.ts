@@ -16,6 +16,19 @@ const authenticatedStatus = {
   reason: null
 }
 
+const traceRequest = {
+  installation_id: '11111111-1111-4111-8111-111111111111',
+  client_version: '0.17.0',
+  telemetry_schema_version: '1'
+}
+
+const traceCredential = {
+  access_token: 'trace-token-sentinel-1234567890',
+  expires_at: '2099-08-23T14:15:00+00:00',
+  expires_in: 900,
+  installation_id: traceRequest.installation_id
+}
+
 class FakeChild extends EventEmitter {
   readonly stdin = new PassThrough()
   readonly stdout = new PassThrough()
@@ -109,6 +122,68 @@ test('uses monotonically increasing bounded request ids', async () => {
 
   assert.deepEqual([firstRequest.id, secondRequest.id], ['1', '2'])
   assert.ok(String(secondRequest.id).length <= 64)
+  bridge.close()
+})
+
+test('requests one short-lived Trace credential with exact installation identity', async () => {
+  const { bridge, child } = bridgeFixture()
+  const pending = bridge.traceToken(traceRequest)
+  const request = await readRequest(child)
+
+  assert.deepEqual(request, {
+    version: 1,
+    id: '1',
+    method: 'trace_token',
+    params: traceRequest
+  })
+
+  respond(child, { version: 1, id: '1', result: traceCredential })
+  assert.deepEqual(await pending, traceCredential)
+  bridge.close()
+})
+
+test('Trace credentials fail closed on malformed, stale, or extra response fields', async () => {
+  for (const result of [
+    { ...traceCredential, access_token: '' },
+    { ...traceCredential, expires_in: 0 },
+    { ...traceCredential, expires_at: '2000-08-23T14:15:00+00:00' },
+    { ...traceCredential, expires_at: 'not-a-date' },
+    { ...traceCredential, installation_id: '22222222-2222-4222-8222-222222222222' },
+    { ...traceCredential, unexpected: true }
+  ]) {
+    const { bridge, child, diagnostics } = bridgeFixture()
+    const pending = bridge.traceToken(traceRequest)
+    const request = await readRequest(child)
+
+    const rejected = assert.rejects(
+      pending,
+      error =>
+        error instanceof AuthBridgeError &&
+        error.code === 'runtime_unavailable' &&
+        !error.message.includes(traceCredential.access_token)
+    )
+
+    respond(child, { version: 1, id: request.id, result })
+    await rejected
+    assert.equal(diagnostics.join('\n').includes(traceCredential.access_token), false)
+  }
+})
+
+test('rejects invalid Trace requests before writing to the auth child', async () => {
+  const { bridge, child } = bridgeFixture()
+  const writes: unknown[] = []
+
+  child.stdin.on('data', chunk => writes.push(chunk))
+
+  await assert.rejects(
+    bridge.traceToken({ ...traceRequest, installation_id: 'not-a-uuid' }),
+    error => error instanceof AuthBridgeError && error.code === 'invalid_request'
+  )
+  await assert.rejects(
+    bridge.traceToken({ ...traceRequest, telemetry_schema_version: '1', extra: 'field' } as any),
+    error => error instanceof AuthBridgeError && error.code === 'invalid_request'
+  )
+  assert.deepEqual(writes, [])
   bridge.close()
 })
 

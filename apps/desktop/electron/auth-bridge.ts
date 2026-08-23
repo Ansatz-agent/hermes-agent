@@ -45,7 +45,7 @@ const SAFE_REASONS = new Set([
   'vault_unavailable'
 ])
 
-export type AuthMethod = 'status' | 'login' | 'logout'
+export type AuthMethod = 'status' | 'login' | 'logout' | 'trace_token'
 
 export type BridgeStatus = {
   state: 'checking' | 'authenticated' | 'signed_out' | 'locked'
@@ -63,10 +63,24 @@ export type ConnectionScope = {
   epoch: number
 }
 
+export type TraceTokenRequest = {
+  installation_id: string
+  client_version: string
+  telemetry_schema_version: string
+}
+
+export type TraceCredential = {
+  access_token: string
+  expires_at: string
+  expires_in: number
+  installation_id: string
+}
+
 type AuthRequest =
   | { method: 'status'; params: Record<string, never> }
   | { method: 'login'; params: { username: string; password: string } }
   | { method: 'logout'; params: Record<string, never> }
+  | { method: 'trace_token'; params: TraceTokenRequest }
 
 type ChildLike = {
   stdin: NodeJS.WritableStream
@@ -100,7 +114,8 @@ type DesktopAuthBridgeOptions = {
 
 type PendingRequest = {
   reject: (error: AuthBridgeError) => void
-  resolve: (status: BridgeStatus) => void
+  request: AuthRequest
+  resolve: (result: BridgeStatus | TraceCredential) => void
   timer: ReturnType<typeof setTimeout>
 }
 
@@ -220,7 +235,13 @@ export class DesktopAuthBridge {
     return this.invoke({ method: 'logout', params: {} })
   }
 
-  invoke(request: AuthRequest): Promise<BridgeStatus> {
+  traceToken(request: TraceTokenRequest): Promise<TraceCredential> {
+    return this.invoke({ method: 'trace_token', params: request })
+  }
+
+  invoke(request: Exclude<AuthRequest, { method: 'trace_token' }>): Promise<BridgeStatus>
+  invoke(request: Extract<AuthRequest, { method: 'trace_token' }>): Promise<TraceCredential>
+  invoke(request: AuthRequest): Promise<BridgeStatus | TraceCredential> {
     if (!isValidRequest(request)) {
       return Promise.reject(new AuthBridgeError('invalid_request'))
     }
@@ -238,7 +259,7 @@ export class DesktopAuthBridge {
       return Promise.reject(runtimeUnavailable())
     }
 
-    return new Promise<BridgeStatus>((resolve, reject) => {
+    return new Promise<BridgeStatus | TraceCredential>((resolve, reject) => {
       const timer = setTimeout(
         () => this.failRuntime(),
         request.method === 'login'
@@ -248,7 +269,7 @@ export class DesktopAuthBridge {
             : this.timeoutMs
       )
 
-      this.pending.set(id, { reject, resolve, timer })
+      this.pending.set(id, { reject, request, resolve, timer })
 
       const frame = JSON.stringify({
         version: PROTOCOL_VERSION,
@@ -335,7 +356,12 @@ export class DesktopAuthBridge {
     }
 
     if (Object.hasOwn(response, 'result')) {
-      if (Object.keys(response).length !== 3 || !isBridgeStatus(response.result)) {
+      const validResult =
+        pending.request.method === 'trace_token'
+          ? isTraceCredential(response.result, pending.request.params.installation_id)
+          : isBridgeStatus(response.result)
+
+      if (Object.keys(response).length !== 3 || !validResult) {
         return false
       }
 
@@ -399,6 +425,17 @@ function isValidRequest(value: unknown): value is AuthRequest {
     return paramKeys.length === 0
   }
 
+  if (value.method === 'trace_token') {
+    return (
+      sameKeys(value.params, ['installation_id', 'client_version', 'telemetry_schema_version']) &&
+      isUuidV4(value.params.installation_id) &&
+      typeof value.params.client_version === 'string' &&
+      /^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$/.test(value.params.client_version) &&
+      typeof value.params.telemetry_schema_version === 'string' &&
+      /^[1-9][0-9]{0,15}$/.test(value.params.telemetry_schema_version)
+    )
+  }
+
   return (
     value.method === 'login' &&
     paramKeys.length === 2 &&
@@ -410,6 +447,37 @@ function isValidRequest(value: unknown): value is AuthRequest {
     typeof value.params.password === 'string' &&
     value.params.password.length > 0 &&
     value.params.password.length <= 4096
+  )
+}
+
+function isTraceCredential(value: unknown, expectedInstallationId: string): value is TraceCredential {
+  if (
+    !isPlainObject(value) ||
+    !sameKeys(value, ['access_token', 'expires_at', 'expires_in', 'installation_id']) ||
+    typeof value.access_token !== 'string' ||
+    value.access_token.length < 20 ||
+    value.access_token.length > 4096 ||
+    /[\r\n]/.test(value.access_token) ||
+    typeof value.expires_at !== 'string' ||
+    value.expires_at.length > 128 ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value.expires_at) ||
+    !Number.isFinite(Date.parse(value.expires_at)) ||
+    Date.parse(value.expires_at) <= Date.now() - 30_000 ||
+    !Number.isSafeInteger(value.expires_in) ||
+    value.expires_in < 1 ||
+    value.expires_in > 900 ||
+    value.installation_id !== expectedInstallationId
+  ) {
+    return false
+  }
+
+  return isUuidV4(value.installation_id)
+}
+
+function isUuidV4(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
   )
 }
 

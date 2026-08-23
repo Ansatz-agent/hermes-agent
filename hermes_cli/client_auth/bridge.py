@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import sys
 import time
 from collections.abc import Callable, Mapping
+from datetime import datetime
 from typing import BinaryIO
 
+from hermes_cli.client_auth.client import TraceCredential
 from hermes_cli.client_auth.runtime import (
     AuthRequired,
     account_login,
     account_logout,
     account_status,
+    account_trace_token,
     clear_entrypoint_owner,
     connect_runtime_owner,
     install_entrypoint_owner,
@@ -89,15 +93,46 @@ def _logout(_params: Mapping[str, object]) -> dict[str, object]:
     return _validated_public_result(account_logout().public_dict())
 
 
+def _trace_token(params: Mapping[str, object]) -> dict[str, object]:
+    installation_id = params.get("installation_id")
+    client_version = params.get("client_version")
+    telemetry_schema_version = params.get("telemetry_schema_version")
+    if (
+        not isinstance(installation_id, str)
+        or re.fullmatch(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+            installation_id,
+            re.IGNORECASE,
+        )
+        is None
+        or not isinstance(client_version, str)
+        or re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}", client_version)
+        is None
+        or not isinstance(telemetry_schema_version, str)
+        or re.fullmatch(r"[1-9][0-9]{0,15}", telemetry_schema_version) is None
+    ):
+        raise ValueError("invalid trace token fields")
+    credential = account_trace_token(
+        installation_id=installation_id,
+        client_version=client_version,
+        telemetry_schema_version=telemetry_schema_version,
+    )
+    return _validated_trace_result(credential, installation_id=installation_id)
+
+
 METHODS: dict[str, Callable[[Mapping[str, object]], dict[str, object]]] = {
     "status": _status,
     "login": _login,
     "logout": _logout,
+    "trace_token": _trace_token,
 }
 ALLOWED_PARAMS = {
     "status": frozenset(),
     "login": frozenset({"username", "password"}),
     "logout": frozenset(),
+    "trace_token": frozenset(
+        {"installation_id", "client_version", "telemetry_schema_version"}
+    ),
 }
 
 
@@ -242,6 +277,39 @@ def _validated_public_result(value: object) -> dict[str, object]:
         remaining = max(0.0, float(valid_until) - time.monotonic())
         result["valid_until"] = time.time() + remaining
     return result
+
+
+def _validated_trace_result(
+    credential: object,
+    *,
+    installation_id: str,
+) -> dict[str, object]:
+    if not isinstance(credential, TraceCredential):
+        raise RuntimeError("invalid trace credential")
+    if (
+        credential.installation_id != installation_id
+        or not 20 <= len(credential.access_token) <= 4096
+        or any(character in credential.access_token for character in "\r\n")
+        or not 1 <= credential.expires_in <= 900
+        or len(credential.expires_at) > 128
+    ):
+        raise RuntimeError("invalid trace credential")
+    try:
+        expiry = datetime.fromisoformat(credential.expires_at)
+    except ValueError:
+        raise RuntimeError("invalid trace credential") from None
+    if (
+        expiry.tzinfo is None
+        or expiry.utcoffset() is None
+        or expiry <= datetime.now(tz=expiry.tzinfo)
+    ):
+        raise RuntimeError("invalid trace credential")
+    return {
+        "access_token": credential.access_token,
+        "expires_at": credential.expires_at,
+        "expires_in": credential.expires_in,
+        "installation_id": credential.installation_id,
+    }
 
 
 def main() -> int:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
@@ -12,6 +13,7 @@ AUTH_PREFIX = "/agent"
 LOGIN_PATH = f"{AUTH_PREFIX}/accounts/login/"
 LOGOUT_PATH = f"{AUTH_PREFIX}/accounts/logout/"
 SESSION_PATH = f"{AUTH_PREFIX}/api/session/"
+TRACE_TOKEN_PATH = f"{AUTH_PREFIX}/api/trace-token/"
 SESSION_COOKIE = "agent_history_sessionid"
 CSRF_COOKIE = "agent_history_csrftoken"
 
@@ -19,6 +21,15 @@ _COOKIE_NAMES = frozenset({SESSION_COOKIE, CSRF_COOKIE})
 _STATUS_KEYS = frozenset(
     {"authenticated", "username", "server_time", "session_expires_at"}
 )
+_TRACE_CREDENTIAL_KEYS = frozenset(
+    {"access_token", "expires_at", "expires_in", "installation_id"}
+)
+_UUID_V4 = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+_CLIENT_VERSION = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$")
+_SCHEMA_VERSION = re.compile(r"^[1-9][0-9]{0,15}$")
 
 
 class AuthServiceError(RuntimeError):
@@ -49,6 +60,14 @@ class SessionStatus:
     username: str
     server_time: str
     session_expires_at: str
+
+
+@dataclass(frozen=True)
+class TraceCredential:
+    access_token: str
+    expires_at: str
+    expires_in: int
+    installation_id: str
 
 
 class AuthClient:
@@ -130,8 +149,42 @@ class AuthClient:
         finally:
             self._http.cookies.clear()
 
+    def trace_token(
+        self,
+        cookies: Mapping[str, str],
+        *,
+        installation_id: str,
+        client_version: str,
+        telemetry_schema_version: str,
+    ) -> TraceCredential:
+        normalized = _validate_cookie_mapping(cookies)
+        _validate_trace_request(
+            installation_id=installation_id,
+            client_version=client_version,
+            telemetry_schema_version=telemetry_schema_version,
+        )
+        csrf = normalized[CSRF_COOKIE]
+        response = self._request(
+            "POST",
+            TRACE_TOKEN_PATH,
+            json={
+                "installation_id": installation_id,
+                "client_version": client_version,
+                "telemetry_schema_version": telemetry_schema_version,
+            },
+            headers={
+                "Cookie": _cookie_header(normalized),
+                "Referer": f"{AUTH_ORIGIN}{AUTH_PREFIX}/",
+                "X-CSRFToken": csrf,
+            },
+        )
+        return _parse_trace_credential(
+            response,
+            expected_installation_id=installation_id,
+        )
+
     def _request(self, method: str, path: str, **kwargs: object) -> httpx.Response:
-        if path not in {LOGIN_PATH, LOGOUT_PATH, SESSION_PATH}:
+        if path not in {LOGIN_PATH, LOGOUT_PATH, SESSION_PATH, TRACE_TOKEN_PATH}:
             raise AuthServiceError("invalid_request")
         try:
             response = self._http.request(method, path, **kwargs)
@@ -253,6 +306,75 @@ def _parse_session_status(response: httpx.Response) -> SessionStatus:
     if expiry_datetime <= server_datetime:
         raise SessionRejected()
     return SessionStatus(username, server_time, session_expires_at)
+
+
+def _validate_trace_request(
+    *,
+    installation_id: str,
+    client_version: str,
+    telemetry_schema_version: str,
+) -> None:
+    if (
+        not isinstance(installation_id, str)
+        or _UUID_V4.fullmatch(installation_id) is None
+        or not isinstance(client_version, str)
+        or _CLIENT_VERSION.fullmatch(client_version) is None
+        or not isinstance(telemetry_schema_version, str)
+        or _SCHEMA_VERSION.fullmatch(telemetry_schema_version) is None
+    ):
+        raise AuthServiceError("invalid_request")
+
+
+def _parse_trace_credential(
+    response: httpx.Response,
+    *,
+    expected_installation_id: str,
+) -> TraceCredential:
+    if response.status_code == 401:
+        raise SessionRejected()
+    cache_directives = {
+        directive.partition("=")[0].strip().casefold()
+        for directive in response.headers.get("cache-control", "").split(",")
+    }
+    if (
+        response.status_code not in {200, 201}
+        or not _is_content_type(response, "application/json")
+        or "no-store" not in cache_directives
+    ):
+        raise AuthServiceError("invalid_response")
+    try:
+        body = response.json()
+    except (ValueError, UnicodeError):
+        raise AuthServiceError("invalid_response") from None
+    if not isinstance(body, dict) or set(body) != _TRACE_CREDENTIAL_KEYS:
+        raise AuthServiceError("invalid_response")
+    access_token = body.get("access_token")
+    expires_at = body.get("expires_at")
+    expires_in = body.get("expires_in")
+    installation_id = body.get("installation_id")
+    if (
+        not isinstance(access_token, str)
+        or not 20 <= len(access_token) <= 4096
+        or any(character in access_token for character in "\r\n")
+        or not isinstance(expires_at, str)
+        or len(expires_at) > 128
+        or not isinstance(expires_in, int)
+        or isinstance(expires_in, bool)
+        or not 1 <= expires_in <= 900
+        or installation_id != expected_installation_id
+        or not isinstance(installation_id, str)
+        or _UUID_V4.fullmatch(installation_id) is None
+    ):
+        raise AuthServiceError("invalid_response")
+    expiry = _parse_aware_datetime(expires_at)
+    if expiry <= datetime.now(tz=expiry.tzinfo):
+        raise AuthServiceError("invalid_response")
+    return TraceCredential(
+        access_token=access_token,
+        expires_at=expires_at,
+        expires_in=expires_in,
+        installation_id=installation_id,
+    )
 
 
 def _parse_aware_datetime(value: str) -> datetime:

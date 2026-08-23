@@ -8,10 +8,12 @@ from hermes_cli.client_auth.client import (
     AUTH_ORIGIN,
     CSRF_COOKIE,
     SESSION_COOKIE,
+    TRACE_TOKEN_PATH,
     AuthClient,
     AuthServiceError,
     CookieRecord,
     SessionRejected,
+    TraceCredential,
 )
 
 
@@ -49,6 +51,28 @@ def json_response(status: int, body: dict[str, object]) -> httpx.Response:
         status,
         headers={"content-type": "application/json"},
         content=json.dumps(body).encode(),
+    )
+
+
+def trace_response(
+    status: int = 200,
+    body: dict[str, object] | None = None,
+) -> httpx.Response:
+    return httpx.Response(
+        status,
+        headers={
+            "content-type": "application/json",
+            "cache-control": "private, no-store",
+        },
+        content=json.dumps(
+            body
+            or {
+                "access_token": "trace-token-sentinel-1234567890",
+                "expires_at": "2099-08-23T14:15:00+00:00",
+                "expires_in": 900,
+                "installation_id": "11111111-1111-4111-8111-111111111111",
+            }
+        ).encode(),
     )
 
 
@@ -220,3 +244,110 @@ def test_logout_clears_local_cookie_jar_when_server_is_unavailable():
         client.logout(valid_cookie_record().cookies)
 
     assert list(client._http.cookies.jar) == []
+
+
+def test_trace_token_uses_fixed_authenticated_route_and_exact_installation_identity():
+    client, requests = make_client([trace_response()])
+
+    credential = client.trace_token(
+        valid_cookie_record().cookies,
+        installation_id="11111111-1111-4111-8111-111111111111",
+        client_version="0.17.0",
+        telemetry_schema_version="1",
+    )
+
+    assert credential == TraceCredential(
+        access_token="trace-token-sentinel-1234567890",
+        expires_at="2099-08-23T14:15:00+00:00",
+        expires_in=900,
+        installation_id="11111111-1111-4111-8111-111111111111",
+    )
+    assert len(requests) == 1
+    request = requests[0]
+    assert request.method == "POST"
+    assert request.url == httpx.URL(f"{AUTH_ORIGIN}{TRACE_TOKEN_PATH}")
+    assert request.headers["cookie"] == (
+        "agent_history_sessionid=session-1; agent_history_csrftoken=csrf-1"
+    )
+    assert request.headers["x-csrftoken"] == "csrf-1"
+    assert request.headers["referer"] == f"{AUTH_ORIGIN}/agent/"
+    assert json.loads(request.content) == {
+        "installation_id": "11111111-1111-4111-8111-111111111111",
+        "client_version": "0.17.0",
+        "telemetry_schema_version": "1",
+    }
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        trace_response(body={"access_token": "too-short"}),
+        trace_response(
+            body={
+                "access_token": "trace-token-sentinel-1234567890",
+                "expires_at": "2000-08-23T14:15:00+00:00",
+                "expires_in": 900,
+                "installation_id": "11111111-1111-4111-8111-111111111111",
+            }
+        ),
+        trace_response(
+            body={
+                "access_token": "trace-token-sentinel-1234567890",
+                "expires_at": "2099-08-23T14:15:00+00:00",
+                "expires_in": 901,
+                "installation_id": "11111111-1111-4111-8111-111111111111",
+            }
+        ),
+        trace_response(
+            body={
+                "access_token": "trace-token-sentinel-1234567890",
+                "expires_at": "2099-08-23T14:15:00+00:00",
+                "expires_in": 900,
+                "installation_id": "22222222-2222-4222-8222-222222222222",
+            }
+        ),
+        httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            json={
+                "access_token": "trace-token-sentinel-1234567890",
+                "expires_at": "2099-08-23T14:15:00+00:00",
+                "expires_in": 900,
+                "installation_id": "11111111-1111-4111-8111-111111111111",
+            },
+        ),
+    ],
+)
+def test_trace_token_rejects_schema_drift_stale_credentials_and_cacheable_responses(response):
+    client, _ = make_client([response])
+
+    with pytest.raises(AuthServiceError, match="invalid_response"):
+        client.trace_token(
+            valid_cookie_record().cookies,
+            installation_id="11111111-1111-4111-8111-111111111111",
+            client_version="0.17.0",
+            telemetry_schema_version="1",
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("installation_id", "not-a-uuid"),
+        ("client_version", ""),
+        ("telemetry_schema_version", "0"),
+    ],
+)
+def test_trace_token_rejects_invalid_request_before_network(field, value):
+    client, requests = make_client([])
+    params = {
+        "installation_id": "11111111-1111-4111-8111-111111111111",
+        "client_version": "0.17.0",
+        "telemetry_schema_version": "1",
+    }
+    params[field] = value
+
+    with pytest.raises(AuthServiceError, match="invalid_request"):
+        client.trace_token(valid_cookie_record().cookies, **params)
+
+    assert requests == []
