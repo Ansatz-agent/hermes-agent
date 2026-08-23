@@ -85,7 +85,11 @@ function macPackagePaths() {
     packagedApp: path.join(releaseDirectory, appDirectory, `${desktopPackage.productName}.app`),
     dmgPath: path.join(
       releaseDirectory,
-      `${desktopPackage.productName}-${desktopPackage.version}-mac-${arch}.dmg`,
+      desktopPackage.build.artifactName
+        .replace("${version}", desktopPackage.version)
+        .replace("${os}", "mac")
+        .replace("${arch}", arch)
+        .replace("${ext}", "dmg"),
     ),
   }
 }

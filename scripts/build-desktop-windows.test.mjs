@@ -113,7 +113,7 @@ function writeX64Pe(filePath) {
 }
 
 test('orchestrator runs all three authoritative commands in order', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-win-build-'))
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ansatz-win-build-'))
   try {
     fs.writeFileSync(path.join(root, '.node-version'), '26.7.0\n')
     const releaseDir = path.join(root, 'apps', 'desktop', 'release')
@@ -124,8 +124,8 @@ test('orchestrator runs all three authoritative commands in order', async () => 
       calls.push({ args: step.args, skip: step.env.HERMES_DESKTOP_SKIP_BUILD })
       fs.appendFileSync(step.logPath, `${step.command} ${step.args.join(' ')}\n`)
       if (step.args.includes('dist:win:nsis')) {
-        const artifact = path.join(releaseDir, 'Hermes-0.17.0-win-x64.exe')
-        const appExe = path.join(releaseDir, 'win-unpacked', 'Hermes.exe')
+        const artifact = path.join(releaseDir, 'Ansatz-Voice-Trace-Client-0.17.0-win-x64.exe')
+        const appExe = path.join(releaseDir, 'win-unpacked', 'AnsatzVoiceTraceClient.exe')
         fs.mkdirSync(path.dirname(appExe), { recursive: true })
         writeX64Pe(artifact)
         writeX64Pe(appExe)
@@ -149,14 +149,17 @@ test('orchestrator runs all three authoritative commands in order', async () => 
       ['ci', 'dist:win:nsis', 'test:desktop:nsis']
     )
     assert.equal(calls[2].skip, '1')
-    assert.match(fs.readFileSync(result.artifactPointer, 'utf8'), /Hermes-0\.17\.0-win-x64\.exe/)
+    assert.match(
+      fs.readFileSync(result.artifactPointer, 'utf8'),
+      /Ansatz-Voice-Trace-Client-0\.17\.0-win-x64\.exe/
+    )
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
 })
 
 test('orchestrator propagates an authoritative command failure', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-win-build-'))
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ansatz-win-build-'))
   try {
     fs.writeFileSync(path.join(root, '.node-version'), '26.7.0\n')
     await assert.rejects(
@@ -179,7 +182,7 @@ test('orchestrator propagates an authoritative command failure', async () => {
 })
 
 test('orchestrator rejects a Playwright browser download in the retained log', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-win-build-'))
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ansatz-win-build-'))
   try {
     fs.writeFileSync(path.join(root, '.node-version'), '26.7.0\n')
     const releaseDir = path.join(root, 'apps', 'desktop', 'release')
@@ -197,8 +200,8 @@ test('orchestrator rejects a Playwright browser download in the retained log', a
         runner: async step => {
           fs.appendFileSync(step.logPath, 'Downloading Chromium 145.0.0 (playwright build v1208)\n')
           if (step.args.includes('dist:win:nsis')) {
-            const artifact = path.join(releaseDir, 'Hermes-0.17.0-win-x64.exe')
-            const appExe = path.join(releaseDir, 'win-unpacked', 'Hermes.exe')
+            const artifact = path.join(releaseDir, 'Ansatz-Voice-Trace-Client-0.17.0-win-x64.exe')
+            const appExe = path.join(releaseDir, 'win-unpacked', 'AnsatzVoiceTraceClient.exe')
             fs.mkdirSync(path.dirname(appExe), { recursive: true })
             writeX64Pe(artifact)
             writeX64Pe(appExe)

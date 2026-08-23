@@ -1,10 +1,10 @@
 {
-  "name": "hermes",
-  "productName": "Hermes",
+  "name": "ansatz-voice-trace-client",
+  "productName": "Ansatz Voice Trace Client",
   "private": true,
   "version": "0.17.0",
-  "description": "Native desktop shell for Hermes Agent.",
-  "author": "Nous Research",
+  "description": "Install-first voice client with authenticated Trace relay.",
+  "author": "Ansatz Agent",
   "type": "module",
   "main": "dist/electron-main.mjs",
   "engines": {
@@ -180,18 +180,18 @@
   },
   "build": {
     "electronVersion": "40.10.2",
-    "appId": "com.nousresearch.hermes",
-    "productName": "Hermes",
-    "executableName": "Hermes",
+    "appId": "cn.c2sml.ansatz.voice-trace-client",
+    "productName": "Ansatz Voice Trace Client",
+    "executableName": "AnsatzVoiceTraceClient",
     "protocols": [
       {
-        "name": "Hermes Protocol",
+        "name": "Ansatz Voice Trace Protocol",
         "schemes": [
-          "hermes"
+          "ansatz-voice-trace"
         ]
       }
     ],
-    "artifactName": "Hermes-${version}-${os}-${arch}.${ext}",
+    "artifactName": "Ansatz-Voice-Trace-Client-${version}-${os}-${arch}.${ext}",
     "icon": "assets/icon",
     "directories": {
       "output": "release"
@@ -245,12 +245,12 @@
       "entitlements": "electron/entitlements.mac.plist",
       "entitlementsInherit": "electron/entitlements.mac.inherit.plist",
       "extendInfo": {
-        "CFBundleDisplayName": "Hermes",
-        "CFBundleExecutable": "Hermes",
-        "CFBundleName": "Hermes",
-        "NSAudioCaptureUsageDescription": "Hermes uses audio capture for voice conversations.",
-        "NSCameraUsageDescription": "Hermes uses the camera when a plugin or feature you enable requests it.",
-        "NSMicrophoneUsageDescription": "Hermes uses the microphone for voice input and voice conversations."
+        "CFBundleDisplayName": "Ansatz Voice Trace Client",
+        "CFBundleExecutable": "AnsatzVoiceTraceClient",
+        "CFBundleName": "Ansatz Voice Trace Client",
+        "NSAudioCaptureUsageDescription": "Ansatz Voice Trace Client uses audio capture for voice conversations.",
+        "NSCameraUsageDescription": "Ansatz Voice Trace Client uses the camera when a plugin or feature you enable requests it.",
+        "NSMicrophoneUsageDescription": "Ansatz Voice Trace Client uses the microphone for voice input and voice conversations."
       },
       "gatekeeperAssess": false,
       "hardenedRuntime": true,
@@ -260,7 +260,7 @@
       ]
     },
     "dmg": {
-      "title": "Install Hermes",
+      "title": "Install Ansatz Voice Trace Client",
       "backgroundColor": "#f5f5f7",
       "iconSize": 96,
       "window": {
@@ -282,7 +282,7 @@
       ]
     },
     "win": {
-      "legalTrademarks": "Hermes",
+      "legalTrademarks": "Ansatz Agent",
       "extraResources": [
         {
           "from": "build/bootstrap/install.ps1",
@@ -313,8 +313,8 @@
     },
     "linux": {
       "category": "Development",
-      "maintainer": "Nous Research <support@nousresearch.com>",
-      "synopsis": "Native desktop shell for Hermes Agent.",
+      "maintainer": "Ansatz Agent <1580065969@qq.com>",
+      "synopsis": "Install-first voice client with authenticated Trace relay.",
       "target": [
         "AppImage",
         "deb",
@@ -325,8 +325,8 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "perMachine": false,
-      "shortcutName": "Hermes",
-      "uninstallDisplayName": "Hermes",
+      "shortcutName": "Ansatz Voice Trace Client",
+      "uninstallDisplayName": "Ansatz Voice Trace Client",
       "warningsAsErrors": false
     }
   }

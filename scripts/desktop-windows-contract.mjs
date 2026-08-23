@@ -22,9 +22,9 @@ export function readPeMachine(filePath) {
 }
 
 export function assertX64HermesExecutable(releaseDir) {
-  const exe = path.resolve(releaseDir, 'win-unpacked', 'Hermes.exe')
+  const exe = path.resolve(releaseDir, 'win-unpacked', 'AnsatzVoiceTraceClient.exe')
   if (!fs.existsSync(exe) || readPeMachine(exe) !== PE_X64_MACHINE) {
-    throw new Error(`packaged Hermes executable must be x64: ${exe}`)
+    throw new Error(`packaged Ansatz Voice Trace Client executable must be x64: ${exe}`)
   }
   return exe
 }
@@ -34,7 +34,7 @@ export function findNewestWindowsNsis(releaseDir, notBeforeMs = 0) {
   const candidates = fs.existsSync(absoluteReleaseDir)
     ? fs
         .readdirSync(absoluteReleaseDir)
-        .filter(name => /^Hermes-.+-win-x64\.exe$/i.test(name))
+        .filter(name => /^Ansatz-Voice-Trace-Client-.+-win-x64\.exe$/i.test(name))
         .map(name => path.join(absoluteReleaseDir, name))
         .filter(filePath => fs.statSync(filePath).isFile())
         .filter(filePath => fs.statSync(filePath).mtimeMs >= notBeforeMs)
@@ -53,7 +53,7 @@ export function findNewestWindowsNsis(releaseDir, notBeforeMs = 0) {
     : []
 
   if (candidates.length === 0) {
-    throw new Error(`no current Windows x64 Hermes NSIS installer found in ${absoluteReleaseDir}`)
+    throw new Error(`no current Windows x64 Ansatz Voice Trace Client NSIS installer found in ${absoluteReleaseDir}`)
   }
   return candidates[0]
 }

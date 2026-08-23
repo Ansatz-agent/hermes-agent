@@ -55,43 +55,45 @@ test('mode predicates classify what each mode removes', () => {
 
 // --- resolveRemovableAppPath ---
 
-test('resolveRemovableAppPath finds the .app bundle on macOS', () => {
+test('resolveRemovableAppPath finds only the Ansatz app bundle on macOS', () => {
   assert.equal(
-    resolveRemovableAppPath('/Applications/Hermes.app/Contents/MacOS/Hermes', 'darwin'),
-    '/Applications/Hermes.app'
+    resolveRemovableAppPath(
+      '/Applications/Ansatz Voice Trace Client.app/Contents/MacOS/AnsatzVoiceTraceClient',
+      'darwin'
+    ),
+    '/Applications/Ansatz Voice Trace Client.app'
   )
   assert.equal(
-    resolveRemovableAppPath('/Users/x/Applications/Hermes.app/Contents/MacOS/Hermes', 'darwin'),
-    '/Users/x/Applications/Hermes.app'
+    resolveRemovableAppPath(
+      '/Users/x/Applications/Ansatz Voice Trace Client.app/Contents/MacOS/AnsatzVoiceTraceClient',
+      'darwin'
+    ),
+    '/Users/x/Applications/Ansatz Voice Trace Client.app'
   )
+  assert.equal(resolveRemovableAppPath('/Applications/Hermes.app/Contents/MacOS/Hermes', 'darwin'), null)
 })
 
-test('resolveRemovableAppPath: dev-run .app resolves (safety is shouldRemoveAppBundle, not null)', () => {
-  // A dev run from node_modules' Electron DOES resolve to a .app — the real
-  // dev-run safety gate is shouldRemoveAppBundle(isPackaged=false,...), not a
-  // null return here. This test documents that contract.
+test('resolveRemovableAppPath rejects development and unrelated app bundles', () => {
   assert.equal(
     resolveRemovableAppPath('/repo/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron', 'darwin'),
-    '/repo/node_modules/electron/dist/Electron.app'
+    null
   )
-  assert.equal(shouldRemoveAppBundle(false, '/repo/node_modules/electron/dist/Electron.app'), false)
-  // A bare path with no .app ancestor → null.
   assert.equal(resolveRemovableAppPath('/usr/bin/electron', 'darwin'), null)
 })
 
-test('resolveRemovableAppPath finds the install dir on Windows', () => {
+test('resolveRemovableAppPath finds only the Ansatz install dir on Windows', () => {
   assert.equal(
-    resolveRemovableAppPath('C:\\Users\\x\\AppData\\Local\\Programs\\Hermes\\Hermes.exe', 'win32'),
-    'C:\\Users\\x\\AppData\\Local\\Programs\\Hermes'
+    resolveRemovableAppPath(
+      'C:\\Users\\x\\AppData\\Local\\Programs\\Ansatz Voice Trace Client\\AnsatzVoiceTraceClient.exe',
+      'win32'
+    ),
+    'C:\\Users\\x\\AppData\\Local\\Programs\\Ansatz Voice Trace Client'
   )
-  assert.equal(
-    resolveRemovableAppPath('C:\\Users\\x\\AppData\\Local\\hermes-desktop\\Hermes.exe', 'win32'),
-    'C:\\Users\\x\\AppData\\Local\\hermes-desktop'
-  )
+  assert.equal(resolveRemovableAppPath('C:\\Users\\x\\AppData\\Local\\Programs\\Hermes\\Hermes.exe', 'win32'), null)
 })
 
 test('resolveRemovableAppPath returns null for an unrecognized Windows dir', () => {
-  assert.equal(resolveRemovableAppPath('C:\\Temp\\foo\\Hermes.exe', 'win32'), null)
+  assert.equal(resolveRemovableAppPath('C:\\Temp\\foo\\AnsatzVoiceTraceClient.exe', 'win32'), null)
 })
 
 test('resolveRemovableAppPath uses APPIMAGE on Linux when set', () => {

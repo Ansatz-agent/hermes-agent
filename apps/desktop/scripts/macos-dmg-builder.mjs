@@ -4,7 +4,7 @@ import path from "node:path"
 import { spawnSync } from "node:child_process"
 
 export const RESTRICTED_DMG_VOLUME_ERROR =
-  "ditto: /Volumes/Install Hermes/Hermes.app: Operation not permitted"
+  "ditto: /Volumes/Install Ansatz Voice Trace Client/Ansatz Voice Trace Client.app: Operation not permitted"
 
 function hasMacTarget(args) {
   return args.some((arg) => arg === "--mac" || arg.startsWith("--mac="))
@@ -89,14 +89,14 @@ function defaultAppSizeKib(packagedApp) {
 export function buildRestrictedVolumeDmg({
   packagedApp,
   dmgPath,
-  volumeName = "Install Hermes",
+  volumeName = "Install Ansatz Voice Trace Client",
   runCommand = defaultRunCommand,
   appSizeKib = defaultAppSizeKib,
   makeTemporaryDirectory = () =>
-    fs.mkdtempSync(path.join(os.tmpdir(), "hermes-dmg-fallback-")),
+    fs.mkdtempSync(path.join(os.tmpdir(), "ansatz-voice-trace-dmg-fallback-")),
 }) {
   const temporaryRoot = makeTemporaryDirectory()
-  const readWriteDmg = path.join(temporaryRoot, "Hermes-rw.dmg")
+  const readWriteDmg = path.join(temporaryRoot, "Ansatz-Voice-Trace-Client-rw.dmg")
   const mountPoint = path.join(temporaryRoot, "mount")
   let attached = false
   let safeToRemove = true
@@ -121,7 +121,11 @@ export function buildRestrictedVolumeDmg({
       "attach fallback DMG",
     )
     attached = true
-    run("/usr/bin/ditto", [packagedApp, path.join(mountPoint, "Hermes.app")], "copy app into fallback DMG")
+    run(
+      "/usr/bin/ditto",
+      [packagedApp, path.join(mountPoint, "Ansatz Voice Trace Client.app")],
+      "copy app into fallback DMG",
+    )
     run("ln", ["-s", "/Applications", path.join(mountPoint, "Applications")], "link Applications in fallback DMG")
     run("hdiutil", ["detach", mountPoint], "detach fallback DMG")
     attached = false

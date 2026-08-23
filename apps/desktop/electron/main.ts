@@ -30,6 +30,7 @@ import {
 import nodePty from 'node-pty'
 
 import { classifyActiveRuntime } from './active-runtime-state'
+import { ANSATZ_PRODUCT, resolveAnsatzRuntimeRoot } from './ansatz-product'
 import { AuthBridgeError, type BridgeStatus, DesktopAuthBridge } from './auth-bridge'
 import { AuthCoordinator } from './auth-coordinator'
 import { isAuthRuntimeUsable } from './auth-runtime-contract'
@@ -646,58 +647,20 @@ if (INSTALL_STAMP) {
   )
 }
 
-// HERMES_HOME — the user-facing root for everything Hermes-related. Mirrors
-// scripts/install.ps1's $HermesHome and scripts/install.sh's $HERMES_HOME.
-//
-// Defaults:
-//   Windows: %LOCALAPPDATA%\hermes (matches install.ps1)
-//   macOS / Linux: ~/.hermes (matches install.sh)
-//
-// Special case for Windows: if the user has a legacy ~/.hermes directory
-// (e.g., from a prior pip install or a manual setup) AND no
-// %LOCALAPPDATA%\hermes yet, prefer the legacy path so we don't orphan their
-// existing config / sessions / .env. New installs go to %LOCALAPPDATA%.
-//
-// HERMES_DESKTOP_USER_DATA_DIR (used by test:desktop:fresh) puts the sandbox
-// HERMES_HOME beneath the throwaway userData dir so a fresh-install run never
-// touches the user's real ~/.hermes / %LOCALAPPDATA%\hermes.
+// HERMES_HOME remains the internal runtime variable understood by the Hermes
+// engine, but this independently named product must never discover or adopt an
+// existing Hermes root. Only an explicit developer/test override may replace
+// the product-owned default.
 function resolveHermesHome() {
   if (process.env.HERMES_HOME) {
     return normalizeHermesHomeRoot(process.env.HERMES_HOME)
   }
 
   if (USER_DATA_OVERRIDE) {
-    return path.join(path.resolve(USER_DATA_OVERRIDE), 'hermes-home')
+    return path.join(path.resolve(USER_DATA_OVERRIDE), 'ansatz-voice-trace-home')
   }
 
-  if (IS_WINDOWS) {
-    // A GUI app launched from Explorer inherits the environment block captured
-    // at login, so a HERMES_HOME set via `setx` AFTER login is invisible in
-    // process.env even though the CLI (a fresh shell) sees it. Without this the
-    // backend silently falls back to %LOCALAPPDATA%\hermes and reports "No
-    // inference provider configured" despite a valid configured home (#45471).
-    // Consult the live User-scoped registry value before the default below.
-    const fromRegistry = readWindowsUserEnvVar('HERMES_HOME')
-
-    if (fromRegistry) {
-      return normalizeHermesHomeRoot(fromRegistry)
-    }
-  }
-
-  if (IS_WINDOWS && process.env.LOCALAPPDATA) {
-    const localappdata = path.join(process.env.LOCALAPPDATA, 'hermes')
-    const legacy = path.join(app.getPath('home'), '.hermes')
-
-    // Migrate transparently to LOCALAPPDATA, but honour an existing legacy
-    // ~/.hermes setup (no LOCALAPPDATA install yet) so users don't lose state.
-    if (!directoryExists(localappdata) && directoryExists(legacy)) {
-      return legacy
-    }
-
-    return localappdata
-  }
-
-  return path.join(app.getPath('home'), '.hermes')
+  return resolveAnsatzRuntimeRoot(process.platform, app.getPath('home'), process.env.LOCALAPPDATA)
 }
 
 const HERMES_HOME = resolveHermesHome()
@@ -1244,7 +1207,7 @@ const BOOT_FAKE_STEP_MS = (() => {
   return Math.max(120, raw)
 })()
 
-const APP_NAME = process.env.HERMES_DESKTOP_APP_NAME || 'Hermes'
+const APP_NAME = process.env.HERMES_DESKTOP_APP_NAME || ANSATZ_PRODUCT.productName
 const HUD_WINDOW_TITLE = `${APP_NAME} HUD`
 const TITLEBAR_HEIGHT = 34
 const MACOS_TRAFFIC_LIGHTS_HEIGHT = 14
@@ -1548,12 +1511,12 @@ app.setName(APP_NAME)
 // Windows toast notifications silently no-op unless an AppUserModelID is set:
 // `new Notification().show()` returns without error and nothing appears. The
 // AUMID must match the installed Start Menu shortcut's AUMID, which
-// electron-builder derives from the build `appId` (com.nousresearch.hermes) —
+// electron-builder derives from the build `appId` —
 // keep this string in sync with package.json `build.appId`. macOS/Linux don't
 // need this, so gate it on Windows. (Fixes: desktop approval/turn notifications
 // never firing on Windows.)
 if (IS_WINDOWS) {
-  app.setAppUserModelId('com.nousresearch.hermes')
+  app.setAppUserModelId(ANSATZ_PRODUCT.appId)
 }
 
 // Seed the native About panel with the live Hermes version. This is refreshed
@@ -1563,7 +1526,7 @@ if (IS_WINDOWS) {
 app.setAboutPanelOptions({
   applicationName: APP_NAME,
   applicationVersion: resolveHermesVersion(),
-  copyright: 'Copyright © 2026 Nous Research'
+  copyright: 'Copyright © 2026 Ansatz Agent'
 })
 
 // Custom scheme for streaming audio/video into the renderer. Local paths read
@@ -14788,12 +14751,12 @@ guardedHandle('hermes:vscode-theme:fetch', async (_event, id) => fetchMarketplac
 guardedHandle('hermes:vscode-theme:search', async (_event, query) => searchMarketplaceThemes(String(query || ''), 20))
 
 // ---------------------------------------------------------------------------
-// hermes:// deep links (e.g. hermes://blueprint/morning-brief?time=08:00).
+// Product deep links (e.g. ansatz-voice-trace://blueprint/morning-brief?time=08:00).
 // A docs/dashboard "Send to App" button opens this URL; we route it into the
 // running app's chat composer. Three delivery paths: macOS 'open-url',
 // Win/Linux running-app 'second-instance' (argv), Win/Linux cold-start argv.
 // ---------------------------------------------------------------------------
-const HERMES_PROTOCOL = 'hermes'
+const HERMES_PROTOCOL = ANSATZ_PRODUCT.protocolScheme
 let _pendingDeepLink = null
 let _rendererReadyForDeepLink = false
 

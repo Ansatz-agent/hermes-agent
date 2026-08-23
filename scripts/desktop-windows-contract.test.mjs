@@ -24,7 +24,7 @@ function writePe(filePath, machine = 0x8664) {
 test('readPeMachine recognizes an x64 PE executable', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-win-pe-'))
   try {
-    const exe = path.join(root, 'Hermes.exe')
+    const exe = path.join(root, 'AnsatzVoiceTraceClient.exe')
     writePe(exe)
     assert.equal(readPeMachine(exe), 0x8664)
   } finally {
@@ -35,7 +35,7 @@ test('readPeMachine recognizes an x64 PE executable', () => {
 test('readPeMachine rejects a file without a PE header', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-win-pe-'))
   try {
-    const exe = path.join(root, 'Hermes.exe')
+    const exe = path.join(root, 'AnsatzVoiceTraceClient.exe')
     fs.writeFileSync(exe, 'not a PE')
     assert.throws(() => readPeMachine(exe), /not a valid PE executable/)
   } finally {
@@ -46,8 +46,8 @@ test('readPeMachine rejects a file without a PE header', () => {
 test('findNewestWindowsNsis selects a fresh Windows x64 installer', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-win-release-'))
   try {
-    const stale = path.join(root, 'Hermes-0.16.0-win-x64.exe')
-    const current = path.join(root, 'Hermes-0.17.0-win-x64.exe')
+    const stale = path.join(root, 'Ansatz-Voice-Trace-Client-0.16.0-win-x64.exe')
+    const current = path.join(root, 'Ansatz-Voice-Trace-Client-0.17.0-win-x64.exe')
     writePe(stale)
     // NSIS installer-stub bitness does not define the bundled app's bitness.
     writePe(current, 0x014c)
@@ -62,16 +62,19 @@ test('findNewestWindowsNsis selects a fresh Windows x64 installer', () => {
 test('findNewestWindowsNsis rejects stale, malformed, and MSI artifacts', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-win-release-'))
   try {
-    const stale = path.join(root, 'Hermes-0.17.0-win-x64.exe')
-    const malformed = path.join(root, 'Hermes-0.18.0-win-x64.exe')
-    const msi = path.join(root, 'Hermes-0.18.0-win-x64.msi')
+    const stale = path.join(root, 'Ansatz-Voice-Trace-Client-0.17.0-win-x64.exe')
+    const malformed = path.join(root, 'Ansatz-Voice-Trace-Client-0.18.0-win-x64.exe')
+    const msi = path.join(root, 'Ansatz-Voice-Trace-Client-0.18.0-win-x64.msi')
     writePe(stale)
     fs.writeFileSync(malformed, 'not a PE')
     writePe(msi)
     fs.utimesSync(stale, new Date(1_000), new Date(1_000))
     fs.utimesSync(malformed, new Date(3_000), new Date(3_000))
     fs.utimesSync(msi, new Date(3_000), new Date(3_000))
-    assert.throws(() => findNewestWindowsNsis(root, 2_000), /no current Windows x64 Hermes NSIS installer found/)
+    assert.throws(
+      () => findNewestWindowsNsis(root, 2_000),
+      /no current Windows x64 Ansatz Voice Trace Client NSIS installer found/
+    )
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
@@ -80,7 +83,7 @@ test('findNewestWindowsNsis rejects stale, malformed, and MSI artifacts', () => 
 test('assertX64HermesExecutable validates the packaged application, not the installer stub', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-win-release-'))
   try {
-    const exe = path.join(root, 'win-unpacked', 'Hermes.exe')
+    const exe = path.join(root, 'win-unpacked', 'AnsatzVoiceTraceClient.exe')
     fs.mkdirSync(path.dirname(exe), { recursive: true })
     writePe(exe)
     assert.equal(assertX64HermesExecutable(root), exe)
@@ -343,10 +346,10 @@ test('Windows installed-auth test preserves hard-gate and runtime evidence', () 
   assert.match(bootstrapRunner, /progressHeartbeatMsForStage/)
 })
 
-test('Windows executable identity stamps the Hermes app version, not the Electron runtime version', () => {
-  const options = exeIdentityOptions({ icon: 'Hermes.ico', productVersion: '0.17.0' })
+test('Windows executable identity stamps the Ansatz app version, not the Electron runtime version', () => {
+  const options = exeIdentityOptions({ icon: 'AnsatzVoiceTraceClient.ico', productVersion: '0.17.0' })
   assert.equal(options['file-version'], '0.17.0')
   assert.equal(options['product-version'], '0.17.0')
-  assert.equal(options['version-string'].ProductName, 'Hermes')
-  assert.equal(options['version-string'].FileDescription, 'Hermes')
+  assert.equal(options['version-string'].ProductName, 'Ansatz Voice Trace Client')
+  assert.equal(options['version-string'].FileDescription, 'Ansatz Voice Trace Client')
 })

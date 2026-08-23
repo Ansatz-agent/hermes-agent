@@ -22,11 +22,11 @@ test("macOS package builds use explicit ad-hoc signing when identity discovery i
   )
 
   assert.deepEqual(
-    ensureMacSigningIdentity(["--mac", "dmg", "--config.mac.identity=Developer ID Application: Hermes"], {
+    ensureMacSigningIdentity(["--mac", "dmg", "--config.mac.identity=Developer ID Application: Ansatz Agent"], {
       platform: "darwin",
       env: { CSC_IDENTITY_AUTO_DISCOVERY: "false" },
     }),
-    ["--mac", "dmg", "--config.mac.identity=Developer ID Application: Hermes"],
+    ["--mac", "dmg", "--config.mac.identity=Developer ID Application: Ansatz Agent"],
   )
 
   assert.deepEqual(
@@ -65,9 +65,9 @@ test("restricted-volume fallback is limited to the exact macOS DMG failure", () 
 })
 
 test("restricted-volume fallback creates, verifies, and cleans a compressed DMG", () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "hermes-direct-dmg-test-"))
-  const packagedApp = path.join(root, "release", "mac-arm64", "Hermes.app")
-  const dmgPath = path.join(root, "release", "Hermes-0.17.0-mac-arm64.dmg")
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ansatz-direct-dmg-test-"))
+  const packagedApp = path.join(root, "release", "mac-arm64", "Ansatz Voice Trace Client.app")
+  const dmgPath = path.join(root, "release", "Ansatz-Voice-Trace-Client-0.17.0-mac-arm64.dmg")
   const temporaryRoot = path.join(root, "fallback")
   fs.mkdirSync(packagedApp, { recursive: true })
   const calls = []
@@ -88,12 +88,12 @@ test("restricted-volume fallback creates, verifies, and cleans a compressed DMG"
     })
 
     assert.deepEqual(calls, [
-      ["hdiutil", "create", "-size", "130m", "-fs", "HFS+", "-volname", "Install Hermes", "-type", "UDIF", path.join(temporaryRoot, "Hermes-rw.dmg")],
-      ["hdiutil", "attach", "-nobrowse", "-mountpoint", path.join(temporaryRoot, "mount"), path.join(temporaryRoot, "Hermes-rw.dmg")],
-      ["/usr/bin/ditto", packagedApp, path.join(temporaryRoot, "mount", "Hermes.app")],
+      ["hdiutil", "create", "-size", "130m", "-fs", "HFS+", "-volname", "Install Ansatz Voice Trace Client", "-type", "UDIF", path.join(temporaryRoot, "Ansatz-Voice-Trace-Client-rw.dmg")],
+      ["hdiutil", "attach", "-nobrowse", "-mountpoint", path.join(temporaryRoot, "mount"), path.join(temporaryRoot, "Ansatz-Voice-Trace-Client-rw.dmg")],
+      ["/usr/bin/ditto", packagedApp, path.join(temporaryRoot, "mount", "Ansatz Voice Trace Client.app")],
       ["ln", "-s", "/Applications", path.join(temporaryRoot, "mount", "Applications")],
       ["hdiutil", "detach", path.join(temporaryRoot, "mount")],
-      ["hdiutil", "convert", path.join(temporaryRoot, "Hermes-rw.dmg"), "-format", "UDZO", "-ov", "-o", dmgPath],
+      ["hdiutil", "convert", path.join(temporaryRoot, "Ansatz-Voice-Trace-Client-rw.dmg"), "-format", "UDZO", "-ov", "-o", dmgPath],
       ["hdiutil", "verify", dmgPath],
     ])
     assert.equal(fs.existsSync(temporaryRoot), false)

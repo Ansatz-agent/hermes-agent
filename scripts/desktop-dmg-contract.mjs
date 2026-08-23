@@ -20,7 +20,7 @@ export function findNewestDmg(releaseDir, notBeforeMs = 0) {
   const absoluteReleaseDir = path.resolve(releaseDir)
   const candidates = fs.existsSync(absoluteReleaseDir)
     ? fs.readdirSync(absoluteReleaseDir)
-      .filter(name => /^Hermes-.+-mac-arm64\.dmg$/.test(name))
+      .filter(name => /^Ansatz-Voice-Trace-Client-.+-mac-arm64\.dmg$/.test(name))
       .map(name => path.join(absoluteReleaseDir, name))
       .filter(filePath => fs.statSync(filePath).isFile())
       .filter(filePath => fs.statSync(filePath).mtimeMs >= notBeforeMs)
@@ -31,7 +31,7 @@ export function findNewestDmg(releaseDir, notBeforeMs = 0) {
     : []
 
   if (candidates.length === 0) {
-    throw new Error(`no macOS arm64 Hermes DMG found in ${absoluteReleaseDir}`)
+    throw new Error(`no macOS arm64 Ansatz Voice Trace Client DMG found in ${absoluteReleaseDir}`)
   }
   return candidates[0]
 }
@@ -76,7 +76,7 @@ if (invokedPath === import.meta.url) {
   try {
     main(process.argv.slice(2))
   } catch (error) {
-    process.stderr.write(`Hermes DMG build: ${error.message}\n`)
+    process.stderr.write(`Ansatz Voice Trace Client DMG build: ${error.message}\n`)
     process.exitCode = 1
   }
 }
