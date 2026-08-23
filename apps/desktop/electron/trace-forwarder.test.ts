@@ -5,6 +5,7 @@ import http from 'node:http'
 import { test } from 'vitest'
 
 import {
+  DEFAULT_TRACE_UPSTREAM_URL,
   RefreshingTraceCredentialProvider,
   type TraceCredentialSource,
   TraceForwarder
@@ -12,6 +13,13 @@ import {
 
 const installationId = '11111111-1111-4111-8111-111111111111'
 const protobuf = Buffer.from([0x0a, 0x03, 0x01, 0x02, 0x03])
+
+test('product Trace uploads use the public same-origin Gateway API by default', () => {
+  assert.equal(
+    DEFAULT_TRACE_UPSTREAM_URL,
+    'https://c2sml.cn/trace-ingest/v1/traces'
+  )
+})
 
 async function post(
   endpoint: string,

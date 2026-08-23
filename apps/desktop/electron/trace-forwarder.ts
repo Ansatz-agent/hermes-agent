@@ -9,7 +9,7 @@ import {
   type TraceQueueSendResult
 } from './trace-forwarder-queue'
 
-const DEFAULT_UPSTREAM_URL = 'https://api.c2sml.cn/v1/traces'
+export const DEFAULT_TRACE_UPSTREAM_URL = 'https://c2sml.cn/trace-ingest/v1/traces'
 const MAX_BODY_BYTES = 8 * 1024 * 1024
 const UPSTREAM_TIMEOUT_MS = 15_000
 const CORRELATION_ID = /^[0-9A-Za-z][0-9A-Za-z._:-]{0,127}$/
@@ -115,7 +115,7 @@ export class TraceForwarder {
     this.queue = options.queue ?? new TraceForwarderQueue()
     this.remoteAddressForRequest =
       options.remoteAddressForRequest ?? (request => request.socket.remoteAddress)
-    this.upstreamUrl = options.upstreamUrl ?? DEFAULT_UPSTREAM_URL
+    this.upstreamUrl = options.upstreamUrl ?? DEFAULT_TRACE_UPSTREAM_URL
   }
 
   async start(epoch: number): Promise<{ endpoint: string; localBearer: string }> {
