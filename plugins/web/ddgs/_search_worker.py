@@ -17,6 +17,11 @@ Optional test hooks (only when ``HERMES_DDGS_ALLOW_TEST_HOOKS=1``)::
 
 from __future__ import annotations
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.plugins.web.ddgs._search_worker")
+
 import json
 import os
 import sys

@@ -53,6 +53,7 @@ interface HermesConfigOptions {
 export function useHermesConfig({ activeSessionIdRef }: HermesConfigOptions) {
   const [voiceMaxRecordingSeconds, setVoiceMaxRecordingSeconds] = useState(DEFAULT_VOICE_SECONDS)
   const [sttEnabled, setSttEnabled] = useState(true)
+  const [sttProvider, setSttProvider] = useState('local')
   const profileRefreshEpochRef = useRef(0)
 
   const refreshHermesConfig = useCallback(
@@ -110,6 +111,7 @@ export function useHermesConfig({ activeSessionIdRef }: HermesConfigOptions) {
 
         setVoiceMaxRecordingSeconds(recordingLimit(config.voice?.max_recording_seconds))
         setSttEnabled(config.stt?.enabled !== false)
+        setSttProvider(typeof config.stt?.provider === 'string' ? config.stt.provider.trim().toLowerCase() : 'local')
         setDisplayTimestampsFromConfig(config.display?.timestamps)
         setTerminalFontFamilyFromConfig(config.terminal?.font_family)
         applyAutoSpeakFromConfig(config)
@@ -122,5 +124,5 @@ export function useHermesConfig({ activeSessionIdRef }: HermesConfigOptions) {
     [activeSessionIdRef]
   )
 
-  return { refreshHermesConfig, sttEnabled, voiceMaxRecordingSeconds }
+  return { refreshHermesConfig, sttEnabled, sttProvider, voiceMaxRecordingSeconds }
 }

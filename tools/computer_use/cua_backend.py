@@ -17,11 +17,8 @@ in this file is OS-agnostic; per-host gaps (no DISPLAY, missing AT-SPI,
 etc.) surface as specific blocked checks via `hermes computer-use doctor`
 rather than failing silently.
 
-Install:
-  - **macOS**:
-      /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.sh)"
-  - **Windows** (PowerShell):
-      irm https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.ps1 | iex
+Install the reviewed pinned artifact supplied by an administrator. Hermes does
+not download and execute an upstream installer script at runtime.
 
 After install, `cua-driver` is on $PATH and supports `cua-driver mcp` (stdio
 transport) which is what we invoke.
@@ -850,23 +847,9 @@ def _maybe_nudge_update() -> None:
 
 
 def cua_driver_install_hint() -> str:
-    if sys.platform == "win32":
-        installer = (
-            '  irm https://raw.githubusercontent.com/trycua/cua/main/'
-            'libs/cua-driver/scripts/install.ps1 | iex'
-        )
-    else:
-        installer = (
-            '  /bin/bash -c "$(curl -fsSL '
-            'https://raw.githubusercontent.com/trycua/cua/main/'
-            'libs/cua-driver/scripts/install.sh)"'
-        )
     return (
-        "cua-driver is not installed. Install with one of:\n"
-        "  hermes computer-use install\n"
-        "Or run the upstream installer directly:\n"
-        f"{installer}\n"
-        "Or run `hermes tools` and enable the Computer Use toolset to install it automatically."
+        "cua-driver is not installed. Ask an administrator to supply the "
+        "reviewed pinned artifact, then run `hermes computer-use install`."
     )
 
 

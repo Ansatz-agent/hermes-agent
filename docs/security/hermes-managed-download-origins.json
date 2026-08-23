@@ -1,0 +1,749 @@
+{
+  "schema_version": 1,
+  "account_server_origins": [
+    "https://c2sml.cn/agent"
+  ],
+  "user_configured_endpoint_paths": [
+    "hermes_cli/config_defaults.py"
+  ],
+  "temporary_legacy_unsafe_callers": [],
+  "temporary_legacy_unmanaged_child_callers": [],
+  "temporary_legacy_notes": {
+    "unsafe_callers": "Exact inherited download-and-execute commands are removed in Task 6; command changes fail closed.",
+    "unmanaged_child_callers": "Exact inherited callers are removed in Task 6; new or orphan callers fail closed.",
+    "bundled_runtime_callers": "Exact inherited runtime downloads are removed or converted to verified build-time payloads in Task 6.",
+    "official_only_callers": "Exact inherited explicit official-only callers are converted to bounded domestic-first behavior in Task 6.",
+    "implicit_official_entries": "Electron currently uses its implicit official default before the declared mirror; Task 6 must invert the execution order and remove this exact entry."
+  },
+  "entries": [
+    {
+      "id": "python-packages",
+      "phases": [
+        "auth-payload-build",
+        "runtime-install",
+        "repair",
+        "lazy-feature"
+      ],
+      "delivery": "domestic-first",
+      "domestic_primary": "https://mirrors.ustc.edu.cn/pypi/simple",
+      "domestic_secondary": "https://pypi.tuna.tsinghua.edu.cn/simple",
+      "official_fallback": "https://pypi.org/simple",
+      "integrity": "uv-lock-and-require-hashes",
+      "idle_timeout_seconds": 90,
+      "total_timeout_seconds": 600,
+      "environment": [
+        "UV_DEFAULT_INDEX",
+        "UV_INDEX",
+        "PIP_INDEX_URL",
+        "HERMES_UV_FALLBACK_INDEX"
+      ],
+      "owners": [
+        "apps/desktop/electron/bootstrap-process.ts",
+        "apps/desktop/scripts/prepare-auth-toolchain-inputs.mjs",
+        "scripts/install.sh"
+      ],
+      "callers": [
+        {
+          "path": "apps/desktop/electron/bootstrap-process.ts",
+          "kind": "literal-url",
+          "value": "https://mirrors.ustc.edu.cn/pypi/simple"
+        },
+        {
+          "path": "apps/desktop/electron/bootstrap-process.ts",
+          "kind": "literal-url",
+          "value": "https://pypi.tuna.tsinghua.edu.cn/simple"
+        },
+        {
+          "path": "apps/desktop/scripts/prepare-auth-toolchain-inputs.mjs",
+          "kind": "literal-url",
+          "value": "https://mirrors.ustc.edu.cn/pypi/simple"
+        },
+        {
+          "path": "apps/desktop/scripts/prepare-auth-toolchain-inputs.mjs",
+          "kind": "literal-url",
+          "value": "https://pypi.tuna.tsinghua.edu.cn/simple"
+        },
+        {
+          "path": "scripts/install.sh",
+          "kind": "literal-url",
+          "value": "https://mirrors.ustc.edu.cn/pypi/simple"
+        },
+        {
+          "path": "scripts/install.sh",
+          "kind": "literal-url",
+          "value": "https://pypi.org/simple/"
+        },
+        {
+          "path": "scripts/install.sh",
+          "kind": "literal-url",
+          "value": "https://pypi.tuna.tsinghua.edu.cn/simple"
+        },
+        {
+          "path": "scripts/install.ps1",
+          "kind": "literal-url",
+          "value": "https://mirrors.ustc.edu.cn/pypi/simple"
+        },
+        {
+          "path": "scripts/install.ps1",
+          "kind": "literal-url",
+          "value": "https://pypi.tuna.tsinghua.edu.cn/simple"
+        }
+      ],
+      "packaged_outputs": [
+        "apps/desktop/build/bootstrap/auth-toolchain/wheelhouse"
+      ]
+    },
+    {
+      "id": "npm-packages",
+      "phases": [
+        "runtime-install",
+        "repair",
+        "lazy-feature"
+      ],
+      "delivery": "domestic-first",
+      "domestic_primary": "https://registry.npmmirror.com",
+      "domestic_secondary": "https://registry.npmjs.org",
+      "official_fallback": "https://registry.npmjs.org",
+      "integrity": "package-lock-integrity",
+      "idle_timeout_seconds": 90,
+      "total_timeout_seconds": 600,
+      "environment": [
+        "npm_config_registry",
+        "NPM_CONFIG_REGISTRY"
+      ],
+      "owners": [
+        "apps/desktop/electron/bootstrap-process.ts",
+        "scripts/install.sh"
+      ],
+      "callers": [
+        {
+          "path": "apps/desktop/electron/bootstrap-process.ts",
+          "kind": "literal-url",
+          "value": "https://registry.npmmirror.com"
+        },
+        {
+          "path": "scripts/install.sh",
+          "kind": "literal-url",
+          "value": "https://registry.npmmirror.com"
+        },
+        {
+          "path": "scripts/install.ps1",
+          "kind": "literal-url",
+          "value": "https://registry.npmmirror.com"
+        }
+      ],
+      "packaged_outputs": [
+        "apps/desktop/node_modules"
+      ]
+    },
+    {
+      "id": "node-runtime",
+      "phases": [
+        "runtime-install",
+        "repair"
+      ],
+      "delivery": "domestic-first",
+      "domestic_primary": "https://registry.npmmirror.com/-/binary/node/",
+      "domestic_secondary": "https://npmmirror.com/mirrors/node/",
+      "official_fallback": "https://nodejs.org/dist/",
+      "integrity": "upstream-sha256sums",
+      "idle_timeout_seconds": 90,
+      "total_timeout_seconds": 600,
+      "environment": [
+        "NODEJS_ORG_MIRROR",
+        "HERMES_NODE_FALLBACK_MIRROR"
+      ],
+      "owners": [
+        "apps/desktop/electron/bootstrap-process.ts",
+        "scripts/install.ps1",
+        "scripts/install.sh"
+      ],
+      "callers": [
+        {
+          "path": "apps/desktop/electron/bootstrap-process.ts",
+          "kind": "literal-url",
+          "value": "https://registry.npmmirror.com/-/binary/node/"
+        },
+        {
+          "path": "scripts/install.ps1",
+          "kind": "literal-url",
+          "value": "https://registry.npmmirror.com/-/binary/node/"
+        },
+        {
+          "path": "scripts/install.ps1",
+          "kind": "literal-url",
+          "value": "https://npmmirror.com/mirrors/node/"
+        },
+        {
+          "path": "scripts/install.ps1",
+          "kind": "literal-url",
+          "value": "https://nodejs.org/dist/"
+        },
+        {
+          "path": "scripts/install.sh",
+          "kind": "literal-url",
+          "value": "https://registry.npmmirror.com/-/binary/node/"
+        },
+        {
+          "path": "scripts/install.sh",
+          "kind": "literal-url",
+          "value": "https://npmmirror.com/mirrors/node/"
+        },
+        {
+          "path": "scripts/install.sh",
+          "kind": "literal-url",
+          "value": "https://nodejs.org/dist/"
+        }
+      ],
+      "packaged_outputs": [
+        "apps/desktop/build/bootstrap/node-runtime"
+      ]
+    },
+    {
+      "id": "electron-runtime",
+      "phases": [
+        "auth-payload-build",
+        "runtime-install",
+        "repair"
+      ],
+      "delivery": "domestic-first",
+      "domestic_primary": "https://npmmirror.com/mirrors/electron/",
+      "domestic_secondary": "https://registry.npmmirror.com/-/binary/electron/",
+      "official_fallback": "https://github.com/electron/electron/releases/download/",
+      "integrity": "package-lock-version-and-upstream-sha256",
+      "idle_timeout_seconds": 90,
+      "total_timeout_seconds": 600,
+      "environment": [
+        "ELECTRON_MIRROR",
+        "HERMES_ELECTRON_FALLBACK_MIRROR"
+      ],
+      "owners": [
+        "scripts/install.ps1",
+        "scripts/install.sh"
+      ],
+      "callers": [
+        {
+          "path": "scripts/install.ps1",
+          "kind": "literal-url",
+          "value": "https://npmmirror.com/mirrors/electron/"
+        },
+        {
+          "path": "scripts/install.ps1",
+          "kind": "literal-url",
+          "value": "https://registry.npmmirror.com/-/binary/electron/"
+        },
+        {
+          "path": "scripts/install.sh",
+          "kind": "literal-url",
+          "value": "https://npmmirror.com/mirrors/electron/"
+        },
+        {
+          "path": "scripts/install.sh",
+          "kind": "literal-url",
+          "value": "https://registry.npmmirror.com/-/binary/electron/"
+        }
+      ],
+      "packaged_outputs": [
+        "apps/desktop/release"
+      ],
+      "implicit_official_default": false
+    },
+    {
+      "id": "electron-builder-binaries",
+      "phases": [
+        "auth-payload-build"
+      ],
+      "delivery": "domestic-first",
+      "domestic_primary": "https://npmmirror.com/mirrors/electron-builder-binaries/",
+      "domestic_secondary": "https://registry.npmmirror.com/-/binary/electron-builder-binaries/",
+      "official_fallback": "https://github.com/electron-userland/electron-builder-binaries/releases/download/",
+      "integrity": "package-lock-version-and-upstream-sha256",
+      "idle_timeout_seconds": 90,
+      "total_timeout_seconds": 600,
+      "environment": [
+        "ELECTRON_BUILDER_BINARIES_MIRROR"
+      ],
+      "owners": [
+        "apps/desktop/scripts/run-electron-builder.mjs"
+      ],
+      "callers": [
+        {
+          "path": "scripts/install.ps1",
+          "kind": "literal-url",
+          "value": "https://npmmirror.com/mirrors/electron-builder-binaries/"
+        },
+        {
+          "path": "scripts/install.sh",
+          "kind": "literal-url",
+          "value": "https://npmmirror.com/mirrors/electron-builder-binaries/"
+        }
+      ],
+      "packaged_outputs": [
+        "apps/desktop/release"
+      ]
+    },
+    {
+      "id": "playwright-browser",
+      "phases": [
+        "runtime-install",
+        "repair",
+        "lazy-feature"
+      ],
+      "delivery": "domestic-first",
+      "domestic_primary": "https://registry.npmmirror.com/-/binary/playwright",
+      "domestic_secondary": "https://npmmirror.com/mirrors/playwright/",
+      "official_fallback": "https://cdn.playwright.dev",
+      "integrity": "playwright-revision-and-browser-sha256",
+      "idle_timeout_seconds": 90,
+      "total_timeout_seconds": 600,
+      "environment": [
+        "PLAYWRIGHT_DOWNLOAD_HOST",
+        "PLAYWRIGHT_BROWSERS_PATH"
+      ],
+      "owners": [
+        "apps/desktop/electron/bootstrap-process.ts",
+        "scripts/install.sh"
+      ],
+      "callers": [
+        {
+          "path": "apps/desktop/electron/bootstrap-process.ts",
+          "kind": "literal-url",
+          "value": "https://registry.npmmirror.com/-/binary/playwright"
+        },
+        {
+          "path": "scripts/install.sh",
+          "kind": "literal-url",
+          "value": "https://registry.npmmirror.com/-/binary/playwright"
+        },
+        {
+          "path": "scripts/install.sh",
+          "kind": "literal-url",
+          "value": "https://npmmirror.com/mirrors/playwright/"
+        },
+        {
+          "path": "scripts/install.ps1",
+          "kind": "literal-url",
+          "value": "https://registry.npmmirror.com/-/binary/playwright"
+        },
+        {
+          "path": "scripts/install.ps1",
+          "kind": "literal-url",
+          "value": "https://npmmirror.com/mirrors/playwright/"
+        }
+      ],
+      "packaged_outputs": [
+        "apps/desktop/build/bootstrap/playwright"
+      ]
+    },
+    {
+      "id": "sensevoice-model",
+      "phases": [
+        "lazy-feature",
+        "repair"
+      ],
+      "delivery": "domestic-first",
+      "domestic_primary": "https://www.modelscope.cn/models/fuyuantech/",
+      "domestic_secondary": "https://modelscope.cn/models/fuyuantech/",
+      "official_fallback": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/",
+      "integrity": "pinned-size-and-sha256",
+      "idle_timeout_seconds": 90,
+      "total_timeout_seconds": 600,
+      "environment": [
+        "MODELSCOPE_CACHE",
+        "HERMES_SENSEVOICE_FALLBACK_ORIGIN"
+      ],
+      "owners": [
+        "tools/sensevoice_stt.py"
+      ],
+      "callers": [
+        {
+          "path": "tools/sensevoice_stt.py",
+          "kind": "literal-url",
+          "value": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
+        },
+        {
+          "path": "tools/sensevoice_stt.py",
+          "kind": "literal-url",
+          "value": "https://www.modelscope.cn/models/fuyuantech/"
+        },
+        {
+          "path": "tools/sensevoice_stt.py",
+          "kind": "literal-url",
+          "value": "https://modelscope.cn/models/fuyuantech/"
+        }
+      ],
+      "packaged_outputs": [
+        "apps/desktop/build/bootstrap/models/sensevoice"
+      ]
+    },
+    {
+      "id": "managed-uv",
+      "phases": [
+        "auth-payload-build",
+        "runtime-install",
+        "repair",
+        "lazy-feature"
+      ],
+      "delivery": "bundled",
+      "domestic_primary": null,
+      "domestic_secondary": null,
+      "official_fallback": null,
+      "integrity": "package-manifest-sha256",
+      "idle_timeout_seconds": 90,
+      "total_timeout_seconds": 600,
+      "environment": [],
+      "owners": [
+        "hermes_cli/managed_uv.py",
+        "scripts/install.ps1",
+        "scripts/install.sh"
+      ],
+      "callers": [],
+      "packaged_outputs": [
+        "apps/desktop/build/bootstrap/auth-toolchain/uv"
+      ],
+      "build_sources": [
+        {
+          "platform": "win32",
+          "arch": "x64",
+          "version": "0.12.5",
+          "filename": "uv-0.12.5-py3-none-win_amd64.whl",
+          "domestic_primary": "https://mirrors.ustc.edu.cn/pypi/simple",
+          "domestic_secondary": "https://pypi.tuna.tsinghua.edu.cn/simple",
+          "official_fallback": "https://pypi.org/simple",
+          "sha256": "455c3e57602e2141e66e2f0bf685898c9c5e5a70377d14c9a71554a3baf3ddbf"
+        }
+      ],
+      "build_provenance": "uv 0.12.5 is acquired at package-build time from registered PyPI mirrors and verified by the platform auth-toolchain manifest",
+      "sha256": null,
+      "sha256_manifest_field": "apps/desktop/build/bootstrap/auth-toolchain/uv#asset.sha256"
+    },
+    {
+      "id": "managed-python-macos",
+      "phases": [
+        "auth-payload-build",
+        "runtime-install",
+        "repair",
+        "lazy-feature"
+      ],
+      "delivery": "bundled",
+      "domestic_primary": null,
+      "domestic_secondary": null,
+      "official_fallback": null,
+      "integrity": "package-manifest-sha256",
+      "idle_timeout_seconds": 90,
+      "total_timeout_seconds": 600,
+      "environment": [],
+      "owners": [
+        "apps/desktop/scripts/prepare-auth-toolchain-inputs.mjs"
+      ],
+      "callers": [],
+      "packaged_outputs": [
+        "apps/desktop/build/bootstrap/auth-toolchain/python.tar.gz"
+      ],
+      "build_provenance": "relocatable CPython 3.11 macOS arm64 selected by the pinned uv toolchain and hashed into the package auth-toolchain manifest",
+      "sha256": null,
+      "sha256_manifest_field": "apps/desktop/build/bootstrap/auth-toolchain/python.tar.gz#asset.sha256"
+    },
+    {
+      "id": "managed-python-windows-x64",
+      "phases": [
+        "auth-payload-build"
+      ],
+      "delivery": "domestic-first",
+      "domestic_primary": "https://mirrors.huaweicloud.com/python/3.13.15/python-3.13.15-embed-amd64.zip",
+      "domestic_secondary": "https://mirrors.aliyun.com/python-release/windows/",
+      "official_fallback": "https://www.python.org/ftp/python/3.13.15/python-3.13.15-embed-amd64.zip",
+      "integrity": "sha256:d1f04d990aee1253d8569e8e5104e30fa9f5fa830899f14843448872d936a2cf",
+      "idle_timeout_seconds": 90,
+      "total_timeout_seconds": 600,
+      "environment": [
+        "HERMES_AUTH_PYTHON_PRIMARY",
+        "HERMES_AUTH_PYTHON_FALLBACK"
+      ],
+      "owners": [
+        "apps/desktop/scripts/prepare-auth-toolchain-inputs.mjs"
+      ],
+      "callers": [],
+      "packaged_outputs": [
+        "apps/desktop/build/bootstrap/auth-toolchain/python-embed.zip"
+      ],
+      "build_sources": [
+        {
+          "platform": "win32",
+          "arch": "x64",
+          "version": "3.13.15",
+          "filename": "python-3.13.15-embed-amd64.zip",
+          "domestic_primary": "https://mirrors.huaweicloud.com/python/3.13.15/python-3.13.15-embed-amd64.zip",
+          "official_fallback": "https://www.python.org/ftp/python/3.13.15/python-3.13.15-embed-amd64.zip",
+          "sha256": "d1f04d990aee1253d8569e8e5104e30fa9f5fa830899f14843448872d936a2cf"
+        }
+      ]
+    },
+    {
+      "id": "portable-git",
+      "phases": [
+        "auth-payload-build",
+        "runtime-install",
+        "repair",
+        "lazy-feature"
+      ],
+      "delivery": "bundled",
+      "domestic_primary": null,
+      "domestic_secondary": null,
+      "official_fallback": null,
+      "integrity": "package-manifest-sha256",
+      "idle_timeout_seconds": 90,
+      "total_timeout_seconds": 600,
+      "environment": [],
+      "owners": [
+        "apps/desktop/scripts/prepare-windows-git-runtime.mjs",
+        "scripts/install.ps1"
+      ],
+      "callers": [],
+      "packaged_outputs": [
+        "apps/desktop/build/windows-prereqs/git-bash-runtime.tar.xz"
+      ],
+      "build_provenance": "pinned Git for Windows runtime is assembled and hash-audited before packaging",
+      "sha256": null,
+      "sha256_manifest_field": "apps/desktop/build/windows-prereqs/git-bash-runtime.tar.xz#asset.sha256"
+    },
+    {
+      "id": "browser-use-cli",
+      "phases": [
+        "lazy-feature",
+        "repair"
+      ],
+      "delivery": "domestic-first",
+      "domestic_primary": "https://mirrors.ustc.edu.cn/pypi/simple",
+      "domestic_secondary": "https://pypi.tuna.tsinghua.edu.cn/simple",
+      "official_fallback": "https://pypi.org/simple",
+      "integrity": "pinned-version-and-lock-hashes",
+      "idle_timeout_seconds": 90,
+      "total_timeout_seconds": 600,
+      "environment": [
+        "UV_DEFAULT_INDEX",
+        "UV_INDEX",
+        "HERMES_UV_FALLBACK_INDEX"
+      ],
+      "owners": [
+        "hermes_cli/tools_config.py",
+        "scripts/install.ps1",
+        "tools/browser_use_cli.py"
+      ],
+      "callers": [
+        {
+          "path": "hermes_cli/tools_config.py",
+          "kind": "package-manager",
+          "value": "uv tool install browser-use"
+        },
+        {
+          "path": "scripts/install.ps1",
+          "kind": "package-manager",
+          "value": "uv tool install browser-use"
+        },
+        {
+          "path": "tools/browser_use_cli.py",
+          "kind": "package-manager",
+          "value": "uv tool install browser-use"
+        }
+      ],
+      "packaged_outputs": [
+        "apps/desktop/build/bootstrap/tools/browser-use"
+      ]
+    },
+    {
+      "id": "cua-driver",
+      "phases": [
+        "auth-payload-build",
+        "runtime-install",
+        "repair",
+        "lazy-feature"
+      ],
+      "delivery": "bundled",
+      "domestic_primary": null,
+      "domestic_secondary": null,
+      "official_fallback": null,
+      "integrity": "package-manifest-sha256",
+      "idle_timeout_seconds": 90,
+      "total_timeout_seconds": 600,
+      "environment": [],
+      "owners": [
+        "hermes_cli/tools_config.py",
+        "scripts/install.ps1",
+        "scripts/install.sh",
+        "tools/computer_use/cua_backend.py"
+      ],
+      "callers": [],
+      "packaged_outputs": [
+        "apps/desktop/build/bootstrap/tools/cua-driver"
+      ],
+      "build_provenance": "administrator-reviewed CUA driver payload is staged and hash-audited before packaging",
+      "sha256": null,
+      "sha256_manifest_field": "apps/desktop/build/bootstrap/tools/cua-driver#asset.sha256"
+    },
+    {
+      "id": "kitten-tts-wheel",
+      "phases": [
+        "auth-payload-build",
+        "runtime-install",
+        "repair",
+        "lazy-feature"
+      ],
+      "delivery": "bundled",
+      "domestic_primary": null,
+      "domestic_secondary": null,
+      "official_fallback": null,
+      "integrity": "package-manifest-sha256",
+      "idle_timeout_seconds": 90,
+      "total_timeout_seconds": 600,
+      "environment": [],
+      "owners": [
+        "hermes_cli/setup.py",
+        "hermes_cli/tools_config.py"
+      ],
+      "callers": [],
+      "packaged_outputs": [
+        "apps/desktop/build/bootstrap/wheelhouse/kitten-tts.whl"
+      ],
+      "build_provenance": "administrator-reviewed KittenTTS wheel is staged and hash-audited before packaging",
+      "sha256": null,
+      "sha256_manifest_field": "apps/desktop/build/bootstrap/wheelhouse/kitten-tts.whl#asset.sha256"
+    },
+    {
+      "id": "hermes-source-archive",
+      "phases": [
+        "auth-payload-build",
+        "runtime-install",
+        "repair",
+        "lazy-feature"
+      ],
+      "delivery": "bundled",
+      "domestic_primary": null,
+      "domestic_secondary": null,
+      "official_fallback": null,
+      "integrity": "package-manifest-sha256",
+      "idle_timeout_seconds": 90,
+      "total_timeout_seconds": 600,
+      "environment": [],
+      "owners": [
+        "hermes_cli/update_cmd.py",
+        "scripts/install.ps1",
+        "scripts/install.sh"
+      ],
+      "callers": [],
+      "packaged_outputs": [
+        "apps/desktop/build/bootstrap/hermes-backend.tar.gz"
+      ],
+      "build_provenance": "repository source is archived from a locked commit and hashed by the package payload builder",
+      "sha256": null,
+      "sha256_manifest_field": "apps/desktop/build/bootstrap/hermes-backend.tar.gz#asset.sha256"
+    },
+    {
+      "id": "model-catalog",
+      "phases": [
+        "auth-payload-build",
+        "runtime-install",
+        "repair",
+        "lazy-feature"
+      ],
+      "delivery": "bundled",
+      "domestic_primary": null,
+      "domestic_secondary": null,
+      "official_fallback": null,
+      "integrity": "package-manifest-sha256",
+      "idle_timeout_seconds": 90,
+      "total_timeout_seconds": 600,
+      "environment": [],
+      "owners": [
+        "hermes_cli/model_catalog.py"
+      ],
+      "callers": [],
+      "packaged_outputs": [
+        "apps/desktop/build/bootstrap/model-catalog.json"
+      ],
+      "build_provenance": "model catalog is copied from a reviewed repository revision and hashed before packaging",
+      "sha256": null,
+      "sha256_manifest_field": "apps/desktop/build/bootstrap/model-catalog.json#asset.sha256"
+    },
+    {
+      "id": "system-package-ripgrep",
+      "phases": [
+        "auth-payload-build",
+        "runtime-install",
+        "repair",
+        "lazy-feature"
+      ],
+      "delivery": "bundled",
+      "domestic_primary": null,
+      "domestic_secondary": null,
+      "official_fallback": null,
+      "integrity": "package-manifest-sha256",
+      "idle_timeout_seconds": 90,
+      "total_timeout_seconds": 600,
+      "environment": [],
+      "owners": [
+        "scripts/install.ps1",
+        "scripts/install.sh"
+      ],
+      "callers": [],
+      "packaged_outputs": [
+        "apps/desktop/build/bootstrap/system-tools/rg"
+      ],
+      "build_provenance": "platform ripgrep executable is staged from a pinned release and hash-audited before packaging",
+      "sha256": null,
+      "sha256_manifest_field": "apps/desktop/build/bootstrap/system-tools/rg#asset.sha256"
+    },
+    {
+      "id": "system-package-ffmpeg",
+      "phases": [
+        "auth-payload-build",
+        "runtime-install",
+        "repair",
+        "lazy-feature"
+      ],
+      "delivery": "bundled",
+      "domestic_primary": null,
+      "domestic_secondary": null,
+      "official_fallback": null,
+      "integrity": "package-manifest-sha256",
+      "idle_timeout_seconds": 90,
+      "total_timeout_seconds": 600,
+      "environment": [],
+      "owners": [
+        "scripts/install.ps1",
+        "scripts/install.sh"
+      ],
+      "callers": [],
+      "packaged_outputs": [
+        "apps/desktop/build/bootstrap/system-tools/ffmpeg"
+      ],
+      "build_provenance": "platform ffmpeg executable is staged from a pinned release and hash-audited before packaging",
+      "sha256": null,
+      "sha256_manifest_field": "apps/desktop/build/bootstrap/system-tools/ffmpeg#asset.sha256"
+    }
+  ],
+  "temporary_legacy_bundled_runtime_callers": [],
+  "temporary_legacy_official_only_callers": [],
+  "managed_download_scan_paths": [
+    "apps/desktop/electron/bootstrap-process.ts",
+    "apps/desktop/electron/runtime-download-policy.ts",
+    "apps/desktop/scripts/build-auth-toolchain.mjs",
+    "apps/desktop/scripts/build-backend-payload.mjs",
+    "apps/desktop/scripts/prepare-auth-toolchain-inputs.mjs",
+    "apps/desktop/scripts/prepare-windows-git-runtime.mjs",
+    "hermes_cli/config_defaults.py",
+    "hermes_cli/managed_uv.py",
+    "hermes_cli/model_catalog.py",
+    "hermes_cli/setup.py",
+    "hermes_cli/tools_config.py",
+    "hermes_cli/update_cmd.py",
+    "scripts/install.ps1",
+    "scripts/install.sh",
+    "tools/browser_use_cli.py",
+    "tools/computer_use/cua_backend.py",
+    "tools/lazy_deps.py",
+    "tools/neutts_synth.py",
+    "tools/sensevoice_stt.py"
+  ],
+  "temporary_legacy_implicit_official_entries": []
+}

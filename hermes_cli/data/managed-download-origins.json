@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "id": "python-packages",
+      "domestic_primary": "https://mirrors.ustc.edu.cn/pypi/simple",
+      "domestic_secondary": "https://pypi.tuna.tsinghua.edu.cn/simple",
+      "official_fallback": "https://pypi.org/simple"
+    },
+    {
+      "id": "npm-packages",
+      "domestic_primary": "https://registry.npmmirror.com",
+      "domestic_secondary": "https://registry.npmjs.org",
+      "official_fallback": "https://registry.npmjs.org"
+    },
+    {
+      "id": "node-runtime",
+      "domestic_primary": "https://registry.npmmirror.com/-/binary/node/",
+      "domestic_secondary": "https://npmmirror.com/mirrors/node/",
+      "official_fallback": "https://nodejs.org/dist/"
+    },
+    {
+      "id": "electron-runtime",
+      "domestic_primary": "https://npmmirror.com/mirrors/electron/",
+      "domestic_secondary": "https://registry.npmmirror.com/-/binary/electron/",
+      "official_fallback": "https://github.com/electron/electron/releases/download/"
+    },
+    {
+      "id": "electron-builder-binaries",
+      "domestic_primary": "https://npmmirror.com/mirrors/electron-builder-binaries/",
+      "domestic_secondary": "https://registry.npmmirror.com/-/binary/electron-builder-binaries/",
+      "official_fallback": "https://github.com/electron-userland/electron-builder-binaries/releases/download/"
+    },
+    {
+      "id": "playwright-browser",
+      "domestic_primary": "https://registry.npmmirror.com/-/binary/playwright",
+      "domestic_secondary": "https://npmmirror.com/mirrors/playwright/",
+      "official_fallback": "https://cdn.playwright.dev"
+    },
+    {
+      "id": "sensevoice-model",
+      "domestic_primary": "https://www.modelscope.cn/models/fuyuantech/",
+      "domestic_secondary": "https://modelscope.cn/models/fuyuantech/",
+      "official_fallback": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/"
+    }
+  ]
+}

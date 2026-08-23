@@ -1,7 +1,7 @@
 /**
  * before-pack.mjs — electron-builder beforePack hook.
  *
- * Two responsibilities:
+ * Three responsibilities:
  *
  * 1. Removes any stale unpacked app directory (`appOutDir`) before
  *    electron-builder stages the Electron binaries into it.
@@ -56,11 +56,30 @@
  *   - appOutDir:            the unpacked app directory about to be staged
  *   - electronPlatformName: 'win32' | 'darwin' | 'linux'
  *   - arch:                 Arch enum (0=ia32, 1=x64, 2=armv7l, 3=arm64, 4=universal)
+ *
+ * 3. Generates the verified backend source payload for macOS packages only.
+ *    Keeping this in the platform-aware hook means generic development builds
+ *    and Windows/Linux packages do not inherit the macOS clean-commit guard.
  */
-import { existsSync, rmSync, renameSync } from 'node:fs'
+import { existsSync, lstatSync, rmSync, renameSync } from 'node:fs'
 import path from 'node:path'
 import { Arch } from 'electron-builder'
+import { packageInputPlan } from './prepare-package-inputs.mjs'
 import { stageNodePty, stageGetWindows } from './stage-native-deps.mjs'
+
+export function verifyPreparedPackageInputs(platform, arch, desktopRoot = path.resolve(import.meta.dirname, '..')) {
+  if (platform !== 'darwin' && platform !== 'win32') return false
+  const repoRoot = path.resolve(desktopRoot, '../..')
+  const plan = packageInputPlan({ platform, arch, repoRoot, desktopRoot })
+  for (const relativePath of plan.outputs) {
+    const filePath = path.join(desktopRoot, relativePath)
+    const stats = lstatSync(filePath)
+    if (!stats.isFile() || stats.isSymbolicLink() || stats.size <= 0) {
+      throw new Error(`prepared package input is invalid: ${relativePath}`)
+    }
+  }
+  return true
+}
 
 export function cleanStaleAppOutDir(appOutDir) {
   if (!appOutDir || typeof appOutDir !== 'string') {
@@ -92,7 +111,7 @@ export function cleanStaleAppOutDir(appOutDir) {
  * A rename failure (AV holding a handle) also returns false — the wipe is the
  * safe fallback and matches pre-#69179 behavior exactly.
  */
-export function preserveRollbackBackup(appOutDir, productExeName = 'Hermes.exe') {
+export function preserveRollbackBackup(appOutDir, productExeName = 'AnsatzVoiceTraceClient.exe') {
   if (!appOutDir || typeof appOutDir !== 'string' || !existsSync(appOutDir)) {
     return false
   }
@@ -113,12 +132,13 @@ export function preserveRollbackBackup(appOutDir, productExeName = 'Hermes.exe')
 export default async function beforePack(context) {
   const appOutDir = context && context.appOutDir
   const platformName = context && context.electronPlatformName
+
   try {
     // Windows: keep the previous working build as rollback material for the
     // post-build integrity gate (#69179) instead of destroying it. Falls
     // through to the plain wipe when the old tree is partial/corrupt or the
     // rename fails.
-    const productExe = `${(context && context.packager?.appInfo?.productFilename) || 'Hermes'}.exe`
+    const productExe = `${(context && context.packager?.appInfo?.productFilename) || 'AnsatzVoiceTraceClient'}.exe`
     if (platformName === 'win32' && preserveRollbackBackup(appOutDir, productExe)) {
       console.log(`[before-pack] preserved previous unpacked dir for rollback: ${appOutDir}.bak`)
     } else if (cleanStaleAppOutDir(appOutDir)) {
@@ -141,6 +161,9 @@ export default async function beforePack(context) {
             'lipo-merge x64/arm64 .node files manually if you need a true universal build.'
         )
       } else {
+        if (platform === 'darwin' || platform === 'win32') {
+          verifyPreparedPackageInputs(platform, archName)
+        }
         await stageNodePty({ platform, arch: archName })
         console.log(`[before-pack] re-staged node-pty for target ${platform}-${archName}`)
       }

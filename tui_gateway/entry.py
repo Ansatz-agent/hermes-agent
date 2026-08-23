@@ -16,14 +16,404 @@ import signal
 import threading
 import time
 import traceback
+from collections.abc import Callable, Mapping
+from typing import Any, Protocol
 
+from hermes_cli.client_auth.runtime import (
+    AuthRequired,
+    account_login,
+    account_logout,
+    account_status,
+    authorize_entrypoint,
+    clear_runtime_consumer,
+)
 from tui_gateway._stdin_recovery import handle_spurious_eof
 
-from tui_gateway import server
-from tui_gateway.server import _CRASH_LOG, dispatch, resolve_skin, write_json
-from tui_gateway.transport import TeeTransport
-
 logger = logging.getLogger(__name__)
+
+_CRASH_LOG = os.path.join(
+    os.path.expanduser(os.environ.get("HERMES_HOME") or "~/.hermes"),
+    "logs",
+    "tui_gateway_crash.log",
+)
+_AUTH_METHODS = frozenset({"auth.status", "auth.login", "auth.logout"})
+_AUTH_PARAMS = {
+    "auth.status": frozenset(),
+    "auth.login": frozenset({"username", "password"}),
+    "auth.logout": frozenset(),
+}
+_AUTH_REASONS = frozenset(
+    {
+        "interactive_login_required",
+        "invalid_credentials",
+        "rate_limited",
+        "runtime_unavailable",
+        "server_unavailable",
+        "session_expired",
+        "session_rejected",
+        "signed_out",
+        "vault_unavailable",
+    }
+)
+
+
+class _StatusLike(Protocol):
+    state: Any
+    runtime_instance_id: str
+    epoch: int
+    reason: str | None
+
+    def public_dict(self) -> dict[str, object]: ...
+
+
+class _AuthRuntimeLike(Protocol):
+    def status(self) -> _StatusLike: ...
+
+    def login(self, username: str, password: bytearray) -> _StatusLike: ...
+
+    def logout(self) -> _StatusLike: ...
+
+    def require(self, boundary: str, status: _StatusLike) -> None: ...
+
+
+class _GatewayLike(Protocol):
+    def dispatch(self, request: dict) -> dict | None: ...
+
+    def start(self) -> Mapping[str, object] | None: ...
+
+    def after_ready(self) -> None: ...
+
+    def stop(self) -> None: ...
+
+
+def _state_text(status: _StatusLike) -> str:
+    value = getattr(status, "state", "locked")
+    return str(getattr(value, "value", value))
+
+
+def _safe_reason(reason: object) -> str:
+    return str(reason) if reason in _AUTH_REASONS else "runtime_unavailable"
+
+
+def _auth_event(kind: str, status: _StatusLike) -> dict[str, object]:
+    payload = status.public_dict()
+    if not isinstance(payload, dict):
+        raise AuthRequired("runtime_unavailable")
+    return {
+        "jsonrpc": "2.0",
+        "method": "event",
+        "params": {"type": kind, "payload": payload},
+    }
+
+
+def _rpc_error(
+    request_id: object,
+    code: int,
+    message: str,
+    *,
+    reason: str | None = None,
+) -> dict[str, object]:
+    error: dict[str, object] = {"code": code, "message": message}
+    if reason is not None:
+        error["data"] = {"reason": _safe_reason(reason)}
+    return {"jsonrpc": "2.0", "id": request_id, "error": error}
+
+
+class AccountAuthShell:
+    """Auth-only JSON-RPC gate for the stdio Ink gateway.
+
+    The injected gateway is not started until an exact runtime owner scope has
+    been authorized. The scope tuple stays process-local and every protected
+    request revalidates it before capability dispatch.
+    """
+
+    def __init__(
+        self,
+        auth: _AuthRuntimeLike,
+        gateway: _GatewayLike,
+        emit: Callable[[dict], object],
+    ) -> None:
+        self._auth = auth
+        self._gateway = gateway
+        self._emit = emit
+        self._status: _StatusLike | None = None
+        self._scope: tuple[str, int] | None = None
+        self._gateway_started = False
+        self._lock = threading.RLock()
+
+    def start(self) -> None:
+        with self._lock:
+            self._start_locked()
+
+    def _start_locked(self) -> None:
+        status = self._read_status()
+        self._status = status
+        self._emit(_auth_event("auth.status", status))
+        if _state_text(status) == "authenticated":
+            self._authorize(status)
+            self._start_gateway()
+
+    def dispatch(self, request: object) -> dict | None:
+        with self._lock:
+            return self._dispatch_locked(request)
+
+    def _dispatch_locked(self, request: object) -> dict | None:
+        normalized = self._normalize_request(request)
+        if isinstance(normalized, dict):
+            return normalized
+        request_id, method, params = normalized
+
+        if method in _AUTH_METHODS:
+            return self._dispatch_auth(request_id, method, params)
+
+        try:
+            status = self._read_status()
+            self._authorize(status)
+        except AuthRequired as error:
+            self._lock_gateway()
+            self._publish_changed(self._status)
+            return _rpc_error(
+                request_id,
+                20,
+                "AUTH_REQUIRED",
+                reason=error.reason or "runtime_unavailable",
+            )
+
+        return self._gateway.dispatch(request)  # type: ignore[arg-type]
+
+    def poll(self) -> None:
+        """Revalidate an active owner even while the TUI is idle."""
+        with self._lock:
+            if self._scope is None:
+                return
+            try:
+                status = self._read_status()
+                observed_scope = (status.runtime_instance_id, status.epoch)
+                if (
+                    _state_text(status) != "authenticated"
+                    or observed_scope != self._scope
+                ):
+                    raise AuthRequired(
+                        getattr(status, "reason", None) or "session_rejected"
+                    )
+                self._auth.require("tui.agent", status)
+            except AuthRequired as error:
+                status = self._status or _UnavailableStatus(error.reason)
+                self._lock_gateway()
+                self._publish_changed(status)
+            except Exception:
+                status = _UnavailableStatus("runtime_unavailable")
+                self._status = status
+                self._lock_gateway()
+                self._publish_changed(status)
+
+    def _normalize_request(
+        self, request: object
+    ) -> tuple[object, str, dict[str, object]] | dict[str, object]:
+        if not isinstance(request, dict):
+            return _rpc_error(None, -32600, "invalid request")
+        request_id = request.get("id")
+        method = request.get("method")
+        params = request.get("params", {})
+        if request.get("jsonrpc") != "2.0" or not isinstance(method, str) or not method:
+            return _rpc_error(request_id, -32600, "invalid request")
+        if not isinstance(params, dict):
+            return _rpc_error(request_id, -32602, "invalid params")
+        return request_id, method, params
+
+    def _dispatch_auth(
+        self,
+        request_id: object,
+        method: str,
+        params: dict[str, object],
+    ) -> dict[str, object]:
+        if set(params) != _AUTH_PARAMS[method]:
+            return _rpc_error(request_id, -32602, "invalid params")
+        try:
+            if method == "auth.login":
+                status = self._login(params)
+            elif method == "auth.logout":
+                self._lock_gateway()
+                status = self._auth.logout()
+            else:
+                status = self._read_status()
+        except AuthRequired as error:
+            self._lock_gateway()
+            return _rpc_error(
+                request_id,
+                20,
+                "AUTH_REQUIRED",
+                reason=error.reason or "runtime_unavailable",
+            )
+        except (TypeError, ValueError):
+            return _rpc_error(request_id, -32602, "invalid params")
+
+        self._status = status
+        if _state_text(status) == "authenticated":
+            try:
+                self._authorize(status)
+            except AuthRequired as error:
+                self._lock_gateway()
+                return _rpc_error(
+                    request_id,
+                    20,
+                    "AUTH_REQUIRED",
+                    reason=error.reason or "runtime_unavailable",
+                )
+            if method == "auth.login":
+                self._publish_changed(status)
+            self._start_gateway()
+        else:
+            self._lock_gateway()
+            if method == "auth.logout":
+                self._publish_changed(status)
+
+        return {"jsonrpc": "2.0", "id": request_id, "result": status.public_dict()}
+
+    def _login(self, params: dict[str, object]) -> _StatusLike:
+        username = params.get("username")
+        password_text = params.get("password")
+        if (
+            not isinstance(username, str)
+            or not username.strip()
+            or len(username) > 150
+            or not isinstance(password_text, str)
+            or not password_text
+            or len(password_text) > 4096
+        ):
+            raise ValueError("invalid login fields")
+        password = bytearray(password_text.encode("utf-8"))
+        password_text = ""
+        try:
+            return self._auth.login(username.strip(), password)
+        finally:
+            password[:] = b"\0" * len(password)
+
+    def _read_status(self) -> _StatusLike:
+        try:
+            status = self._auth.status()
+        except AuthRequired as error:
+            self._status = _UnavailableStatus(error.reason)
+            raise
+        self._status = status
+        return status
+
+    def _authorize(self, status: _StatusLike) -> None:
+        if _state_text(status) != "authenticated":
+            raise AuthRequired(_safe_reason(getattr(status, "reason", None)))
+        scope = (status.runtime_instance_id, status.epoch)
+        if self._scope is not None and self._scope != scope:
+            self._lock_gateway()
+        self._auth.require("tui.agent", status)
+        self._scope = scope
+
+    def _start_gateway(self) -> None:
+        if self._gateway_started:
+            return
+        ready_payload = dict(self._gateway.start() or {})
+        self._gateway_started = True
+        self._emit(
+            {
+                "jsonrpc": "2.0",
+                "method": "event",
+                "params": {"type": "gateway.ready", "payload": ready_payload},
+            }
+        )
+        after_ready = getattr(self._gateway, "after_ready", None)
+        if callable(after_ready):
+            after_ready()
+
+    def _lock_gateway(self) -> None:
+        self._scope = None
+        if self._gateway_started:
+            self._gateway_started = False
+            self._gateway.stop()
+
+    def _publish_changed(self, status: _StatusLike | None) -> None:
+        if status is not None:
+            self._emit(_auth_event("auth.changed", status))
+
+
+class _UnavailableStatus:
+    def __init__(self, reason: str | None = None) -> None:
+        self.state = "locked"
+        self.username = None
+        self.runtime_instance_id = "unavailable"
+        self.epoch = 0
+        self.valid_until = 0.0
+        self.session_expires_at = None
+        self.reason = _safe_reason(reason)
+
+    def public_dict(self) -> dict[str, object]:
+        return {
+            "state": self.state,
+            "username": self.username,
+            "runtime_instance_id": self.runtime_instance_id,
+            "epoch": self.epoch,
+            "valid_until": self.valid_until,
+            "session_expires_at": self.session_expires_at,
+            "reason": self.reason,
+        }
+
+
+class _RuntimeAuth:
+    def status(self):
+        return account_status()
+
+    def login(self, username: str, password: bytearray):
+        return account_login(username, password)
+
+    def logout(self):
+        clear_runtime_consumer()
+        return account_logout()
+
+    def require(self, boundary: str, status: _StatusLike) -> None:
+        scope = authorize_entrypoint(boundary, interactive=False)
+        if (
+            scope.runtime_instance_id != status.runtime_instance_id
+            or scope.epoch != status.epoch
+        ):
+            clear_runtime_consumer()
+            raise AuthRequired("runtime_unavailable")
+
+
+class _ServerGateway:
+    def __init__(self) -> None:
+        self._server = None
+        self._sidecar_installed = False
+
+    def _load(self):
+        if self._server is None:
+            from tui_gateway import server
+
+            self._server = server
+        return self._server
+
+    def start(self) -> Mapping[str, object]:
+        server = self._load()
+        if not self._sidecar_installed:
+            _install_sidecar_publisher(server)
+            self._sidecar_installed = True
+        ensure_mcp_discovery_started()
+        server._ensure_skin_watcher()
+        return {"skin": server.resolve_skin(), "change_events": True}
+
+    def after_ready(self) -> None:
+        try:
+            from hermes_cli.model_switch import prewarm_picker_cache_async
+
+            prewarm_picker_cache_async()
+        except Exception:
+            logger.debug("picker cache prewarm (tui) failed to start", exc_info=True)
+
+    def dispatch(self, request: dict) -> dict | None:
+        return self._load().dispatch(request)
+
+    def stop(self) -> None:
+        if self._server is None:
+            return
+        self._server._shutdown_sessions()
+
 
 # Handle for the background MCP tool-discovery thread (see
 # ensure_mcp_discovery_started).  The first agent build briefly joins this so
@@ -45,7 +435,7 @@ _mcp_discovery_thread = None
 _mcp_discovery_enabled = False
 
 
-def _install_sidecar_publisher() -> None:
+def _install_sidecar_publisher(server_module) -> None:
     """Mirror every dispatcher emit to the dashboard sidebar via WS.
 
     Activated by `HERMES_TUI_SIDECAR_URL`, set by the dashboard's
@@ -58,9 +448,10 @@ def _install_sidecar_publisher() -> None:
         return
 
     from tui_gateway.event_publisher import WsPublisherTransport
+    from tui_gateway.transport import TeeTransport
 
-    server._stdio_transport = TeeTransport(
-        server._stdio_transport, WsPublisherTransport(url)
+    server_module._stdio_transport = TeeTransport(
+        server_module._stdio_transport, WsPublisherTransport(url)
     )
 
 
@@ -419,71 +810,69 @@ def ensure_mcp_discovery_started() -> None:
 
 
 def main():
-    _install_sidecar_publisher()
+    output = sys.stdout
+    output_lock = threading.Lock()
 
-    # MCP tool discovery — backgrounded so a slow or unreachable MCP server
-    # can't freeze TUI startup (a dead stdio/http server burns 1+2+4s of
-    # connect retries → ~7s of dead air before the composer appears).  The
-    # agent isn't built until the first prompt, at which point _make_agent
-    # briefly joins the discovery thread (wait_for_mcp_discovery, bounded) so
-    # already-spawning fast servers land in the tool snapshot.  The config
-    # gate inside ensure_mcp_discovery_started keeps the ~200ms MCP SDK
-    # import cost entirely off the path for users with no mcp_servers.
-    ensure_mcp_discovery_started()
-
-    if not write_json({
-        "jsonrpc": "2.0",
-        "method": "event",
-        "params": {
-            "type": "gateway.ready",
-            # change_events: see tui_gateway/ws.py — clients demote legacy polls.
-            "payload": {"skin": resolve_skin(), "change_events": True},
-        },
-    }):
-        _log_exit("startup write failed (broken stdout pipe before first event)")
-        sys.exit(0)
-
-    # Live-apply skins Hermes activates mid-conversation.
-    server._ensure_skin_watcher()
-
-    # Warm the /model picker's provider-models cache off-thread during this
-    # idle window (gateway.ready sent, user about to type). Mirrors the classic
-    # CLI run() loop — the stdio TUI otherwise never prewarms, so the first
-    # /model open blocks on serial /v1/models fetches. Fire-and-forget,
-    # guarded once-per-process, fully exception-isolated.
-    try:
-        from hermes_cli.model_switch import prewarm_picker_cache_async
-        prewarm_picker_cache_async()
-    except Exception:
-        logger.debug("picker cache prewarm (tui) failed to start", exc_info=True)
-
-    while True:
-        raw = sys.stdin.readline()
-        if not raw:
-            # Stdin fell through — check if spurious (O_NONBLOCK flip by a
-            # child on the shared open file description) or genuine EOF.
-            if not handle_spurious_eof(_recovery_times, _log_exit):
-                break
-            continue
-
-        line = raw.strip()
-        if not line:
-            continue
-
+    def emit(value: dict) -> bool:
         try:
-            req = json.loads(line)
-        except json.JSONDecodeError:
-            if not write_json({"jsonrpc": "2.0", "error": {"code": -32700, "message": "parse error"}, "id": None}):
-                _log_exit("parse-error-response write failed (broken stdout pipe)")
-                sys.exit(0)
-            continue
+            encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+            with output_lock:
+                output.write(encoded + "\n")
+                output.flush()
+            return True
+        except (BrokenPipeError, OSError, ValueError):
+            return False
 
-        method = req.get("method") if isinstance(req, dict) else None
-        resp = dispatch(req)
-        if resp is not None:
-            if not write_json(resp):
-                _log_exit(f"response write failed for method={method!r} (broken stdout pipe)")
-                sys.exit(0)
+    shell = AccountAuthShell(_RuntimeAuth(), _ServerGateway(), emit)
+    try:
+        shell.start()
+    except AuthRequired as error:
+        if not emit(_auth_event("auth.status", _UnavailableStatus(error.reason))):
+            _log_exit("startup write failed (broken stdout pipe before first event)")
+            sys.exit(0)
+
+    monitor_stop = threading.Event()
+
+    def monitor_auth_owner() -> None:
+        while not monitor_stop.wait(5.0):
+            shell.poll()
+
+    threading.Thread(
+        target=monitor_auth_owner,
+        name="tui-auth-monitor",
+        daemon=True,
+    ).start()
+
+    try:
+        while True:
+            raw = sys.stdin.readline()
+            if not raw:
+                # Stdin fell through — check if spurious (O_NONBLOCK flip by a
+                # child on the shared open file description) or genuine EOF.
+                if not handle_spurious_eof(_recovery_times, _log_exit):
+                    break
+                continue
+
+            line = raw.strip()
+            if not line:
+                continue
+
+            try:
+                req = json.loads(line)
+            except json.JSONDecodeError:
+                if not emit({"jsonrpc": "2.0", "error": {"code": -32700, "message": "parse error"}, "id": None}):
+                    _log_exit("parse-error-response write failed (broken stdout pipe)")
+                    sys.exit(0)
+                continue
+
+            method = req.get("method") if isinstance(req, dict) else None
+            resp = shell.dispatch(req)
+            if resp is not None:
+                if not emit(resp):
+                    _log_exit(f"response write failed for method={method!r} (broken stdout pipe)")
+                    sys.exit(0)
+    finally:
+        monitor_stop.set()
 
 
 if __name__ == "__main__":

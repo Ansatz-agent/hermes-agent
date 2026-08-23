@@ -28,6 +28,11 @@ destroy the feature" posture):
 
 from __future__ import annotations
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.tools.skill_linter")
+
 import re
 from dataclasses import dataclass
 from pathlib import Path

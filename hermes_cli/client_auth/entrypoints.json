@@ -1,0 +1,313 @@
+{
+  "entrypoints": [
+    {
+      "id": "docker:Dockerfile:cmd",
+      "interactive": false,
+      "startup": "locked-waiting"
+    },
+    {
+      "id": "docker:Dockerfile:entrypoint",
+      "interactive": false,
+      "startup": "locked-waiting"
+    },
+    {
+      "id": "electron:primary-backend",
+      "interactive": false,
+      "startup": "auth-shell"
+    },
+    {
+      "id": "installer:scripts/hermes-gateway",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "installer:scripts/install.ps1",
+      "interactive": false,
+      "startup": "distribution-bootstrap"
+    },
+    {
+      "id": "installer:scripts/install.sh",
+      "interactive": false,
+      "startup": "distribution-bootstrap"
+    },
+    {
+      "id": "pyproject:hermes",
+      "interactive": true,
+      "startup": "guarded"
+    },
+    {
+      "id": "pyproject:hermes-acp",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "pyproject:hermes-agent",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:acp_adapter/__main__.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:acp_adapter/entry.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:agent/learning_graph.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:agent/transports/hermes_tools_mcp_server.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:batch_runner.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:cli.py",
+      "interactive": true,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:cron/scheduler.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:cron/scripts/classify_items.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:gateway/cgroup_cleanup.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:gateway/run.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:hermes_cli/_scan_venv_blockers.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:hermes_cli/client_auth/bridge.py",
+      "interactive": false,
+      "startup": "auth-shell"
+    },
+    {
+      "id": "python:hermes_cli/client_auth/runtime.py",
+      "interactive": false,
+      "startup": "auth-shell"
+    },
+    {
+      "id": "python:hermes_cli/container_boot.py",
+      "interactive": false,
+      "startup": "auth-shell"
+    },
+    {
+      "id": "python:hermes_cli/curator.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:hermes_cli/journey.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:hermes_cli/main.py",
+      "interactive": true,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:hermes_cli/stderr_timestamp.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:hermes_cli/uninstall.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:hermes_cli/windows_ssh_runtime.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:mcp_serve.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:mini_swe_runner.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:plugins/google_meet/cli.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:plugins/google_meet/meet_bot.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:plugins/platforms/feishu/feishu_comment_rules.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:plugins/platforms/google_chat/oauth.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:plugins/web/ddgs/_search_worker.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:run_agent.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:scripts/discord-voice-doctor.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:scripts/keystroke_diagnostic.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:tools/browser_tool.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:tools/image_generation_tool.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:tools/mcp_stdio_watchdog.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:tools/neutts_synth.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:tools/skill_linter.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:tools/skills_sync.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:tools/skills_tool.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:tools/terminal_tool.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:tools/tts_tool.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:tools/vision_tools.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:tools/web_tools.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:toolset_distributions.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:toolsets.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:trajectory_compressor.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:tui_gateway/compute_host.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "python:tui_gateway/entry.py",
+      "interactive": false,
+      "startup": "auth-shell"
+    },
+    {
+      "id": "python:tui_gateway/slash_worker.py",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "s6:docker/s6-rc.d/dashboard/run",
+      "interactive": false,
+      "startup": "locked-waiting"
+    },
+    {
+      "id": "s6:docker/s6-rc.d/hermes-auth-runtime/run",
+      "interactive": false,
+      "startup": "locked-waiting"
+    },
+    {
+      "id": "s6:docker/s6-rc.d/main-hermes/run",
+      "interactive": false,
+      "startup": "locked-waiting"
+    },
+    {
+      "id": "service:plugins/kanban/systemd/hermes-kanban-dispatcher.service",
+      "interactive": false,
+      "startup": "locked-waiting"
+    },
+    {
+      "id": "tui:tui-gateway",
+      "interactive": true,
+      "startup": "auth-shell"
+    }
+  ],
+  "notes": {
+    "registration_lifecycle.py": "provider/plugin replacement ownership; not user-account registration"
+  },
+  "version": 1
+}

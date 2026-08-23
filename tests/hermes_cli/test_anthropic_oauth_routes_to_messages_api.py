@@ -70,7 +70,7 @@ class TestExplicitRuntimeForAnthropic:
 
 class TestPoolEntryForAnthropic:
     """``_resolve_runtime_from_pool_entry`` is what runs when a user
-    has added an OAuth credential via ``hermes auth add anthropic
+    has added an OAuth credential via ``hermes provider add anthropic
     --type oauth`` (the exact flow from #32243).  Pin the contract
     alongside the URL-detector test so all three runtime branches
     stay aligned and a future refactor of one cannot diverge from

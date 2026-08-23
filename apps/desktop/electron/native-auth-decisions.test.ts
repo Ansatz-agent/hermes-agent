@@ -89,6 +89,13 @@ test('resolveReadinessProbeAuth sends the session token for a token gateway', ()
   assert.deepEqual(resolveReadinessProbeAuth('token', null, null), { kind: 'token', token: null })
 })
 
+test('resolveReadinessProbeAuth sends the short-lived bearer for a Desktop scope backend', () => {
+  assert.deepEqual(resolveReadinessProbeAuth('scope', null, 'scope-bearer'), {
+    kind: 'token',
+    token: 'scope-bearer'
+  })
+})
+
 test('resolveReadinessProbeAuth stays public for local and unknown modes', () => {
   // A loopback backend has no gate; sending credentials it never issued is
   // meaningless, and an unknown mode must not invent a credential.

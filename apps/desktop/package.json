@@ -1,10 +1,10 @@
 {
-  "name": "hermes",
-  "productName": "Hermes",
+  "name": "ansatz-voice-trace-client",
+  "productName": "Ansatz Voice Trace Client",
   "private": true,
   "version": "0.17.0",
-  "description": "Native desktop shell for Hermes Agent.",
-  "author": "Nous Research",
+  "description": "Install-first voice client with authenticated Trace relay.",
+  "author": "Ansatz Agent",
   "type": "module",
   "main": "dist/electron-main.mjs",
   "engines": {
@@ -30,12 +30,14 @@
     "builder": "cross-env NODE_OPTIONS=--max-old-space-size=16384 node scripts/run-electron-builder.mjs",
     "pack": "npm run build && npm run builder -- --dir",
     "dist": "npm run build && npm run builder",
-    "dist:mac": "npm run build && npm run builder -- --mac",
-    "dist:mac:dmg": "npm run build && npm run builder -- --mac dmg",
-    "dist:mac:zip": "npm run build && npm run builder -- --mac zip",
-    "dist:win": "npm run build && npm run builder -- --win",
-    "dist:win:msi": "npm run build && npm run builder -- --win msi",
-    "dist:win:nsis": "npm run build && npm run builder -- --win nsis",
+    "prepare:package:mac": "node scripts/prepare-package-inputs.mjs --platform darwin",
+    "prepare:package:win": "node scripts/prepare-package-inputs.mjs --platform win32",
+    "dist:mac": "npm run prepare:package:mac && npm run build && npm run builder -- --mac",
+    "dist:mac:dmg": "npm run prepare:package:mac && npm run build && npm run builder -- --mac dmg",
+    "dist:mac:zip": "npm run prepare:package:mac && npm run build && npm run builder -- --mac zip",
+    "dist:win": "npm run prepare:package:win && npm run build && npm run builder -- --win",
+    "dist:win:msi": "npm run prepare:package:win && npm run build && npm run builder -- --win msi",
+    "dist:win:nsis": "npm run prepare:package:win && npm run build && npm run builder -- --win nsis",
     "dist:linux": "npm run build && npm run builder -- --linux AppImage deb rpm",
     "perf": "node scripts/perf/run.mjs",
     "update:shim": "bash ../../scripts/desktop-update/repro.sh shim",
@@ -178,18 +180,18 @@
   },
   "build": {
     "electronVersion": "40.10.2",
-    "appId": "com.nousresearch.hermes",
-    "productName": "Hermes",
-    "executableName": "Hermes",
+    "appId": "cn.c2sml.ansatz.voice-trace-client",
+    "productName": "Ansatz Voice Trace Client",
+    "executableName": "AnsatzVoiceTraceClient",
     "protocols": [
       {
-        "name": "Hermes Protocol",
+        "name": "Ansatz Voice Trace Protocol",
         "schemes": [
-          "hermes"
+          "ansatz-voice-trace"
         ]
       }
     ],
-    "artifactName": "Hermes-${version}-${os}-${arch}.${ext}",
+    "artifactName": "Ansatz-Voice-Trace-Client-${version}-${os}-${arch}.${ext}",
     "icon": "assets/icon",
     "directories": {
       "output": "release"
@@ -222,15 +224,33 @@
     ],
     "mac": {
       "category": "public.app-category.developer-tools",
+      "extraResources": [
+        {
+          "from": "build/bootstrap/install.sh",
+          "to": "bootstrap/install.sh"
+        },
+        {
+          "from": "build/bootstrap/hermes-backend.tar.gz",
+          "to": "bootstrap/hermes-backend.tar.gz"
+        },
+        {
+          "from": "build/bootstrap/payload-manifest.json",
+          "to": "bootstrap/payload-manifest.json"
+        },
+        {
+          "from": "build/bootstrap/auth-toolchain",
+          "to": "bootstrap/auth-toolchain"
+        }
+      ],
       "entitlements": "electron/entitlements.mac.plist",
       "entitlementsInherit": "electron/entitlements.mac.inherit.plist",
       "extendInfo": {
-        "CFBundleDisplayName": "Hermes",
-        "CFBundleExecutable": "Hermes",
-        "CFBundleName": "Hermes",
-        "NSAudioCaptureUsageDescription": "Hermes uses audio capture for voice conversations.",
-        "NSCameraUsageDescription": "Hermes uses the camera when a plugin or feature you enable requests it.",
-        "NSMicrophoneUsageDescription": "Hermes uses the microphone for voice input and voice conversations."
+        "CFBundleDisplayName": "Ansatz Voice Trace Client",
+        "CFBundleExecutable": "AnsatzVoiceTraceClient",
+        "CFBundleName": "Ansatz Voice Trace Client",
+        "NSAudioCaptureUsageDescription": "Ansatz Voice Trace Client uses audio capture for voice conversations.",
+        "NSCameraUsageDescription": "Ansatz Voice Trace Client uses the camera when a plugin or feature you enable requests it.",
+        "NSMicrophoneUsageDescription": "Ansatz Voice Trace Client uses the microphone for voice input and voice conversations."
       },
       "gatekeeperAssess": false,
       "hardenedRuntime": true,
@@ -240,7 +260,7 @@
       ]
     },
     "dmg": {
-      "title": "Install Hermes",
+      "title": "Install Ansatz Voice Trace Client",
       "backgroundColor": "#f5f5f7",
       "iconSize": 96,
       "window": {
@@ -262,7 +282,29 @@
       ]
     },
     "win": {
-      "legalTrademarks": "Hermes",
+      "legalTrademarks": "Ansatz Agent",
+      "extraResources": [
+        {
+          "from": "build/bootstrap/install.ps1",
+          "to": "bootstrap/install.ps1"
+        },
+        {
+          "from": "build/bootstrap/hermes-backend.tar.gz",
+          "to": "bootstrap/hermes-backend.tar.gz"
+        },
+        {
+          "from": "build/bootstrap/payload-manifest.json",
+          "to": "bootstrap/payload-manifest.json"
+        },
+        {
+          "from": "build/bootstrap/auth-toolchain",
+          "to": "bootstrap/auth-toolchain"
+        },
+        {
+          "from": "build/windows-prereqs/git-bash-runtime.tar.xz",
+          "to": "bootstrap/git-bash-runtime.tar.xz"
+        }
+      ],
       "target": [
         "nsis",
         "msi"
@@ -271,8 +313,8 @@
     },
     "linux": {
       "category": "Development",
-      "maintainer": "Nous Research <support@nousresearch.com>",
-      "synopsis": "Native desktop shell for Hermes Agent.",
+      "maintainer": "Ansatz Agent <1580065969@qq.com>",
+      "synopsis": "Install-first voice client with authenticated Trace relay.",
       "target": [
         "AppImage",
         "deb",
@@ -283,8 +325,8 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "perMachine": false,
-      "shortcutName": "Hermes",
-      "uninstallDisplayName": "Hermes",
+      "shortcutName": "Ansatz Voice Trace Client",
+      "uninstallDisplayName": "Ansatz Voice Trace Client",
       "warningsAsErrors": false
     }
   }

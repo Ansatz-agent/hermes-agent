@@ -148,6 +148,10 @@ LAZY_DEPS: dict[str, tuple[str, ...]] = {
         "sounddevice==0.5.5",
         "numpy==2.4.3",
     ),
+    "stt.sensevoice": (
+        "sherpa-onnx==1.13.4",
+        "numpy==2.4.3",
+    ),
     # SILK voice-note decoding (WeChat/QQ .silk voice messages). pilk is a
     # small silk-v3 codec binding; installed on first .silk transcription.
     "stt.silk": ("pilk==0.2.4",),
@@ -736,8 +740,9 @@ def _venv_pip_install(specs: tuple[str, ...], *, timeout: int = 300) -> _Install
 
     try:
         venv_root = Path(sys.executable).parent.parent
-        from tools.environments.local import hermes_subprocess_env
-        uv_env = hermes_subprocess_env(inherit_credentials=False)
+        from hermes_cli.managed_downloads import managed_download_environment
+
+        uv_env = managed_download_environment("lazy-feature")
         uv_env["VIRTUAL_ENV"] = str(venv_root)
 
         # Tier 1: uv (preferred — fast, doesn't need pip in the venv)
@@ -785,6 +790,7 @@ def _venv_pip_install(specs: tuple[str, ...], *, timeout: int = 300) -> _Install
             probe = subprocess.run(
                 pip_cmd + ["--version"],
                 capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=15,
+                env=uv_env,
                 stdin=subprocess.DEVNULL,
                 creationflags=windows_hide_flags(),
             )
@@ -795,6 +801,7 @@ def _venv_pip_install(specs: tuple[str, ...], *, timeout: int = 300) -> _Install
                 subprocess.run(
                     [sys.executable, "-m", "ensurepip", "--upgrade", "--default-pip"],
                     capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=120, check=True,
+                    env=uv_env,
                     stdin=subprocess.DEVNULL,
                     creationflags=windows_hide_flags(),
                 )
@@ -806,6 +813,7 @@ def _venv_pip_install(specs: tuple[str, ...], *, timeout: int = 300) -> _Install
             r = subprocess.run(
                 pip_cmd + ["install", *target_args, *constraint_args, *specs],
                 capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=timeout,
+                env=uv_env,
                 stdin=subprocess.DEVNULL,
                 creationflags=windows_hide_flags(),
             )

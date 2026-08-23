@@ -22,7 +22,7 @@ import { $wakeWord, toggleWakeWord } from '@/store/wake-word'
 
 import type { ConversationStatus } from './hooks/use-voice-conversation'
 import { ModelPill } from './model-pill'
-import type { ChatBarState, VoiceStatus } from './types'
+import type { ChatBarState, SenseVoiceReadiness, SttPreparationErrorCode, VoiceStatus } from './types'
 
 export const ICON_BTN = 'size-(--composer-control-size) shrink-0 rounded-md'
 export const GHOST_ICON_BTN = cn(
@@ -60,6 +60,7 @@ export function ComposerControls({
   disabled,
   hasComposerPayload,
   state,
+  voiceReadiness,
   voiceStatus,
   onDictate,
   onQueue,
@@ -74,6 +75,7 @@ export function ComposerControls({
   disabled: boolean
   hasComposerPayload: boolean
   state: ChatBarState
+  voiceReadiness?: SenseVoiceReadiness
   voiceStatus: VoiceStatus
   onDictate: () => void
   onQueue: () => void
@@ -81,6 +83,7 @@ export function ComposerControls({
 }) {
   const { t } = useI18n()
   const c = t.composer
+  const voiceDisabled = disabled || (voiceReadiness?.required === true && !voiceReadiness.ready)
 
   if (conversation.active) {
     return <ConversationPill {...conversation} disabled={disabled} />
@@ -91,8 +94,9 @@ export function ComposerControls({
 
   return (
     <div className="ml-auto flex shrink-0 items-center gap-(--composer-control-gap)">
+      {voiceReadiness ? <SenseVoiceReadinessNotice readiness={voiceReadiness} /> : null}
       <ModelPill compact={compactModelPill} disabled={disabled} model={state.model} />
-      <DictationButton disabled={disabled} onToggle={onDictate} state={state.voice} status={voiceStatus} />
+      <DictationButton disabled={voiceDisabled} onToggle={onDictate} state={state.voice} status={voiceStatus} />
       <AutoSpeakButton active={autoSpeak} disabled={disabled} onToggle={onToggleAutoSpeak} />
       <WakeWordButton disabled={disabled} />
       {busyAction === 'steer' ? (
@@ -115,7 +119,7 @@ export function ComposerControls({
           <Button
             aria-label={c.startVoice}
             className={PRIMARY_ICON_BTN}
-            disabled={disabled}
+            disabled={voiceDisabled}
             onClick={() => {
               triggerHaptic('open')
               conversation.onStart()
@@ -165,6 +169,72 @@ export function ComposerControls({
           </Button>
         </Tip>
       )}
+    </div>
+  )
+}
+
+function formatPreparationBytes(value: number): string {
+  if (value < 1_024) {
+    return `${value} B`
+  }
+
+  const units = ['KiB', 'MiB', 'GiB']
+  let amount = value
+  let unit = -1
+
+  while (amount >= 1_024 && unit < units.length - 1) {
+    amount /= 1_024
+    unit += 1
+  }
+
+  return `${amount >= 10 ? amount.toFixed(0) : amount.toFixed(1)} ${units[unit]}`
+}
+
+export function SenseVoiceReadinessNotice({ readiness }: { readiness: SenseVoiceReadiness }) {
+  const { t } = useI18n()
+
+  if (!readiness.required || readiness.ready) {
+    return null
+  }
+
+  const status = readiness.status
+  const canRetry = status != null && status.state !== 'preparing' && status.state !== 'ready'
+  let message = t.composer.senseVoicePreparing
+
+  if (status?.state === 'preparing' && status.phase === 'dependencies') {
+    message = t.composer.senseVoicePreparingDependencies
+  } else if (status?.state === 'preparing' && status.phase === 'download' && status.total && status.downloaded != null) {
+    const percent = Math.min(100, Math.round((status.downloaded / status.total) * 100))
+    message = t.composer.senseVoiceDownloading(
+      formatPreparationBytes(status.downloaded),
+      formatPreparationBytes(status.total),
+      percent
+    )
+  } else if (status?.state === 'error') {
+    const errorCopy: Record<SttPreparationErrorCode, string> = {
+      checksum_mismatch: t.composer.senseVoiceVerificationFailed,
+      dependency_install_failed: t.composer.senseVoiceDependencyInstallFailed,
+      download_failed: t.composer.senseVoiceDownloadFailed,
+      insufficient_disk: t.composer.senseVoiceInsufficientDisk
+    }
+
+    message = errorCopy[status.code]
+  }
+
+  return (
+    <div aria-live="polite" className="flex max-w-52 items-center gap-1.5 text-[0.6875rem] text-muted-foreground" role="status">
+      <span className="line-clamp-2">{message}</span>
+      {canRetry ? (
+        <Button
+          disabled={readiness.retrying}
+          onClick={() => void readiness.retry()}
+          size="inline"
+          type="button"
+          variant="textStrong"
+        >
+          {t.common.retry}
+        </Button>
+      ) : null}
     </div>
   )
 }

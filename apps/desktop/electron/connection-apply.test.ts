@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { applyConnectionChange, commitConnectionFailure, resolveTerminalConnection } from './connection-apply'
+import {
+  applyConnectionChange,
+  applyForegroundConnectionChange,
+  commitConnectionFailure,
+  resolveTerminalConnection
+} from './connection-apply'
 
 function deferred() {
   let resolve!: () => void
@@ -96,5 +101,75 @@ describe('commitConnectionFailure', () => {
     expect(commit).not.toHaveBeenCalled()
     expect(commitConnectionFailure(current, current, commit)).toBe(true)
     expect(commit).toHaveBeenCalledOnce()
+  })
+})
+
+describe('applyForegroundConnectionChange', () => {
+  it('revokes A before minting and publishing a fresh token for B', async () => {
+    const events: string[] = []
+
+    const oldRoute = {
+      connectionId: 'remote-a',
+      scope: { connection_id: 'remote-a', runtime_instance_id: 'runtime-a', epoch: 1 },
+      token: 'foreground-a'
+    }
+
+    const nextScope = { connection_id: 'remote-b', runtime_instance_id: 'runtime-b', epoch: 2 }
+
+    const result = await applyForegroundConnectionChange({
+      current: oldRoute,
+      nextConnectionId: 'remote-b',
+      publish: route => {
+        events.push(`publish:${route.connectionId}:${route.token}`)
+      },
+      requestFreshToken: async scope => {
+        events.push(`mint:${scope.connection_id}`)
+
+        return 'foreground-b'
+      },
+      requireScope: async connectionId => {
+        events.push(`require:${connectionId}`)
+
+        return nextScope
+      },
+      revokeForeground: async route => {
+        events.push(`revoke:${route.connectionId}:${route.token}`)
+      }
+    })
+
+    expect(events).toEqual([
+      'revoke:remote-a:foreground-a',
+      'require:remote-b',
+      'mint:remote-b',
+      'publish:remote-b:foreground-b'
+    ])
+    expect(result).toEqual({ connectionId: 'remote-b', scope: nextScope, token: 'foreground-b' })
+  })
+
+  it('fails closed after revoking A when B has no valid scope', async () => {
+    const publish = vi.fn()
+    const requestFreshToken = vi.fn()
+    const revokeForeground = vi.fn(async () => {})
+
+    await expect(
+      applyForegroundConnectionChange({
+        current: {
+          connectionId: 'remote-a',
+          scope: { connection_id: 'remote-a', runtime_instance_id: 'runtime-a', epoch: 1 },
+          token: 'foreground-a'
+        },
+        nextConnectionId: 'remote-b',
+        publish,
+        requestFreshToken,
+        requireScope: async () => {
+          throw new Error('AUTH_REQUIRED')
+        },
+        revokeForeground
+      })
+    ).rejects.toThrow('AUTH_REQUIRED')
+
+    expect(revokeForeground).toHaveBeenCalledOnce()
+    expect(requestFreshToken).not.toHaveBeenCalled()
+    expect(publish).not.toHaveBeenCalled()
   })
 })

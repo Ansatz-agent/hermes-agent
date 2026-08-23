@@ -6,7 +6,7 @@ import { createInterface } from 'node:readline'
 
 import { WebSocket as UndiciWebSocket } from 'undici'
 
-import type { GatewayEvent } from './gatewayTypes.js'
+import type { GatewayEvent, TuiAuthStatus } from './gatewayTypes.js'
 import { CircularBuffer } from './lib/circularBuffer.js'
 import { recordParentLifecycle } from './lib/parentLog.js'
 
@@ -158,7 +158,7 @@ export class GatewayClient extends EventEmitter {
   }
 
   private publish(ev: GatewayEvent) {
-    if (ev.type === 'gateway.ready') {
+    if (ev.type === 'auth.status' || ev.type === 'gateway.ready') {
       this.ready = true
 
       if (this.readyTimer) {
@@ -773,6 +773,18 @@ export class GatewayClient extends EventEmitter {
         reject(e instanceof Error ? e : new Error(String(e)))
       }
     })
+  }
+
+  authStatus(): Promise<TuiAuthStatus> {
+    return this.request<TuiAuthStatus>('auth.status')
+  }
+
+  authLogin(username: string, password: string): Promise<TuiAuthStatus> {
+    return this.request<TuiAuthStatus>('auth.login', { username, password })
+  }
+
+  authLogout(): Promise<TuiAuthStatus> {
+    return this.request<TuiAuthStatus>('auth.logout')
   }
 
   kill(reason = 'requested') {

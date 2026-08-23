@@ -49,6 +49,56 @@ interface AuxTaskCopy {
 }
 
 export interface Translations {
+  auth: {
+    title: string
+    description: string
+    serverLabel: string
+    traceNotice: string
+    username: string
+    password: string
+    signIn: string
+    signingIn: string
+    retry: string
+    checking: string
+    preparingRuntime: string
+    preparingStage: (current: number, total: number, title: string) => string
+    runtimeTitle: string
+    runtimeDescription: string
+    preparingFullRuntime: string
+    preparingFullStage: (current: number, total: number, title: string) => string
+    runtimePreparationFailed: string
+    administratorManaged: string
+    accountMenu: string
+    signOut: string
+    signingOut: string
+    bootstrap: {
+      preparingAuthTitle: string
+      stagesComplete: (completed: number, total: number) => string
+      stagePosition: (current: number, total: number, title: string) => string
+      elapsed: (elapsed: string) => string
+      overallProgressLabel: string
+      authPreparationFailed: string
+      runtimePreparationFailed: string
+      failedAt: (title: string) => string
+      runningWithElapsed: (state: string, elapsed: string) => string
+      knownProgress: (completed: string, total: string, unit: string, percent: number) => string
+      unknownProgress: (completed: string, unit: string) => string
+      stageStates: Record<'pending' | 'running' | 'succeeded' | 'skipped' | 'failed', string>
+      units: Record<'packages' | 'items' | 'files' | 'steps', string>
+    }
+    reasons: {
+      interactiveLoginRequired: string
+      invalidCredentials: string
+      rateLimited: string
+      runtimeUnavailable: string
+      serverUnavailable: string
+      sessionExpired: string
+      sessionRejected: string
+      signedOut: string
+      vaultUnavailable: string
+    }
+  }
+
   common: {
     apply: string
     back: string
@@ -1779,6 +1829,13 @@ export interface Translations {
     newSessionPlaceholders: readonly string[]
     followUpPlaceholders: readonly string[]
     startVoice: string
+    senseVoicePreparing: string
+    senseVoicePreparingDependencies: string
+    senseVoiceDownloading: (downloaded: string, total: string, percent: number) => string
+    senseVoiceInsufficientDisk: string
+    senseVoiceVerificationFailed: string
+    senseVoiceDependencyInstallFailed: string
+    senseVoiceDownloadFailed: string
     openDirective: string
     queueMessage: string
     steer: string

@@ -42,6 +42,7 @@ dependencies = [
   "python-dotenv==1.2.2",
   "fire==0.7.1",
   "httpx[socks]==0.28.1",
+  "keyring==25.7.0",
   "rich==14.3.3",
   "tenacity==9.1.4",
   "pyyaml==6.0.3",
@@ -199,6 +200,12 @@ voice = [
   "sounddevice==0.5.5",
   "numpy==2.4.3",
 ]
+# Mandarin-first on-device Desktop STT. sherpa-onnx embeds the native runtime;
+# file normalization uses the Desktop's existing ffmpeg binary.
+sensevoice = [
+  "sherpa-onnx==1.13.4",
+  "numpy==2.4.3",
+]
 # "Hey Hermes" wake word — on-device hotword detection. All engines are
 # optional; openWakeWord (ONNX) is the free default, sherpa-onnx adds
 # open-vocabulary phrases (any typed phrase, zero training), Porcupine is
@@ -346,6 +353,10 @@ all = [
   # [all], `uv sync --locked` on Windows tried to build it from sdist
   # and failed on `make`. Lazy-install routes that build to first use,
   # where the user is expected to have a toolchain available.
+  # The bundled Desktop runtime installs this local project offline with
+  # build isolation disabled after syncing the lock-exported dependency set.
+  # Keep the exact build backend in [all] so that step never downloads it.
+  "setuptools==83.0.0",
   "hermes-agent[cron]",
   "hermes-agent[pty]",
   "hermes-agent[mcp]",
@@ -363,8 +374,8 @@ build-backend = "setuptools.build_meta"
 
 [project.scripts]
 hermes = "hermes_cli.main:main"
-hermes-agent = "run_agent:main"
-hermes-acp = "acp_adapter.entry:main"
+hermes-agent = "hermes_cli.client_auth.entrypoint_wrappers:hermes_agent"
+hermes-acp = "hermes_cli.client_auth.entrypoint_wrappers:hermes_acp"
 
 [tool.uv]
 override-dependencies = [
@@ -381,7 +392,7 @@ override-dependencies = [
   # Remove this line when alibabacloud-tea-openapi lifts the cap.
   "cryptography>=50,<51",
 ]
-exclude-newer = "14 days"
+exclude-newer = "2026-08-19T00:00:00Z"
 # h2: temporary exclude-newer exception for the CVE-2026-71554 (GHSA-6hr6-w5qg-qmwg,
 # request-smuggling) fix in 4.4.1, published 2026-08-03. Remove after 2026-08-17.
 # aiohttp, cryptography: same shape — the advisory fixes are newer than the

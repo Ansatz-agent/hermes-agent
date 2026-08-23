@@ -1,4 +1,4 @@
-"""Remote model catalog fetcher.
+"""Operator-configured model catalog fetcher.
 
 The Hermes docs site hosts a JSON manifest of curated models for providers
 we want to update without shipping a release (currently OpenRouter and
@@ -62,18 +62,10 @@ logger = logging.getLogger(__name__)
 # Constants
 # ---------------------------------------------------------------------------
 
-DEFAULT_CATALOG_URL = (
-    "https://hermes-agent.nousresearch.com/docs/api/model-catalog.json"
-)
-# Fallback fetch chain. The Docusaurus site is served through Vercel, which
-# occasionally returns HTTP 403 + x-vercel-mitigated: challenge for non-
-# browser clients (urllib, curl). When that happens the disk cache goes
-# stale and new model releases never reach the picker. The raw GitHub URL
-# is the same manifest published from the same repo and is not bot-gated,
-# so we fall through to it whenever the primary URL fails.
-DEFAULT_CATALOG_FALLBACK_URLS: tuple[str, ...] = (
-    "https://raw.githubusercontent.com/NousResearch/hermes-agent/main/website/static/api/model-catalog.json",
-)
+DEFAULT_CATALOG_URL = ""
+# No baked remote origin is allowed. An operator may configure a reviewed
+# catalog endpoint; otherwise Hermes remains cache/offline-only.
+DEFAULT_CATALOG_FALLBACK_URLS: tuple[str, ...] = ()
 DEFAULT_TTL_HOURS = 1
 DEFAULT_FETCH_TIMEOUT = 8.0
 SUPPORTED_SCHEMA_VERSION = 1
@@ -161,7 +153,7 @@ def _fetch_manifest_with_fallback(
     operator who configured the catalog URL to point at the raw GitHub
     copy doesn't double-fetch.
     """
-    data = _fetch_manifest(primary_url, timeout)
+    data = _fetch_manifest(primary_url, timeout) if primary_url else None
     if data is not None:
         return data
     for url in fallback_urls:

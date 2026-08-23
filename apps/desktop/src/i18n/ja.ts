@@ -3,6 +3,66 @@ import { defineFieldCopy } from '@/app/settings/field-copy'
 import { defineLocale } from './define-locale'
 
 export const ja = defineLocale({
+  auth: {
+    title: 'Ansatz Voice Trace Client にサインイン',
+    description: '完全なオフラインランタイムのインストール後にアカウントへサインインできます。',
+    serverLabel: 'アカウントサーバー',
+    traceNotice:
+      '入力、モデル応答、ツール引数・結果を含む完全な会話 Trace は自動的にアップロードされ、プラットフォーム管理者のみが閲覧できます。アップロードは無効にできません。生音声と認証情報は除外されます。',
+    username: 'ユーザー名',
+    password: 'パスワード',
+    signIn: 'サインイン',
+    signingIn: 'サインイン中…',
+    retry: '再試行',
+    checking: 'アカウントセッションを確認中…',
+    preparingRuntime: '安全なサインインサービスを準備中…',
+    preparingStage: (current, total, title) =>
+      `安全なサインインサービスを準備中（${current}/${total}）：${title}…`,
+    runtimeTitle: 'Ansatz Voice Trace Client をインストール中',
+    runtimeDescription: 'アカウントのサインインを表示する前に、完全なオフラインランタイムをインストールします。',
+    preparingFullRuntime: '完全なオフラインランタイムをインストール中…',
+    preparingFullStage: (current, total, title) =>
+      `完全なオフラインランタイムをインストール中（${current}/${total}）：${title}…`,
+    runtimePreparationFailed: 'Ansatz Voice Trace Client のローカルランタイムをインストールできませんでした。再試行してください。',
+    administratorManaged: 'アカウントの発行とパスワードの支援はサーバー管理者が行います。',
+    accountMenu: 'アカウント',
+    signOut: 'サインアウト',
+    signingOut: 'サインアウト中…',
+    bootstrap: {
+      preparingAuthTitle: '安全なサインインサービスを準備中',
+      stagesComplete: (completed, total) => `${total} 段階中 ${completed} 段階が完了`,
+      stagePosition: (current, total, title) => `${total} 段階中 ${current}：${title}`,
+      elapsed: elapsed => `現在の段階 · ${elapsed}`,
+      overallProgressLabel: 'Ansatz Voice Trace Client ランタイムのインストール',
+      authPreparationFailed: '安全なサインインサービスを準備できませんでした。',
+      runtimePreparationFailed: 'Ansatz Voice Trace Client のローカルランタイムをインストールできませんでした。',
+      failedAt: title => `失敗した段階：${title}`,
+      runningWithElapsed: (state, elapsed) => `${state} · ${elapsed}`,
+      knownProgress: (completed, total, unit, percent) =>
+        `${completed} / ${total}${unit ? ` ${unit}` : ''}、${percent}%`,
+      unknownProgress: (completed, unit) => `${completed}${unit ? ` ${unit}` : ''}`,
+      stageStates: {
+        pending: '待機中',
+        running: '実行中',
+        succeeded: '完了',
+        skipped: '完了',
+        failed: '失敗'
+      },
+      units: { packages: 'パッケージ', items: '項目', files: 'ファイル', steps: '段階' }
+    },
+    reasons: {
+      interactiveLoginRequired: 'サーバー管理者から提供された認証情報を入力してください。',
+      invalidCredentials: 'ユーザー名またはパスワードが正しくありません。',
+      rateLimited: 'サインイン試行が多すぎます。少し待ってから再試行してください。',
+      runtimeUnavailable: '安全なアカウントサービスを利用できません。再試行してください。',
+      serverUnavailable: 'アカウントサーバーを利用できません。再試行してください。',
+      sessionExpired: 'セッションの有効期限が切れました。もう一度サインインしてください。',
+      sessionRejected: 'セッションは無効です。もう一度サインインしてください。',
+      signedOut: 'サーバー管理者から提供されたアカウントでサインインしてください。',
+      vaultUnavailable: 'このデバイスで安全な認証情報ストレージを利用できません。'
+    }
+  },
+
   common: {
     apply: '適用',
     back: '戻る',

@@ -1,3 +1,5 @@
+import { type ConnectionScope, requireAuthenticatedConnectionScope } from './auth-bridge'
+
 interface SessionListResponse {
   sessions: unknown[]
   total: number
@@ -9,6 +11,17 @@ export interface ProfileSessionsResponse extends SessionListResponse {
 }
 
 type FetchJsonForProfile = (profile: string | null, path: string) => Promise<unknown>
+
+export interface ConnectionProfileTarget {
+  connectionId: string
+  profile: string
+}
+
+interface ConnectionProfileSessionsDependencies {
+  fetchJson: (connectionId: string, profile: string, path: string, bearer: string) => Promise<unknown>
+  requestFreshToken: (scope: ConnectionScope) => Promise<string>
+  requireScope: (connectionId: string) => Promise<ConnectionScope>
+}
 
 const REMOTE_SESSION_PAGE_LIMIT = 100
 
@@ -188,4 +201,39 @@ export async function fetchRemoteProfileSessions(
     limit: requestedLimit,
     offset: requestedOffset
   }
+}
+
+export async function fetchConnectionProfileSessions(
+  target: ConnectionProfileTarget,
+  searchParams: URLSearchParams,
+  dependencies: ConnectionProfileSessionsDependencies
+): Promise<SessionListResponse> {
+  const connectionId = String(target.connectionId || '').trim()
+  const profile = String(target.profile || '').trim() || 'default'
+
+  if (!connectionId) {
+    throw new Error('AUTH_REQUIRED')
+  }
+
+  return fetchRemoteProfileSessions(profile, searchParams, async (_profile, path) => {
+    let scope: ConnectionScope
+
+    try {
+      scope = requireAuthenticatedConnectionScope(await dependencies.requireScope(connectionId))
+    } catch {
+      throw new Error('AUTH_REQUIRED')
+    }
+
+    if (scope.connection_id !== connectionId) {
+      throw new Error('AUTH_REQUIRED')
+    }
+
+    const bearer = await dependencies.requestFreshToken(scope)
+
+    if (!bearer) {
+      throw new Error('AUTH_REQUIRED')
+    }
+
+    return dependencies.fetchJson(connectionId, profile, path, bearer)
+  })
 }

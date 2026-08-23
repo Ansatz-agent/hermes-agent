@@ -10,6 +10,11 @@ layout, and the (ported-from-desktop) palette all live in
 
 from __future__ import annotations
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.hermes_cli.journey")
+
 import argparse
 import shutil
 import sys

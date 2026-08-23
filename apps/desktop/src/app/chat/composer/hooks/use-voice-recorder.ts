@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { useI18n } from '@/i18n'
+import { VOICE_END_SILENCE_MS } from '@/lib/voice-timing'
 import { notify, notifyError } from '@/store/notifications'
 
 import type { VoiceActivityState, VoiceStatus } from '../types'
@@ -85,7 +86,12 @@ export function useVoiceRecorder({
     }
 
     try {
-      await handle.start({ onError: error => notifyError(error, voiceCopy.recordingFailed) })
+      await handle.start({
+        silenceLevel: 0.075,
+        silenceMs: VOICE_END_SILENCE_MS,
+        onError: error => notifyError(error, voiceCopy.recordingFailed),
+        onSilence: () => void stop()
+      })
       startedAtRef.current = Date.now()
       setElapsedSeconds(0)
       setVoiceStatus('recording')

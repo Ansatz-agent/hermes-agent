@@ -66,6 +66,11 @@ Usage:
     content = skill_view("axolotl", "references/dataset-formats.md")
 """
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.tools.skills_tool")
+
 import json
 import logging
 import time

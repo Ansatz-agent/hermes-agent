@@ -2,6 +2,7 @@ import { backendScopeKey, type ConnectionState, type GatewayEvent, resolveGatewa
 import { atom } from 'nanostores'
 
 import { HermesGateway } from '@/hermes'
+import { setApiRequestConnectionId } from '@/lib/api-request-target'
 import { reconnectBackoffDelayMs } from '@/lib/reconnect-backoff'
 import { markNativeNotifyBaseline } from '@/store/notify-baseline'
 import { setConnection, setGatewayState } from '@/store/session'
@@ -157,8 +158,11 @@ export function reportPrimaryGatewayState(state: ConnectionState): void {
   reportGatewayState(g.primaryProfile, state)
 }
 
-function setActive(profile: string): void {
+function setActive(profile: string, connectionId?: null | string): void {
   g.activeKey = normKey(profile)
+  setApiRequestConnectionId(
+    connectionId === undefined ? (g.secondaries.get(g.activeKey)?.connectionId ?? null) : connectionId
+  )
   const gateway = activeGateway()
   g.$gateway.set(gateway)
   setGatewayState(gateway?.connectionState ?? 'closed')
@@ -341,7 +345,10 @@ export async function openGatewayForAgent(connectionId: null | string, profile: 
   const scope = backendScopeKey(connectionId, profile)
 
   if (scope === normKey(profile)) {
-    return openGatewayForProfile(profile)
+    await openGatewayForProfile(profile)
+    setApiRequestConnectionId(connectionId?.trim() || null)
+
+    return
   }
 
   if (!window.hermesDesktop?.getConnectionFor) {
@@ -360,7 +367,10 @@ export async function ensureGatewayForAgent(connectionId: null | string, profile
   const scope = backendScopeKey(connectionId, profile)
 
   if (scope === normKey(profile)) {
-    return ensureGatewayForProfile(profile)
+    await ensureGatewayForProfile(profile)
+    setApiRequestConnectionId(connectionId?.trim() || null)
+
+    return
   }
 
   if (!window.hermesDesktop?.getConnectionFor) {
@@ -511,6 +521,7 @@ export function closeSecondaryGateways(): void {
   }
 
   g.secondaries.clear()
+  setApiRequestConnectionId(null)
 }
 
 // Self-accept so editing this module (or a fan-out that lands here) is an

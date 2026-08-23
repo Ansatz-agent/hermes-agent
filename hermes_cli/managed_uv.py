@@ -1,11 +1,11 @@
 """Hermes-managed uv and Python runtime repair.
 
 Hermes owns its own uv binary at ``$HERMES_HOME/bin/uv`` (or ``uv.exe`` on
-Windows).  Every code path that needs uv resolves it from that single location.
-If the binary is missing, ``ensure_uv()`` bootstraps it via the official
-standalone installer with ``UV_UNMANAGED_INSTALL`` / ``UV_INSTALL_DIR`` pointed
-at ``$HERMES_HOME/bin`` so the installer writes directly there — no PATH
-probing, no conda guards, no multi-location resolution chains.
+Windows). Every code path that needs uv resolves it from that single location.
+If the binary is missing, ``ensure_uv()`` installs the pinned uv wheel through
+the registered domestic PyPI mirrors into a temporary target, validates the
+resulting binary, and publishes it atomically. It never executes a downloaded
+installer script.
 
 The Python backing the install is different: it is shared by every Hermes
 profile because the checkout's ``venv`` is shared.  Runtime repair therefore
@@ -1313,21 +1313,13 @@ def repair_vulnerable_runtime(
 
 
 def _install_uv(target: Path) -> None:
-    """Bootstrap uv into *target* using the official standalone installer.
-
-    Uses ``UV_UNMANAGED_INSTALL`` (POSIX) or ``UV_INSTALL_DIR`` (Windows)
-    so the astral installer writes the binary directly into
-    ``$HERMES_HOME/bin/`` instead of ``~/.local/bin/``.
-    """
+    """Install a pinned uv wheel through the registered domestic indexes."""
     system = platform.system()
-    env = {
-        **os.environ,
-        # Tell the astral installer to drop the binary in our dir, not
-        # ~/.local/bin.  UV_UNMANAGED_INSTALL is the POSIX env var; Windows
-        # uses UV_INSTALL_DIR.
-        "UV_UNMANAGED_INSTALL": str(target.parent),
-        "UV_INSTALL_DIR": str(target.parent),
-    }
+    from hermes_cli.managed_downloads import managed_download_environment
+
+    env = managed_download_environment("repair")
+    env["UV_UNMANAGED_INSTALL"] = str(target.parent)
+    env["UV_INSTALL_DIR"] = str(target.parent)
 
     if system == "Windows":
         _install_uv_windows(env)
@@ -1336,38 +1328,83 @@ def _install_uv(target: Path) -> None:
 
 
 def _install_uv_posix(env: dict[str, str]) -> None:
-    """Download + sh the POSIX installer (two-stage to avoid curl|sh pitfalls)."""
-    with tempfile.NamedTemporaryFile(suffix=".sh", delete=False) as f:
-        installer_path = f.name
-
-    try:
-        subprocess.run(
-            ["curl", "-LsSf", "https://astral.sh/uv/install.sh", "-o", installer_path],
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["sh", installer_path],
-            env=env,
-            check=True,
-            capture_output=True,
-        )
-    finally:
-        try:
-            os.unlink(installer_path)
-        except OSError:
-            pass
+    """Install uv without downloading or executing a remote shell script."""
+    _install_uv_wheel(managed_uv_path(), env=env)
 
 
 def _install_uv_windows(env: dict[str, str]) -> None:
-    """Invoke the PowerShell installer."""
-    cmd = "irm https://astral.sh/uv/install.ps1 | iex"
-    subprocess.run(
-        ["powershell", "-ExecutionPolicy", "Bypass", "-c", cmd],
-        env=env,
-        check=True,
-        capture_output=True,
+    """Install uv without downloading or executing a remote PowerShell script."""
+    _install_uv_wheel(managed_uv_path(), env=env)
+
+
+def _install_uv_wheel(target: Path, *, env: dict[str, str]) -> None:
+    """Resolve the pinned platform wheel, then atomically publish its binary.
+
+    The two domestic indexes are attempted sequentially. No official or
+    downloaded-script fallback exists in this repair path.
+    """
+
+    from hermes_cli.managed_downloads import managed_origin
+
+    indexes = (
+        managed_origin("python-packages", "domestic_primary"),
+        managed_origin("python-packages", "domestic_secondary"),
     )
+    last_error: Exception | None = None
+
+    with tempfile.TemporaryDirectory(prefix="hermes-uv-wheel-") as temporary:
+        staging = Path(temporary) / "site"
+        staging.mkdir()
+        for index in indexes:
+            attempt_env = dict(env)
+            attempt_env["PIP_INDEX_URL"] = index
+            attempt_env["UV_DEFAULT_INDEX"] = index
+            try:
+                subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "pip",
+                        "install",
+                        "--disable-pip-version-check",
+                        "--no-input",
+                        "--no-deps",
+                        "--only-binary=:all:",
+                        "--target",
+                        str(staging),
+                        "uv==0.12.5",
+                    ],
+                    env=attempt_env,
+                    check=True,
+                    capture_output=True,
+                    timeout=180,
+                )
+                last_error = None
+                break
+            except (OSError, subprocess.SubprocessError) as exc:
+                last_error = exc
+                shutil.rmtree(staging, ignore_errors=True)
+                staging.mkdir()
+
+        if last_error is not None:
+            raise RuntimeError(
+                "managed uv wheel is unavailable from the approved domestic mirrors"
+            ) from last_error
+
+        candidates = (
+            staging / "uv" / ("uv.exe" if platform.system() == "Windows" else "uv"),
+            staging / "Scripts" / "uv.exe",
+            staging / "bin" / "uv",
+        )
+        binary = next((candidate for candidate in candidates if candidate.is_file()), None)
+        if binary is None:
+            raise RuntimeError("pinned uv wheel did not contain the expected executable")
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        pending = target.with_name(f".{target.name}.{uuid.uuid4().hex}.pending")
+        shutil.copy2(binary, pending)
+        pending.chmod(pending.stat().st_mode | 0o700)
+        os.replace(pending, target)
 
 
 def rebuild_venv(uv_bin: str, venv_dir: Path, python_version: str = "3.11") -> bool:

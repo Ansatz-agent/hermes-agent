@@ -52,6 +52,15 @@ def _valid_manifest() -> dict:
     }
 
 
+def _remote_catalog_config(url: str = "https://catalog.example.test/catalog.json") -> dict:
+    return {
+        "enabled": True,
+        "url": url,
+        "ttl_hours": 1.0,
+        "providers": {},
+    }
+
+
 class TestValidation:
     def test_accepts_well_formed_manifest(self, isolated_home):
         from hermes_cli.model_catalog import _validate_manifest
@@ -75,10 +84,11 @@ class TestFetchSuccess:
     def test_fetch_and_cache_writes_disk(self, isolated_home):
         from hermes_cli import model_catalog
         manifest = _valid_manifest()
-        with patch.object(
-            model_catalog, "_fetch_manifest", return_value=manifest
-        ) as fetch:
-            result = model_catalog.get_catalog(force_refresh=True)
+        with patch.object(model_catalog, "_load_catalog_config", return_value=_remote_catalog_config()):
+            with patch.object(
+                model_catalog, "_fetch_manifest", return_value=manifest
+            ) as fetch:
+                result = model_catalog.get_catalog(force_refresh=True)
 
         assert result == manifest
         assert fetch.called
@@ -92,21 +102,24 @@ class TestFetchSuccess:
 class TestFetchFailure:
     def test_network_failure_returns_empty_when_no_cache(self, isolated_home):
         from hermes_cli import model_catalog
-        with patch.object(model_catalog, "_fetch_manifest", return_value=None):
-            result = model_catalog.get_catalog(force_refresh=True)
+        with patch.object(model_catalog, "_load_catalog_config", return_value=_remote_catalog_config()):
+            with patch.object(model_catalog, "_fetch_manifest", return_value=None):
+                result = model_catalog.get_catalog(force_refresh=True)
         assert result == {}
 
     def test_network_failure_falls_back_to_disk_cache(self, isolated_home):
         from hermes_cli import model_catalog
         # Prime disk cache with a fresh copy.
         manifest = _valid_manifest()
-        with patch.object(model_catalog, "_fetch_manifest", return_value=manifest):
-            model_catalog.get_catalog(force_refresh=True)
+        with patch.object(model_catalog, "_load_catalog_config", return_value=_remote_catalog_config()):
+            with patch.object(model_catalog, "_fetch_manifest", return_value=manifest):
+                model_catalog.get_catalog(force_refresh=True)
 
         # Now wipe in-process cache and simulate network failure on refetch.
         model_catalog.reset_cache()
-        with patch.object(model_catalog, "_fetch_manifest", return_value=None):
-            result = model_catalog.get_catalog(force_refresh=True)
+        with patch.object(model_catalog, "_load_catalog_config", return_value=_remote_catalog_config()):
+            with patch.object(model_catalog, "_fetch_manifest", return_value=None):
+                result = model_catalog.get_catalog(force_refresh=True)
 
         assert result == manifest
 
@@ -122,20 +135,16 @@ class TestFetchFailure:
         import os as _os
         _os.utime(cache, (old, old))
 
-        with patch.object(model_catalog, "_fetch_manifest", return_value=None):
-            result = model_catalog.get_catalog()
+        with patch.object(model_catalog, "_load_catalog_config", return_value=_remote_catalog_config()):
+            with patch.object(model_catalog, "_fetch_manifest", return_value=None):
+                result = model_catalog.get_catalog()
 
         # Stale cache is better than nothing.
         assert result == manifest
 
 
 class TestFallbackChain:
-    """``_fetch_manifest_with_fallback`` walks ``DEFAULT_CATALOG_FALLBACK_URLS``
-    when the primary URL fails. Regression: the Docusaurus site behind Vercel
-    occasionally returns HTTP 403 + x-vercel-mitigated: challenge for urllib;
-    without a fallback URL the user's disk cache freezes and new model
-    releases (opus 4.8, etc.) never reach the picker.
-    """
+    """Only explicitly supplied catalog origins may be contacted."""
 
     PRIMARY = "https://hermes-agent.nousresearch.com/docs/api/model-catalog.json"
     FALLBACK = (
@@ -157,50 +166,38 @@ class TestFallbackChain:
         assert result is not None
         assert calls == [self.PRIMARY], "fallback URLs must not be touched on primary success"
 
-    def test_falls_through_to_raw_github_on_primary_failure(self, isolated_home):
+    def test_has_no_baked_fallback_on_primary_failure(self, isolated_home):
         from hermes_cli import model_catalog
         calls: list[str] = []
 
         def fake_fetch(url, timeout):
             calls.append(url)
-            if url == self.PRIMARY:
-                return None  # simulate Vercel 403
-            return _valid_manifest()
+            return None
 
         with patch.object(model_catalog, "_fetch_manifest", side_effect=fake_fetch):
             result = model_catalog._fetch_manifest_with_fallback(self.PRIMARY, 5.0)
 
-        assert result is not None
-        assert calls == [self.PRIMARY, self.FALLBACK]
+        assert result is None
+        assert calls == [self.PRIMARY]
 
 
-    def test_get_catalog_uses_fallback_chain(self, isolated_home):
-        """End-to-end: ``get_catalog`` routes through the fallback helper so
-        a primary URL failure transparently produces a working catalog."""
+    def test_get_catalog_without_operator_url_stays_offline(self, isolated_home):
         from hermes_cli import model_catalog
-        manifest = _valid_manifest()
-        calls: list[str] = []
-
-        def fake_fetch(url, timeout):
-            calls.append(url)
-            if url == self.PRIMARY:
-                return None
-            return manifest
-
-        with patch.object(model_catalog, "_fetch_manifest", side_effect=fake_fetch):
+        with patch.object(model_catalog, "_fetch_manifest") as fetch:
             result = model_catalog.get_catalog(force_refresh=True)
 
-        assert result == manifest
-        assert self.FALLBACK in calls
+        assert result == {}
+        fetch.assert_not_called()
 
 
 class TestCuratedAccessors:
     def test_openrouter_returns_tuples(self, isolated_home):
         from hermes_cli import model_catalog
-        with patch.object(
-            model_catalog, "_fetch_manifest", return_value=_valid_manifest()
-        ):
-            result = model_catalog.get_curated_openrouter_models()
+        with patch.object(model_catalog, "_load_catalog_config", return_value=_remote_catalog_config()):
+            with patch.object(
+                model_catalog, "_fetch_manifest", return_value=_valid_manifest()
+            ):
+                result = model_catalog.get_curated_openrouter_models()
         assert result == [
             ("anthropic/claude-opus-4.7", "recommended"),
             ("openai/gpt-5.4", ""),

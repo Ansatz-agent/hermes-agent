@@ -7,7 +7,8 @@ import {
   type BackendIdentity,
   createBackendOwnership,
   createBackendShutdownCoordinator,
-  parseBackendOwnership
+  parseBackendOwnership,
+  resumeQuitAfterShutdown
 } from './backend-ownership'
 
 function memoryStore(initial = '') {
@@ -220,4 +221,28 @@ test('shutdown coordinator returns one promise and awaits teardown exactly once'
   await second
   assert.equal(finished, true)
   assert.equal(coordinator.run(), first)
+})
+
+test('quit resumption runs outside the cancelled before-quit event', async () => {
+  let scheduled: (() => void) | null = null
+  let teardownComplete = false
+  const quit = vi.fn()
+
+  resumeQuitAfterShutdown(Promise.resolve(), {
+    markComplete: () => {
+      teardownComplete = true
+    },
+    quit,
+    schedule: callback => {
+      scheduled = callback
+    }
+  })
+
+  await Promise.resolve()
+
+  assert.equal(teardownComplete, true)
+  assert.equal(quit.mock.calls.length, 0)
+  assert.ok(scheduled)
+  scheduled()
+  assert.equal(quit.mock.calls.length, 1)
 })

@@ -6,6 +6,11 @@ Provides options for:
 - Keep data: Remove code but keep ~/.hermes/ (configs, sessions, logs)
 """
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.hermes_cli.uninstall")
+
 import os
 import shutil
 import subprocess

@@ -27,8 +27,9 @@ INSTALL_SH = REPO_ROOT / "scripts" / "install.sh"
 def test_install_sh_stamps_code_tree_not_home() -> None:
     text = INSTALL_SH.read_text()
 
-    # Stamps the code tree.
-    assert text.count('echo "git" > "$INSTALL_DIR/.install_method"') >= 1, (
+    # Stamps the selected install method into the code tree. Desktop bundles
+    # use ``desktop-bundle`` while CLI installs use ``git``.
+    assert 'printf \'%s\\n\' "$method" > "$INSTALL_DIR/.install_method"' in text, (
         "install.sh must stamp $INSTALL_DIR/.install_method (code-scoped)"
     )
 

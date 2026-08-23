@@ -1,8 +1,10 @@
+import { type ConnectionScope, requireAuthenticatedConnectionScope } from './auth-bridge'
 import type { FirstRunSetupDecision } from './first-run-setup-gate'
 
 export interface PrimaryBackendStartupOptions<Backend, RuntimeBackend, Remote, Connection> {
-  connectRemote: (remote: Remote) => Promise<Connection>
-  ensureLocalRuntime: (backend: Backend) => Promise<RuntimeBackend>
+  connectionScope: ConnectionScope
+  connectRemote: (remote: Remote, scope: ConnectionScope) => Promise<Connection>
+  ensureLocalRuntime: (backend: Backend, scope: ConnectionScope) => Promise<RuntimeBackend>
   prepareLocalBackend: () => Backend | Promise<Backend>
   resolveRemote: () => Promise<Remote | null>
   waitForDecision: (backend: Backend) => Promise<FirstRunSetupDecision>
@@ -27,6 +29,7 @@ export class FirstRunSetupResetError extends Error {
 // and local backend resolution happen before the setup gate, and a remote Apply
 // re-resolves persisted config without ever entering ensureRuntime/bootstrap.
 export async function runPrimaryBackendStartup<Backend, RuntimeBackend, Remote, Connection>({
+  connectionScope,
   connectRemote,
   ensureLocalRuntime,
   prepareLocalBackend,
@@ -36,10 +39,11 @@ export async function runPrimaryBackendStartup<Backend, RuntimeBackend, Remote, 
 }: PrimaryBackendStartupOptions<Backend, RuntimeBackend, Remote, Connection>): Promise<
   PrimaryBackendStartupResult<RuntimeBackend, Connection>
 > {
+  const authenticatedScope = requireAuthenticatedConnectionScope(connectionScope)
   const savedRemote = await resolveRemote()
 
   if (savedRemote) {
-    return { kind: 'remote', connection: await connectRemote(savedRemote) }
+    return { kind: 'remote', connection: await connectRemote(savedRemote, authenticatedScope) }
   }
 
   await waitForLocalStart()
@@ -54,12 +58,12 @@ export async function runPrimaryBackendStartup<Backend, RuntimeBackend, Remote, 
       throw new Error('First-run remote setup completed without a saved remote backend.')
     }
 
-    return { kind: 'remote', connection: await connectRemote(appliedRemote) }
+    return { kind: 'remote', connection: await connectRemote(appliedRemote, authenticatedScope) }
   }
 
   if (decision === 'reset') {
     throw new FirstRunSetupResetError()
   }
 
-  return { kind: 'local', backend: await ensureLocalRuntime(backend) }
+  return { kind: 'local', backend: await ensureLocalRuntime(backend, authenticatedScope) }
 }

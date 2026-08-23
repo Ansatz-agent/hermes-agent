@@ -6,8 +6,10 @@ import {
   getElevenLabsVoices,
   getMemoryProviderConfig,
   getStatus,
+  listSessions,
   restartGateway,
   saveMemoryProviderConfig,
+  setApiRequestConnectionId,
   setApiRequestProfile,
   speakText,
   transcribeAudio,
@@ -19,7 +21,7 @@ import {
 // update hit the backend they're actually on — not the primary/default. The
 // System-panel "restart does nothing" bug was these helpers dropping it.
 describe('backend action helpers are profile-scoped', () => {
-  const api = vi.fn(async (_req: { path: string; profile?: string }) => ({}) as never)
+  const api = vi.fn(async (_req: { path: string; profile?: string }) => ({ sessions: [] }) as never)
 
   beforeEach(() => {
     ;(window as { hermesDesktop?: unknown }).hermesDesktop = { api }
@@ -27,6 +29,7 @@ describe('backend action helpers are profile-scoped', () => {
   })
 
   afterEach(() => {
+    setApiRequestConnectionId(null)
     setApiRequestProfile(null)
     delete (window as { hermesDesktop?: unknown }).hermesDesktop
   })
@@ -46,6 +49,18 @@ describe('backend action helpers are profile-scoped', () => {
 
     for (const call of api.mock.calls) {
       expect(call[0].profile).toBe('coder')
+    }
+  })
+
+  it('forwards the active connection with the profile and never substitutes another source', () => {
+    setApiRequestConnectionId('remote-a')
+    setApiRequestProfile('coder')
+
+    void getStatus()
+    void listSessions()
+
+    for (const call of api.mock.calls) {
+      expect(call[0]).toMatchObject({ connectionId: 'remote-a', profile: 'coder' })
     }
   })
 

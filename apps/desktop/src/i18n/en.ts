@@ -3,6 +3,64 @@ import { FIELD_DESCRIPTIONS, FIELD_LABELS } from '@/app/settings/constants'
 import type { Translations } from './types'
 
 export const en: Translations = {
+  auth: {
+    title: 'Sign in to Ansatz Voice Trace Client',
+    description: 'Sign in after the complete offline runtime has been installed.',
+    serverLabel: 'Account server',
+    traceNotice:
+      'Complete conversation Traces—including prompts, model replies, and tool arguments/results—are uploaded automatically for platform administrators only. Upload cannot be disabled. Raw audio and credentials are excluded.',
+    username: 'Username',
+    password: 'Password',
+    signIn: 'Sign in',
+    signingIn: 'Signing in…',
+    retry: 'Retry',
+    checking: 'Checking your account session…',
+    preparingRuntime: 'Preparing the secure sign-in service…',
+    preparingStage: (current, total, title) => `Preparing the secure sign-in service (${current}/${total}): ${title}…`,
+    runtimeTitle: 'Installing Ansatz Voice Trace Client',
+    runtimeDescription: 'The complete offline runtime is installed before account sign-in becomes available.',
+    preparingFullRuntime: 'Installing the complete offline runtime…',
+    preparingFullStage: (current, total, title) => `Installing the complete offline runtime (${current}/${total}): ${title}…`,
+    runtimePreparationFailed: 'Ansatz Voice Trace Client could not install its local runtime. Retry installation.',
+    administratorManaged: 'Accounts and password assistance are managed by the server administrator.',
+    accountMenu: 'Account',
+    signOut: 'Sign out',
+    signingOut: 'Signing out…',
+    bootstrap: {
+      preparingAuthTitle: 'Preparing the secure sign-in service',
+      stagesComplete: (completed, total) => `${completed} of ${total} stages complete`,
+      stagePosition: (current, total, title) => `Stage ${current} of ${total}: ${title}`,
+      elapsed: elapsed => `Current stage · ${elapsed}`,
+      overallProgressLabel: 'Ansatz Voice Trace Client runtime installation',
+      authPreparationFailed: 'Hermes could not prepare the secure sign-in service.',
+      runtimePreparationFailed: 'Ansatz Voice Trace Client could not install its local runtime.',
+      failedAt: title => `Failed at: ${title}`,
+      runningWithElapsed: (state, elapsed) => `${state} · ${elapsed}`,
+      knownProgress: (completed, total, unit, percent) =>
+        `${completed} / ${total}${unit ? ` ${unit}` : ''}, ${percent}%`,
+      unknownProgress: (completed, unit) => `${completed}${unit ? ` ${unit}` : ''}`,
+      stageStates: {
+        pending: 'Waiting',
+        running: 'Running',
+        succeeded: 'Completed',
+        skipped: 'Completed',
+        failed: 'Failed'
+      },
+      units: { packages: 'packages', items: 'items', files: 'files', steps: 'steps' }
+    },
+    reasons: {
+      interactiveLoginRequired: 'Enter the account credentials provided by the server administrator.',
+      invalidCredentials: 'The username or password is incorrect.',
+      rateLimited: 'Too many sign-in attempts. Wait a moment and try again.',
+      runtimeUnavailable: 'The secure account service is unavailable. Try again.',
+      serverUnavailable: 'The account server is unavailable. Try again.',
+      sessionExpired: 'Your session expired. Sign in again.',
+      sessionRejected: 'Your session is no longer valid. Sign in again.',
+      signedOut: 'Sign in with the account provided by the server administrator.',
+      vaultUnavailable: 'Secure credential storage is unavailable on this device.'
+    }
+  },
+
   common: {
     apply: 'Apply',
     back: 'Back',
@@ -2113,6 +2171,14 @@ export const en: Translations = {
       'Adjust or continue'
     ],
     startVoice: 'Start voice conversation',
+    senseVoicePreparing: 'Preparing speech recognition…',
+    senseVoicePreparingDependencies: 'Preparing speech recognition dependencies…',
+    senseVoiceDownloading: (downloaded, total, percent) =>
+      `Downloading speech model ${downloaded}/${total} (${percent}%)`,
+    senseVoiceInsufficientDisk: 'Not enough disk space for the speech model.',
+    senseVoiceVerificationFailed: 'The downloaded speech model is corrupted.',
+    senseVoiceDependencyInstallFailed: 'Could not install speech recognition dependencies.',
+    senseVoiceDownloadFailed: 'Could not download the speech model.',
     openDirective: 'Open',
     queueMessage: 'Queue message',
     steer: 'Steer the current run',

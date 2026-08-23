@@ -1,0 +1,4355 @@
+{
+  "schema_version": 1,
+  "base": "9bd88c530716279a089ed18428dc785732b6e1be",
+  "dmg_reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+  "windows_reference": "c2d3d09aab921130171ff611e260c13e9c6d477c",
+  "candidate_tip": "b0a9dfc4e212cd9f25a0e9474e65f77f4adbf6f1",
+  "task4_replay_order": [
+    "89503cfb2b48a29f9996cf9dba2088d6b4a8d463",
+    "08a2eedf67bcd6537dc048a77411cee5f21b1345",
+    "706c5a4d0d034a8ab43914d45cef24f7f1d0fde2",
+    "6aed1cc0f122cbe3aeba14203b11bcab2e915064",
+    "e042ce38614967acd47cf70b00922e5d8d3ea308",
+    "bffdd26edf190e6fa9798c3c8ff702baacfa4301",
+    "f28a0f4b585899dae16bf181b9d036133ed35cc7",
+    "8af9e3eefec781929fd16c788dba54d7f7cae254",
+    "cdc12484f1326279c4fe215db453dd50b5c9e94c",
+    "27567163b3759018af72030701dfb0f130ba146c",
+    "366fb3f5a850abdd0f2e02ff014487deca1bc456",
+    "cdb5c65bc8eca0d8fe37981ffc2e25e712a25ce4",
+    "df34e9da62a19e7be209612da4c6fe6c9f022602",
+    "c478db4d2f917a4216bee2827dcb6f2082702a1e",
+    "e51e448669ac8a8e33dca12607382a1633f04b36",
+    "f68510d9054119b0bd1de9db69411bfc3df3abbd",
+    "817a5d0a6aef96027f3eda39a09b8648d058b5f0",
+    "b22bdb8d310cca553218c706a5e61058838e94ee",
+    "af19ce56b1a94792d084c2bb40ea98a8b570a80b",
+    "50609240e290cb85b4d2024973b875cb5ffe642b",
+    "bddbec2abb469700abbb5f603d48badae04102d9",
+    "6e57ead9693ab16f8a6e9d3b4fabf87d1c0927a6",
+    "c4d5ae2d4087f5a92290597562e93456c0d0b802",
+    "f8d7c05fadcc0d405f0f5e89c2af3508a948c277",
+    "34026f76276d2f4667652036e59751c7829b9bdd",
+    "a41608712672b766f0855e658f7d09ffaf76cc25",
+    "34f1c119e212d993f8685635ab44d92ca273e2e3",
+    "c8fad50c49260feb0373aceb8a509a829e70c390",
+    "363d464a85c8a6ce408a4af34963b3426a0fcba3",
+    "a756c93e35b7d15037cfcb11de83d6198aa5f04c",
+    "f5a7372e4c20d3fa1c66bacbebba2d51bf2956bb",
+    "c893e264e99de1ee0293688ce59223d57f432a17",
+    "38230a6c9fbe24382782cb52b4d3adc638f51cd0",
+    "4e4a5d42c785e25f940531a9831ff2c591bfb412"
+  ],
+  "enforce_locked_commit_coverage": true,
+  "common_baseline": "4ef56cef4c6eecc009e2284fe2f1df20664f357a",
+  "dmg_integration_reference": "403e1c3873d1679720c1403d7e38acd289804d69",
+  "windows_integration_reference": "56b402c63b22da81f906ff1f7398a90cfd17bd81",
+  "contract_bookkeeping_paths": [
+    ".github/workflows/desktop-macos-package.yml",
+    ".github/workflows/desktop-windows-package.yml",
+    "docs/security/hermes-managed-download-origins.json",
+    "docs/security/main-auth-voice-migration-ledger.json",
+    "docs/security/main-auth-voice-product-paths.txt",
+    "scripts/check_hermes_managed_downloads.py",
+    "scripts/check_main_auth_voice_migration.py",
+    "scripts/check_main_auth_voice_parity.py",
+    "tests/test_desktop_packaging_workflows.py",
+    "tests/test_hermes_managed_downloads.py",
+    "tests/test_main_auth_voice_dependencies.py",
+    "tests/test_main_auth_voice_migration.py",
+    "tests/test_main_auth_voice_parity.py"
+  ],
+  "post_tip_commits": [
+    "a6e8792b0c701287eecee97c692956e10a35b5d8",
+    "11bcf8976dc3f9511b4d021da686b4236b52e68c",
+    "ff25f03ef33b7943269f5f8b62066040277b2186",
+    "0cf5c3c23e125e668bda27f8492e702e98bf6c3c",
+    "83223adbcc56d4a960acc806d84a550f4509055b",
+    "e9501893d88243105e87ae758c0574d3ee46e0e6",
+    "6c7b59a1ac422d3dc5f59d4192bb238d8968293c",
+    "fe5ab1a6845db6b6305dd8fbc916061082c70848",
+    "3a0a2bb0d127ffde5635570f4573f5f9b69c6374",
+    "1f4a20143fca663589ef1e282149aa0d230901d1",
+    "9b9be2ab302457e85aec5fe8aef173b2b2f3d211",
+    "491accd211727f64576aae168e8d8d8e7e4d6967",
+    "49c27bc2b6bde2f8c46f60a8d4e9ddd413f20da4",
+    "84078b95e55c9e7231bda9e43b1c3cc10b4e73d7",
+    "0bd282242c76d055c278ab3b8d1fc15a82fe3bc3",
+    "bc3e158c8798613d03692bfa7ef0f7195ad4eeed",
+    "6feb0d3742b71772ba118b7b254ebd14d05cc386",
+    "c751fc3694c18803de83d45585781de84f750dd7",
+    "c50933d6136aac2beb25c9c2b7274e56afb513ae",
+    "15a28552c22bb8aefdaa66433fa4c99057f1adb3"
+  ],
+  "parity_reason_enum": [
+    "windows-adapter-addition",
+    "package-producer-interface-extraction",
+    "neutral-platform-wording",
+    "dependency-lock-regeneration",
+    "upstream-main-preservation",
+    "auth-integration",
+    "domestic-mirror-policy"
+  ],
+  "parity_waivers": [
+    {
+      "path": "apps/desktop/electron/auth-bridge.ts",
+      "reason": "auth-integration",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/electron/auth-bridge.test.ts"]
+    },
+    {
+      "path": "apps/desktop/electron/auth-runtime-contract.ts",
+      "reason": "windows-adapter-addition",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/electron/auth-runtime-contract.test.ts"]
+    },
+    {
+      "path": "apps/desktop/electron/bootstrap-payload.ts",
+      "reason": "windows-adapter-addition",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/electron/bootstrap-payload.integration.test.ts"]
+    },
+    {
+      "path": "apps/desktop/electron/bootstrap-process.ts",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/electron/bootstrap-process.test.ts"]
+    },
+    {
+      "path": "apps/desktop/electron/bootstrap-runner.ts",
+      "reason": "windows-adapter-addition",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/electron/bootstrap-runner.test.ts"]
+    },
+    {
+      "path": "apps/desktop/electron/bootstrap-toolchain.ts",
+      "reason": "windows-adapter-addition",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/electron/bootstrap-toolchain.integration.test.ts"]
+    },
+    {
+      "path": "apps/desktop/electron/main.ts",
+      "reason": "auth-integration",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/src/components/auth-gate.test.tsx"]
+    },
+    {
+      "path": "apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/src/app/chat/composer/hooks/use-composer-voice.test.tsx"]
+    },
+    {
+      "path": "apps/desktop/electron/package-runtime/windows-auth-toolchain.ts",
+      "reason": "windows-adapter-addition",
+      "owner": "package-windows",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/electron/package-runtime/windows-auth-toolchain.test.ts"]
+    },
+    {
+      "path": "apps/desktop/electron/runtime-download-policy.ts",
+      "reason": "domestic-mirror-policy",
+      "owner": "package-shared",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/electron/runtime-download-policy.test.ts"]
+    },
+    {
+      "path": "apps/desktop/electron/windows-auth-owner.ts",
+      "reason": "windows-adapter-addition",
+      "owner": "package-windows",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/electron/windows-auth-owner.test.ts"]
+    },
+    {
+      "path": "apps/desktop/package.json",
+      "reason": "package-producer-interface-extraction",
+      "owner": "package-shared",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/scripts/prepare-package-inputs.test.mjs"]
+    },
+    {
+      "path": "apps/desktop/scripts/before-pack.mjs",
+      "reason": "package-producer-interface-extraction",
+      "owner": "package-shared",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/scripts/before-pack.test.mjs"]
+    },
+    {
+      "path": "apps/desktop/scripts/build-auth-toolchain.mjs",
+      "reason": "windows-adapter-addition",
+      "owner": "package-shared",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/scripts/build-auth-toolchain.test.mjs"]
+    },
+    {
+      "path": "apps/desktop/scripts/build-backend-payload.mjs",
+      "reason": "package-producer-interface-extraction",
+      "owner": "package-shared",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/scripts/build-backend-payload.integration.test.mjs"]
+    },
+    {
+      "path": "apps/desktop/scripts/exe-identity-options.mjs",
+      "reason": "windows-adapter-addition",
+      "owner": "package-shared",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["scripts/desktop-windows-contract.test.mjs"]
+    },
+    {
+      "path": "apps/desktop/scripts/macos-dmg-builder.mjs",
+      "reason": "package-producer-interface-extraction",
+      "owner": "package-macos",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/scripts/run-electron-builder.test.mjs"]
+    },
+    {
+      "path": "apps/desktop/scripts/package-audit.mjs",
+      "reason": "windows-adapter-addition",
+      "owner": "package-shared",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["scripts/desktop-windows-contract.test.mjs"]
+    },
+    {
+      "path": "apps/desktop/scripts/prepare-auth-toolchain-inputs.mjs",
+      "reason": "windows-adapter-addition",
+      "owner": "package-shared",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/scripts/prepare-auth-toolchain-inputs.test.mjs"]
+    },
+    {
+      "path": "apps/desktop/scripts/prepare-package-inputs.mjs",
+      "reason": "package-producer-interface-extraction",
+      "owner": "package-shared",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/scripts/prepare-package-inputs.test.mjs"]
+    },
+    {
+      "path": "apps/desktop/scripts/prepare-windows-git-runtime.mjs",
+      "reason": "windows-adapter-addition",
+      "owner": "package-windows",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["scripts/desktop-windows-contract.test.mjs"]
+    },
+    {
+      "path": "apps/desktop/scripts/run-electron-builder.mjs",
+      "reason": "package-producer-interface-extraction",
+      "owner": "package-shared",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["apps/desktop/scripts/run-electron-builder.test.mjs"]
+    },
+    {
+      "path": "docs/security/hermes-managed-download-origins.json",
+      "reason": "domestic-mirror-policy",
+      "owner": "package-shared",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/test_hermes_managed_downloads.py"]
+    },
+    {
+      "path": "hermes_cli/client_auth/runtime.py",
+      "reason": "windows-adapter-addition",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/hermes_cli/client_auth/test_runtime.py"]
+    },
+    {
+      "path": "hermes_cli/config_defaults.py",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/test_hermes_managed_downloads.py"]
+    },
+    {
+      "path": "hermes_cli/data/managed-download-origins.json",
+      "reason": "domestic-mirror-policy",
+      "owner": "package-shared",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/hermes_cli/test_managed_downloads.py"]
+    },
+    {
+      "path": "hermes_cli/managed_downloads.py",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/hermes_cli/test_managed_downloads.py"]
+    },
+    {
+      "path": "hermes_cli/managed_uv.py",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/hermes_cli/test_managed_uv.py"]
+    },
+    {
+      "path": "hermes_cli/model_catalog.py",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/hermes_cli/test_model_catalog.py"]
+    },
+    {
+      "path": "hermes_cli/setup.py",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/hermes_cli/test_setup.py"]
+    },
+    {
+      "path": "hermes_cli/tools_config.py",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/hermes_cli/test_tools_config.py"]
+    },
+    {
+      "path": "hermes_cli/update_cmd.py",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/cli/test_update_command.py"]
+    },
+    {
+      "path": "package.json",
+      "reason": "windows-adapter-addition",
+      "owner": "package-shared",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["scripts/desktop-windows-contract.test.mjs"]
+    },
+    {
+      "path": "scripts/build-desktop-windows.mjs",
+      "reason": "windows-adapter-addition",
+      "owner": "package-windows",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["scripts/build-desktop-windows.test.mjs"]
+    },
+    {
+      "path": "scripts/desktop-windows-contract.mjs",
+      "reason": "windows-adapter-addition",
+      "owner": "package-windows",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["scripts/desktop-windows-contract.test.mjs"]
+    },
+    {
+      "path": "scripts/install.ps1",
+      "reason": "windows-adapter-addition",
+      "owner": "package-windows",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/test_install_ps1_browser_install.py"]
+    },
+    {
+      "path": "scripts/install.sh",
+      "reason": "domestic-mirror-policy",
+      "owner": "package-macos",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/test_install_sh_browser_install.py"]
+    },
+    {
+      "path": "scripts/test-desktop-windows-auth-host.ps1",
+      "reason": "windows-adapter-addition",
+      "owner": "package-windows",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["scripts/desktop-windows-contract.test.mjs"]
+    },
+    {
+      "path": "scripts/test-desktop-windows-install.ps1",
+      "reason": "windows-adapter-addition",
+      "owner": "package-windows",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["scripts/desktop-windows-contract.test.mjs"]
+    },
+    {
+      "path": "tools/browser_use_cli.py",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/tools/test_browser_use_cli.py"]
+    },
+    {
+      "path": "tools/computer_use/cua_backend.py",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/computer_use/test_cua_spawn_env_sanitization.py"]
+    },
+    {
+      "path": "tools/lazy_deps.py",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/tools/test_lazy_deps.py"]
+    },
+    {
+      "path": "tools/neutts_synth.py",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/test_hermes_managed_downloads.py"]
+    },
+    {
+      "path": "tools/sensevoice_stt.py",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/tools/test_sensevoice_stt.py"]
+    },
+    {
+      "path": "tools/transcription_tools.py",
+      "reason": "upstream-main-preservation",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/tools/test_transcription_tools.py"]
+    },
+    {
+      "path": "tools/tts_tool.py",
+      "reason": "domestic-mirror-policy",
+      "owner": "common-product",
+      "reference": "80db6d8265f805cec46817d913982e4c5f6405c4",
+      "tests": ["tests/test_hermes_managed_downloads.py"]
+    }
+  ],
+  "owner_enum": [
+    "common-product",
+    "package-shared",
+    "package-macos",
+    "package-windows",
+    "ci-infrastructure",
+    "test-evidence",
+    "historical-drop",
+    "reference-equivalent"
+  ],
+  "strategy_enum": [
+    "candidate",
+    "merge",
+    "cherry-pick",
+    "path-extract",
+    "reference-equivalent",
+    "drop"
+  ],
+  "commits": [
+    {
+      "sha": "ecc610b0a375ffbe6c7fcc05e15d4a2115af9368",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "736aa6c99e82c45c0b3233d7852fd8c57ff60727",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "dd422c7cdc3239f1ed670057331e06ce66386482",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "f5351c3c60b731c6181e6a30511ef0e68dcc0006",
+      "owner": "package-macos",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "8aa6263a35042c591de4c52106f24c0774c3713a",
+      "owner": "package-macos",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "3305431d6809448ba11dffe53333b6b176785db6",
+      "owner": "package-macos",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "e28883110da802adc8ea8c7a6939ad5e5e325f65",
+      "owner": "package-macos",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "977322ecd706a4ba3bab14eeaf7401fe665fa2b3",
+      "owner": "package-macos",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "8ced1927de2f623828efaf7e4fe46679fcc31c1f",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "cf1fe441f8b4fb8fc233927576b752c12502929a",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "470d8b1905af3b10e24dfaf5f74b8466f6b6f590",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "3ad4a126606079c77e7adca6d8661cd0c8c0a93b",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "abbc79d0cd4149b2b2892e10134e5dfe6690dc32",
+      "owner": "package-shared",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "904d435685dbe00783537146e5aea42c9eb38e62",
+      "owner": "package-shared",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "6da3fb596fb7fef96523c8c39ae4371b1cdf68f4",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "0e052743b4e94c41f8cd441e31eaa334d284bf62",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "9df13adddebc84486dbe2bbdf70a0fc85b473a80",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "d01cc64dcaec38f6a86397475918516e409b1fb2",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "26aec19847ff32ac13d4ab78b01eba80bcbf84a7",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "dd2c68ae228072c86bc694be1cf45f54ae0e967d",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "18871c0d8334878298a568cdc41d038a399c6e63",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "ab29aace874792742a1f4c9c447278f5a0c5ed85",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "73e72f3299fcb2a4bc8c270c4c7eb0258882d83e",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "32074405c7e4126cac53be0f7ce441747c1a2d34",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "6cb18534cf3a267a5b1618b417030e17ca669537",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "efa452f9121b5575db2cbafa92ca81d4dbed4509",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "dc2d944942e128a15fbe0196beb2d08ccb8eb31e",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "d974f8dc9b93a33a342e844eb1059a99896b2f63",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "c2743bcccad9c94ccbabcaa7f38c89091040acbb",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "2e869529169c00cd43c31085b0b7efbc2f7ef302",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "e1989c96c8a620ace33d23569be176e25c8c7798",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "07537af39c52490a57ece14fce2abf6215f1cc54",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "a80574b53555324821f108dd5f19c6f96ab8a459",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "351c28136a6edf554e7b7f34e472556095d4e70b",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "e9514f0d4528da45c7813e2fa0cbaaec83a35bd3",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "82858193cef97aa84de4cf7128444205f1d2a035",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "c961ee189c9e8b8cabf201fe50eda4dd77885a83",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "fa7b7e493e9bc5f902980776f64c46f6dabcbde1",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "aed1a4f71d8e175342edce40b192b07eb686d3de",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "b964a7cbe7fc0be05c980e73972c247bea9fddde",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "c06e537ab0aad275f53d70a944f6bc7b5fcea037",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "ddfbcddf673fa878ac1e9373aef71b3e19da1bd4",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "f251d644954674f54d5cefefd753dde4e5226e7d",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "ddd3431eaf1c39d20ced8d78898d29a957d00a99",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "250d8610a523eedf4a8c860698b3deabfbbe6b29",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "ef0ee016c98cef69b766ddc8d3e0f0fb1b1011f8",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "dba0aef70658d44552d57abc1755f415a5278e79",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "a6dcb9556acbebf1b7b8188e304ca50ae30ec166",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "07692896d0d9442929d58111cf59a96236e9ff51",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "cee8bdbaedafe77a646dedb61f7f6896f2bdc415",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "dbef3a05220d4f006f7e4e2168ae7b3a276dad6d",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "b281ebc1eec317fbbadfb7ee4f3fbadbbeee5e2e",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "763465daf019c8755813659b98a72c6c6f4662e3",
+      "owner": "common-product",
+      "strategy": "merge",
+      "paths": []
+    },
+    {
+      "sha": "dad43d9d9a02a8d0f3a3d585f30e41b113782a86",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "936ede795328bde1e80dbfc756d1fd84b547c6df",
+      "owner": "package-shared",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "89503cfb2b48a29f9996cf9dba2088d6b4a8d463",
+      "owner": "package-shared",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "11d2143924dc65baa5c5841658953bdb198b00ab",
+      "owner": "package-shared",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "08a2eedf67bcd6537dc048a77411cee5f21b1345",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "706c5a4d0d034a8ab43914d45cef24f7f1d0fde2",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "6aed1cc0f122cbe3aeba14203b11bcab2e915064",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "e042ce38614967acd47cf70b00922e5d8d3ea308",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "bffdd26edf190e6fa9798c3c8ff702baacfa4301",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "f28a0f4b585899dae16bf181b9d036133ed35cc7",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "eb26a5ecea605ee6f87ca82846a616365f6c4b6e",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "ab712d99465d982cfd8071d65e1ca4d04355f0c7",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "9d77f29d5afbd6ab13a5f2b31f783d01b968ca4e",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "8af9e3eefec781929fd16c788dba54d7f7cae254",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "cdc12484f1326279c4fe215db453dd50b5c9e94c",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "27567163b3759018af72030701dfb0f130ba146c",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "07df7ea7599ec3cfda466f24c88511e65b35014c",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "26afd123ebcd72c84fc5dbb78ac8859ea01f18de",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "25d37ca7f612b2a739e33775cdb31d849477f0a7",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "366fb3f5a850abdd0f2e02ff014487deca1bc456",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "cdb5c65bc8eca0d8fe37981ffc2e25e712a25ce4",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "df34e9da62a19e7be209612da4c6fe6c9f022602",
+      "owner": "package-shared",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "c478db4d2f917a4216bee2827dcb6f2082702a1e",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "ac3f53a2ff3fcc61ef7ee6cf64dbd0193c157114",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "e51e448669ac8a8e33dca12607382a1633f04b36",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "f68510d9054119b0bd1de9db69411bfc3df3abbd",
+      "owner": "package-shared",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "50e0ca56546bf7a28aa2c68a555a1d961bf7bf7d",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "f6a3ae195001de433655a77729ae7122515312b0",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "06e19c3ba35eada3d8855273fafa688b6ec4cca8",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "8bccbdb20ae56242ded4ea80316d9e4887c30bdd",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "cc49af754642a660cd6c927cf75dfba454ae9816",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "817a5d0a6aef96027f3eda39a09b8648d058b5f0",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "b22bdb8d310cca553218c706a5e61058838e94ee",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "af19ce56b1a94792d084c2bb40ea98a8b570a80b",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "50609240e290cb85b4d2024973b875cb5ffe642b",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "4bafb3bac2541666e74ea16abb2c8de01e712740",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "f773677cee49e4d9ec848b3a514bc5c27569e27d",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "d94baef98bd21889c221b7a35cb3224066970dc4",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "7666fc4da54ef340a66850be2c06ebda94394cd2",
+      "owner": "package-macos",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "42bbebadf936476bc8734107e3bf03db04501bd1",
+      "owner": "package-macos",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "44467baafa372db2677d75ee0ee8e59c61760bff",
+      "owner": "ci-infrastructure",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "dcad13389883cac1a8b74f77b4ef5f2d18f1a9e7",
+      "owner": "ci-infrastructure",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "3536951e9beefc29906fc2fa8e5cbb08fb95c03e",
+      "owner": "ci-infrastructure",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "22800baacf7cd39e13cd6c378f7f9c37af0551ea",
+      "owner": "ci-infrastructure",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "527eb97a19b5f4f41eecf5a384359a60efed2733",
+      "owner": "package-macos",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "31cf387094c9ce339c28f70d9882eb0e080f2007",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "e57b25c9856a75cfeac266c1838fda66c7d8725e",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "396cb551c1efd9358679ec702f2f3787cfe368d6",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "bddbec2abb469700abbb5f603d48badae04102d9",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "6e57ead9693ab16f8a6e9d3b4fabf87d1c0927a6",
+      "owner": "package-shared",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "c4d5ae2d4087f5a92290597562e93456c0d0b802",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "f8d7c05fadcc0d405f0f5e89c2af3508a948c277",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "34026f76276d2f4667652036e59751c7829b9bdd",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "a41608712672b766f0855e658f7d09ffaf76cc25",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "34f1c119e212d993f8685635ab44d92ca273e2e3",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "3796a4349845bc38ed6429e4e8360e818c1ef457",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "ad61acdccf15054bf10abd96d39de5beb8db3baa",
+      "owner": "ci-infrastructure",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "e7a204987c87150909c9d66a01fe43c5ce9cf8e0",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "5074c1437796be1b5ec6de949118372493cbac1f",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "7824f1cb935f7f2c6d1962ec670e305a9b0a4b28",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "89fa9d4239edc730bf3cf9cd4e26fe0cdb00e70c",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "628123153f2456f39db6ee359a4292d851e4ae36",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "65d2a6763d349c51bb07689befcfa9b5c1083084",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "4caccc8f2065e3a845e43b89d88ed616e1166fba",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "26ebd2889e7f065e3ea324af0b9acf15caab88ba",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "f832c24aa0bfd8a9067d8a81eccbc4ac48e94912",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "afb067fd8c60701ef876556230b98e570b0b5047",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "4b593d06b76ddd1fb563691f66d41dde3683ecf2",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "bca86e89b568c710de169e3d6bce8b6d258ad75a",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "960a0359d7cb3c566e85b7c5ec4d80536855003a",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "b6975728ff7d23ab685eb6fbdff2b03a278da20e",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "9c818b26d380f6639f0e5c79ee3bf7ffcc23d5cb",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "0aa1d8b792fc54e2c2d6d48c6788749feb9f0699",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "c8fad50c49260feb0373aceb8a509a829e70c390",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "363d464a85c8a6ce408a4af34963b3426a0fcba3",
+      "owner": "package-shared",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "e69bd4ec18a98e5279cdc2cfd989b12cbb77890e",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "a756c93e35b7d15037cfcb11de83d6198aa5f04c",
+      "owner": "package-shared",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "db821dbf087738d0ace730e73a6a0407bf44912e",
+      "owner": "ci-infrastructure",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "eddb467418437e42169fea8753a6f79c5653b7cd",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "f5a7372e4c20d3fa1c66bacbebba2d51bf2956bb",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "f3ca2085a4c5201edb24c5e6dfca388217333a0f",
+      "owner": "ci-infrastructure",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "30d02d508f50afd8d9ef633a5e708de2f4752ccb",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "f47a1e47e0cd78a8868bc10649122438457a7f34",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "5a41a5cb4973a686a0fa4321be26c9c463742c1d",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "38993cffe4078e2ced1dd7d60e81f112dd066519",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "c893e264e99de1ee0293688ce59223d57f432a17",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "744fb0b72995afe169562ef1a8392b164a439424",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "d340ebd15e2ed3c440da67b27a02e1f29888db96",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "cb26826fadec03f219541d9e6e13684de0c8a560",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "f4bdb9655fefc04d8484e25aa8b6e43a85a5c837",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "38230a6c9fbe24382782cb52b4d3adc638f51cd0",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "d35641eb43aed2af92ed1a52d39d44c45738a46a",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "38cbc945e72174e3dd634a98aeffdbf20d54ddb6",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "5beace1d8f5152fc58cb82dfef315c3fd8e49b26",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "280751398dea21d39ba99c4b9560ea7c5ab9839c",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "4e4a5d42c785e25f940531a9831ff2c591bfb412",
+      "owner": "common-product",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "035fbf16da7be5aa79f4d1d15580b36343c08192",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "30f78f4207a08fac819263872bd964c8f23a01cb",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "cf79e75e42b632a16a2bd4a4a9120cd7b8e77ae4",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "aa97962e0d9b24a6333ae887a9c3f8fc51c26e5b",
+      "owner": "package-shared",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "6355c61c79e3d4878bc1d98d4462af265d6e8677",
+      "owner": "package-shared",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "d0b334abbacfb8486b0648cc93b67abb3f4e39b1",
+      "owner": "package-shared",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "86d0598a134640161ee148be872a580cc55c6a5a",
+      "owner": "package-shared",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "decb2f0fcb7729731afe49471d89317b5505fdab",
+      "owner": "package-shared",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "b0ad6ad4e5441b179ec110b4c1e4c7237b63dc9a",
+      "owner": "package-shared",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "e1de17db83444afe87cc262732ec6be8e0a8df38",
+      "owner": "package-shared",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "02f539099641708cfd4996cde2295a22b56e7f42",
+      "owner": "package-shared",
+      "strategy": "path-extract",
+      "paths": [
+        "apps/desktop/scripts/build-backend-payload.integration.test.mjs",
+        "apps/desktop/scripts/build-backend-payload.mjs"
+      ]
+    },
+    {
+      "sha": "ccc7e10274f828d3ebcc47f44b1d0712677ac99b",
+      "owner": "package-shared",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "82b23ebde603712aff9977a7b8030dbf465813d4",
+      "owner": "package-shared",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "9689aefd08ca8ccaa475a648214a7220e6eeed8a",
+      "owner": "package-shared",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "bf090797fee3a17daf190a5de075d536a288feb9",
+      "owner": "package-shared",
+      "strategy": "cherry-pick",
+      "paths": []
+    },
+    {
+      "sha": "403e1c3873d1679720c1403d7e38acd289804d69",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "11985b01c78312f42de595e99ef4ff2bad3f579b",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "6d1e7001b923445a30e7dd2556661a01288d5a67",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "ba0daf81371ec1b1e3d90b2412a821f5165d0cd0",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "0a7a8ce591c2f9d8ec874877a84d86b2b58f1a01",
+      "owner": "ci-infrastructure",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "5fd2064cbcc9a7971165fa8347abddf04b99085a",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "a6c9059b63dbed4b7f526613e9db246ecfe06e01",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "106737151b80602ea6b6cd8ba57b84496fc84cad",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "5d2283c07e06ae7e879f2708f3fbfab94d203b42",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "f648832bdba560a193e3e6a8916bbc6a6c66b622",
+      "owner": "ci-infrastructure",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "68f818c0fa543dfdfbff9fb06e42b38295a3bf27",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "0d19fc15652dea99b13650eacceb90d9d7a8e831",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "375d9294976392b31ed3613211c389c8935bb5a4",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "85a51a53b1c32c263477ffdf1e5bd40c9057c7ff",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "aa87cb7d2693d45711df859d0ed10159789718e8",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "dde41d82b7dfb426f1d06d4e2920fb6763dd48eb",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "539b6935add6bb29e85d97c47eecdb62617923b8",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "c5530d959274e0ebc0d0d416ed5d6ed3155a3fe1",
+      "owner": "ci-infrastructure",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "ec826b581feaf15c0e37353d0417b05c3da18a79",
+      "owner": "ci-infrastructure",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "848cde2ab104fbb11745a5770007fae15172d804",
+      "owner": "ci-infrastructure",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "c322a9821a1c2ff1c13040f192911958ef46230a",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "1030e4fe3fc1110e6750f800b2ed6babd1a7f891",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "26a4b8d7ead0084ca51b1efecb321b7d1469581a",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "c560db9a19b148e651a338a735df41f8a7c5b7a9",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "93d904e882c3172d951d0b305b04538e37f59cf6",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "a4e987eef5d209842e7607c2aebcc990fc7790f9",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "4e9a3417358eaa64791df305817f601037c13823",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "d393cb4c15ae98bc00b63766f357368fe63b584a",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "4522f4a37365074bd7f0f490bcf01c1310f141d4",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "b8324aedb5b22c2a9d6861b90ceedc8d7ae2556c",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "07f560bf558c1d9368973806980cc19ed047284e",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "7341c748ac01af39d2b11798b5c619b683a85d57",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "e79f0552cd3dfd5153e06a4ca82c9f233081cb1e",
+      "owner": "ci-infrastructure",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "8eb0d8130189e9309e9ef7db43ba53a1df4d93fc",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "f32eb39ae702f2e2ccf72ffdf591dc32b211a5d4",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "fea4d6a5084e921daf84782343e9b4bc4bc542e3",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "0add19da412129387a9749b92b26cc714779e805",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "92e8081d2b46f1ccae47ef8e2c8dae0dc502d395",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "c0dbe0df1c9dc0bc8964d7a27bbcc794fda43cde",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "6972412531a563123eec0772a90814e087625443",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "b6a56cd6667f5fff9b6ed95f4911140d0a2e573c",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "49e5e00fff9eb8cd3624e8864a484f271e3b83d5",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "127fc83825e5f338ca6266304c3e5a9fd87316c3",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "4ace75a22e0c04e63cf306b96d09e2530c9a03bb",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "4b830a1039c432a02e98f6bf3fa21af1a42a1a64",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "a600cdc466f8ad0a067926d794c27b7c5d6fbd95",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "27a116ec2aeb5f61e21ab000f43875e865f0aef6",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "77fa1fe4a5f8f9d6053ecfac63effe93c55fd912",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "876885cf9a7dd6811a1a1b621dffab05359f4f0d",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "dba6380561413e05143a1432b87f86fc53bcb60b",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "63c5cb2346ce26373edb7dabbe74e3ee3e0de40f",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "3258a6ba23f2735a069eb6989844378edd75bcaf",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "8f54dca6fa4883f4764879dde634433acb40754d",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "1fb19396cf63584000287768b1e66ff17ac991cc",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "1a23cf08530510f12c9dcfbb28479423f33d1a8b",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "9eea9c3b32e6b15dd98d9f324c41a731ffeb6be5",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "97b0f8185d6d3cbb4c771ec0c21cbaf080b2e945",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "9de6674ccd79140103a3355a2c7cb266777a63b2",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "3657aa1c2cfaa62190ee7e82ff54f494a05eef5f",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "f7ef90262f2d28c0d8d2d779a11a432ad4963f52",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "65910c093aba59ba46fddcfa82a90b65350d8036",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "637928dfa8ea6f019d73850bb5f2bc2619471cda",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "06bb1fcf23c6f9e7db3a466d3c8915baaa9ed1ae",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "d157e6c3de61dfe9baf50e86a5c37b9bc32f4abb",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "d899cbf5b65dc7d90569ff0548234a2fd2d19fa6",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "7cc9762589f2cf58637739dabd966363842e69fa",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "f15a137792e1cadf9f45f118d8a9e902c579f0c1",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "66890b3dcce1f605b63c57ed42ed086637c6eaf2",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "7114e136568636f71d5b370a20ffebc9eccef204",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "4351fb5a82424d18a87fedc3fe44659126c3072b",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "b846ebff6c132bf32ece8316d4cb880539365acb",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "677de12c95c0442be6566361c89abd632570b7a3",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "4738fc2f3ae9f725a7a8386075bfea51b1206624",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "f59191d7178f30200450b9e74e68765644fe6717",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "0ac1923a41131c5362ba882cac9cb1e2a11cf05f",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "202192ccd43c2217aaa2cb4d00dbfe96cce8d6e2",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "b243965d723e3911e14ff2ce595d306c18254f80",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "ecd4b6062daa9570a894c0f7bb50a504fd7bb4e9",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "10cffc9b314e724942ae47be5b06d520cf4f7555",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "38c13118c4220465e5e7b36e8503b26ee3ec9d6f",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "ba6f6c31bd5cf9bbbc72098fec66af3078b818b3",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "c2c4790e0138f09d88aa090351491043c4fc65af",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "2143a033c0a85dfdf6845ebed5ea9be61cf3ddb7",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "76e4bbd338999f9f079e4ed1cf1ddd986efd143f",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "822156b2dc1dd1278b62000232c69c2c6880ba9c",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "3e9a5a54c3e677e71eed00bfeaaf68deaa2807a0",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "ca52c1ce6c2a11b264ceaf632582fbfe5fd92e62",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "14522ce93918201dc67d5607d7e940a38df734e4",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "7dcf63d013e934c1843f3b646b62ae28ece7f94c",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "2b111d92ed1d37614bc9079d406c083fb251300b",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "3bf9a637722ff292bba11aa3bd6008cab6eacc01",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "8294a9b41f236829494953a6b3b386c0b7d11796",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "80bd13c9b5ac3b6542bae6249709230866b8526c",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "c5b19efe57533c20db336d6995bcc3d3cdabe11b",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "cc4c297cd22577e674fad0926609ab7260915d72",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "ed3235595c41d453211bfb07d8c1c75fed4b283c",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "d282099fafd09ccc25279b3c0a5efd4c1e2d91c3",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "07755bc139440407e5ead9c9a46b2834857e9c66",
+      "owner": "test-evidence",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "d991c6a919ffad05fdec576d490c12f6bc4fdd3f",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "b2b6a610b12e458981f1dfeba709c0619c46f26c",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "af0e95514eb6af0b4e70575724224ae173477faf",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "45eb464242282d32165996970dcbbfd7fa5807e9",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "9a32e19153fc7bdf7ac2ebcd132ef7bd6683a2f7",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "772903c824bda9ea8834819622253ccbf90fdb8c",
+      "owner": "reference-equivalent",
+      "strategy": "reference-equivalent",
+      "paths": []
+    },
+    {
+      "sha": "8f54f28f172f69a98efc909a1d7217fb326f8715",
+      "owner": "ci-infrastructure",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "1a877e86f9d7536dc73af4c3e67c7f85c7b8d620",
+      "owner": "ci-infrastructure",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "c2d3d09aab921130171ff611e260c13e9c6d477c",
+      "owner": "ci-infrastructure",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "56b402c63b22da81f906ff1f7398a90cfd17bd81",
+      "owner": "historical-drop",
+      "strategy": "drop",
+      "paths": []
+    },
+    {
+      "sha": "d89f779dfee04a7bf168e8860e0dc0fb817d0177",
+      "owner": "test-evidence",
+      "strategy": "candidate",
+      "paths": []
+    },
+    {
+      "sha": "47192c8f63e27ea3268a22d440301eb5d188f7c2",
+      "owner": "test-evidence",
+      "strategy": "candidate",
+      "paths": []
+    },
+    {
+      "sha": "b859a4859627b77d87ac9f21e9b017cf191e84d6",
+      "owner": "test-evidence",
+      "strategy": "candidate",
+      "paths": []
+    },
+    {
+      "sha": "efcf501e95e6bdc91a60711ca5dd292c0073a157",
+      "owner": "test-evidence",
+      "strategy": "candidate",
+      "paths": []
+    },
+    {
+      "sha": "9e622be26771b6a7448df3f22dccafd47f5784bc",
+      "owner": "test-evidence",
+      "strategy": "candidate",
+      "paths": []
+    },
+    {
+      "sha": "2938971f77d6e6b559c0d8929bf339de9c86e8b8",
+      "owner": "common-product",
+      "strategy": "candidate",
+      "paths": []
+    },
+    {
+      "sha": "21afa522c80326163b2c318432fac3640a89ada3",
+      "owner": "test-evidence",
+      "strategy": "candidate",
+      "paths": []
+    },
+    {
+      "sha": "136882a61e0d53d1c6ed79c0655701cd802ce973",
+      "owner": "test-evidence",
+      "strategy": "candidate",
+      "paths": []
+    },
+    {
+      "sha": "2600153f2590207c4cffcf8efe784be569094669",
+      "owner": "test-evidence",
+      "strategy": "candidate",
+      "paths": []
+    },
+    {
+      "sha": "f281dd9813292ac56081eb497ff4099f94d00379",
+      "owner": "test-evidence",
+      "strategy": "candidate",
+      "paths": []
+    },
+    {
+      "sha": "b0a9dfc4e212cd9f25a0e9474e65f77f4adbf6f1",
+      "owner": "test-evidence",
+      "strategy": "candidate",
+      "paths": []
+    }
+  ],
+  "path_owners": [
+    {
+      "match": "exact",
+      "path": ".github/workflows/desktop-dmg-gatekeeper.yml",
+      "owner": "ci-infrastructure"
+    },
+    {
+      "match": "exact",
+      "path": ".github/workflows/desktop-windows-package.yml",
+      "owner": "ci-infrastructure"
+    },
+    {
+      "match": "exact",
+      "path": ".github/workflows/tests-os.yml",
+      "owner": "ci-infrastructure"
+    },
+    {
+      "match": "exact",
+      "path": ".github/workflows/tests.yml",
+      "owner": "ci-infrastructure"
+    },
+    {
+      "match": "exact",
+      "path": ".gitignore",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": ".node-version",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": ".nvmrc",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "SECURITY.md",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "acp_adapter/__main__.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "acp_adapter/entry.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "acp_adapter/server.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "agent/agent_runtime_helpers.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "agent/conversation_loop.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "agent/learning_graph.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "agent/tool_executor.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "agent/transcription_registry.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "agent/transports/codex_app_server_session.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "agent/transports/hermes_tools_mcp_server.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/e2e/auth-assertions.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/e2e/auth-hard-gate.spec.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/e2e/fixed-auth-contract-server.spec.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/e2e/fixed-auth-contract-server.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/e2e/fixtures.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/e2e/installed-windows-auth.spec.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/e2e/installed-windows-smoke.spec.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/e2e/windows-process-tree.spec.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/e2e/windows-process-tree.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/auth-bridge.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/auth-bridge.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/auth-coordinator.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/auth-coordinator.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/auth-runtime-contract.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/auth-runtime-contract.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/auth-scope-token.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/auth-scope-token.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/authenticated-runtime-preparation.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/authenticated-runtime-preparation.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/task4-auth-runtime.contract.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/backend-ownership.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/backend-ownership.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/backend-probes.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/backend-probes.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/bootstrap-payload.integration.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/bootstrap-payload.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/bootstrap-process.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/bootstrap-process.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/bootstrap-progress.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/bootstrap-progress.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/bootstrap-runner.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/bootstrap-runner.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/bootstrap-toolchain.integration.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/bootstrap-toolchain.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/bundled-runtime-state.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/bundled-runtime.integration.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/connection-apply.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/connection-apply.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/connection-config.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/connection-config.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/connection-registry.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/connection-registry.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/desktop-runtime-gate.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/desktop-runtime-gate.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/external-open-policy.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/external-open-policy.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/first-run-setup-main-process.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/guarded-ipc.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/guarded-ipc.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/hardening.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/main.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/media-permission-policy.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/media-permission-policy.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/media-protocol.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/media-protocol.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/native-auth-decisions.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/native-auth-decisions.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/package-runtime/windows-auth-toolchain.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/package-runtime/windows-auth-toolchain.ts",
+      "owner": "package-windows"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/preload.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/preview-webview-policy.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/preview-webview-policy.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/primary-backend-startup.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/primary-backend-startup.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/profile-session-routing.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/profile-session-routing.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/renderer-log.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/renderer-log.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/ssh-bootstrap-coordinator.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/ssh-bootstrap-coordinator.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/ssh-config.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/ssh-config.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/ssh-connection.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/ssh-connection.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/trusted-renderer.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/trusted-renderer.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/windows-auth-owner.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/windows-auth-owner.ts",
+      "owner": "package-windows"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/eslint.config.mjs",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/package.json",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/after-pack.mjs",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/before-pack-payload.integration.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/before-pack.mjs",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/before-pack.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/build-auth-toolchain.mjs",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/build-auth-toolchain.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/build-backend-payload.integration.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/build-backend-payload.mjs",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/exe-identity-options.mjs",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/macos-dmg-builder.mjs",
+      "owner": "package-macos"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/package-audit.mjs",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/prepare-auth-toolchain-inputs.mjs",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/prepare-auth-toolchain-inputs.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/prepare-package-inputs.mjs",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/prepare-package-inputs.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/prepare-windows-git-runtime.mjs",
+      "owner": "package-windows"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/run-electron-builder.mjs",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/run-electron-builder.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/windows-auth-toolchain.integration.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/set-exe-identity.mjs",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/scripts/stage-native-deps.mjs",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/chat/composer/controls.tsx",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/chat/composer/hooks/use-composer-voice.test.tsx",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/chat/composer/hooks/use-composer-voice.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/chat/composer/hooks/use-voice-conversation.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/chat/composer/hooks/use-voice-recorder.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/chat/composer/index.tsx",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/chat/composer/types.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/chat/index.tsx",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/contrib/surfaces.test.tsx",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/contrib/surfaces.tsx",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/contrib/wiring.tsx",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/session/hooks/use-hermes-config.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/settings/constants.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/settings/helpers.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/settings/helpers.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/app/shell/hooks/use-account-statusbar-item.tsx",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/components/auth-bootstrap-progress.test.tsx",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/components/auth-bootstrap-progress.tsx",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/components/auth-gate.test.tsx",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/components/auth-gate.tsx",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/components/task4-auth-ui.contract.test.tsx",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/components/desktop-install-overlay.test.tsx",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/components/desktop-install-overlay.tsx",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/global.d.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/hermes-profile-scope.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/hermes.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/i18n/auth-catalog.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/i18n/en.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/i18n/ja.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/i18n/types.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/i18n/zh-hant.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/i18n/zh.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/lib/api-request-target.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/lib/auth-bootstrap-progress.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/lib/auth-bootstrap-progress.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/lib/gateway-ws-url.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/lib/icons.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/lib/media.remote.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/lib/media.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/lib/voice-barge-in.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/lib/voice-timing.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/main.tsx",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/protected-root.tsx",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/store/gateway.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/src/types/hermes.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/vitest.setup.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/shared/src/websocket-url.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "batch_runner.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "cli-config.yaml.example",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "cli.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "cron/__init__.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "cron/scheduler.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "cron/scripts/classify_items.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "desktop_auth_runtime/pyproject.toml",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "desktop_auth_runtime/uv.lock",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "desktop_auth_runtime/uv.toml",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "docker/cont-init.d/02-reconcile-profiles",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "docker/main-wrapper.sh",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "docker/s6-rc.d/dashboard/dependencies.d/hermes-auth-runtime",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "docker/s6-rc.d/dashboard/down",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "docker/s6-rc.d/dashboard/run",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "docker/s6-rc.d/hermes-auth-runtime/finish",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "docker/s6-rc.d/hermes-auth-runtime/run",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "docker/s6-rc.d/hermes-auth-runtime/type",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "docker/s6-rc.d/main-hermes/dependencies.d/hermes-auth-runtime",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "docker/s6-rc.d/main-hermes/down",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "docker/s6-rc.d/user/contents.d/hermes-auth-runtime",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "docker/stage2-hook.sh",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "docs/desktop-dmg-build.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/security/desktop-auth-bootstrap-progress-acceptance-2026-08-20.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/security/desktop-clean-machine-bootstrap-recovery-2026-08-19.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/security/desktop-dmg-auth-artifact-review-2026-08-20.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/security/desktop-dmg-auth-e2e-acceptance-2026-08-19.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/security/desktop-dmg-auth-owner-acceptance-2026-08-21.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/security/desktop-dmg-auth-replacement-acceptance-2026-08-20.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/security/desktop-dmg-domestic-first-launch-acceptance-2026-08-22.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/security/hermes-login-hard-gate-implementation.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/security/hermes-managed-download-origins.json",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "docs/security/main-auth-voice-migration-ledger.json",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/security/main-auth-voice-product-paths.txt",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/security/remote-auth-release-evidence.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-15-hermes-desktop-dmg.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-18-remote-auth-hard-gate-01-server-contract.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-18-remote-auth-hard-gate-02-core-runtime-cli.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-18-remote-auth-hard-gate-03-desktop-tui-ssh.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-18-remote-auth-hard-gate-04-background-docker-release.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-18-remote-auth-hard-gate-implementation.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-19-desktop-bootstrap-recovery.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-19-desktop-gui-logout.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-20-auth-bootstrap-elapsed-focus-resync.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-20-desktop-auth-bootstrap-progress.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-20-desktop-auth-bridge-recovery.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-20-desktop-dmg-credential-login-ci.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-20-desktop-dmg-github-actions-gatekeeper.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-20-dmg-auth-entrypoint-closure.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-20-final-dmg-artifact-review-documentation.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-20-logout-stale-runtime-status.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-21-auth-owner-idle-recovery.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-21-windows-auth-owner-recovery-parity.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-21-windows-auth-runtime-progress-parity.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-22-desktop-first-launch-domestic-bootstrap.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-22-main-auth-voice-cross-platform-packaging.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/plans/2026-08-22-main-auth-voice-platform-boundary.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-15-hermes-cloud-auth-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-15-hermes-desktop-dmg-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-18-remote-auth-hard-gate-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-19-desktop-clean-machine-bootstrap-recovery.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-19-desktop-gui-logout-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-20-auth-bootstrap-elapsed-focus-resync-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-20-desktop-auth-bootstrap-progress-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-20-desktop-auth-bridge-recovery-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-20-desktop-dmg-credential-login-ci-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-20-desktop-dmg-github-actions-gatekeeper-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-20-dmg-auth-entrypoint-closure-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-20-final-dmg-artifact-review-documentation-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-20-logout-stale-runtime-status-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-21-auth-owner-idle-recovery-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-21-windows-auth-owner-recovery-parity-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-21-windows-auth-runtime-progress-parity-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-22-desktop-first-launch-domestic-bootstrap-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-22-main-auth-voice-platform-boundary-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "docs/superpowers/specs/2026-08-22-windows-x64-auth-runtime-parity-design.md",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "gateway/__init__.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "gateway/cgroup_cleanup.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "gateway/platforms/api_server.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "gateway/run.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/_parser.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/_scan_venv_blockers.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/auth.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/auth_commands.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/cli_agent_setup_mixin.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/client_auth/__init__.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/client_auth/bridge.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/client_auth/cli.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/client_auth/client.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/client_auth/entrypoint_wrappers.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/client_auth/entrypoints.json",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/client_auth/guard.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/client_auth/runtime.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/client_auth/static_help.txt",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/config.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/config_defaults.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/console_engine.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/container_boot.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/credential_lifecycle.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/curator.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/dashboard_auth/routes.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/dashboard_auth/ws_tickets.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/dashboard_register.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/dump.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/gateway.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/gateway_enroll.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/gateway_windows.py",
+      "owner": "package-windows"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/journey.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/main.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/managed_uv.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/model_setup_flows.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/models.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/observability/schemas/hermes.shared_metrics.v2.schema.json",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/observability/shared_metrics_contract.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/portal_cli.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/proxy/adapters/nous_portal.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/proxy/adapters/xai.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/proxy/cli.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/runtime_provider.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/service_manager.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/setup.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/status.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/stderr_timestamp.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/subcommands/auth.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/subcommands/login.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/subcommands/logout.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/subcommands/provider.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/tips.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/tools_config.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/uninstall.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/update_cmd.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/web_server.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/windows_ssh_runtime.py",
+      "owner": "package-windows"
+    },
+    {
+      "match": "exact",
+      "path": "mcp_serve.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "mini_swe_runner.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "model_tools.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "package.json",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "plugins/google_meet/cli.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "plugins/google_meet/meet_bot.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "plugins/kanban/dashboard/plugin_api.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "plugins/kanban/systemd/hermes-kanban-dispatcher.service",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "plugins/platforms/feishu/feishu_comment_rules.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "plugins/platforms/google_chat/oauth.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "plugins/web/ddgs/_search_worker.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "pyproject.toml",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "run_agent.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/build-desktop-dmg.sh",
+      "owner": "package-macos"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/build-desktop-dmg.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/build-desktop-windows.mjs",
+      "owner": "package-windows"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/build-desktop-windows.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/check_auth_entrypoints.py",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/check_auth_native_artifacts.py",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/check_hermes_managed_downloads.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/check_main_auth_voice_migration.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/desktop-credential-login.mjs",
+      "owner": "ci-infrastructure"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/desktop-credential-login.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/desktop-dmg-contract.mjs",
+      "owner": "package-macos"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/desktop-dmg-contract.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/desktop-dmg-credential-login.mjs",
+      "owner": "ci-infrastructure"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/desktop-dmg-credential-login.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/desktop-dmg-gatekeeper-contract.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/desktop-windows-contract.mjs",
+      "owner": "package-windows"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/desktop-windows-contract.test.mjs",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/discord-voice-doctor.py",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/generate_auth_free_help.py",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/hermes-gateway",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/install.ps1",
+      "owner": "package-windows"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/install.sh",
+      "owner": "package-macos"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/keystroke_diagnostic.py",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/run_tests.sh",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/test-desktop-windows-auth-host.ps1",
+      "owner": "package-windows"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/test-desktop-windows-install.ps1",
+      "owner": "package-windows"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/tests/test-install-ps1-managed-uv.ps1",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/tests/test-install-ps1-packaged-lock.ps1",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/tests/test-install-ps1-stage-protocol.ps1",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/verify-desktop-dmg-gatekeeper.sh",
+      "owner": "ci-infrastructure"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/write_auth_native_artifact.py",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/write_desktop_windows_electron_artifact.py",
+      "owner": "package-windows"
+    },
+    {
+      "match": "exact",
+      "path": "tests/acp/test_entry.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/conftest.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/docker/test_auth_hard_gate.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/client_auth/auth_site/sitecustomize.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/client_auth/subprocess_harness.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/client_auth/test_account_commands.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/client_auth/test_background_modes.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/client_auth/test_boundaries.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/client_auth/test_bridge.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/client_auth/test_client.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/client_auth/test_entrypoints.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/client_auth/test_guard.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/client_auth/test_native_artifacts.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/client_auth/test_runtime.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/client_auth/test_service_locked_waiting.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/conftest.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_anthropic_oauth_routes_to_messages_api.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_auth_codex_provider.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_auth_commands.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_auth_nous_provider.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_auth_xai_oauth_provider.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_console_engine.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_container_boot.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_copilot_catalog_oauth_fallback.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_dashboard_admin_endpoints.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_dashboard_auth_ws_auth.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_gateway_service.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_graphical_browser_detection.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_managed_uv.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_resolve_provider_openrouter_pool.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_status.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_subcommands_batch.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_web_oauth_dispatch.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_hermes_managed_downloads.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_install_ps1_uv_install_fallback.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_install_ps1_uv_powershell_host.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_install_ps1_venv_process_tree.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_install_sh_bootstrap_scope.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_install_sh_desktop_mirrors.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_install_sh_install_method_stamp.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_install_sh_node_deps_failure.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_install_unmerged_index.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_main_auth_voice_migration.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_main_auth_voice_reference_contract.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_project_metadata.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/tui_gateway/test_account_auth.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/tui_gateway/test_compute_host.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/tui_gateway/test_entry_picker_prewarm.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/tui_gateway/test_slash_worker_mcp_discovery.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tools/browser_tool.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/delegate_tool.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/image_generation_tool.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/lazy_deps.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/mcp_stdio_watchdog.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/neutts_synth.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/sensevoice_stt.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/skill_linter.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/skills_sync.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/skills_tool.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/terminal_tool.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/transcription_tools.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/tts_tool.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/vision_tools.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/web_tools.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "toolset_distributions.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "toolsets.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "trajectory_compressor.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tui_gateway/compute_host.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tui_gateway/entry.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tui_gateway/server.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tui_gateway/slash_worker.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tui_gateway/ws.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "ui-tui/src/__tests__/authGate.test.tsx",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "ui-tui/src/__tests__/gatewayClient.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "ui-tui/src/authGate.tsx",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "ui-tui/src/entry.tsx",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "ui-tui/src/gatewayClient.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "ui-tui/src/gatewayTypes.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "ui-tui/src/sdk/apps/index.ts",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/runtime-download-policy.ts",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "apps/desktop/electron/runtime-download-policy.test.ts",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/data/managed-download-origins.json",
+      "owner": "package-shared"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/managed_downloads.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "hermes_cli/model_catalog.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_managed_downloads.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/hermes_cli/test_model_catalog.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_install_ps1_browser_install.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_install_sh_browser_install.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/tools/test_browser_use_cli.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/tools/test_lazy_deps.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/tools/test_sensevoice_stt.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tools/browser_use_cli.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "tools/computer_use/cua_backend.py",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": ".github/workflows/desktop-macos-package.yml",
+      "owner": "ci-infrastructure"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_desktop_packaging_workflows.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "scripts/check_main_auth_voice_parity.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_main_auth_voice_dependencies.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "tests/test_main_auth_voice_parity.py",
+      "owner": "test-evidence"
+    },
+    {
+      "match": "exact",
+      "path": "uv.lock",
+      "owner": "common-product"
+    },
+    {
+      "match": "exact",
+      "path": "uv.toml",
+      "owner": "common-product"
+    }
+  ]
+}

@@ -767,7 +767,14 @@ class HermesConsoleEngine:
             "auth": (
                 "hermes_cli.subcommands.auth",
                 "build_auth_parser",
-                "cmd_auth",
+                "cmd_auth_status",
+                [("status",)],
+                set(),
+            ),
+            "provider": (
+                "hermes_cli.subcommands.provider",
+                "build_provider_parser",
+                "cmd_provider",
                 [
                     ("list",),
                     ("status",),
@@ -1262,7 +1269,7 @@ def _apply_confirmed_defaults(args: argparse.Namespace) -> None:
     if getattr(args, "plugins_action", None) == "install":
         if not getattr(args, "enable", False) and not getattr(args, "no_enable", False):
             setattr(args, "no_enable", True)
-    if getattr(args, "auth_action", None) == "add":
+    if getattr(args, "provider_action", None) == "add":
         auth_type = getattr(args, "auth_type", None)
         if auth_type in {"api-key", "api_key"} and not getattr(args, "api_key", None):
             raise ConsoleCommandError("auth add --type api-key requires --api-key in Hermes Console.")

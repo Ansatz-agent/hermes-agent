@@ -103,6 +103,7 @@ def _run_install_fn(distro: str, version: str, *, native_fails: bool,
         "run_with_timeout",
         "playwright_host_unrecognized",
         "playwright_fallback_platform",
+        "_run_playwright_install_for_current_mirror",
         "run_playwright_install",
     ]
     src = INSTALL_SH.read_text()
@@ -120,6 +121,8 @@ def _run_install_fn(distro: str, version: str, *, native_fails: bool,
 set -u
 DISTRO={distro!r}
 DISTRO_VERSION={version!r}
+DESKTOP_PLAYWRIGHT_MIRROR='https://registry.npmmirror.com/-/binary/playwright'
+DESKTOP_PLAYWRIGHT_FALLBACK_MIRROR='https://npmmirror.com/mirrors/playwright/'
 export PLAYWRIGHT_HOST_PLATFORM_OVERRIDE={operator_override!r}
 [ -z "$PLAYWRIGHT_HOST_PLATFORM_OVERRIDE" ] && unset PLAYWRIGHT_HOST_PLATFORM_OVERRIDE
 
@@ -231,7 +234,7 @@ def test_ensure_browser_still_ignore_scripts_and_timeout_guarded() -> None:
     body = _extract_function_body(INSTALL_SH.read_text(), "ensure_browser")
 
     assert "--ignore-scripts" in body
-    assert "run_with_timeout" in body
+    assert "run_npm_with_mirror_fallback" in body
 
 
 def test_ensure_browser_no_longer_references_agent_browser_binary_path() -> None:
@@ -244,6 +247,27 @@ def test_ensure_browser_no_longer_references_agent_browser_binary_path() -> None
     assert "$HERMES_HOME/node/bin/agent-browser" not in body
 
 
+def test_install_script_is_domestic_first_and_never_executes_remote_installers() -> None:
+    text = INSTALL_SH.read_text()
 
+    assert 'DESKTOP_ELECTRON_PRIMARY_MIRROR="https://npmmirror.com/mirrors/electron/"' in text
+    assert 'DESKTOP_ELECTRON_SECONDARY_MIRROR="https://registry.npmmirror.com/-/binary/electron/"' in text
+    assert "DESKTOP_ELECTRON_FALLBACK_MIRROR" not in text
+    assert "https://astral.sh/uv/install.sh" not in text
+    assert "curl -LsSf" not in _extract_function_body(text, "install_uv")
+    assert 'export NPM_CONFIG_REGISTRY="$DESKTOP_NPM_REGISTRY"' in text
+    assert 'export PLAYWRIGHT_DOWNLOAD_HOST="$DESKTOP_PLAYWRIGHT_MIRROR"' in text
+    assert text.index('DESKTOP_NODE_MIRROR="https://registry.npmmirror.com/-/binary/node/"') < text.index('DESKTOP_NODE_FALLBACK_MIRROR="https://npmmirror.com/mirrors/node/"') < text.index('DESKTOP_NODE_OFFICIAL_MIRROR="https://nodejs.org/dist/"')
+    assert "NousResearch/hermes-agent.git" not in text
+    assert "hermes-agent.nousresearch.com/install.sh" not in text
+    assert "hermes-agent.nousresearch.com/install.ps1" not in text
 
-
+    repo_body = _extract_function_body(text, "clone_repo")
+    assert "validate_bundled_source" in repo_body
+    assert "Automatic source download is unavailable" in repo_body
+    node_body = _extract_function_body(text, "install_node")
+    assert '"${HERMES_NODE_MIRROR:-$DESKTOP_NODE_MIRROR}"' in node_body
+    assert '"$DESKTOP_NODE_FALLBACK_MIRROR"' in node_body
+    assert '"$DESKTOP_NODE_OFFICIAL_MIRROR"' in node_body
+    playwright_body = _extract_function_body(text, "run_playwright_install")
+    assert playwright_body.index('"$DESKTOP_PLAYWRIGHT_MIRROR"') < playwright_body.index('"$DESKTOP_PLAYWRIGHT_FALLBACK_MIRROR"') < playwright_body.index('"__official__"')

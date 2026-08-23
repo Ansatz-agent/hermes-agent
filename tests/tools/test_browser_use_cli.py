@@ -867,6 +867,10 @@ class TestInstallCli:
         uv = tmp_path / "uv"
         uv.write_text(
             "#!/bin/sh\n"
+            'test "$UV_DEFAULT_INDEX" = "https://mirrors.ustc.edu.cn/pypi/simple" || exit 41\n'
+            'test "$HERMES_UV_FALLBACK_INDEX" = "https://pypi.tuna.tsinghua.edu.cn/simple" || exit 42\n'
+            'test "$PIP_INDEX_URL" = "https://mirrors.ustc.edu.cn/pypi/simple" || exit 43\n'
+            'test "$PIP_EXTRA_INDEX_URL" = "" || exit 44\n'
             'target="$UV_TOOL_BIN_DIR/browser-use"\n'
             'echo "#!/bin/sh" > "$target"\n'
             '/bin/chmod +x "$target"\n'

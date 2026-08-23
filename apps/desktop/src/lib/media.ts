@@ -109,7 +109,10 @@ export function mediaExternalUrl(path: string): string {
   if (isRemoteGateway()) {
     const conn = $connection.get()
 
-    if (conn?.baseUrl && conn.token) {
+    // A Desktop scope bearer is deliberately header-only. It must never enter
+    // a renderer-visible download URL (history, referrers, crash reports). The
+    // normal remote-file actions use the authenticated main-process bridge.
+    if (conn?.baseUrl && conn.token && conn.authMode !== 'scope') {
       const file = encodeURIComponent(filePathFromMediaPath(path))
 
       return `${conn.baseUrl}/api/files/download?path=${file}&token=${encodeURIComponent(conn.token)}`

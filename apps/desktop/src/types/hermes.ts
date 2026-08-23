@@ -22,6 +22,26 @@ export interface AudioTranscriptionResponse {
   transcript: string
 }
 
+export type SttPreparationErrorCode =
+  | 'checksum_mismatch'
+  | 'dependency_install_failed'
+  | 'download_failed'
+  | 'insufficient_disk'
+
+export type SttPreparationResponse =
+  | { state: 'not_applicable' | 'not_ready' | 'ready' }
+  | {
+      downloaded?: number
+      phase: 'dependencies' | 'download'
+      state: 'preparing'
+      total?: number
+    }
+  | {
+      code: SttPreparationErrorCode
+      message?: string
+      state: 'error'
+    }
+
 export interface AudioSpeakResponse {
   ok: boolean
   data_url: string
@@ -344,6 +364,7 @@ export interface HermesConfig {
   }
   stt?: {
     enabled?: boolean
+    provider?: string
   }
   voice?: {
     max_recording_seconds?: number

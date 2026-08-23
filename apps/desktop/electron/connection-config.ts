@@ -172,12 +172,26 @@ async function gatewayWsUrlIpcResult(resolveWsUrl: () => Promise<string>) {
  * errors so a temporary outage is not mislabeled as an expired session.
  *
  * @param {string} baseUrl
- * @param {'token'|'oauth'} authMode
+ * @param {'token'|'oauth'|'scope'} authMode
  * @param {string|null} token
- * @param {{ mintTicket: (baseUrl: string) => Promise<string> }} deps
+ * @param {{ mintTicket?: (baseUrl: string) => Promise<string>, mintScopeTicket?: (baseUrl: string, bearer: string) => Promise<string> }} deps
  * @returns {Promise<string|null>}
  */
 async function resolveTestWsUrl(baseUrl, authMode, token, deps: any = {}) {
+  if (authMode === 'scope') {
+    const mintScopeTicket = deps.mintScopeTicket
+
+    if (typeof mintScopeTicket !== 'function') {
+      throw new Error('resolveTestWsUrl: a mintScopeTicket function is required in Desktop scope mode.')
+    }
+
+    if (!token) {
+      throw new Error('resolveTestWsUrl: a bearer is required in Desktop scope mode.')
+    }
+
+    return buildGatewayWsUrlWithTicket(baseUrl, await mintScopeTicket(baseUrl, token))
+  }
+
   if (authMode === 'oauth') {
     const mintTicket = deps.mintTicket
 

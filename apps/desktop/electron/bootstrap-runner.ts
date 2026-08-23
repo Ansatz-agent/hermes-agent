@@ -38,6 +38,10 @@ import fsp from 'node:fs/promises'
 import https from 'node:https'
 import path from 'node:path'
 
+import { prepareBundledSource, type PreparedBundledSource, resolveBundledPayload } from './bootstrap-payload'
+import { buildBootstrapEnvironment, runBootstrapProcess } from './bootstrap-process'
+import { resolveBundledAuthToolchain } from './bootstrap-toolchain'
+import { prepareWindowsPackagedAuthRuntime } from './package-runtime/windows-auth-toolchain'
 import { hiddenWindowsChildOptions } from './windows-child-options'
 
 const IS_WINDOWS = process.platform === 'win32'
@@ -45,6 +49,43 @@ const IS_WINDOWS = process.platform === 'win32'
 const STAMP_COMMIT_RE = /^[0-9a-f]{7,40}$/i
 const FALLBACK_COMMIT_RE = /^0{7,40}$/
 const FALLBACK_BRANCH = 'main'
+
+const DEFAULT_BOOTSTRAP_TIMEOUTS = Object.freeze({
+  idleMs: 90_000,
+  killGraceMs: 2_000,
+  manifestHardMs: 60_000,
+  stageHardMs: 15 * 60_000,
+  totalMs: 30 * 60_000
+})
+
+function positiveTimeout(value, fallback) {
+  return Number.isFinite(value) && value > 0 ? value : fallback
+}
+
+function timeoutBudget(totalDeadline, preferredMs) {
+  const remainingMs = Math.max(1, Math.ceil(totalDeadline - performance.now()))
+
+  return {
+    hardTimeoutMs: Math.min(preferredMs, remainingMs),
+    totalLimited: remainingMs <= preferredMs
+  }
+}
+
+function terminationError(result, { totalLimited = false } = {}) {
+  if (result.termination === 'cancelled') {
+    return 'BOOTSTRAP_CANCELLED'
+  }
+
+  if (result.termination === 'idle-timeout') {
+    return 'BOOTSTRAP_IDLE_TIMEOUT'
+  }
+
+  if (result.termination === 'hard-timeout') {
+    return totalLimited ? 'BOOTSTRAP_TOTAL_TIMEOUT' : 'BOOTSTRAP_STAGE_TIMEOUT'
+  }
+
+  return null
+}
 
 function isPinnedCommit(commit) {
   return typeof commit === 'string' && STAMP_COMMIT_RE.test(commit) && !FALLBACK_COMMIT_RE.test(commit)
@@ -318,6 +359,7 @@ async function resolveInstallScript({
   installStamp,
   sourceRepoRoot,
   hermesHome,
+  bundledBootstrapRoot = null,
   emit,
   _download = downloadInstallScript
 }) {
@@ -332,7 +374,31 @@ async function resolveInstallScript({
     return { path: localScript, source: 'local', kind: installScriptKind() }
   }
 
-  // 2. Packaged path: download from GitHub at the install stamp's ref.
+  // 2. Packaged Desktop path: the installer is part of the signed app
+  // resources. A missing/corrupt package must fail locally instead of quietly
+  // reintroducing the raw.githubusercontent.com first-launch dependency.
+  if (bundledBootstrapRoot) {
+    const bundledScript = path.join(bundledBootstrapRoot, installScriptName())
+
+    try {
+      const stats = fs.lstatSync(bundledScript)
+
+      if (!stats.isFile() || stats.isSymbolicLink()) {
+        throw new Error('not a regular file')
+      }
+    } catch (err) {
+      throw new Error(
+        `Packaged Hermes is missing bundled ${installScriptName()} at ${bundledScript}. ` +
+          `Reinstall or re-download the Hermes DMG. (${err.message})`
+      )
+    }
+
+    emit({ type: 'log', line: `[bootstrap] using bundled ${installScriptName()} at ${bundledScript}` })
+
+    return { path: bundledScript, source: 'bundled', commit: installStamp?.commit || null, kind: installScriptKind() }
+  }
+
+  // 3. Backward-compatible non-packaged path: download from GitHub at the install stamp's ref.
   // Non-git fallback builds carry an all-zero commit; treat that as an
   // unpinned branch ref instead of trying to fetch a non-existent SHA.
   const installRef = installRefForStamp(installStamp)
@@ -456,201 +522,78 @@ function resolveWindowsPowerShell() {
   return 'powershell.exe'
 }
 
-function spawnPowerShell(scriptPath, args, { emit, stageName, abortSignal, hermesHome }: any = {}) {
-  return new Promise<any>((resolve, reject) => {
-    const ps = process.platform === 'win32' ? resolveWindowsPowerShell() : 'pwsh'
-    const fullArgs = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...args]
+function spawnPowerShell(
+  scriptPath,
+  args,
+  {
+    emit,
+    stageName,
+    abortSignal,
+    hermesHome,
+    hardTimeoutMs,
+    idleTimeoutMs,
+    killGraceMs,
+    progressHeartbeatMs,
+    useDomesticRuntimeMirrors
+  }: any = {}
+) {
+  const ps = process.platform === 'win32' ? resolveWindowsPowerShell() : 'pwsh'
 
-    const child = spawn(
-      ps,
-      fullArgs,
-      hiddenWindowsChildOptions({
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: {
-          ...process.env,
-          // Pass HERMES_HOME through so install.ps1 respects the caller's
-          // choice rather than re-computing the default.
-          HERMES_HOME: hermesHome || process.env.HERMES_HOME || ''
-        }
-      })
-    )
-
-    let stdout = ''
-    let stderr = ''
-    let killed = false
-
-    const onAbort = () => {
-      killed = true
-
-      try {
-        child.kill('SIGTERM')
-      } catch {
-        void 0
-      }
-    }
-
-    if (abortSignal) {
-      if (abortSignal.aborted) {
-        onAbort()
-      } else {
-        abortSignal.addEventListener('abort', onAbort, { once: true })
-      }
-    }
-
-    child.stdout.setEncoding('utf8')
-    child.stderr.setEncoding('utf8')
-
-    // Stream stdout line-by-line so the renderer sees progress in real time.
-    let stdoutBuf = ''
-    child.stdout.on('data', chunk => {
-      stdout += chunk
-      stdoutBuf += chunk
-      let nl
-
-      while ((nl = stdoutBuf.indexOf('\n')) !== -1) {
-        const line = stdoutBuf.slice(0, nl).replace(/\r$/, '')
-        stdoutBuf = stdoutBuf.slice(nl + 1)
-
-        if (line) {
-          emit && emit({ type: 'log', stage: stageName, line, stream: 'stdout' })
-        }
-      }
-    })
-
-    let stderrBuf = ''
-    child.stderr.on('data', chunk => {
-      stderr += chunk
-      stderrBuf += chunk
-      let nl
-
-      while ((nl = stderrBuf.indexOf('\n')) !== -1) {
-        const line = stderrBuf.slice(0, nl).replace(/\r$/, '')
-        stderrBuf = stderrBuf.slice(nl + 1)
-
-        if (line) {
-          emit && emit({ type: 'log', stage: stageName, line, stream: 'stderr' })
-        }
-      }
-    })
-
-    child.on('error', err => {
-      if (abortSignal) {
-        abortSignal.removeEventListener('abort', onAbort)
-      }
-
-      reject(err)
-    })
-
-    child.on('close', (code, signal) => {
-      if (abortSignal) {
-        abortSignal.removeEventListener('abort', onAbort)
-      }
-
-      // Flush any trailing bytes
-      if (stdoutBuf) {
-        emit && emit({ type: 'log', stage: stageName, line: stdoutBuf, stream: 'stdout' } as any)
-      }
-
-      if (stderrBuf) {
-        emit && emit({ type: 'log', stage: stageName, line: stderrBuf, stream: 'stderr' } as any)
-      }
-
-      resolve({ stdout, stderr, code, signal, killed } as any)
-    })
+  return runBootstrapProcess({
+    command: ps,
+    args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath, ...args],
+    abortSignal,
+    emit,
+    env: buildBootstrapEnvironment(process.env, { hermesHome, useDomesticRuntimeMirrors }),
+    hardTimeoutMs,
+    idleTimeoutMs,
+    killGraceMs,
+    progressHeartbeatMs,
+    stageName
   })
 }
 
-function spawnBash(scriptPath, args, { emit, stageName, abortSignal, hermesHome }: any = {}) {
-  return new Promise<any>((resolve, reject) => {
-    const child = spawn('bash', [scriptPath, ...args], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        HERMES_HOME: hermesHome || process.env.HERMES_HOME || ''
-      }
-    })
-
-    let stdout = ''
-    let stderr = ''
-    let killed = false
-
-    const onAbort = () => {
-      killed = true
-
-      try {
-        child.kill('SIGTERM')
-      } catch {
-        void 0
-      }
-    }
-
-    if (abortSignal) {
-      if (abortSignal.aborted) {
-        onAbort()
-      } else {
-        abortSignal.addEventListener('abort', onAbort, { once: true })
-      }
-    }
-
-    child.stdout.setEncoding('utf8')
-    child.stderr.setEncoding('utf8')
-
-    let stdoutBuf = ''
-    child.stdout.on('data', chunk => {
-      stdout += chunk
-      stdoutBuf += chunk
-      let nl
-
-      while ((nl = stdoutBuf.indexOf('\n')) !== -1) {
-        const line = stdoutBuf.slice(0, nl).replace(/\r$/, '')
-        stdoutBuf = stdoutBuf.slice(nl + 1)
-
-        if (line) {
-          emit && emit({ type: 'log', stage: stageName, line, stream: 'stdout' })
-        }
-      }
-    })
-
-    let stderrBuf = ''
-    child.stderr.on('data', chunk => {
-      stderr += chunk
-      stderrBuf += chunk
-      let nl
-
-      while ((nl = stderrBuf.indexOf('\n')) !== -1) {
-        const line = stderrBuf.slice(0, nl).replace(/\r$/, '')
-        stderrBuf = stderrBuf.slice(nl + 1)
-
-        if (line) {
-          emit && emit({ type: 'log', stage: stageName, line, stream: 'stderr' })
-        }
-      }
-    })
-
-    child.on('error', err => {
-      if (abortSignal) {
-        abortSignal.removeEventListener('abort', onAbort)
-      }
-
-      reject(err)
-    })
-
-    child.on('close', (code, signal) => {
-      if (abortSignal) {
-        abortSignal.removeEventListener('abort', onAbort)
-      }
-
-      if (stdoutBuf) {
-        emit && emit({ type: 'log', stage: stageName, line: stdoutBuf, stream: 'stdout' })
-      }
-
-      if (stderrBuf) {
-        emit && emit({ type: 'log', stage: stageName, line: stderrBuf, stream: 'stderr' })
-      }
-
-      resolve({ stdout, stderr, code, signal, killed })
-    })
+function spawnBash(
+  scriptPath,
+  args,
+  {
+    emit,
+    stageName,
+    abortSignal,
+    hermesHome,
+    hardTimeoutMs,
+    idleTimeoutMs,
+    killGraceMs,
+    progressHeartbeatMs,
+    useDomesticRuntimeMirrors
+  }: any = {}
+) {
+  return runBootstrapProcess({
+    command: 'bash',
+    args: [scriptPath, ...args],
+    abortSignal,
+    emit,
+    env: buildBootstrapEnvironment(process.env, { hermesHome, useDomesticRuntimeMirrors }),
+    hardTimeoutMs,
+    idleTimeoutMs,
+    killGraceMs,
+    progressHeartbeatMs,
+    stageName
   })
+}
+
+function usesDomesticRuntimeMirrors({ bundledSource, bootstrapScope }) {
+  return bundledSource === true && bootstrapScope === 'runtime'
+}
+
+function shouldPrepareWindowsPackagedAuthRuntime({ platform, bootstrapScope, bundledSource, bundledToolchain }) {
+  return platform === 'win32' && bootstrapScope === 'auth' && bundledSource === true && Boolean(bundledToolchain)
+}
+
+const LONG_PACKAGE_STAGES = new Set(['auth-prerequisites', 'python-auth-deps', 'python-deps', 'node-deps'])
+
+function progressHeartbeatMsForStage(stageName) {
+  return LONG_PACKAGE_STAGES.has(stageName) ? 10_000 : undefined
 }
 
 // ---------------------------------------------------------------------------
@@ -676,7 +619,40 @@ function buildPinArgs(installStamp, { pinCommit = true } = {}) {
   return args
 }
 
-function buildPosixPinArgs({ installStamp, activeRoot, hermesHome, pinCommit = true }) {
+function buildPowerShellBootstrapArgs({
+  installStamp,
+  activeRoot,
+  hermesHome,
+  pinCommit = true,
+  bundledSource = false,
+  bootstrapScope = 'runtime'
+}) {
+  const args = [
+    '-HermesHome',
+    hermesHome,
+    '-InstallDir',
+    activeRoot,
+    '-BootstrapScope',
+    bootstrapScope,
+    ...buildPinArgs(installStamp, { pinCommit })
+  ]
+
+  if (bundledSource) {
+    args.push('-BundledSource', '-SkipComputerUse')
+  }
+
+  return args
+}
+
+function buildPosixPinArgs({
+  installStamp,
+  activeRoot,
+  hermesHome,
+  pinCommit = true,
+  bundledSource = false,
+  bundledToolchainRoot = null,
+  bootstrapScope = null
+}) {
   const args = ['--dir', activeRoot, '--hermes-home', hermesHome]
 
   if (installStamp && installStamp.branch) {
@@ -687,26 +663,87 @@ function buildPosixPinArgs({ installStamp, activeRoot, hermesHome, pinCommit = t
     args.push('--commit', installStamp.commit)
   }
 
+  if (bundledSource) {
+    // The bundled voice runtime only needs the package registries and its
+    // ModelScope/GitHub model mirror ladder. Avoid the installer's unrelated,
+    // best-effort GitHub fetch for the optional Computer Use driver; that
+    // capability still installs on demand if the user enables it later.
+    args.push('--bundled-source', '--skip-computer-use')
+
+    if (bundledToolchainRoot) {
+      args.push('--bundled-toolchain', bundledToolchainRoot)
+    }
+  }
+
+  if (bootstrapScope) {
+    args.push('--bootstrap-scope', bootstrapScope)
+  }
+
   return args
 }
 
-async function fetchManifest({ scriptPath, installerKind, emit, hermesHome, activeRoot, installStamp, pinCommit }) {
+async function fetchManifest({
+  scriptPath,
+  installerKind,
+  emit,
+  hermesHome,
+  activeRoot,
+  installStamp,
+  pinCommit,
+  bundledSource,
+  bundledToolchainRoot,
+  abortSignal,
+  timeoutBudget: processTimeout,
+  idleTimeoutMs,
+  killGraceMs,
+  bootstrapScope
+}) {
   const isPosix = installerKind === 'posix'
 
   const args = isPosix
-    ? ['--manifest', ...buildPosixPinArgs({ installStamp, activeRoot, hermesHome, pinCommit })]
-    : ['-Manifest', ...buildPinArgs(installStamp, { pinCommit })]
+    ? [
+        '--manifest',
+        ...buildPosixPinArgs({
+          installStamp,
+          activeRoot,
+          hermesHome,
+          pinCommit,
+          bundledSource,
+          bundledToolchainRoot,
+          bootstrapScope
+        })
+      ]
+    : [
+        '-Manifest',
+        ...buildPowerShellBootstrapArgs({
+          installStamp,
+          activeRoot,
+          hermesHome,
+          pinCommit,
+          bundledSource,
+          bootstrapScope
+        })
+      ]
 
   const result = await (isPosix ? spawnBash : spawnPowerShell)(scriptPath, args, {
+    abortSignal,
     emit,
     stageName: '__manifest__',
-    hermesHome
+    hermesHome,
+    hardTimeoutMs: processTimeout.hardTimeoutMs,
+    idleTimeoutMs,
+    killGraceMs,
+    useDomesticRuntimeMirrors: usesDomesticRuntimeMirrors({ bundledSource, bootstrapScope })
   })
 
+  const terminalError = terminationError(result, processTimeout)
+
+  if (terminalError) {
+    throw new Error(terminalError)
+  }
+
   if (result.code !== 0) {
-    throw new Error(
-      `${isPosix ? 'install.sh --manifest' : 'install.ps1 -Manifest'} failed: exit ${result.code}\n${result.stderr || result.stdout}`
-    )
+    throw new Error(`${isPosix ? 'install.sh --manifest' : 'install.ps1 -Manifest'} failed: exit ${result.code}`)
   }
 
   // The manifest is the LAST JSON line on stdout (install.ps1 may print
@@ -719,6 +756,10 @@ async function fetchManifest({ scriptPath, installerKind, emit, hermesHome, acti
       const parsed = JSON.parse(lines[i])
 
       if (parsed && Array.isArray(parsed.stages)) {
+        if (parsed.bootstrap_scope !== bootstrapScope) {
+          throw new Error('BOOTSTRAP_SCOPE_MISMATCH')
+        }
+
         return parsed
       }
     } catch {
@@ -761,10 +802,24 @@ async function runStage({
   activeRoot,
   abortSignal,
   installStamp,
-  pinCommit
+  pinCommit,
+  bundledSource,
+  bundledToolchainRoot,
+  timeoutBudget: processTimeout,
+  idleTimeoutMs,
+  killGraceMs,
+  bootstrapScope
 }) {
   const startedAt = Date.now()
   emit({ type: 'stage', name: stage.name, state: 'running' })
+  emit({
+    type: 'progress',
+    stage: stage.name,
+    completed: 0,
+    total: null,
+    unit: 'items',
+    label: stage.title || stage.name
+  })
 
   const isPosix = installerKind === 'posix'
 
@@ -774,21 +829,57 @@ async function runStage({
         stage.name,
         '--non-interactive',
         '--json',
-        ...buildPosixPinArgs({ installStamp, activeRoot, hermesHome, pinCommit })
+        ...buildPosixPinArgs({
+          installStamp,
+          activeRoot,
+          hermesHome,
+          pinCommit,
+          bundledSource,
+          bundledToolchainRoot,
+          bootstrapScope
+        })
       ]
-    : ['-Stage', stage.name, '-NonInteractive', '-Json', ...buildPinArgs(installStamp, { pinCommit })]
+    : [
+        '-Stage',
+        stage.name,
+        '-NonInteractive',
+        '-Json',
+        ...buildPowerShellBootstrapArgs({
+          installStamp,
+          activeRoot,
+          hermesHome,
+          pinCommit,
+          bundledSource,
+          bootstrapScope
+        })
+      ]
 
   const result = await (isPosix ? spawnBash : spawnPowerShell)(scriptPath, args, {
     emit,
     stageName: stage.name,
     abortSignal,
-    hermesHome
+    hermesHome,
+    hardTimeoutMs: processTimeout.hardTimeoutMs,
+    idleTimeoutMs,
+    killGraceMs,
+    progressHeartbeatMs: progressHeartbeatMsForStage(stage.name),
+    useDomesticRuntimeMirrors: usesDomesticRuntimeMirrors({ bundledSource, bootstrapScope })
   })
 
   const durationMs = Date.now() - startedAt
 
-  if (result.killed) {
-    const ev = { type: 'stage', name: stage.name, state: 'failed', durationMs, error: 'cancelled by user' }
+  const terminalError = terminationError(result, processTimeout)
+
+  if (terminalError) {
+    const ev = {
+      type: 'stage',
+      name: stage.name,
+      state: 'failed',
+      durationMs,
+      error: terminalError,
+      cancelled: terminalError === 'BOOTSTRAP_CANCELLED'
+    }
+
     emit(ev)
 
     return ev
@@ -852,6 +943,90 @@ function openRunLog(logRoot) {
   return { path: logPath, stream }
 }
 
+function bundledRuntimePython(activeRoot) {
+  return process.platform === 'win32'
+    ? path.join(activeRoot, 'venv', 'Scripts', 'python.exe')
+    : path.join(activeRoot, 'venv', 'bin', 'python')
+}
+
+function validateBundledRuntime(activeRoot, bootstrapScope = 'runtime') {
+  const python = bundledRuntimePython(activeRoot)
+
+  try {
+    const stats = fs.statSync(python)
+
+    if (!stats.isFile()) {
+      throw new Error('not a regular file')
+    }
+  } catch (err) {
+    return Promise.reject(new Error(`Bundled runtime validation failed: Python is unavailable at ${python}`))
+  }
+
+  return new Promise((resolve, reject) => {
+    const importProbe =
+      bootstrapScope === 'auth' ? 'import httpx, keyring, hermes_cli.client_auth.bridge' : 'import hermes_cli'
+
+    const child = spawn(python, ['-c', importProbe], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env: {
+        ...process.env,
+        PYTHONPATH: [activeRoot, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter)
+      }
+    })
+
+    let stderr = ''
+    let settled = false
+
+    const timeout = setTimeout(() => {
+      if (settled) {
+        return
+      }
+
+      settled = true
+
+      try {
+        child.kill('SIGTERM')
+      } catch {
+        void 0
+      }
+
+      reject(new Error('Bundled runtime import smoke check timed out'))
+    }, 30_000)
+
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', chunk => {
+      stderr += chunk
+    })
+    child.on('error', err => {
+      if (settled) {
+        return
+      }
+
+      settled = true
+      clearTimeout(timeout)
+      reject(new Error(`Bundled runtime import smoke check failed: ${err.message}`))
+    })
+    child.on('close', code => {
+      if (settled) {
+        return
+      }
+
+      settled = true
+      clearTimeout(timeout)
+
+      if (code === 0) {
+        resolve(true)
+      } else {
+        reject(
+          new Error(
+            `Bundled runtime import smoke check failed with exit ${code}` + (stderr.trim() ? `: ${stderr.trim()}` : '')
+          )
+        )
+      }
+    })
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Public entrypoint
 // ---------------------------------------------------------------------------
@@ -861,12 +1036,29 @@ async function runBootstrap(opts) {
     installStamp,
     activeRoot,
     sourceRepoRoot,
+    bundledBootstrapRoot,
     hermesHome,
     logRoot,
     onEvent,
     abortSignal,
-    writeMarker // callback to write the bootstrap-complete marker; main.ts provides
+    writeMarker, // callback to write the bootstrap-complete marker; main.ts provides
+    timeouts: timeoutOverrides = {},
+    scope: bootstrapScope = 'runtime'
   } = opts
+
+  if (bootstrapScope !== 'auth' && bootstrapScope !== 'runtime') {
+    throw new Error(`Unknown bootstrap scope: ${bootstrapScope}`)
+  }
+
+  const timeouts = {
+    idleMs: positiveTimeout(timeoutOverrides.idleMs, DEFAULT_BOOTSTRAP_TIMEOUTS.idleMs),
+    killGraceMs: positiveTimeout(timeoutOverrides.killGraceMs, DEFAULT_BOOTSTRAP_TIMEOUTS.killGraceMs),
+    manifestHardMs: positiveTimeout(timeoutOverrides.manifestHardMs, DEFAULT_BOOTSTRAP_TIMEOUTS.manifestHardMs),
+    stageHardMs: positiveTimeout(timeoutOverrides.stageHardMs, DEFAULT_BOOTSTRAP_TIMEOUTS.stageHardMs),
+    totalMs: positiveTimeout(timeoutOverrides.totalMs, DEFAULT_BOOTSTRAP_TIMEOUTS.totalMs)
+  }
+
+  const totalDeadline = performance.now() + timeouts.totalMs
 
   // Bail before spawning anything if the user already cancelled — otherwise an
   // already-aborted signal would still fetch the manifest (a spawn) before the
@@ -913,9 +1105,12 @@ async function runBootstrap(opts) {
       `runLog=${runLog.path}`
   })
 
+  let sourceTransaction: PreparedBundledSource | null = null
+
   try {
     const existingCheckout = hasExistingGitCheckout(activeRoot)
     const pinCommit = !existingCheckout
+    let bundledSource = false
 
     if (existingCheckout && installStamp && installStamp.commit) {
       emit({
@@ -926,11 +1121,85 @@ async function runBootstrap(opts) {
       })
     }
 
+    const payload = bundledBootstrapRoot
+      ? await resolveBundledPayload({ bootstrapRoot: bundledBootstrapRoot, installStamp })
+      : null
+
+    const bundledToolchain = payload
+      ? await resolveBundledAuthToolchain(path.join(bundledBootstrapRoot, 'auth-toolchain'))
+      : null
+
+    if (payload && !existingCheckout) {
+      sourceTransaction = await prepareBundledSource({ payload, activeRoot, hermesHome })
+      bundledSource = sourceTransaction.kind !== 'existing-git'
+      emit({
+        type: 'log',
+        line:
+          `[bootstrap] prepared bundled backend ${payload.manifest.commit.slice(0, 12)} ` +
+          `(${sourceTransaction.kind})`
+      })
+    }
+
+    if (
+      shouldPrepareWindowsPackagedAuthRuntime({
+        platform: process.platform,
+        bootstrapScope,
+        bundledSource,
+        bundledToolchain
+      })
+    ) {
+      const stages = [
+        { name: 'auth-prerequisites', title: 'Prepare authentication runtime', category: 'auth', needs_user_input: false },
+        { name: 'python-auth-deps', title: 'Install authentication dependencies', category: 'auth', needs_user_input: false },
+        { name: 'auth-complete', title: 'Verify authentication runtime', category: 'auth', needs_user_input: false }
+      ]
+
+      emit({ type: 'manifest', stages, protocolVersion: 1, bootstrapScope })
+
+      for (const stage of stages) {
+        emit({ type: 'stage', name: stage.name, state: 'running' })
+      }
+
+      await prepareWindowsPackagedAuthRuntime({
+        toolchain: bundledToolchain,
+        activeRoot,
+        abortSignal,
+        emit
+      })
+
+      for (const stage of stages) {
+        emit({ type: 'stage', name: stage.name, state: 'succeeded' })
+      }
+
+      if (sourceTransaction) {
+        await sourceTransaction.finalize()
+      }
+
+      const marker = {
+        pinnedCommit: payload.manifest.commit,
+        pinnedBranch: payload.manifest.branch,
+        bootstrapScope
+      }
+
+      emit({ type: 'complete', marker })
+
+      return { ok: true, marker }
+    }
+
     // 1. Resolve the platform installer.
-    const scriptInfo = await resolveInstallScript({ installStamp, sourceRepoRoot, hermesHome, emit })
+    const scriptInfo = await resolveInstallScript({
+      installStamp,
+      sourceRepoRoot,
+      hermesHome,
+      bundledBootstrapRoot,
+      emit
+    })
+
     const installerKind = scriptInfo.kind || 'powershell'
 
     // 2. Fetch manifest
+    const manifestTimeout = timeoutBudget(totalDeadline, timeouts.manifestHardMs)
+
     const manifest = await fetchManifest({
       scriptPath: scriptInfo.path,
       installerKind,
@@ -938,13 +1207,21 @@ async function runBootstrap(opts) {
       hermesHome,
       activeRoot,
       installStamp,
-      pinCommit
+      pinCommit,
+      bundledSource,
+      bundledToolchainRoot: bundledToolchain?.root || null,
+      abortSignal,
+      timeoutBudget: manifestTimeout,
+      idleTimeoutMs: timeouts.idleMs,
+      killGraceMs: timeouts.killGraceMs,
+      bootstrapScope
     })
 
     emit({
       type: 'manifest',
       stages: manifest.stages,
-      protocolVersion: manifest.protocol_version || manifest.protocolVersion || null
+      protocolVersion: manifest.protocol_version || manifest.protocolVersion || null,
+      bootstrapScope
     })
 
     // 3. Iterate stages in order. Stages flagged needs_user_input are still
@@ -953,10 +1230,26 @@ async function runBootstrap(opts) {
     //    client-side.
     for (const stage of manifest.stages) {
       if (abortSignal && abortSignal.aborted) {
+        if (sourceTransaction) {
+          await sourceTransaction.rollback()
+        }
+
         emit({ type: 'failed', error: 'bootstrap cancelled by user' })
 
         return { ok: false, cancelled: true }
       }
+
+      if (performance.now() >= totalDeadline) {
+        if (sourceTransaction) {
+          await sourceTransaction.rollback()
+        }
+
+        emit({ type: 'failed', stage: stage.name, error: 'BOOTSTRAP_TOTAL_TIMEOUT' })
+
+        return { ok: false, failedStage: stage.name, error: 'BOOTSTRAP_TOTAL_TIMEOUT' }
+      }
+
+      const stageTimeout = timeoutBudget(totalDeadline, timeouts.stageHardMs)
 
       const ev = await runStage({
         scriptPath: scriptInfo.path,
@@ -967,14 +1260,32 @@ async function runBootstrap(opts) {
         activeRoot,
         abortSignal,
         installStamp,
-        pinCommit
+        pinCommit,
+        bundledSource,
+        bundledToolchainRoot: bundledToolchain?.root || null,
+        timeoutBudget: stageTimeout,
+        idleTimeoutMs: timeouts.idleMs,
+        killGraceMs: timeouts.killGraceMs,
+        bootstrapScope
       })
 
       if (ev.state === 'failed') {
+        if (sourceTransaction) {
+          await sourceTransaction.rollback()
+        }
+
         emit({ type: 'failed', stage: stage.name, error: (ev as any).error || 'stage failed' })
+
+        if ((ev as any).cancelled) {
+          return { ok: false, cancelled: true }
+        }
 
         return { ok: false, failedStage: stage.name, error: (ev as any).error }
       }
+    }
+
+    if (bundledSource) {
+      await validateBundledRuntime(activeRoot, bootstrapScope)
     }
 
     // 4. Write the bootstrap-complete marker. Fallback (all-zero) stamps are
@@ -1002,11 +1313,30 @@ async function runBootstrap(opts) {
       pinnedBranch: installStamp ? installStamp.branch : null
     }
 
-    const marker = typeof writeMarker === 'function' ? writeMarker(markerPayload) : markerPayload
+    const marker =
+      bootstrapScope === 'runtime' && typeof writeMarker === 'function'
+        ? writeMarker(markerPayload)
+        : { ...markerPayload, bootstrapScope }
+
+    if (sourceTransaction) {
+      await sourceTransaction.finalize()
+    }
+
     emit({ type: 'complete', marker })
 
     return { ok: true, marker }
   } catch (err) {
+    if (sourceTransaction) {
+      try {
+        await sourceTransaction.rollback()
+      } catch (rollbackError) {
+        emit({
+          type: 'log',
+          line: `[bootstrap] bundled source rollback failed: ${rollbackError.message || String(rollbackError)}`
+        })
+      }
+    }
+
     emit({ type: 'failed', error: err.message || String(err) })
 
     return { ok: false, error: err.message || String(err) }
@@ -1022,6 +1352,7 @@ async function runBootstrap(opts) {
 export {
   buildPinArgs,
   buildPosixPinArgs,
+  buildPowerShellBootstrapArgs,
   cachedScriptPath,
   hasExistingGitCheckout,
   installedAgentInstallScript,
@@ -1029,9 +1360,12 @@ export {
   isPinnedCommit,
   // Exposed for testability
   parseStageResult,
+  progressHeartbeatMsForStage,
   resolveCheckoutHead,
   resolveInstallScript,
   resolveLocalInstallScript,
   resolveMarkerPinnedCommit,
-  runBootstrap
+  runBootstrap,
+  shouldPrepareWindowsPackagedAuthRuntime,
+  usesDomesticRuntimeMirrors
 }

@@ -77,6 +77,7 @@ from hermes_cli.config import (
     custom_endpoint_key_env,
     check_config_version,
     detect_install_method,
+    format_desktop_bundle_update_message,
     format_docker_update_message,
     recommended_update_command_for_method,
     redact_key,
@@ -101,6 +102,12 @@ from gateway.status import (
     resolve_gateway_liveness,
 )
 from utils import env_var_enabled
+from hermes_cli.client_auth.runtime import (
+    AuthRequired,
+    backend_scope_tokens,
+    require_authorized,
+    start_backend_scope_token_control,
+)
 
 try:
     from fastapi import (
@@ -335,6 +342,14 @@ async def _lifespan(app: "FastAPI"):
     # On app.state (not a module global) so the Lock binds to the running
     # event loop during lifespan startup — see _get_event_state's docstring.
     app.state.chat_argv_lock = asyncio.Lock()
+    previous_desktop_scope_requirement = getattr(
+        app.state,
+        "desktop_scope_tokens_required",
+        False,
+    )
+    app.state.desktop_scope_tokens_required = os.getenv("HERMES_DESKTOP") == "1"
+    if app.state.desktop_scope_tokens_required:
+        start_backend_scope_token_control()
 
     # Bring this profile's state.db schema current BEFORE the first
     # session-list poll (#79531/#80037). Migrations used to run lazily on
@@ -403,6 +418,9 @@ async def _lifespan(app: "FastAPI"):
     try:
         yield
     finally:
+        if app.state.desktop_scope_tokens_required:
+            backend_scope_tokens.clear()
+        app.state.desktop_scope_tokens_required = previous_desktop_scope_requirement
         if cron_stop is not None:
             cron_stop.set()
         pty_reaper_task.cancel()
@@ -591,6 +609,8 @@ def _require_token(request: Request) -> None:
       making plugin install/enable/disable and the other ``_require_token``
       endpoints permanently unreachable behind the gate. Defer to the gate.
     """
+    if getattr(request.state, "desktop_scope_authenticated", False):
+        return
     if getattr(request.app.state, "auth_required", False):
         # Gate is authoritative. It attaches ``request.state.session`` on
         # success and 401s otherwise, so a request that reached us is already
@@ -732,6 +752,7 @@ async def _plugin_api_runtime_gate(request: Request, call_next):
         # this route can't be used as a plugin-name oracle.
         _authed = (
             getattr(request.state, "token_authenticated", False)
+            or getattr(request.state, "desktop_scope_authenticated", False)
             or getattr(request.app.state, "auth_required", False)
             or _has_valid_session_token(request)
             or _has_valid_query_token(request, path)
@@ -798,6 +819,8 @@ async def auth_middleware(request: Request, call_next):
     # presenting a bearer token on a registered token route) carries
     # ``token_authenticated`` — never bounce it through the cookie/session gate.
     if getattr(request.state, "token_authenticated", False):
+        return await call_next(request)
+    if getattr(request.state, "desktop_scope_authenticated", False):
         return await call_next(request)
     # When the OAuth gate is active, cookie-based auth (gated_auth_middleware
     # above) is authoritative.  The legacy _SESSION_TOKEN path is loopback-only
@@ -890,6 +913,34 @@ class DashboardHealth:
 
 
 DASHBOARD_HEALTH = DashboardHealth()
+
+
+@app.middleware("http")
+async def client_runtime_auth_middleware(request: Request, call_next):
+    """Require the shared remote login for every dashboard API request."""
+    if request.url.path.startswith("/api/"):
+        try:
+            request_app = getattr(request, "app", app)
+            if getattr(request_app.state, "desktop_scope_tokens_required", False):
+                bearer = request.headers.get(_SESSION_HEADER_NAME, "")
+                grant = backend_scope_tokens.authorize(
+                    bearer,
+                    "dashboard.api.request",
+                )
+                request.state.desktop_scope_authenticated = True
+                request.state.desktop_scope_grant = grant
+            else:
+                require_authorized("dashboard.api.request")
+        except AuthRequired:
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "detail": "Hermes login required",
+                    "code": "login_required",
+                    "hint": "Run `hermes login` and retry.",
+                },
+            )
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -1062,7 +1113,12 @@ _SCHEMA_OVERRIDES: Dict[str, Dict[str, Any]] = {
         "description": "Speech-to-text provider",
         # "mistral" temporarily removed — mistralai PyPI package quarantined
         # (malicious 2.4.6 release on 2026-05-12). Restore once available.
-        "options": ["local", "groq", "openai", "xai", "elevenlabs"],
+        "options": ["local", "sensevoice", "groq", "openai", "xai", "elevenlabs"],
+    },
+    "stt.sensevoice.language": {
+        "type": "select",
+        "description": "SenseVoice recognition language",
+        "options": ["zh", "auto", "en", "ja", "ko", "yue"],
     },
     "stt.local.model": {
         "type": "select",
@@ -3465,12 +3521,16 @@ async def get_status(profile: Optional[str] = None):
         # probes (NAS's wildcard-subdomain liveness probe), the SPA's pre-login
         # bootstrap, and anyone who can curl the host — i.e. exactly the audience
         # ``PUBLIC_API_PATHS`` documents this endpoint as serving.
+        can_update_hermes = (
+            not _dashboard_local_update_managed_externally()
+            and detect_install_method(PROJECT_ROOT) != "desktop-bundle"
+        )
         status = {
             "version": __version__,
             "release_date": __release_date__,
             "config_version": current_ver,
             "latest_config_version": latest_ver,
-            "can_update_hermes": not _dashboard_local_update_managed_externally(),
+            "can_update_hermes": can_update_hermes,
             "gateway_running": gateway_running,
             "gateway_state": gateway_state,
             "gateway_platforms": gateway_platforms,
@@ -4435,6 +4495,18 @@ async def update_hermes():
         }
 
     install_method = detect_install_method(PROJECT_ROOT)
+    if install_method == "desktop-bundle":
+        message = format_desktop_bundle_update_message()
+        _record_completed_action("hermes-update", message, exit_code=1)
+        return {
+            "ok": False,
+            "pid": None,
+            "name": "hermes-update",
+            "error": "desktop_bundle_update_unsupported",
+            "message": message,
+            "update_command": recommended_update_command_for_method(install_method),
+        }
+
     if install_method == "docker":
         message = format_docker_update_message()
         _record_completed_action("hermes-update", message, exit_code=1)
@@ -4597,6 +4669,10 @@ async def check_hermes_update(force: bool = False):
         "message": None,
     }
 
+    if install_method == "desktop-bundle":
+        payload["message"] = format_desktop_bundle_update_message()
+        return payload
+
     if install_method == "docker":
         payload["message"] = format_docker_update_message()
         return payload
@@ -4632,6 +4708,31 @@ async def check_hermes_update(force: bool = False):
             payload["commits"] = await asyncio.to_thread(_recent_upstream_commits)
 
     return payload
+
+
+class SttPreparationRequest(BaseModel):
+    retry: bool = False
+
+
+@app.post("/api/audio/stt/prepare")
+async def prepare_stt(
+    payload: SttPreparationRequest, profile: Optional[str] = None
+):
+    """Start or poll preparation of the selected local Desktop STT runtime."""
+    with _config_profile_scope(profile):
+        provider = str(
+            cfg_get(load_config(), "stt", "provider") or "local"
+        ).strip().lower()
+        if provider != "sensevoice":
+            return {"state": "not_applicable"}
+
+        from tools.sensevoice_stt import model_cache_root, prepare_sensevoice
+
+        # Resolve the profile path before spawning: ContextVars do not flow
+        # into a fresh threading.Thread, while profile caches must remain
+        # isolated even when one backend serves several profiles.
+        cache_root = model_cache_root()
+        return prepare_sensevoice(retry=payload.retry, cache_root=cache_root)
 
 
 @app.post("/api/audio/transcribe")
@@ -4965,6 +5066,8 @@ async def speak_stream_ws(ws: "WebSocket") -> None:
       server → ``{"type": "fallback"}`` when the configured provider has no
                chunked API — the client uses the POST endpoint instead.
     """
+    if not await _ws_client_runtime_authorized(ws, "dashboard.ws.audio"):
+        return
     if not _ws_auth_ok(ws):
         await ws.close(code=4401)
         return
@@ -5069,6 +5172,10 @@ async def speak_stream_ws(ws: "WebSocket") -> None:
         try:
             while True:
                 frame = json.loads(await ws.receive_text())
+                if not await _ws_client_runtime_authorized(
+                    ws, "dashboard.ws.audio.message"
+                ):
+                    break
                 if frame.get("text"):
                     text_q.put(str(frame["text"]))
                 if frame.get("stop"):
@@ -9900,7 +10007,7 @@ async def test_messaging_platform(platform_id: str, profile: Optional[str] = Non
 # connected, plus a disconnect button. The actual login flow (PKCE for
 # Anthropic, device-code for Nous/Codex) still runs in the CLI for now;
 # Phase 2 will add in-browser flows. For unconnected providers we return
-# the canonical ``hermes auth add <provider>`` command so the dashboard
+# the canonical ``hermes provider add <provider>`` command so the dashboard
 # can surface a one-click copy.
 
 
@@ -10062,7 +10169,7 @@ _OAUTH_PROVIDER_CATALOG: tuple[Dict[str, Any], ...] = (
         "id": "nous",
         "name": "Nous Portal",
         "flow": "device_code",
-        "cli_command": "hermes auth add nous",
+        "cli_command": "hermes provider add nous",
         "docs_url": "https://portal.nousresearch.com",
         "status_fn": None,  # dispatched via auth.get_nous_auth_status
     },
@@ -10070,7 +10177,7 @@ _OAUTH_PROVIDER_CATALOG: tuple[Dict[str, Any], ...] = (
         "id": "openai-codex",
         "name": "ChatGPT or Codex Subscription",
         "flow": "device_code",
-        "cli_command": "hermes auth add openai-codex",
+        "cli_command": "hermes provider add openai-codex",
         "docs_url": "https://platform.openai.com/docs",
         "status_fn": None,  # dispatched via auth.get_codex_auth_status
     },
@@ -10078,7 +10185,7 @@ _OAUTH_PROVIDER_CATALOG: tuple[Dict[str, Any], ...] = (
         "id": "qwen-oauth",
         "name": "Qwen (via Qwen CLI)",
         "flow": "external",
-        "cli_command": "hermes auth add qwen-oauth",
+        "cli_command": "hermes provider add qwen-oauth",
         "docs_url": "https://github.com/QwenLM/qwen-code",
         "status_fn": None,  # dispatched via auth.get_qwen_auth_status
     },
@@ -10091,7 +10198,7 @@ _OAUTH_PROVIDER_CATALOG: tuple[Dict[str, Any], ...] = (
         # as Nous's device-code flow; the PKCE bit is a security
         # extension that doesn't change the operator experience.
         "flow": "device_code",
-        "cli_command": "hermes auth add minimax-oauth",
+        "cli_command": "hermes provider add minimax-oauth",
         "docs_url": "https://www.minimax.io",
         "status_fn": None,  # dispatched via auth.get_minimax_oauth_auth_status
     },
@@ -10102,7 +10209,7 @@ _OAUTH_PROVIDER_CATALOG: tuple[Dict[str, Any], ...] = (
         # containers, and desktop installs without requiring a reachable
         # 127.0.0.1 callback.
         "flow": "device_code",
-        "cli_command": "hermes auth add xai-oauth",
+        "cli_command": "hermes provider add xai-oauth",
         "docs_url": "https://hermes-agent.nousresearch.com/docs/guides/xai-grok-oauth",
         "status_fn": None,  # dispatched via auth.get_xai_oauth_auth_status
     },
@@ -10121,7 +10228,7 @@ _OAUTH_PROVIDER_CATALOG: tuple[Dict[str, Any], ...] = (
         "id": "anthropic",
         "name": "Anthropic API Key",
         "flow": "pkce",
-        "cli_command": "hermes auth add anthropic",
+        "cli_command": "hermes provider add anthropic",
         "docs_url": "https://docs.claude.com/en/api/getting-started",
         "status_fn": _anthropic_oauth_status,
     },
@@ -10310,7 +10417,7 @@ def _build_oauth_catalog() -> list[Dict[str, Any]]:
                 "id": d.slug,
                 "name": d.label,
                 "flow": "external",
-                "cli_command": f"hermes auth add {d.slug}",
+                "cli_command": f"hermes provider add {d.slug}",
                 "docs_url": d.signup_url or "",
                 "status_fn": None,
             })
@@ -10554,7 +10661,7 @@ def _save_anthropic_oauth_creds(access_token: str, refresh_token: str, expires_a
     """Persist Anthropic PKCE creds to both Hermes file AND credential pool.
 
     Mirrors what auth_commands.add_command does so the dashboard flow leaves
-    the system in the same state as ``hermes auth add anthropic``.
+    the system in the same state as ``hermes provider add anthropic``.
     """
     from agent.anthropic_adapter import _get_hermes_oauth_file
     oauth_file = _get_hermes_oauth_file()
@@ -10999,7 +11106,7 @@ def _minimax_poller(session_id: str) -> None:
     auth_state dict that ``_minimax_oauth_login`` (the CLI flow) builds
     and persists via ``_minimax_save_auth_state`` — so the dashboard
     path leaves the system in the same state as
-    ``hermes auth add minimax-oauth``.
+    ``hermes provider add minimax-oauth``.
     """
     from hermes_cli.auth import (
         _minimax_poll_token,
@@ -11122,7 +11229,7 @@ def _xai_device_poller(session_id: str) -> None:
                 # chat provider.
                 set_active=False,
             )
-            # Mirror `hermes auth add xai-oauth`: first credential may become
+            # Mirror `hermes provider add xai-oauth`: first credential may become
             # active when none is set yet; never overwrite an existing choice.
             mark_provider_active_if_unset("xai-oauth")
             # The singleton write above is the single source of truth: the
@@ -11132,7 +11239,7 @@ def _xai_device_poller(session_id: str) -> None:
             # entries and triggers rotation churn / ``refresh_token_reused``.
             # An interactive dashboard login is also an explicit re-enable
             # signal, so clear any ``device_code`` suppression left by a
-            # prior ``hermes auth remove xai-oauth`` (mirrors auth_add_command
+            # prior ``hermes provider remove xai-oauth`` (mirrors auth_add_command
             # and the ``hermes model`` re-login path in _login_xai_oauth).
             unsuppress_credential_source("xai-oauth", "device_code")
         with _oauth_sessions_lock:
@@ -13388,8 +13495,8 @@ async def add_credential_pool_entry(body: CredentialPoolAdd):
         pool.add_entry(entry)
         # Re-adding a credential is an explicit re-engagement signal: lift
         # every suppression for this provider so a source deleted earlier
-        # (via DELETE below or `hermes auth remove`) can seed again.
-        # Mirrors the `hermes auth add` behaviour in auth_commands.py.
+        # (via DELETE below or `hermes provider remove`) can seed again.
+        # Mirrors the `hermes provider add` behaviour in auth_commands.py.
         if not provider.startswith(CUSTOM_POOL_PREFIX):
             try:
                 from hermes_cli.auth import (
@@ -13417,7 +13524,7 @@ async def remove_credential_pool_entry(provider: str, index: int):
     their backing source (.env var, OAuth singleton file, custom-provider
     config) on every call, so deleting only the pool row silently reverts on
     the next dashboard refresh.  We dispatch through the same RemovalStep
-    registry the CLI ``hermes auth remove`` uses: each source cleans up its
+    registry the CLI ``hermes provider remove`` uses: each source cleans up its
     external state and suppresses ``(provider, source)`` so the seeders skip
     it.  Manual entries have no registered step — nothing external to clean,
     no suppression needed (they aren't re-seeded).
@@ -15288,6 +15395,10 @@ async def _legacy_pump(ws: "WebSocket", bridge) -> None:
                 break
             if msg.get("type") == "websocket.disconnect":
                 break
+            if not await _ws_client_runtime_authorized(
+                ws, "dashboard.ws.pty.message"
+            ):
+                break
             raw = msg.get("bytes")
             if raw is None:
                 text = msg.get("text")
@@ -15445,6 +15556,8 @@ def _ws_request_is_allowed(ws: "WebSocket") -> bool:
 
 def _ws_auth_mode() -> str:
     """Short label for the active WS auth mode — logged on every connection."""
+    if getattr(app.state, "desktop_scope_tokens_required", False):
+        return "desktop-scope"
     if getattr(app.state, "auth_required", False):
         return "gated"
     bound_host = (getattr(app.state, "bound_host", "") or "").strip().lower()
@@ -15485,8 +15598,23 @@ def _ws_auth_reason(ws: "WebSocket") -> tuple[Optional[str], str]:
     Audit-logs the rejection so operators can debug "WS keeps closing"
     issues from the log.
     """
-    auth_required = bool(getattr(app.state, "auth_required", False))
-    if auth_required:
+    ws_state = getattr(ws, "state", None)
+    ws_app = getattr(ws, "app", app)
+    cached = getattr(ws_state, "hermes_auth_result", None)
+    if isinstance(cached, tuple) and len(cached) == 2:
+        return cached
+
+    def finish(reason: Optional[str], credential: str) -> tuple[Optional[str], str]:
+        result = (reason, credential)
+        if ws_state is not None:
+            ws_state.hermes_auth_result = result
+        return result
+
+    auth_required = bool(getattr(ws_app.state, "auth_required", False))
+    desktop_scope_required = bool(
+        getattr(ws_app.state, "desktop_scope_tokens_required", False)
+    )
+    if auth_required or desktop_scope_required:
         # Lazy import — keeps this function importable in test harnesses
         # that don't bring in the dashboard_auth layer.
         from hermes_cli.dashboard_auth.audit import AuditEvent, audit_log
@@ -15503,7 +15631,7 @@ def _ws_auth_reason(ws: "WebSocket") -> tuple[Optional[str], str]:
         if internal:
             try:
                 consume_internal_credential(internal)
-                return None, "internal"
+                return finish(None, "internal")
             except TicketInvalid as exc:
                 audit_log(
                     AuditEvent.WS_TICKET_REJECTED,
@@ -15511,15 +15639,25 @@ def _ws_auth_reason(ws: "WebSocket") -> tuple[Optional[str], str]:
                     ip=(ws.client.host if ws.client else ""),
                     path=ws.url.path,
                 )
-                return "internal_invalid", "internal"
+                return finish("internal_invalid", "internal")
 
         ticket = ws.query_params.get("ticket", "")
         if not ticket:
-            return "no_credential", "none"
+            return finish("no_credential", "none")
 
         try:
-            consume_ticket(ticket)
-            return None, "ticket"
+            info = consume_ticket(ticket)
+            if desktop_scope_required:
+                claim = info.get("auth_scope")
+                backend_scope_tokens.authorize_claim(
+                    claim,
+                    "dashboard.ws.upgrade",
+                )
+                if ws_state is not None:
+                    ws_state.desktop_scope_claim = claim
+            return finish(None, "ticket")
+        except AuthRequired:
+            return finish("scope_invalid", "ticket")
         except TicketInvalid as exc:
             audit_log(
                 AuditEvent.WS_TICKET_REJECTED,
@@ -15527,19 +15665,44 @@ def _ws_auth_reason(ws: "WebSocket") -> tuple[Optional[str], str]:
                 ip=(ws.client.host if ws.client else ""),
                 path=ws.url.path,
             )
-            return "ticket_invalid", "ticket"
+            return finish("ticket_invalid", "ticket")
 
     token = ws.query_params.get("token", "")
     if not token:
-        return "no_credential", "none"
+        return finish("no_credential", "none")
     if hmac.compare_digest(token.encode(), _SESSION_TOKEN.encode()):
-        return None, "token"
-    return "token_mismatch", "token"
+        return finish(None, "token")
+    return finish("token_mismatch", "token")
 
 
 def _ws_auth_ok(ws: "WebSocket") -> bool:
     """True when the WS-upgrade credential is accepted. See _ws_auth_reason."""
     return _ws_auth_reason(ws)[0] is None
+
+
+async def _ws_client_runtime_authorized(ws: "WebSocket", boundary: str) -> bool:
+    """Validate the central login and close a locked WebSocket fail-closed."""
+    try:
+        ws_app = getattr(ws, "app", app)
+        ws_state = getattr(ws, "state", None)
+        if getattr(ws_app.state, "desktop_scope_tokens_required", False):
+            reason, credential = _ws_auth_reason(ws)
+            if reason is not None:
+                raise AuthRequired("runtime_unavailable")
+            claim = getattr(ws_state, "desktop_scope_claim", None)
+            if credential == "ticket":
+                backend_scope_tokens.authorize_claim(claim, boundary)
+            elif credential == "internal":
+                require_authorized(boundary)
+            else:
+                raise AuthRequired("runtime_unavailable")
+        else:
+            require_authorized(boundary)
+        return True
+    except AuthRequired:
+        with contextlib.suppress(Exception):
+            await ws.close(code=4401, reason="Hermes login required")
+        return False
 
 # Per-channel subscriber registry used by /api/pub (PTY-side gateway → dashboard)
 # and /api/events (dashboard → browser sidebar).  Keyed by an opaque channel id
@@ -16087,6 +16250,8 @@ def _console_json_payload(msg: Any) -> tuple[Optional[dict[str, Any]], Optional[
 async def console_ws(ws: WebSocket) -> None:
     peer = ws.client.host if ws.client else "?"
 
+    if not await _ws_client_runtime_authorized(ws, "dashboard.ws.console"):
+        return
     if not _DASHBOARD_EMBEDDED_CHAT_ENABLED:
         _log.info("console refused: embedded chat disabled peer=%s", peer)
         await ws.close(code=4404, reason="embedded chat disabled")
@@ -16277,6 +16442,10 @@ async def console_ws(ws: WebSocket) -> None:
             msg_type = msg.get("type")
             if msg_type == "websocket.disconnect":
                 break
+            if not await _ws_client_runtime_authorized(
+                ws, "dashboard.ws.console.message"
+            ):
+                break
 
             payload, error = _console_json_payload(msg)
             if error:
@@ -16437,6 +16606,8 @@ async def console_ws(ws: WebSocket) -> None:
 async def pty_ws(ws: WebSocket) -> None:
     peer = ws.client.host if ws.client else "?"
 
+    if not await _ws_client_runtime_authorized(ws, "dashboard.ws.pty"):
+        return
     if not _DASHBOARD_EMBEDDED_CHAT_ENABLED:
         _log.info("pty refused: embedded chat disabled peer=%s", peer)
         await ws.close(code=4404, reason="embedded chat disabled")
@@ -16590,6 +16761,10 @@ async def pty_ws(ws: WebSocket) -> None:
                 break
             if msg.get("type") == "websocket.disconnect":
                 break
+            if not await _ws_client_runtime_authorized(
+                ws, "dashboard.ws.pty.message"
+            ):
+                break
             raw = msg.get("bytes")
             if raw is None:
                 text = msg.get("text")
@@ -16625,6 +16800,8 @@ async def pty_ws(ws: WebSocket) -> None:
 
 @app.websocket("/api/ws")
 async def gateway_ws(ws: WebSocket) -> None:
+    if not await _ws_client_runtime_authorized(ws, "dashboard.ws.gateway"):
+        return
     if not _DASHBOARD_EMBEDDED_CHAT_ENABLED:
         await ws.close(code=4403)
         return
@@ -16656,6 +16833,8 @@ async def gateway_ws(ws: WebSocket) -> None:
 
 @app.websocket("/api/pub")
 async def pub_ws(ws: WebSocket) -> None:
+    if not await _ws_client_runtime_authorized(ws, "dashboard.ws.pub"):
+        return
     if not _DASHBOARD_EMBEDDED_CHAT_ENABLED:
         await ws.close(code=4403)
         return
@@ -16677,13 +16856,20 @@ async def pub_ws(ws: WebSocket) -> None:
 
     try:
         while True:
-            await _broadcast_event(ws.app, channel, await ws.receive_text())
+            frame = await ws.receive_text()
+            if not await _ws_client_runtime_authorized(
+                ws, "dashboard.ws.pub.message"
+            ):
+                break
+            await _broadcast_event(ws.app, channel, frame)
     except WebSocketDisconnect:
         pass
 
 
 @app.websocket("/api/events")
 async def events_ws(ws: WebSocket) -> None:
+    if not await _ws_client_runtime_authorized(ws, "dashboard.ws.events"):
+        return
     if not _DASHBOARD_EMBEDDED_CHAT_ENABLED:
         await ws.close(code=4403)
         return
@@ -16713,6 +16899,10 @@ async def events_ws(ws: WebSocket) -> None:
             # disconnect so the connection stays open as long as the
             # browser holds it.
             await ws.receive_text()
+            if not await _ws_client_runtime_authorized(
+                ws, "dashboard.ws.events.message"
+            ):
+                break
     except WebSocketDisconnect:
         pass
     finally:

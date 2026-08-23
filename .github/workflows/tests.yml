@@ -253,3 +253,9 @@ jobs:
           OPENROUTER_API_KEY: ""
           OPENAI_API_KEY: ""
           NOUS_API_KEY: ""
+
+      - name: Verify generated auth policy artifacts
+        run: |
+          source .venv/bin/activate
+          python scripts/check_auth_entrypoints.py --check
+          python scripts/generate_auth_free_help.py --check

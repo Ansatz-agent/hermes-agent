@@ -1,0 +1,39 @@
+version = 1
+
+[ansatz_product]
+runtime_marker = "ansatz-voice-trace-client/v1"
+schema_version = 1
+package_resource_sealed = true
+
+[[components]]
+kind = "observability"
+enabled = true
+
+[components.config]
+version = 3
+enable_full_payloads = true
+
+[components.config.policy]
+unknown_component = "error"
+unknown_field = "error"
+unsupported_value = "error"
+
+[components.config.opentelemetry]
+enabled = true
+
+[[components.config.opentelemetry.endpoints]]
+type = "full"
+endpoint = "http://127.0.0.1:1/v1/traces"
+transport = "http_binary"
+service_name = "ansatz-voice-trace-client"
+service_namespace = "cn.c2sml.ansatz"
+instrumentation_scope = "nemo-relay"
+timeout_millis = 3000
+
+[components.config.opentelemetry.endpoints.header_env]
+Authorization = "ANSATZ_TRACE_LOCAL_AUTHORIZATION"
+
+[components.config.opentelemetry.endpoints.resource_attributes]
+"ansatz.product" = "voice-trace-client"
+"ansatz.telemetry.schema_version" = "1"
+"ansatz.installation.id" = "validated-at-runtime"

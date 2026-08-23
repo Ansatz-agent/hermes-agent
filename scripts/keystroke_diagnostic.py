@@ -33,6 +33,18 @@ Then in Hermes, bind the newline behaviour to that key:
     def handle_ctrl_enter(event):
         event.current_buffer.insert_text('\\n')
 """
+if __name__ == "__main__":
+    import sys
+    from pathlib import Path
+
+    project_root = Path(__file__).resolve().parents[1]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.keystroke_diagnostic")
+
 from prompt_toolkit import Application
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import Layout

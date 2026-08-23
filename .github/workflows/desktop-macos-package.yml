@@ -1,0 +1,143 @@
+name: Desktop macOS DMG package
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-macos-package-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Build and verify macOS arm64 DMG
+    runs-on: macos-15
+    timeout-minutes: 180
+    env:
+      NPM_CONFIG_REGISTRY: https://registry.npmmirror.com
+      NPM_CONFIG_REPLACE_REGISTRY_HOST: always
+      UV_DEFAULT_INDEX: https://mirrors.ustc.edu.cn/pypi/simple
+      HERMES_UV_FALLBACK_INDEX: https://pypi.tuna.tsinghua.edu.cn/simple
+      ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+      ELECTRON_BUILDER_BINARIES_MIRROR: https://npmmirror.com/mirrors/electron-builder-binaries/
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Set up Node 26.7.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 26.7.0
+          cache: npm
+
+      - name: Set up uv 0.12.5
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          version: "0.12.5"
+          enable-cache: true
+
+      - name: Pin npm and install locked dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          npm install --global npm@11.19.0
+          test "$(node --version)" = v26.7.0
+          test "$(npm --version)" = 11.19.0
+          uv python install 3.11.16
+          npm ci
+
+      - name: Run product contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run typecheck --workspace apps/desktop
+          node --test \
+            scripts/desktop-dmg-contract.test.mjs \
+            scripts/desktop-dmg-gatekeeper-contract.test.mjs
+
+      - name: Build with the local product command
+        shell: bash
+        run: npm run dist:mac:dmg --workspace apps/desktop
+
+      - name: Reject CI files, credential drivers, and raw logs
+        shell: bash
+        run: |
+          set -euo pipefail
+          dmg="$(find apps/desktop/release -maxdepth 1 -type f -name '*-mac-arm64.dmg' -print -quit)"
+          test -n "$dmg"
+          mount="$RUNNER_TEMP/hermes-dmg-audit"
+          mkdir -p "$mount"
+          hdiutil attach "$dmg" -mountpoint "$mount" -nobrowse -readonly
+          trap 'hdiutil detach "$mount" -force >/dev/null 2>&1 || true' EXIT
+          app="$mount/Hermes.app"
+          asar="$app/Contents/Resources/app.asar"
+          node --input-type=module -e \
+            "import {listPackage} from '@electron/asar'; const entries=listPackage(process.argv[1]); const bad=entries.find(x=>/(^|\/)\.github\/|credential-login|\.log$/i.test(x)); if(bad) throw new Error('forbidden ASAR entry: '+bad)" \
+            "$asar"
+          archive="$app/Contents/Resources/bootstrap/hermes-backend.tar.gz"
+          if tar -tzf "$archive" | grep -E '(^|/)\.github/|credential-login|\.log$'; then
+            echo 'forbidden backend entry found' >&2
+            exit 1
+          fi
+          if find "$app/Contents/Resources" \( -path '*/.github/*' -o -iname '*credential-login*' -o -name '*.log' \) -print -quit | grep -q .; then
+            echo 'forbidden packaged resource found' >&2
+            exit 1
+          fi
+
+      - name: Credentialed installed-app login
+        shell: bash
+        env:
+          HERMES_E2E_USERNAME: ${{ secrets.HERMES_E2E_USERNAME }}
+          HERMES_E2E_PASSWORD: ${{ secrets.HERMES_E2E_PASSWORD }}
+        run: |
+          set -euo pipefail
+          dmg="$(find apps/desktop/release -maxdepth 1 -type f -name '*-mac-arm64.dmg' -print -quit)"
+          test -n "$dmg"
+          mount="$RUNNER_TEMP/hermes-dmg-login"
+          home="$RUNNER_TEMP/hermes-clean-home"
+          mkdir -p "$mount" "$home"
+          hdiutil attach "$dmg" -mountpoint "$mount" -nobrowse -readonly
+          cleanup() {
+            pkill -f '/Applications/Hermes.app/Contents/MacOS/Hermes' >/dev/null 2>&1 || true
+            hdiutil detach "$mount" -force >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          ditto "$mount/Hermes.app" /Applications/Hermes.app
+          HERMES_HOME="$home" /Applications/Hermes.app/Contents/MacOS/Hermes \
+            --remote-debugging-address=127.0.0.1 \
+            --remote-debugging-port=9222 >/dev/null 2>&1 &
+          for _ in $(seq 1 240); do
+            nc -z 127.0.0.1 9222 && break
+            sleep 0.5
+          done
+          nc -z 127.0.0.1 9222
+          node -e \
+            "process.stdout.write(process.env.HERMES_E2E_USERNAME+'\\0'+process.env.HERMES_E2E_PASSWORD+'\\0')" | \
+            node scripts/desktop-credential-login.mjs --port 9222 --timeout-ms 2700000
+
+      - name: Write sanitized artifact report
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p apps/desktop/build/reports
+          dmg="$(find apps/desktop/release -maxdepth 1 -type f -name '*-mac-arm64.dmg' -print -quit)"
+          sha="$(shasum -a 256 "$dmg" | cut -d' ' -f1)"
+          version="$(node -p "require('./apps/desktop/package.json').version")"
+          node -e \
+            "require('fs').writeFileSync(process.argv[1], JSON.stringify({schemaVersion:1,commit:process.env.GITHUB_SHA,version:process.argv[2],platform:'macos',arch:'arm64',artifact:require('path').basename(process.argv[3]),sha256:process.argv[4],sensitiveEvidenceRecorded:false},null,2)+'\\n')" \
+            apps/desktop/build/reports/macos-package.json "$version" "$dmg" "$sha"
+
+      - name: Upload DMG and sanitized report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: hermes-macos-dmg-${{ github.sha }}
+          path: |
+            apps/desktop/release/*-mac-arm64.dmg
+            apps/desktop/build/reports/macos-package.json
+          if-no-files-found: error
+          retention-days: 14

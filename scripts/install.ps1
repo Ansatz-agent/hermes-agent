@@ -4,11 +4,8 @@
 # Installation script for Windows (PowerShell).
 # Uses uv for fast Python provisioning and package management.
 #
-# Usage:
-#   iex (irm https://hermes-agent.nousresearch.com/install.ps1)
-#
-# Or download and run with options:
-#   .\install.ps1 -NoVenv -SkipSetup
+# Usage (administrator-supplied reviewed package):
+#   .\install.ps1 -BundledSource -NoVenv -SkipSetup
 #
 # ============================================================================
 
@@ -16,6 +13,7 @@ param(
     [switch]$NoVenv,
     [switch]$SkipSetup,
     [switch]$SkipComputerUse,
+    [switch]$BundledSource,
     [string]$Branch = "main",
     # -Commit and -Tag are higher-precedence variants of -Branch for users
     # who need reproducible installs (desktop installer pinning, CI, release
@@ -35,11 +33,12 @@ param(
 
     # --- Stage protocol (additive; default invocation behaves as before) ----
     # See the "Stage protocol" section near the bottom of the file for the
-    # full contract.  Intended for programmatic drivers (the desktop GUI's
-    # onboarding wizard, CI, future install.sh parity, etc.).  CLI users
-    # running the canonical `irm | iex` one-liner never touch these flags.
+    # full contract. Intended for programmatic drivers such as the packaged
+    # desktop GUI's onboarding wizard.
     [switch]$Manifest,
     [string]$Stage,
+    [ValidateSet("auth", "runtime")]
+    [string]$BootstrapScope = "runtime",
     [switch]$ProtocolVersion,
     [switch]$NonInteractive,
     [switch]$Json,
@@ -69,9 +68,8 @@ param(
     #     from inside an already-launched Hermes.exe; if THAT recursively
     #     built apps/desktop it would try to overwrite the live Hermes.exe
     #     on disk and fail. The recursive path omits the flag.
-    #   * The canonical CLI one-liner (irm | iex) omits the flag too;
-    #     terminal users don't need a desktop binary built for them, and
-    #     `hermes desktop` already builds on demand.
+    #   * Reviewed CLI packages omit the flag; terminal users don't need a
+    #     desktop binary built for them, and `hermes desktop` builds on demand.
     [switch]$IncludeDesktop
 )
 
@@ -144,14 +142,15 @@ try {
 # them apply -- including non-Windows -- behaves exactly as it did before.
 
 $script:LongProfileRoot = $null
+$script:MachineReadableMode = $ProtocolVersion -or $ShowResolvedPaths -or $Manifest -or $Json -or $PSBoundParameters.ContainsKey('Stage')
 
 function Write-PathDiag {
     # Diagnostics for this block go to stderr, never stdout: the stage protocol
     # hands drivers a single line of JSON on stdout and a stray note would break
     # anything parsing it.
     #
-    # Suppressed entirely under -ShowResolvedPaths, which is a machine-readable
-    # query: Windows PowerShell 5.1 wraps any native-command stderr in a
+    # Suppressed entirely under every machine-readable query: Windows
+    # PowerShell 5.1 wraps any native-command stderr in a
     # NativeCommandError and folds it back into the caller's own stream, so a
     # child writing here at all is enough to corrupt a 5.1 caller's capture.
     # The JSON already carries everything these lines say.
@@ -160,7 +159,7 @@ function Write-PathDiag {
     # windows-latest runner. $host.UI.WriteErrorLine was tried and silently
     # produced nothing there under a non-interactive host.
     param([string]$Message)
-    if ($ShowResolvedPaths) { return }
+    if ($script:MachineReadableMode) { return }
     [Console]::Error.WriteLine("[hermes] $Message")
 }
 
@@ -374,8 +373,6 @@ $script:ResolvedPathReport = @{
 # Configuration
 # ============================================================================
 
-$RepoUrlSsh = "git@github.com:NousResearch/hermes-agent.git"
-$RepoUrlHttps = "https://github.com/NousResearch/hermes-agent.git"
 $PythonVersion = "3.11"
 # Minor versions the installer accepts when the requested $PythonVersion isn't
 # available, in preference order.  uv discovers both uv-managed and system
@@ -390,6 +387,45 @@ $NodeVersion = "22"
 # manifest whenever it does exist, so a drifted constant self-corrects on any
 # run against an existing checkout.
 $NpmRange = ">=12.0.0"
+
+$script:PythonPrimaryMirror = "https://mirrors.ustc.edu.cn/pypi/simple"
+$script:PythonSecondaryMirror = "https://pypi.tuna.tsinghua.edu.cn/simple"
+$script:NpmPrimaryRegistry = "https://registry.npmmirror.com"
+$script:NpmOfficialRegistry = "https://registry.npmjs.org"
+$script:NodePrimaryMirror = "https://registry.npmmirror.com/-/binary/node/"
+$script:NodeSecondaryMirror = "https://npmmirror.com/mirrors/node/"
+$script:NodeOfficialMirror = "https://nodejs.org/dist/"
+$script:PlaywrightPrimaryMirror = "https://registry.npmmirror.com/-/binary/playwright"
+$script:PlaywrightSecondaryMirror = "https://npmmirror.com/mirrors/playwright/"
+$script:DesktopElectronPrimaryMirror = "https://npmmirror.com/mirrors/electron/"
+$script:DesktopElectronSecondaryMirror = "https://registry.npmmirror.com/-/binary/electron/"
+
+@(
+    "UV_INDEX", "UV_INDEX_URL", "UV_EXTRA_INDEX_URL", "UV_CONFIG_FILE", "UV_PYTHON",
+    "PIP_INDEX_URL", "PIP_EXTRA_INDEX_URL", "PIP_CONFIG_FILE",
+    "NPM_CONFIG_REGISTRY", "npm_config_registry", "NPM_CONFIG_USERCONFIG",
+    "NODEJS_ORG_MIRROR", "ELECTRON_MIRROR", "ELECTRON_BUILDER_BINARIES_MIRROR",
+    "PLAYWRIGHT_DOWNLOAD_HOST", "HF_ENDPOINT", "HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"
+) | ForEach-Object { Remove-Item "Env:\$_" -ErrorAction SilentlyContinue }
+$env:UV_NO_CONFIG = "1"
+$env:UV_DEFAULT_INDEX = $script:PythonPrimaryMirror
+$env:UV_INDEX = $script:PythonPrimaryMirror
+$env:PIP_CONFIG_FILE = "NUL"
+$env:PIP_INDEX_URL = $script:PythonPrimaryMirror
+$env:PIP_DISABLE_PIP_VERSION_CHECK = "1"
+$env:PIP_NO_INPUT = "1"
+$env:HERMES_UV_FALLBACK_INDEX = $script:PythonSecondaryMirror
+$env:NPM_CONFIG_USERCONFIG = "NUL"
+$env:NPM_CONFIG_REGISTRY = "https://registry.npmmirror.com"
+$env:npm_config_registry = $script:NpmPrimaryRegistry
+$env:NODEJS_ORG_MIRROR = $script:NodePrimaryMirror
+$env:HERMES_NODE_MIRROR = $script:NodePrimaryMirror
+$env:PLAYWRIGHT_DOWNLOAD_HOST = "https://registry.npmmirror.com/-/binary/playwright"
+$env:ELECTRON_MIRROR = $script:DesktopElectronPrimaryMirror
+$env:ELECTRON_BUILDER_BINARIES_MIRROR = "https://npmmirror.com/mirrors/electron-builder-binaries/"
+$env:HF_HUB_OFFLINE = "1"
+$env:HF_HUB_DISABLE_TELEMETRY = "1"
+$script:MANAGED_DOWNLOAD_ENVIRONMENT = $true
 
 # Stage-protocol version.  Bumped only for genuinely breaking changes to the
 # manifest schema, stage-name set semantics, or stdout JSON shape.  Adding a
@@ -747,98 +783,30 @@ function Install-Uv {
         return $true
     }
 
-    Write-Info "Installing managed uv into $HermesHome\bin ..."
+    Write-Info "Preparing managed uv in $HermesHome\bin ..."
     New-Item -ItemType Directory -Path (Join-Path $HermesHome "bin") -Force | Out-Null
 
-    # UV_INSTALL_DIR tells the astral installer to place the binary
-    # directly into $HermesHome\bin instead of ~/.local/bin.
-    $prevEAP = $ErrorActionPreference
+    # Packaged Desktop supplies a hash-verified uv.exe. A source install may
+    # adopt an existing local executable, but never executes downloaded code.
     try {
-        $ErrorActionPreference = "Continue"
-        $env:UV_INSTALL_DIR = Join-Path $HermesHome "bin"
-        # Spawn via the resolved host exe (see Get-PowerShellHostExe) rather
-        # than a bare `powershell`, which isn't guaranteed to be on PATH under
-        # PowerShell 7 / pwsh-only setups.
-        $psHostExe = Get-PowerShellHostExe
-
-        # Rungs 1 + 2: run the uv installer -- astral.sh first, then the
-        # byte-identical copy published on GitHub releases.  Corporate
-        # proxies and AV products frequently block astral.sh while
-        # github.com is reachable (issue #69216), so a second source turns
-        # a hard failure into a working install.  Capture the installer
-        # output (Tee-Object) instead of discarding it: when every source
-        # fails, the real error (download blocked, AV quarantine,
-        # permissions) must reach the user instead of only the generic
-        # "installed but not found" message.
-        $installerOutput = @()
-        $astralOut = @()
-        & $psHostExe -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex" 2>&1 | Tee-Object -Variable astralOut | Out-Null
-        $installerOutput += "--- uv installer source: astral.sh ---"
-        $installerOutput += @($astralOut | ForEach-Object { "$_" })
-        if (Test-Path $managedUv) {
-            Write-Info "uv installer succeeded via astral.sh"
-        } else {
-            Write-Info "astral.sh uv installer did not produce $managedUv; trying GitHub releases mirror ..."
-            $ghOut = @()
-            & $psHostExe -ExecutionPolicy ByPass -c "irm https://github.com/astral-sh/uv/releases/latest/download/uv-installer.ps1 | iex" 2>&1 | Tee-Object -Variable ghOut | Out-Null
-            $installerOutput += "--- uv installer source: GitHub releases ---"
-            $installerOutput += @($ghOut | ForEach-Object { "$_" })
-            if (Test-Path $managedUv) {
-                Write-Info "uv installer succeeded via GitHub releases"
-            }
-        }
-
-        # Rung 3: salvage an existing uv.exe.  When the installer cannot run
-        # at all (network fully blocked) but a working uv already exists --
-        # on PATH, or at ~/.local/bin (the astral default location when
-        # UV_INSTALL_DIR was ignored by an older installer) -- copy it into
-        # the managed location so the managed-first invariant holds
-        # (hermes_cli/managed_uv.py looks only at $HermesHome\bin\uv.exe).
-        if (-not (Test-Path $managedUv)) {
-            $existingUv = $null
-            $uvOnPath = Get-Command uv -CommandType Application -ErrorAction SilentlyContinue |
-                Select-Object -First 1
-            if ($uvOnPath -and $uvOnPath.Source -and (Test-Path $uvOnPath.Source)) {
-                $existingUv = $uvOnPath.Source
-            }
-            if (-not $existingUv) {
-                $defaultUv = Join-Path $env:USERPROFILE ".local\bin\uv.exe"
-                if (Test-Path $defaultUv) { $existingUv = $defaultUv }
-            }
-            if ($existingUv) {
-                Write-Info "Salvaging existing uv from $existingUv"
-                try {
-                    Copy-Item $existingUv $managedUv -Force
-                    # Verify the salvaged binary actually runs before
-                    # trusting it as the managed uv.
-                    $null = & $managedUv --version
-                } catch {
-                    Write-Info "Existing uv at $existingUv could not be salvaged: $_"
-                    Remove-Item $managedUv -Force -ErrorAction SilentlyContinue
-                }
-            }
-        }
-
-        $ErrorActionPreference = $prevEAP
-
-        if (Test-Path $managedUv) {
+        $uvOnPath = Get-Command uv -CommandType Application -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        if ($uvOnPath -and $uvOnPath.Source -and (Test-Path $uvOnPath.Source)) {
+            $pending = "$managedUv.pending"
+            Copy-Item $uvOnPath.Source $pending -Force
+            $null = & $pending --version
+            Move-Item $pending $managedUv -Force
             $script:UvCmd = $managedUv
             $version = & $managedUv --version
-            Write-Success "Managed uv installed ($version)"
+            Write-Success "Managed uv adopted from the local installation ($version)"
             return $true
         }
-
-        Write-Err "uv installed but not found at $managedUv"
-        if ($installerOutput.Count -gt 0) {
-            Write-Info "uv installer output (last 15 lines):"
-            $installerOutput | Select-Object -Last 15 | ForEach-Object { Write-Info "  $_" }
-        }
-        Write-Info "Install manually: https://docs.astral.sh/uv/getting-started/installation/"
+        Write-Err "A verified uv payload is unavailable."
+        Write-Info "Use the packaged Desktop installer or ask an administrator to place a reviewed uv.exe at $managedUv."
         return $false
     } catch {
-        if ($prevEAP) { $ErrorActionPreference = $prevEAP }
-        Write-Err "Failed to install uv: $_"
-        Write-Info "Install manually: https://docs.astral.sh/uv/getting-started/installation/"
+        Remove-Item "$managedUv.pending" -Force -ErrorAction SilentlyContinue
+        Write-Err "Could not adopt the local uv executable: $_"
         return $false
     }
 }
@@ -1095,25 +1063,48 @@ function Resolve-AvailablePythonVersion {
     # survive into the ``venv`` stage's process -- there $PythonVersion is back
     # at its "3.11" default.  Consumers re-resolve here instead of trusting that
     # default, which is exactly the propagation gap behind issue #50769.
+    $packagedAuthPython = Resolve-PackagedAuthPython
+    if ($packagedAuthPython) { return $packagedAuthPython }
+
     $candidates = @($PythonVersion) + $PythonFallbackVersions
     $seen = @{}
     foreach ($ver in $candidates) {
         if (-not $ver -or $seen.ContainsKey($ver)) { continue }
         $seen[$ver] = $true
         try {
-            $found = & $UvCmd python find $ver 2>$null
+            $found = & $UvCmd --no-config python find $ver 2>$null
             if ($found) { return $ver }
         } catch { }
     }
     return $null
 }
 
+function Resolve-PackagedAuthPython {
+    if (-not $BundledSource) { return $null }
+    $candidate = Join-Path $InstallDir "auth-venv\python.exe"
+    if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { return $null }
+    try {
+        $version = & $candidate --version 2>$null
+        if ($LASTEXITCODE -eq 0 -and $version -match '^Python 3\.13\.') {
+            return $candidate
+        }
+    } catch { }
+    throw "The packaged authentication Python runtime is invalid"
+}
+
 function Test-Python {
     Write-Info "Checking Python $PythonVersion..."
+
+    $packagedAuthPython = Resolve-PackagedAuthPython
+    if ($packagedAuthPython) {
+        $script:PythonVersion = $packagedAuthPython
+        Write-Success "Using the packaged authentication Python runtime"
+        return $true
+    }
     
     # Let uv find or install Python
     try {
-        $pythonPath = & $UvCmd python find $PythonVersion 2>$null
+        $pythonPath = & $UvCmd --no-config python find $PythonVersion 2>$null
         if ($pythonPath) {
             $ver = & $pythonPath --version 2>$null
             Write-Success "Python found: $ver"
@@ -1123,28 +1114,33 @@ function Test-Python {
     
     # Python not found -- use uv to install it (no admin needed!)
     Write-Info "Python $PythonVersion not found, installing via uv..."
-    # Capture EAP outside the try block so the catch's restore call always
-    # has a meaningful value (see Install-Uv for the full rationale).
-    $prevEAP = $ErrorActionPreference
     try {
-        # Temporarily relax ErrorActionPreference: uv writes download progress
-        # ("Downloading cpython-3.11.15-windows-x86_64-none (24.5MiB)") to
-        # stderr.  With $ErrorActionPreference = "Stop" (set at the top of this
-        # script) PowerShell wraps stderr lines from native commands as
-        # ErrorRecord objects when captured via 2>&1, then throws a terminating
-        # exception on the first one -- even though uv exits 0 and Python was
-        # installed successfully.  Verify success via `uv python find`
-        # afterwards, which is the reliable signal regardless of exit-code
-        # semantics or stderr noise.  This fix was previously landed as
-        # commit ec1714e71 and then lost in a release squash; reapplied here.
-        $ErrorActionPreference = "Continue"
-        $uvOutput = & $UvCmd python install $PythonVersion 2>&1
-        $uvExitCode = $LASTEXITCODE
-        $ErrorActionPreference = $prevEAP
+        # Windows PowerShell 5.1 turns native stderr into ErrorRecord objects.
+        # A uv warning can therefore terminate the pipeline before uv finishes,
+        # even when the native process itself would succeed. Redirect both
+        # streams at the process boundary so PowerShell never interprets them.
+        $uvStdoutLog = [System.IO.Path]::GetTempFileName()
+        $uvStderrLog = [System.IO.Path]::GetTempFileName()
+        try {
+            $uvProcess = Start-Process -FilePath $UvCmd `
+                -ArgumentList @("--no-config", "python", "install", $PythonVersion) `
+                -NoNewWindow -PassThru `
+                -RedirectStandardOutput $uvStdoutLog `
+                -RedirectStandardError $uvStderrLog
+            $uvProcess.WaitForExit()
+            $uvProcess.Refresh()
+            $uvExitCode = [int]$uvProcess.ExitCode
+            $uvOutput = @(
+                [System.IO.File]::ReadAllText($uvStdoutLog)
+                [System.IO.File]::ReadAllText($uvStderrLog)
+            ) -join "`n"
+        } finally {
+            Remove-Item $uvStdoutLog, $uvStderrLog -Force -ErrorAction SilentlyContinue
+        }
 
         # Check if Python is now available (more reliable than exit code
         # since uv may return non-zero due to "already installed" etc.)
-        $pythonPath = & $UvCmd python find $PythonVersion 2>$null
+        $pythonPath = & $UvCmd --no-config python find $PythonVersion 2>$null
         if ($pythonPath) {
             $ver = & $pythonPath --version 2>$null
             Write-Success "Python installed: $ver"
@@ -1157,8 +1153,6 @@ function Test-Python {
             Write-Host $uvOutput -ForegroundColor DarkGray
         }
     } catch {
-        # Restore EAP in case the try block threw before the assignment
-        if ($prevEAP) { $ErrorActionPreference = $prevEAP }
         Write-Warn "uv python install error: $_"
     }
 
@@ -1166,7 +1160,7 @@ function Test-Python {
     Write-Info "Trying to find any existing Python 3.10+..."
     foreach ($fallbackVer in $PythonFallbackVersions) {
         try {
-            $pythonPath = & $UvCmd python find $fallbackVer 2>$null
+            $pythonPath = & $UvCmd --no-config python find $fallbackVer 2>$null
             if ($pythonPath) {
                 $ver = & $pythonPath --version 2>$null
                 Write-Success "Found fallback: $ver"
@@ -1222,6 +1216,41 @@ function Test-Python {
 $script:GitInstallFailureReason = $null
 $script:GitBashPath = $null
 $script:GitBashProbeOutput = $null
+$script:BundledGitRuntimeFile = "git-bash-runtime.tar.xz"
+$script:PortableGitReleaseFile = "PortableGit-2.55.0.3-64-bit.7z.exe"
+$script:PortableGitReleaseSha256 = "ab00566336b5472120f9a52d34f2e79c5406535792acb0548001ffd0bd090e5d"
+
+function Resolve-BundledGitRuntimeArchive {
+    if (-not $BundledSource) { return $null }
+
+    $archivePath = Join-Path $PSScriptRoot $script:BundledGitRuntimeFile
+    $manifestPath = Join-Path $PSScriptRoot "payload-manifest.json"
+    if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
+        throw "Bundled Git Bash runtime archive is missing at $archivePath"
+    }
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        throw "Bundled payload manifest is missing at $manifestPath"
+    }
+
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    if (-not $manifest.PSObject.Properties["gitBashRuntime"]) {
+        throw "Bundled payload manifest has no Git Bash runtime metadata"
+    }
+    $metadata = $manifest.gitBashRuntime
+    $archiveInfo = Get-Item -LiteralPath $archivePath
+    $actualSha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $manifestSha256 = ([string]$metadata.sha256).ToLowerInvariant()
+    $sourceSha256 = ([string]$metadata.source.sha256).ToLowerInvariant()
+    if ([string]$metadata.file -ne $script:BundledGitRuntimeFile -or
+        [long]$metadata.size -ne $archiveInfo.Length -or
+        $manifestSha256 -ne $actualSha256 -or
+        [string]$metadata.source.file -ne $script:PortableGitReleaseFile -or
+        $sourceSha256 -ne $script:PortableGitReleaseSha256) {
+        throw "Bundled Git Bash runtime failed size, SHA-256, or pinned-source validation"
+    }
+
+    return $archivePath
+}
 
 function Test-GitBashCompatibility {
     <#
@@ -1322,8 +1351,10 @@ function Install-Git {
     Priority order (deliberately simple -- no winget, no registry, no system
     package manager):
       1. Existing ``git`` on PATH -- use it as-is (the common fast path).
-      2. Download **PortableGit** from the official git-for-windows GitHub
-         release (self-extracting 7z.exe) and unpack it to
+      2. For bundled Desktop installs, unpack the verified, documentation-free
+         Git Bash runtime shipped inside the NSIS package.
+      3. For the standalone CLI installer, download **PortableGit** from the
+         official git-for-windows GitHub release (self-extracting 7z.exe) to
          ``%LOCALAPPDATA%\hermes\git`` -- never touches system Git, never
          requires admin, works even on locked-down machines and machines
          with a broken system Git install.
@@ -1372,57 +1403,21 @@ function Install-Git {
         Write-Info "Trying a Hermes-managed PortableGit install instead..."
     }
 
-    # Download PortableGit into $HermesHome\git.  Always works as long as
-    # we can reach github.com -- no admin, no winget, no reliance on the
-    # user's possibly-broken system Git install.
-    Write-Info "Git not found -- downloading PortableGit to $HermesHome\git\ ..."
-    Write-Info "(no admin rights required; isolated from any system Git install)"
-
     try {
         $arch = Get-WindowsArch
-        if ($arch -eq 'arm64') {
-            $assetTag = 'arm64'
+        $bundledArchive = Resolve-BundledGitRuntimeArchive
+        if ($bundledArchive) {
+            if ($arch -ne "x64") {
+                throw "This Hermes Desktop package contains PortableGit for Windows x64, but detected $arch"
+            }
+            $assetName = $script:BundledGitRuntimeFile
             $downloadIsZip = $false
-        } elseif ($arch -eq 'x64') {
-            $assetTag = '64-bit'
-            $downloadIsZip = $false
+            $tmpFile = $bundledArchive
+            Write-Info "Git not found -- installing the verified Git Bash runtime from the Hermes Desktop package..."
         } else {
-            # PortableGit does not ship 32-bit / arm builds -- fall back to MinGit
-            # 32-bit with a warning that bash-based features will be unavailable.
-            $assetTag = '32-bit-mingit'
-            $downloadIsZip = $true
+            throw "A verified bundled Git Bash runtime is required. Ask your administrator for a complete Hermes Desktop installer."
         }
-
-        # Pinned git-for-windows release. We deliberately do NOT hit
-        # api.github.com/repos/.../releases/latest here: that endpoint
-        # is rate-limited to 60 requests/hour/IP for unauthenticated
-        # callers, and users behind CGNAT / corporate NAT / dorm WiFi
-        # routinely hit the limit, breaking the installer.
-        # Static github.com/.../releases/download/<tag>/<asset> URLs
-        # are not subject to the API rate limit.
-        $gitTag    = "v2.54.0.windows.1"
-        $gitVer    = "2.54.0"
-        $gitVerTag = "$gitVer.windows.1"
-
-        if ($arch -eq "32-bit-mingit") {
-            Write-Warn "32-bit Windows detected -- PortableGit is 64-bit only.  Installing MinGit 32-bit as a last resort; bash-dependent Hermes features (terminal tool, agent-browser) will not work on this machine."
-            $assetName    = "MinGit-$gitVer-32-bit.zip"
-            $downloadIsZip = $true
-        } elseif ($arch -eq "arm64") {
-            $assetName    = "PortableGit-$gitVer-arm64.7z.exe"
-            $downloadIsZip = $false
-        } else {
-            $assetName    = "PortableGit-$gitVer-64-bit.7z.exe"
-            $downloadIsZip = $false
-        }
-
-        $downloadUrl = "https://github.com/git-for-windows/git/releases/download/$gitTag/$assetName"
-        $downloadExt = if ($downloadIsZip) { "zip" } else { "7z.exe" }
-        $tmpFile = "$env:TEMP\$assetName"
         $gitDir = "$HermesHome\git"
-
-        Write-Info "Downloading $assetName (Git for Windows $gitVerTag)..."
-        Invoke-WebRequest -Uri $downloadUrl -OutFile $tmpFile -UseBasicParsing
 
         if (Test-Path $gitDir) {
             Write-Info "Removing previous Git install at $gitDir ..."
@@ -1430,21 +1425,15 @@ function Install-Git {
         }
         New-Item -ItemType Directory -Path $gitDir -Force | Out-Null
 
-        if ($downloadIsZip) {
-            Expand-Archive -Path $tmpFile -DestinationPath $gitDir -Force
-        } else {
-            # PortableGit is a self-extracting 7z archive.  Invoke it with
-            # `-o<target> -y` (silent) to extract to $gitDir.  No 7z install
-            # required; it's fully self-contained.
-            Write-Info "Extracting PortableGit to $gitDir ..."
-            $extractProc = Start-Process -FilePath $tmpFile `
-                -ArgumentList "-o`"$gitDir`"", "-y" `
-                -NoNewWindow -Wait -PassThru
-            if ($extractProc.ExitCode -ne 0) {
-                throw "PortableGit extraction failed (exit code $($extractProc.ExitCode))"
-            }
+        $tarExe = Join-Path $env:SystemRoot "System32\tar.exe"
+        if (-not (Test-Path -LiteralPath $tarExe -PathType Leaf)) {
+            throw "Windows tar.exe is required to extract the bundled Git Bash runtime"
         }
-        Remove-Item -Force $tmpFile -ErrorAction SilentlyContinue
+        Write-Info "Extracting the bundled Git Bash runtime to $gitDir ..."
+        & $tarExe -xJf $tmpFile -C $gitDir
+        if ($LASTEXITCODE -ne 0) {
+            throw "Git Bash runtime extraction failed (exit code $LASTEXITCODE)"
+        }
 
         # PortableGit layout: cmd\git.exe + bin\bash.exe + usr\bin\ (coreutils)
         # MinGit layout:      cmd\git.exe + usr\bin\bash.exe (if present)
@@ -1497,6 +1486,11 @@ function Install-Git {
     } catch {
         if ($script:GitInstallFailureReason) {
             Write-Err $script:GitInstallFailureReason
+            return $false
+        }
+        if ($BundledSource) {
+            Write-Err "Could not install the bundled Git Bash runtime: $_"
+            Write-Info "Reinstall Hermes Desktop; the packaged Git Bash runtime is missing or damaged."
             return $false
         }
         Write-Err "Could not install portable Git: $_"
@@ -1621,16 +1615,31 @@ function Test-Node {
     Write-Info "(no admin rights required; isolated from any system Node install)"
     try {
         $arch = Get-WindowsArch
-        $indexUrl = "https://nodejs.org/dist/latest-v${NodeVersion}.x/"
-        $indexPage = Invoke-WebRequest -Uri $indexUrl -UseBasicParsing
-        $zipName = ($indexPage.Content | Select-String -Pattern "node-v${NodeVersion}\.\d+\.\d+-win-${arch}\.zip" -AllMatches).Matches[0].Value
+        $zipName = $null
+        $tmpZip = $null
+        foreach ($nodeBase in @($script:NodePrimaryMirror, $script:NodeSecondaryMirror, $script:NodeOfficialMirror)) {
+            $indexUrl = "$(($nodeBase).TrimEnd('/'))/latest-v${NodeVersion}.x/"
+            try {
+                $indexPage = Invoke-WebRequest -Uri $indexUrl -UseBasicParsing -TimeoutSec 60
+                $matches = ($indexPage.Content | Select-String -Pattern "node-v${NodeVersion}\.\d+\.\d+-win-${arch}\.zip" -AllMatches).Matches
+                if (-not $matches -or $matches.Count -eq 0) {
+                    Write-Warn "Node.js archive was not listed by the current managed mirror; trying the next source."
+                    continue
+                }
+                $zipName = $matches[0].Value
+                $downloadUrl = "${indexUrl}${zipName}"
+                $tmpZip = "$env:TEMP\$zipName"
+                Invoke-WebRequest -Uri $downloadUrl -OutFile $tmpZip -UseBasicParsing -TimeoutSec 300
+                break
+            } catch {
+                $zipName = $null
+                $tmpZip = $null
+                Write-Warn "Managed Node.js mirror failed; trying the next reviewed source."
+            }
+        }
 
         if ($zipName) {
-            $downloadUrl = "${indexUrl}${zipName}"
-            $tmpZip = "$env:TEMP\$zipName"
             $tmpDir = "$env:TEMP\hermes-node-extract"
-
-            Invoke-WebRequest -Uri $downloadUrl -OutFile $tmpZip -UseBasicParsing
             if (Test-Path $tmpDir) { Remove-Item -Recurse -Force $tmpDir }
             Expand-Archive -Path $tmpZip -DestinationPath $tmpDir -Force
 
@@ -1986,425 +1995,118 @@ function Install-SystemPackages {
 # Installation
 # ============================================================================
 
+function Assert-BundledSource {
+    if (-not $Commit -or $Commit -notmatch '^[0-9a-fA-F]{40}$' -or $Commit -match '^0+$') {
+        throw "Bundled source requires a real 40-character -Commit value"
+    }
+
+    if (-not (Test-Path -LiteralPath $HermesHome -PathType Container)) {
+        throw "Bundled source Hermes home does not exist: $HermesHome"
+    }
+    if (-not (Test-Path -LiteralPath $InstallDir -PathType Container)) {
+        throw "Bundled source install directory does not exist: $InstallDir"
+    }
+
+    $resolvedHome = (Resolve-Path -LiteralPath $HermesHome -ErrorAction Stop).ProviderPath
+    $resolvedInstall = (Resolve-Path -LiteralPath $InstallDir -ErrorAction Stop).ProviderPath
+    $installParent = [System.IO.Directory]::GetParent($resolvedInstall)
+    if (-not $installParent -or -not [string]::Equals(
+        $installParent.FullName.TrimEnd('\'),
+        $resolvedHome.TrimEnd('\'),
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw "Bundled source install directory must be a direct child of Hermes home"
+    }
+
+    $installItem = Get-Item -LiteralPath $resolvedInstall -Force -ErrorAction Stop
+    if (($installItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Bundled source install directory must not be a reparse point"
+    }
+
+    $markerPath = Join-Path $resolvedInstall ".hermes-bundled-source.json"
+    if (-not (Test-Path -LiteralPath $markerPath -PathType Leaf)) {
+        throw "Bundled source marker is missing: $markerPath"
+    }
+    $markerItem = Get-Item -LiteralPath $markerPath -Force -ErrorAction Stop
+    if (($markerItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+        throw "Bundled source marker must not be a reparse point"
+    }
+
+    try {
+        $marker = Get-Content -LiteralPath $markerPath -Raw -ErrorAction Stop | ConvertFrom-Json
+    } catch {
+        throw "Bundled source marker is not valid JSON: $markerPath"
+    }
+    if ($marker.schemaVersion -ne 1) {
+        throw "Bundled source marker schemaVersion must be 1"
+    }
+    if (-not [string]::Equals(
+        [string]$marker.commit,
+        $Commit,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw "Bundled source marker commit does not match -Commit"
+    }
+
+    $requiredFiles = @(
+        "pyproject.toml",
+        "desktop_auth_runtime\pyproject.toml",
+        "desktop_auth_runtime\uv.lock",
+        "desktop_auth_runtime\uv.toml",
+        "hermes_cli\main.py",
+        "tools\sensevoice_stt.py",
+        "scripts\install.ps1"
+    )
+    foreach ($relativePath in $requiredFiles) {
+        $requiredPath = Join-Path $resolvedInstall $relativePath
+        if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+            throw "Bundled source is missing required runtime file: $relativePath"
+        }
+        $requiredItem = Get-Item -LiteralPath $requiredPath -Force -ErrorAction Stop
+        if (($requiredItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw "Bundled source runtime file must not be a reparse point: $relativePath"
+        }
+    }
+}
+
+function Write-InstallMethod {
+    param([Parameter(Mandatory = $true)][ValidateSet("desktop-bundle", "git")][string]$Method)
+
+    $methodPath = Join-Path $InstallDir ".install_method"
+    $temporaryPath = "$methodPath.tmp-$PID-$([Guid]::NewGuid().ToString('N'))"
+    $backupPath = "$methodPath.backup-$PID-$([Guid]::NewGuid().ToString('N'))"
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+    try {
+        [System.IO.File]::WriteAllText($temporaryPath, "$Method`n", $utf8NoBom)
+        if (Test-Path -LiteralPath $methodPath -PathType Leaf) {
+            [System.IO.File]::Replace($temporaryPath, $methodPath, $backupPath)
+        } else {
+            [System.IO.File]::Move($temporaryPath, $methodPath)
+        }
+    } finally {
+        Remove-Item -LiteralPath $temporaryPath, $backupPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Install-Repository {
     Write-Info "Installing to $InstallDir..."
 
-    $didUpdate = $false
+    if ($BundledSource) {
+        Assert-BundledSource
 
-    if (Test-Path $InstallDir) {
-        # Test-Path "$InstallDir\.git" returns True when .git is a file OR a
-        # directory OR a symlink OR a submodule-style gitfile -- and also when
-        # it's a broken stub left over from a failed previous install (e.g.
-        # a partial Remove-Item that couldn't delete a locked index.lock).
-        # Validate the repo properly by asking git itself.  Three checks
-        # belt-and-braces: rev-parse (work tree), git status, and a resolvable
-        # HEAD (an initial commit).  If any fails the repo is broken and we
-        # fall through to a fresh clone.
-        $repoValid = $false
-        if (Test-Path "$InstallDir\.git") {
-            Push-Location $InstallDir
-            try {
-                # Reset $LASTEXITCODE before the probe so we don't pick up
-                # a stale 0 from an earlier git call in this session.
-                $global:LASTEXITCODE = 0
-                $revParseOut = & git -c windows.appendAtomically=false rev-parse --is-inside-work-tree 2>&1
-                $revParseOk = ($LASTEXITCODE -eq 0) -and ($revParseOut -match "true")
-
-                $global:LASTEXITCODE = 0
-                $null = & git -c windows.appendAtomically=false status --short 2>&1
-                $statusOk = ($LASTEXITCODE -eq 0)
-
-                # An interrupted previous clone leaves a repo with NO initial
-                # commit. rev-parse/status still succeed there, but the update
-                # path's `git stash` (and later `git checkout`) abort with
-                # "You do not have the initial commit yet" and fail the install
-                # (#40998). Require a resolvable HEAD so such partial checkouts
-                # are treated as broken and re-cloned fresh below.
-                $global:LASTEXITCODE = 0
-                $null = & git -c windows.appendAtomically=false rev-parse --verify HEAD 2>&1
-                $hasCommit = ($LASTEXITCODE -eq 0)
-
-                if ($revParseOk -and $statusOk -and $hasCommit) {
-                    $repoValid = $true
-                }
-            } catch {}
-            Pop-Location
+        $currentHermesHome = [Environment]::GetEnvironmentVariable("HERMES_HOME", "User")
+        if (-not $currentHermesHome -or $currentHermesHome -ne $HermesHome) {
+            [Environment]::SetEnvironmentVariable("HERMES_HOME", $HermesHome, "User")
+            Write-Success "Set HERMES_HOME=$HermesHome"
         }
-
-        if ($repoValid) {
-            Write-Info "Existing installation found, updating..."
-            Push-Location $InstallDir
-            # Wrap the entire fetch+checkout block in EAP=Continue so git's
-            # routine stderr output (e.g. 'From <url>' info lines emitted by
-            # `git fetch`) doesn't terminate the script under the global
-            # EAP=Stop.  We rely on $LASTEXITCODE for actual failures.
-            $prevEAP = $ErrorActionPreference
-            $ErrorActionPreference = "Continue"
-            $autostashRef = ""
-            try {
-                # This is a MANAGED checkout, not a repo the user edits. Git for
-                # Windows defaults to core.autocrlf=true, which renormalizes the
-                # repo's LF-only text files to CRLF in the working tree -- so
-                # tracked files (.envrc, AGENTS.md, agent/*.py, workflows, ...)
-                # show as locally modified even though nobody touched them. A
-                # bare `git checkout` then aborts with "Your local changes would
-                # be overwritten by checkout", which is exactly the failure GUI
-                # users hit on update. Pin autocrlf=false so the dirt is never
-                # created in the first place.
-                git -c windows.appendAtomically=false config core.autocrlf false 2>$null
-                Discard-LockfileChurn $InstallDir
-                # Preserve any real local changes before the checkout instead of
-                # discarding them with `reset --hard HEAD`. The old hard reset
-                # silently destroyed agent-edited source on managed clones (the
-                # #38542 data-loss class). Stash + restore mirrors install.sh:
-                # nothing is lost, and a failed restore leaves the work in a
-                # git stash for manual recovery. Untracked files are included so
-                # agent-created dirs (e.g. tinker-atropos/) survive too.
-                $statusOut = git -c windows.appendAtomically=false status --porcelain 2>$null
-                if (-not [string]::IsNullOrWhiteSpace(($statusOut -join "`n"))) {
-                    # A previously interrupted update can leave the index with
-                    # unmerged entries. In that state `git stash` aborts with
-                    # "could not write index" and the following `git checkout`
-                    # aborts with "you need to resolve your current index first"
-                    # -- the GUI "git checkout main failed (exit 1)" install
-                    # failure. Clear the conflict markers with `git reset` first:
-                    # working-tree changes are kept (and stashed just below); only
-                    # the index conflict state is dropped. Mirrors the `hermes
-                    # update` path (#4735).
-                    $unmergedOut = git -c windows.appendAtomically=false ls-files --unmerged 2>$null
-                    if (-not [string]::IsNullOrWhiteSpace(($unmergedOut -join "`n"))) {
-                        Write-Info "Clearing unmerged index entries from a previous conflict..."
-                        git -c windows.appendAtomically=false reset -q 2>$null
-                    }
-                    $stashName = "hermes-install-autostash-" + (Get-Date -Format "yyyyMMdd-HHmmss")
-                    Write-Info "Local changes detected, stashing before update..."
-                    git -c windows.appendAtomically=false stash push --include-untracked -m "$stashName"
-                    if ($LASTEXITCODE -eq 0) { $autostashRef = "stash@{0}" }
-                }
-                git -c windows.appendAtomically=false fetch origin $Branch
-                if ($LASTEXITCODE -ne 0) { throw "git fetch failed (exit $LASTEXITCODE)" }
-                # Precedence: Commit > Tag > Branch.  Commit and Tag check
-                # out as detached HEAD intentionally -- they're meant to be
-                # reproducible pins, not branches the user pulls into.
-                if ($Commit) {
-                    # Make sure we have the commit locally (a tag-less commit
-                    # SHA isn't always reachable from any one branch fetch).
-                    git -c windows.appendAtomically=false fetch origin $Commit
-                    # A commit pin must never move an existing install
-                    # BACKWARDS. hermes-setup.exe bakes its build-time commit
-                    # into the binary (BUILD_PIN_COMMIT) and passes it as
-                    # -Commit on every install-mode run -- including the retry
-                    # the desktop's "Update didn't finish" screen kicks off. An
-                    # installer built months ago would otherwise rewind a
-                    # current checkout to its build commit, leaving ancient
-                    # code against a current venv (npm workspaces and Python
-                    # deps that no longer match: the #74xxx report). Skip the
-                    # pin when the target is already an ancestor of HEAD; a
-                    # fresh clone has no such ancestry and pins normally.
-                    $skipRollback = $false
-                    if (-not $ForceCommit) {
-                        git -c windows.appendAtomically=false merge-base --is-ancestor $Commit HEAD 2>$null
-                        $isAncestor = ($LASTEXITCODE -eq 0)
-                        $pinnedSha = (& git -c windows.appendAtomically=false rev-parse "$Commit^{commit}" 2>$null)
-                        $headSha = (& git -c windows.appendAtomically=false rev-parse HEAD 2>$null)
-                        $skipRollback = $isAncestor -and ($pinnedSha -ne $headSha)
-                    }
-                    if ($skipRollback) {
-                        Write-Warn "Ignoring -Commit $Commit`: the checkout is already newer."
-                        Write-Warn "Pinning to it would roll this install back. Pass -ForceCommit to override."
-                    } else {
-                        git -c windows.appendAtomically=false checkout --detach $Commit
-                        if ($LASTEXITCODE -ne 0) { throw "git checkout $Commit failed (exit $LASTEXITCODE)" }
-                    }
-                } elseif ($Tag) {
-                    git -c windows.appendAtomically=false fetch origin "refs/tags/${Tag}:refs/tags/${Tag}"
-                    git -c windows.appendAtomically=false checkout --detach "refs/tags/$Tag"
-                    if ($LASTEXITCODE -ne 0) { throw "git checkout tag $Tag failed (exit $LASTEXITCODE)" }
-                } else {
-                    git -c windows.appendAtomically=false checkout $Branch
-                    if ($LASTEXITCODE -ne 0) { throw "git checkout $Branch failed (exit $LASTEXITCODE)" }
-                    # Managed installs should follow origin/$Branch exactly. If
-                    # the checkout has diverged (or has local-only commits),
-                    # ff-only pull cannot succeed -- mirror ``hermes update`` and
-                    # reset to the fetched remote so bootstrap/install can recover.
-                    git -c windows.appendAtomically=false pull --ff-only origin $Branch
-                    if ($LASTEXITCODE -ne 0) {
-                        Write-Warn "Fast-forward not possible; resetting managed install to origin/$Branch..."
-                        git -c windows.appendAtomically=false reset --hard "origin/$Branch"
-                        if ($LASTEXITCODE -ne 0) { throw "git reset --hard origin/$Branch failed (exit $LASTEXITCODE)" }
-                    }
-                }
-
-                if ($autostashRef) {
-                    # Default to restoring so work is never silently dropped.
-                    # Only prompt when we're certain a human can answer: an
-                    # interactive session AND a real, non-redirected console on
-                    # both stdin and stdout. The desktop "Update" button and
-                    # bootstrap run the installer without a usable console -- in
-                    # those cases Read-Host would hang or return empty, so we
-                    # skip the prompt and just restore (the safe default).
-                    $restoreNow = $true
-                    $hasConsole = $false
-                    try {
-                        $hasConsole = (
-                            [Environment]::UserInteractive `
-                            -and (-not [Console]::IsInputRedirected) `
-                            -and (-not [Console]::IsOutputRedirected) `
-                            -and ($Host.Name -eq "ConsoleHost")
-                        )
-                    } catch { $hasConsole = $false }
-                    if ($hasConsole) {
-                        Write-Warn "Local changes were stashed before updating."
-                        Write-Warn "Restoring them may reapply local customizations onto the updated codebase."
-                        $restoreAnswer = Read-Host "Restore local changes now? [Y/n]"
-                        if ($restoreAnswer -match '^(n|no)$') { $restoreNow = $false }
-                    }
-
-                    if ($restoreNow) {
-                        Write-Info "Restoring local changes..."
-                        $restoreOutput = @(git -c windows.appendAtomically=false stash apply $autostashRef 2>&1)
-                        $restoreExit = $LASTEXITCODE
-                        $conflictedFiles = @(
-                            git -c windows.appendAtomically=false diff --name-only --diff-filter=U 2>$null
-                        ) | Where-Object { $_ -and $_.ToString().Trim() }
-                        if (($restoreExit -eq 0) -and ($conflictedFiles.Count -eq 0)) {
-                            git -c windows.appendAtomically=false stash drop $autostashRef 2>$null
-                            Write-Warn "Local changes were restored on top of the updated codebase."
-                            Write-Warn "Review git diff / git status if Hermes behaves unexpectedly."
-                        } else {
-                            Write-Err "Update pulled new code, but restoring local changes hit conflicts."
-                            foreach ($line in $restoreOutput) {
-                                if ($line -and $line.ToString().Trim()) {
-                                    Write-Host $line
-                                }
-                            }
-                            if ($conflictedFiles.Count -gt 0) {
-                                Write-Host ""
-                                Write-Host "Conflicted files:"
-                                foreach ($file in $conflictedFiles) {
-                                    Write-Host "  - $file"
-                                }
-                            }
-                            Write-Host ""
-                            Write-Info "Your stashed changes are preserved -- nothing is lost."
-                            Write-Info "  Stash ref: $autostashRef"
-                            git -c windows.appendAtomically=false reset --hard HEAD 2>$null | Out-Null
-                            Write-Info "Working tree reset to clean state."
-                            Write-Info "Restore your changes later with: git stash apply $autostashRef"
-                        }
-                    } else {
-                        Write-Info "Skipped restoring local changes."
-                        Write-Info "Your changes are still preserved in git stash."
-                        Write-Info "Restore manually with: git stash apply $autostashRef"
-                    }
-                    $autostashRef = ""
-                }
-            } finally {
-                if ($autostashRef) {
-                    # We stashed but never reached the restore block (a fetch/
-                    # checkout/pull failure threw). Leave the stash in place and
-                    # tell the user how to recover it -- never silently drop it.
-                    Write-Warn "Update did not complete. Your local changes are preserved in git stash."
-                    Write-Info "Restore manually with: git stash apply $autostashRef"
-                }
-                $ErrorActionPreference = $prevEAP
-                Pop-Location
-            }
-            $didUpdate = $true
-        } else {
-            # Directory exists but isn't a usable git repo -- e.g. an
-            # interrupted clone with no initial commit (#40998), or a leftover
-            # ``.git`` stub from a partial uninstall that used to lock the
-            # installer into the "update" branch forever. Move it aside rather
-            # than deleting it -- never destroy a directory the user might still
-            # want -- and fall through to a fresh clone.
-            $backupDir = "$InstallDir.broken-" + (Get-Date -Format "yyyyMMdd-HHmmss")
-            Write-Warn "Existing directory at $InstallDir is not a valid git repo."
-            Write-Warn "Moving it aside to $backupDir before re-cloning."
-            try {
-                Move-Item -LiteralPath $InstallDir -Destination $backupDir -ErrorAction Stop
-            } catch {
-                Write-Err "Could not move $InstallDir aside : $_"
-                Write-Info "Close any programs that might be using files in $InstallDir (editors,"
-                Write-Info "terminals, running hermes processes) and try again."
-                throw
-            }
-        }
+        $env:HERMES_HOME = $HermesHome
+        Write-InstallMethod -Method "desktop-bundle"
+        Write-Success "Verified bundled repository ready"
+        return
     }
 
-    if (-not $didUpdate) {
-        $cloneSuccess = $false
-
-        # Fix Windows git "copy-fd: write returned: Invalid argument" error.
-        # Git for Windows can fail on atomic file operations (hook templates,
-        # config lock files) due to antivirus, OneDrive, or NTFS filter drivers.
-        # The -c flag injects config before any file I/O occurs.
-        Write-Info "Configuring git for Windows compatibility..."
-        $env:GIT_CONFIG_COUNT = "1"
-        $env:GIT_CONFIG_KEY_0 = "windows.appendAtomically"
-        $env:GIT_CONFIG_VALUE_0 = "false"
-        git config --global windows.appendAtomically false 2>$null
-
-        # Try SSH first, then HTTPS, with -c flag for atomic write fix
-        Write-Info "Trying SSH clone..."
-        $env:GIT_SSH_COMMAND = "ssh -o BatchMode=yes -o ConnectTimeout=5"
-        try {
-            Invoke-NativeWithRelaxedErrorAction { git -c windows.appendAtomically=false clone --depth 1 --branch $Branch $RepoUrlSsh $InstallDir }
-            if ($LASTEXITCODE -eq 0) { $cloneSuccess = $true }
-        } catch { }
-        $env:GIT_SSH_COMMAND = $null
-
-        if (-not $cloneSuccess) {
-            if (Test-Path $InstallDir) { Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue }
-            Write-Info "SSH failed, trying HTTPS..."
-            try {
-                Invoke-NativeWithRelaxedErrorAction { git -c windows.appendAtomically=false clone --depth 1 --branch $Branch $RepoUrlHttps $InstallDir }
-                if ($LASTEXITCODE -eq 0) { $cloneSuccess = $true }
-            } catch { }
-        }
-
-        # Fallback: download ZIP archive (bypasses git file I/O issues entirely)
-        if (-not $cloneSuccess) {
-            if (Test-Path $InstallDir) { Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue }
-            Write-Warn "Git clone failed -- downloading ZIP archive instead..."
-            try {
-                # Pick the ZIP URL for the most-specific ref the caller asked
-                # for.  GitHub supports archive URLs for commits, tags, and
-                # branches; we honour Commit > Tag > Branch.
-                if ($Commit) {
-                    $zipUrl = "https://github.com/NousResearch/hermes-agent/archive/$Commit.zip"
-                    $zipLabel = $Commit
-                } elseif ($Tag) {
-                    $zipUrl = "https://github.com/NousResearch/hermes-agent/archive/refs/tags/$Tag.zip"
-                    $zipLabel = $Tag
-                } else {
-                    $zipUrl = "https://github.com/NousResearch/hermes-agent/archive/refs/heads/$Branch.zip"
-                    $zipLabel = $Branch
-                }
-                $zipPath = "$env:TEMP\hermes-agent-$zipLabel.zip"
-                $extractPath = "$env:TEMP\hermes-agent-extract"
-
-                Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
-                if (Test-Path $extractPath) { Remove-Item -Recurse -Force $extractPath }
-                Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
-
-                # GitHub ZIPs extract to repo-branch/ subdirectory
-                $extractedDir = Get-ChildItem $extractPath -Directory | Select-Object -First 1
-                if ($extractedDir) {
-                    New-Item -ItemType Directory -Force -Path (Split-Path $InstallDir) -ErrorAction SilentlyContinue | Out-Null
-                    Move-Item $extractedDir.FullName $InstallDir -Force
-                    Write-Success "Downloaded and extracted"
-
-                    # Initialize git repo so updates work later. A bare
-                    # `git init` leaves NO HEAD -- desktop's write-build-stamp
-                    # then hard-fails with "could not determine git commit"
-                    # (#50823 / #61657). Fetch the requested ref and force-check
-                    # it out (-f) so untracked ZIP files cannot block checkout.
-                    Push-Location $InstallDir
-                    git -c windows.appendAtomically=false init 2>$null
-                    git -c windows.appendAtomically=false config windows.appendAtomically false 2>$null
-                    # Pin autocrlf=false BEFORE the checkout below. Git for Windows
-                    # defaults to core.autocrlf=true, which would renormalize the
-                    # repo's LF text files to CRLF in the working tree during
-                    # `checkout -f FETCH_HEAD` -- leaving this freshly-created
-                    # managed checkout dirty vs HEAD and aborting the next
-                    # `hermes update` (see the notes at the shared clone-path
-                    # config below and install.ps1:1461-1469). The later pin on
-                    # the shared path is idempotent and still covers git clones.
-                    git -c windows.appendAtomically=false config core.autocrlf false 2>$null
-                    git remote add origin $RepoUrlHttps 2>$null
-                    $fetchRef = if ($Commit) { $Commit } elseif ($Tag) { "refs/tags/$Tag" } else { $Branch }
-                    Write-Info "Fetching $fetchRef so the ZIP checkout has a resolvable HEAD..."
-                    $prevZipEAP = $ErrorActionPreference
-                    $ErrorActionPreference = "Continue"
-                    try {
-                        git -c windows.appendAtomically=false fetch --depth 1 origin $fetchRef 2>&1 | Out-Null
-                        if ($LASTEXITCODE -eq 0) {
-                            if ($Commit -or $Tag) {
-                                git -c windows.appendAtomically=false checkout -f --detach FETCH_HEAD 2>&1 | Out-Null
-                            } else {
-                                git -c windows.appendAtomically=false checkout -f -B $Branch FETCH_HEAD 2>&1 | Out-Null
-                            }
-                            if ($LASTEXITCODE -eq 0) {
-                                Write-Success "ZIP checkout pinned to $fetchRef"
-                            } else {
-                                # Checkout blocked, but FETCH_HEAD still has a SHA we can stamp with.
-                                $fetchSha = & git -c windows.appendAtomically=false rev-parse FETCH_HEAD 2>$null
-                                if ($LASTEXITCODE -eq 0 -and $fetchSha) {
-                                    if (-not $env:GITHUB_SHA) { $env:GITHUB_SHA = ("$fetchSha").Trim() }
-                                    Write-Warn "ZIP checkout failed; seeded GITHUB_SHA from FETCH_HEAD for desktop stamp"
-                                } else {
-                                    Write-Warn "ZIP extract succeeded but git checkout failed -- desktop build may need `$env:GITHUB_SHA"
-                                }
-                            }
-                        } else {
-                            Write-Warn "ZIP extract succeeded but git fetch of $fetchRef failed -- desktop build may need `$env:GITHUB_SHA"
-                        }
-                    } finally {
-                        $ErrorActionPreference = $prevZipEAP
-                    }
-                    Pop-Location
-                    Write-Success "Git repo initialized for future updates"
-
-                    $cloneSuccess = $true
-                }
-
-                # Cleanup temp files
-                Remove-Item -Force $zipPath -ErrorAction SilentlyContinue
-                Remove-Item -Recurse -Force $extractPath -ErrorAction SilentlyContinue
-            } catch {
-                Write-Err "ZIP download also failed: $_"
-            }
-        }
-
-        if (-not $cloneSuccess) {
-            throw "Failed to download repository (tried git clone SSH, HTTPS, and ZIP)"
-        }
-    }
-
-    # Set per-repo config (harmless if it fails)
-    Push-Location $InstallDir
-    git -c windows.appendAtomically=false config windows.appendAtomically false 2>$null
-    # Pin autocrlf=false on the managed clone so git never renormalizes the
-    # repo's LF text files to CRLF in the working tree. Without this, the very
-    # next `hermes update` checkout aborts on a "dirty" tree the user never
-    # touched (see the update path above).
-    git -c windows.appendAtomically=false config core.autocrlf false 2>$null
-
-    # Post-clone pin: when a clone (or ZIP-fallback init) just landed us on
-    # $Branch's tip, honour the higher-precedence $Commit / $Tag by checking
-    # the exact ref out as a detached HEAD.  Skipped for the in-place update
-    # path (above) since that already routed via the same precedence.
-    if (-not $didUpdate) {
-        # Same EAP=Continue wrap as the update path -- git fetch's 'From <url>'
-        # info line goes to stderr and would terminate the script under the
-        # global EAP=Stop otherwise.  We check $LASTEXITCODE for real errors.
-        $prevEAP = $ErrorActionPreference
-        $ErrorActionPreference = "Continue"
-        try {
-            if ($Commit) {
-                Write-Info "Pinning to commit $Commit..."
-                git -c windows.appendAtomically=false fetch origin $Commit
-                git -c windows.appendAtomically=false checkout --detach $Commit
-                if ($LASTEXITCODE -ne 0) {
-                    throw "git checkout $Commit failed (exit $LASTEXITCODE)"
-                }
-            } elseif ($Tag) {
-                Write-Info "Pinning to tag $Tag..."
-                git -c windows.appendAtomically=false fetch origin "refs/tags/${Tag}:refs/tags/${Tag}"
-                git -c windows.appendAtomically=false checkout --detach "refs/tags/$Tag"
-                if ($LASTEXITCODE -ne 0) {
-                    throw "git checkout tag $Tag failed (exit $LASTEXITCODE)"
-                }
-            }
-        } finally {
-            $ErrorActionPreference = $prevEAP
-        }
-    }
-
-    Write-Success "Repository ready"
+    throw "Automatic source download is unavailable without a reviewed bundled payload. Use the packaged Desktop installer supplied by your administrator."
 }
-
 function Install-Venv {
     if ($NoVenv) {
         Write-Info "Skipping virtual environment (-NoVenv)"
@@ -2446,7 +2148,7 @@ function Install-Venv {
         # gateway into the replacement venv.
         if ($env:OS -eq "Windows_NT") {
             $myPid = $PID
-            Write-Info "Stopping any running hermes processes before recreating venv..."
+            Write-Info "Stopping Hermes runtime processes before recreating venv..."
             # Disarm the respawner FIRST: the gateway autostart Scheduled Task
             # relaunches a killed gateway within seconds, and losing that race
             # re-locks the venv's .pyd files between our kill sweep and
@@ -2472,9 +2174,10 @@ function Install-Venv {
             } catch {
                 Write-Warn "Could not enumerate gateway scheduled tasks: $($_.Exception.Message)"
             }
-            # The launcher CLI (hermes.exe) plus its child tree.
-            & taskkill /F /T /IM hermes.exe /FI "PID ne $myPid" 2>$null | Out-Null
-            # taskkill /IM hermes.exe is NOT enough: the gateway/agent that a
+            # Never terminate by the image name hermes.exe: the packaged
+            # Electron shell has that same name and owns this bootstrap. The
+            # path-scoped sweep below covers the venv launcher CLI as well as
+            # the gateway/agent that a
             # scheduled task or watchdog autostarts runs as
             # `pythonw.exe -m hermes_cli.main gateway run` straight out of
             # venv\Scripts\, so its image name is python/pythonw, not hermes.exe.
@@ -2663,6 +2366,269 @@ function Get-PendingVenvBackup {
     return $name
 }
 
+function Write-AtomicAuthBytes {
+    param(
+        [Parameter(Mandatory=$true)] [string]$Path,
+        [Parameter(Mandatory=$true)] [byte[]]$Bytes
+    )
+
+    $parent = Split-Path -Parent $Path
+    if ($parent) { New-Item -ItemType Directory -Force -Path $parent | Out-Null }
+    $temporaryPath = "$Path.tmp-$PID-$([Guid]::NewGuid().ToString('N'))"
+    $backupPath = "$Path.replace-$PID-$([Guid]::NewGuid().ToString('N'))"
+    $stream = $null
+    try {
+        $stream = New-Object System.IO.FileStream -ArgumentList @(
+            $temporaryPath,
+            [System.IO.FileMode]::CreateNew,
+            [System.IO.FileAccess]::Write,
+            [System.IO.FileShare]::None
+        )
+        $stream.Write($Bytes, 0, $Bytes.Length)
+        $stream.Flush($true)
+        $stream.Dispose()
+        $stream = $null
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            [System.IO.File]::Replace($temporaryPath, $Path, $backupPath)
+            Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
+        } else {
+            Move-Item -LiteralPath $temporaryPath -Destination $Path -ErrorAction Stop
+        }
+    } finally {
+        if ($stream) { $stream.Dispose() }
+        Remove-Item -LiteralPath $temporaryPath, $backupPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Write-AtomicAuthJson {
+    param(
+        [Parameter(Mandatory=$true)] [string]$Path,
+        [Parameter(Mandatory=$true)] $Value
+    )
+
+    $json = $Value | ConvertTo-Json -Compress -Depth 5
+    Write-AtomicAuthBytes -Path $Path -Bytes ([System.Text.Encoding]::UTF8.GetBytes($json))
+}
+
+function Get-PendingAuthVenvTransaction {
+    $transactionPath = Join-Path $InstallDir "auth-venv.pending-backup"
+    if (-not (Test-Path -LiteralPath $transactionPath -PathType Leaf)) { return $null }
+
+    try {
+        $raw = [System.IO.File]::ReadAllText($transactionPath)
+        if ($raw.Length -gt 131072) { throw "transaction record is too large" }
+        $record = $raw | ConvertFrom-Json
+        $keys = @($record.PSObject.Properties.Name | Sort-Object) -join ','
+        if ($keys -ne 'backupName,markerBase64,markerExisted,schemaVersion') {
+            throw "unexpected transaction fields"
+        }
+        if ($record.schemaVersion -ne 1 -or $record.markerExisted -isnot [bool]) {
+            throw "invalid transaction schema"
+        }
+        if ($null -ne $record.backupName -and (
+            $record.backupName -isnot [string] -or
+            $record.backupName -notmatch '^auth-venv\.stale\.\d{14}-[0-9a-f]{32}$'
+        )) {
+            throw "invalid auth-venv backup name"
+        }
+        if ($record.markerExisted) {
+            if ($record.markerBase64 -isnot [string]) { throw "missing previous marker bytes" }
+            $markerBytes = [Convert]::FromBase64String($record.markerBase64)
+            if ($markerBytes.Length -gt 65536) { throw "previous marker is too large" }
+        } elseif ($null -ne $record.markerBase64) {
+            throw "unexpected previous marker bytes"
+        }
+        return $record
+    } catch {
+        throw "Authentication environment transaction is invalid: $($_.Exception.Message)"
+    }
+}
+
+function Restore-AuthVenvTransaction {
+    $record = Get-PendingAuthVenvTransaction
+    if (-not $record) { return }
+
+    $authVenv = Join-Path $InstallDir "auth-venv"
+    $backupPath = if ($record.backupName) { Join-Path $InstallDir $record.backupName } else { $null }
+    $failedPath = Join-Path $InstallDir ("auth-venv.failed.{0}-{1}" -f (Get-Date -Format "yyyyMMddHHmmss"), ([Guid]::NewGuid().ToString("N")))
+
+    if ($backupPath -and (Test-Path -LiteralPath $backupPath -PathType Container)) {
+        if (Test-Path -LiteralPath $authVenv) {
+            Rename-Item -LiteralPath $authVenv -NewName (Split-Path -Leaf $failedPath) -ErrorAction Stop
+        }
+        Rename-Item -LiteralPath $backupPath -NewName "auth-venv" -ErrorAction Stop
+    } elseif ($backupPath) {
+        # The durable record is published before the rename. If the original
+        # fixed path still exists, the interrupted run never parked it (or a
+        # previous recovery already restored it), so it is already the safe
+        # environment. Neither path existing is an unrecoverable half-state.
+        if (-not (Test-Path -LiteralPath $authVenv -PathType Container)) {
+            throw "Authentication environment backup is missing: $($record.backupName)"
+        }
+    } elseif (Test-Path -LiteralPath $authVenv) {
+        Rename-Item -LiteralPath $authVenv -NewName (Split-Path -Leaf $failedPath) -ErrorAction Stop
+    }
+
+    $markerPath = Join-Path $InstallDir ".hermes-auth-bootstrap-complete"
+    if ($record.markerExisted) {
+        Write-AtomicAuthBytes -Path $markerPath -Bytes ([Convert]::FromBase64String($record.markerBase64))
+    } else {
+        Remove-Item -LiteralPath $markerPath -Force -ErrorAction SilentlyContinue
+    }
+
+    Remove-Item -LiteralPath (Join-Path $InstallDir "auth-venv.pending-backup") -Force -ErrorAction Stop
+    if (Test-Path -LiteralPath $failedPath) {
+        Remove-Item -LiteralPath $failedPath -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    Write-Warn "Restored the previous authentication environment after an interrupted or failed update"
+}
+
+function Complete-AuthVenvTransaction {
+    $record = Get-PendingAuthVenvTransaction
+    if (-not $record) { return }
+
+    # Removing the transaction record is the commit point. The validated new
+    # environment and schema-2 marker are already at their fixed paths. Old
+    # parked bytes are cleanup only after this point.
+    Remove-Item -LiteralPath (Join-Path $InstallDir "auth-venv.pending-backup") -Force -ErrorAction Stop
+    if ($record.backupName) {
+        $backupPath = Join-Path $InstallDir $record.backupName
+        Remove-Item -LiteralPath $backupPath -Recurse -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $backupPath) {
+            Write-Warn "Old authentication environment remains parked at $($record.backupName)"
+        }
+    }
+}
+
+function Test-ExactAuthRuntimeOwner {
+    param(
+        [Parameter(Mandatory=$true)] $Process,
+        [Parameter(Mandatory=$true)] [string]$ExpectedExecutable,
+        [Parameter(Mandatory=$true)] [string]$ExpectedSid
+    )
+
+    if (-not $Process -or -not $Process.ExecutablePath -or -not $Process.CommandLine) {
+        throw "Authentication owner candidate identity is incomplete"
+    }
+    try {
+        $actualExecutable = [System.IO.Path]::GetFullPath([string]$Process.ExecutablePath)
+    } catch {
+        throw "Authentication owner candidate identity is incomplete"
+    }
+    if (-not [string]::Equals($actualExecutable, $ExpectedExecutable, [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $false
+    }
+    $owner = Invoke-CimMethod -InputObject $Process -MethodName GetOwnerSid -ErrorAction Stop
+    if ($owner.ReturnValue -ne 0 -or -not $owner.Sid) {
+        throw "Authentication owner SID could not be confirmed"
+    }
+    if ($owner.Sid -ne $ExpectedSid) { return $false }
+    $expectedQuoted = '"' + $ExpectedExecutable + '" -m hermes_cli.client_auth.runtime owner'
+    $expectedPlain = $ExpectedExecutable + ' -m hermes_cli.client_auth.runtime owner'
+    return (
+        [string]::Equals([string]$Process.CommandLine, $expectedQuoted, [System.StringComparison]::OrdinalIgnoreCase) -or
+        [string]::Equals([string]$Process.CommandLine, $expectedPlain, [System.StringComparison]::OrdinalIgnoreCase)
+    )
+}
+
+function Stop-ExactAuthRuntimeOwner {
+    if ($env:OS -ne "Windows_NT") { return }
+
+    $expectedExecutable = [System.IO.Path]::GetFullPath((Join-Path $InstallDir "auth-venv\Scripts\python.exe"))
+    $currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $candidates = @(
+        Get-CimInstance Win32_Process -ErrorAction Stop |
+            Where-Object {
+                $_.ProcessId -ne $PID -and
+                $_.ExecutablePath -and
+                [string]::Equals(
+                    [System.IO.Path]::GetFullPath([string]$_.ExecutablePath),
+                    $expectedExecutable,
+                    [System.StringComparison]::OrdinalIgnoreCase
+                )
+            }
+    )
+    if ($candidates.Count -gt 64) {
+        throw "Authentication owner candidate limit exceeded"
+    }
+
+    foreach ($candidate in $candidates) {
+        if (-not (Test-ExactAuthRuntimeOwner -Process $candidate -ExpectedExecutable $expectedExecutable -ExpectedSid $currentSid)) {
+            continue
+        }
+
+        # Re-read and revalidate immediately before termination so PID reuse or
+        # a process exec cannot turn the earlier inventory into authority.
+        $targetPid = [int]$candidate.ProcessId
+        $current = Get-CimInstance Win32_Process -Filter "ProcessId = $targetPid" -ErrorAction Stop
+        if (-not (Test-ExactAuthRuntimeOwner -Process $current -ExpectedExecutable $expectedExecutable -ExpectedSid $currentSid)) {
+            throw "Authentication owner identity changed before it could be stopped"
+        }
+        $termination = Invoke-CimMethod -InputObject $current -MethodName Terminate -ErrorAction Stop
+        if ($termination.ReturnValue -ne 0) {
+            throw "Authentication owner could not be stopped"
+        }
+        $deadline = [DateTime]::UtcNow.AddSeconds(5)
+        do {
+            $remaining = Get-CimInstance Win32_Process -Filter "ProcessId = $targetPid" -ErrorAction SilentlyContinue
+            if (-not $remaining) { break }
+            Start-Sleep -Milliseconds 50
+        } while ([DateTime]::UtcNow -lt $deadline)
+        if ($remaining) { throw "Authentication owner did not exit before the update deadline" }
+    }
+}
+
+function Install-AuthVenv {
+    Stop-ExactAuthRuntimeOwner
+    Restore-AuthVenvTransaction
+
+    $resolved = Resolve-AvailablePythonVersion
+    if ($resolved -and $resolved -ne $PythonVersion) {
+        Write-Info "Python $PythonVersion not available; using detected Python $resolved"
+        $script:PythonVersion = $resolved
+    }
+
+    $authVenv = Join-Path $InstallDir "auth-venv"
+    $authPython = Join-Path $authVenv "Scripts\python.exe"
+    $markerPath = Join-Path $InstallDir ".hermes-auth-bootstrap-complete"
+    $backupName = if (Test-Path -LiteralPath $authVenv -PathType Container) {
+        "auth-venv.stale.{0}-{1}" -f (Get-Date -Format "yyyyMMddHHmmss"), ([Guid]::NewGuid().ToString("N"))
+    } else { $null }
+    $markerExisted = Test-Path -LiteralPath $markerPath -PathType Leaf
+    $markerBytes = if ($markerExisted) { [System.IO.File]::ReadAllBytes($markerPath) } else { $null }
+    if ($markerExisted -and $markerBytes.Length -gt 65536) {
+        throw "Previous authentication marker is too large to preserve safely"
+    }
+    $markerBase64 = if ($markerExisted) { [Convert]::ToBase64String($markerBytes) } else { $null }
+    $transaction = [ordered]@{
+        schemaVersion = 1
+        backupName = $backupName
+        markerExisted = [bool]$markerExisted
+        markerBase64 = $markerBase64
+    }
+    Write-AtomicAuthJson -Path (Join-Path $InstallDir "auth-venv.pending-backup") -Value $transaction
+
+    try {
+        if ($backupName) {
+            Rename-Item -LiteralPath $authVenv -NewName $backupName -ErrorAction Stop
+            Write-Info "Previous authentication environment parked at $backupName"
+        }
+
+        Write-Info "Creating authentication virtual environment with Python $PythonVersion..."
+        Invoke-NativeWithRelaxedErrorAction { & $UvCmd venv $authVenv --python $PythonVersion }
+        $authVenvExitCode = $LASTEXITCODE
+        if ($authVenvExitCode -ne 0) {
+            throw "Failed to create authentication virtual environment (uv venv exited with $authVenvExitCode)"
+        }
+        if (-not (Test-Path -LiteralPath $authPython -PathType Leaf)) {
+            throw "uv reported success but authentication interpreter is missing at $authPython"
+        }
+    } catch {
+        Restore-AuthVenvTransaction
+        throw
+    }
+}
+
 function Complete-VenvTransaction {
     # Commit: dependency install + baseline imports passed, so the previous
     # venv is no longer needed as a rollback source. Best-effort delete; a
@@ -2694,6 +2660,56 @@ function Restore-VenvBackup {
         Write-Warn "Restored previous virtual environment after failed dependency install"
     } catch {
         Write-Warn "Could not restore previous venv (still parked at $backupName): $($_.Exception.Message)"
+    }
+}
+
+function Install-AuthDependencies {
+    try {
+        $authProject = Join-Path $InstallDir "desktop_auth_runtime"
+        $authPython = Join-Path $InstallDir "auth-venv\Scripts\python.exe"
+        foreach ($requiredPath in @(
+            (Join-Path $authProject "pyproject.toml"),
+            (Join-Path $authProject "uv.lock"),
+            (Join-Path $authProject "uv.toml"),
+            $authPython
+        )) {
+            if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+                throw "Authentication runtime is missing required file: $requiredPath"
+            }
+        }
+
+        Write-Info "Installing locked authentication dependencies..."
+        $env:UV_PROJECT_ENVIRONMENT = (Join-Path $InstallDir "auth-venv")
+        $env:UV_PYTHON = $authPython
+        Invoke-NativeWithRelaxedErrorAction {
+            & $UvCmd sync --project $authProject --locked --no-install-project --config-file (Join-Path $authProject "uv.toml")
+        }
+        if ($LASTEXITCODE -ne 0) {
+            throw "Locked authentication dependency sync failed"
+        }
+
+        $previousPythonPath = $env:PYTHONPATH
+        $previousPreference = $ErrorActionPreference
+        try {
+            $env:PYTHONPATH = $InstallDir
+            $ErrorActionPreference = "Continue"
+            & $authPython -c "import hermes_cli.client_auth.bridge as bridge; assert bridge.PROTOCOL_VERSION == 1" 2>&1 | Out-Null
+            $probeExitCode = $LASTEXITCODE
+        } finally {
+            $ErrorActionPreference = $previousPreference
+            if ($null -eq $previousPythonPath) {
+                Remove-Item -LiteralPath "Env:PYTHONPATH" -ErrorAction SilentlyContinue
+            } else {
+                $env:PYTHONPATH = $previousPythonPath
+            }
+        }
+        if ($probeExitCode -ne 0) {
+            throw "Authentication runtime protocol probe failed"
+        }
+        Write-Success "Authentication dependencies installed from lockfile and protocol verified"
+    } catch {
+        Restore-AuthVenvTransaction
+        throw
     }
 }
 
@@ -2791,7 +2807,7 @@ function Install-Dependencies {
 
     # Parse [project.optional-dependencies].all from pyproject.toml.
     # tomllib is stdlib on Python 3.11+ which the bootstrap guarantees.
-    $pythonExeForParse = if (-not $NoVenv) { "$InstallDir\venv\Scripts\python.exe" } else { (& $UvCmd python find $PythonVersion) }
+    $pythonExeForParse = if (-not $NoVenv) { "$InstallDir\venv\Scripts\python.exe" } else { (& $UvCmd --no-config python find $PythonVersion) }
     $allExtras = @()
     if (Test-Path $pythonExeForParse) {
         $parsed = & $pythonExeForParse -c @"
@@ -2937,7 +2953,7 @@ print(','.join(scripts))
     # users hit and lazy-import errors from `hermes dashboard` are confusing.
     # If tier 1 failed (the common case), [web] was still picked up by tiers
     # 2-3; only tier 4 leaves you without it.
-    $pythonExe = if (-not $NoVenv) { "$InstallDir\venv\Scripts\python.exe" } else { (& $UvCmd python find $PythonVersion) }
+    $pythonExe = if (-not $NoVenv) { "$InstallDir\venv\Scripts\python.exe" } else { (& $UvCmd --no-config python find $PythonVersion) }
     if (Test-Path $pythonExe) {
         $webOk = $false
         $webServerSyntaxOk = $false
@@ -3039,6 +3055,71 @@ function Set-PathVariable {
     $env:Path = "$hermesBin;$env:Path"
     
     Write-Success "hermes command ready"
+}
+
+function Write-AuthBootstrapComplete {
+    try {
+        $authPython = Join-Path $InstallDir "auth-venv\Scripts\python.exe"
+        $authLock = Join-Path $InstallDir "desktop_auth_runtime\uv.lock"
+        foreach ($requiredPath in @($authPython, $authLock)) {
+            if (-not (Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
+                throw "Authentication runtime is missing required file: $requiredPath"
+            }
+        }
+
+        $sourceCommit = $null
+        $sourceArchiveSha256 = $null
+        $sourceMarkerPath = Join-Path $InstallDir ".hermes-bundled-source.json"
+        if (Test-Path -LiteralPath $sourceMarkerPath -PathType Leaf) {
+            $sourceMarker = [System.IO.File]::ReadAllText($sourceMarkerPath) | ConvertFrom-Json
+            if (
+                $sourceMarker.schemaVersion -ne 1 -or
+                $sourceMarker.commit -notmatch '^[0-9a-f]{40}$' -or
+                $sourceMarker.archiveSha256 -notmatch '^[0-9a-f]{64}$'
+            ) {
+                throw "Bundled source marker is invalid"
+            }
+            $sourceCommit = ([string]$sourceMarker.commit).ToLowerInvariant()
+            $sourceArchiveSha256 = ([string]$sourceMarker.archiveSha256).ToLowerInvariant()
+        } elseif (Test-Path -LiteralPath (Join-Path $InstallDir ".git")) {
+            $previousPreference = $ErrorActionPreference
+            $ErrorActionPreference = "Continue"
+            try {
+                $sourceCommit = (& git -C $InstallDir -c windows.appendAtomically=false rev-parse HEAD 2>$null | Select-Object -First 1)
+                $gitExitCode = $LASTEXITCODE
+            } finally {
+                $ErrorActionPreference = $previousPreference
+            }
+            if ($gitExitCode -ne 0 -or $sourceCommit -notmatch '^[0-9a-f]{40}$') {
+                throw "Could not resolve the authentication source commit"
+            }
+            $sourceCommit = $sourceCommit.Trim().ToLowerInvariant()
+        } else {
+            throw "Authentication source has no managed marker or Git metadata"
+        }
+
+        $binDir = Join-Path $InstallDir "bin"
+        New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+        $launcherPath = Join-Path $binDir "hermes.cmd"
+        $launcher = "@echo off`r`nset `"PYTHONPATH=%~dp0..`"`r`n`"%~dp0..\auth-venv\Scripts\python.exe`" -m hermes_cli.main %*`r`n"
+        Write-AtomicAuthBytes -Path $launcherPath -Bytes ([System.Text.Encoding]::ASCII.GetBytes($launcher))
+
+        $marker = [ordered]@{
+            schemaVersion = 2
+            scope = "auth"
+            sourceCommit = $sourceCommit
+            sourceArchiveSha256 = $sourceArchiveSha256
+            authLockSha256 = (Get-FileHash -LiteralPath $authLock -Algorithm SHA256).Hash.ToLowerInvariant()
+            protocolVersion = 1
+        }
+        Write-AtomicAuthJson -Path (Join-Path $InstallDir ".hermes-auth-bootstrap-complete") -Value $marker
+        Complete-AuthVenvTransaction
+    } catch {
+        Restore-AuthVenvTransaction
+        throw
+    }
+
+    Write-Success "Authentication bootstrap complete"
 }
 
 function Write-BootstrapMarker {
@@ -3154,6 +3235,17 @@ function Copy-ConfigTemplates {
         $examplePath = "$InstallDir\cli-config.yaml.example"
         if (Test-Path $examplePath) {
             Copy-Item $examplePath $configPath
+            if ($BundledSource) {
+                $configText = [System.IO.File]::ReadAllText($configPath)
+                $defaultProvider = '  # provider: "local"          # auto-detected if omitted'
+                $desktopProvider = '  provider: "sensevoice"       # fresh Hermes Desktop default'
+                if (-not $configText.Contains($defaultProvider)) {
+                    throw "Fresh Desktop config template is missing the expected STT provider anchor"
+                }
+                $configText = $configText.Replace($defaultProvider, $desktopProvider)
+                $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+                [System.IO.File]::WriteAllText($configPath, $configText, $utf8NoBom)
+            }
             Write-Success "Created $configPath from template"
         }
     } else {
@@ -3303,6 +3395,7 @@ function Install-NodeDeps {
         $proc = Start-Process -FilePath $env:ComSpec -ArgumentList $cmdLine `
             -WorkingDirectory $workDir -NoNewWindow -PassThru
         $deadline = [DateTime]::UtcNow.AddSeconds($timeoutSec)
+        $nextHeartbeat = [DateTime]::UtcNow.AddSeconds(30)
         $shown = 0
         function _Drain-NewLines([string]$path, [ref]$count) {
             $lines = @(Get-Content $path -ErrorAction SilentlyContinue)
@@ -3313,16 +3406,30 @@ function Install-NodeDeps {
                 $count.Value = $lines.Count
             }
         }
-        while (-not $proc.HasExited) {
-            if ([DateTime]::UtcNow -gt $deadline) {
+        while (-not $proc.WaitForExit(750)) {
+            $now = [DateTime]::UtcNow
+            if ($now -gt $deadline) {
                 & taskkill /T /F /PID $proc.Id 2>&1 | Out-Null
+                $proc.WaitForExit()
                 return 124
             }
-            Start-Sleep -Milliseconds 750
             _Drain-NewLines $logPath ([ref]$shown)
+            if ($now -ge $nextHeartbeat) {
+                # Keep the desktop bootstrap's shorter idle watchdog informed
+                # while a quiet npm download or extraction is still alive. The
+                # command remains bounded by $deadline above.
+                Write-Host "    [hermes] command still running" -ForegroundColor DarkGray
+                $nextHeartbeat = $now.AddSeconds(30)
+            }
         }
         _Drain-NewLines $logPath ([ref]$shown)
-        return $proc.ExitCode
+        # Start-Process without -Wait can report HasExited before its cached
+        # native exit code has been populated on Windows PowerShell 5.1.  A
+        # final wait + refresh makes the Process snapshot authoritative before
+        # callers decide whether npm succeeded.
+        $proc.WaitForExit()
+        $proc.Refresh()
+        return [int]$proc.ExitCode
     }
 
     # Helper: run "npm install" in a given directory and surface the real
@@ -3419,6 +3526,7 @@ function Install-NodeDeps {
             } else {
                 $pwLog = "$env:TEMP\hermes-playwright-install-$(Get-Random).log"
                 Push-Location $InstallDir
+                $previousPlaywrightHost = $env:PLAYWRIGHT_DOWNLOAD_HOST
                 # Capture EAP outside the try block so the catch's restore call
                 # always has a meaningful value (see Install-Uv for the full
                 # rationale).
@@ -3456,8 +3564,18 @@ function Install-NodeDeps {
                     # the same 600s guard via run_playwright_install since
                     # #39219.
                     $ErrorActionPreference = "Continue"
-                    $pwCode = _Invoke-NativeWithTimeout $npxExe "--yes playwright install chromium" `
-                        $InstallDir $pwLog $nodeDepsTimeoutSec
+                    $pwCode = 1
+                    foreach ($playwrightHost in @($script:PlaywrightPrimaryMirror, $script:PlaywrightSecondaryMirror, $null)) {
+                        if ($playwrightHost) {
+                            $env:PLAYWRIGHT_DOWNLOAD_HOST = $playwrightHost
+                        } else {
+                            Remove-Item Env:\PLAYWRIGHT_DOWNLOAD_HOST -ErrorAction SilentlyContinue
+                        }
+                        $pwCode = _Invoke-NativeWithTimeout $npxExe "--yes playwright install chromium" `
+                            $InstallDir $pwLog $nodeDepsTimeoutSec
+                        if ($pwCode -eq 0) { break }
+                        Write-Warn "Playwright download source failed; trying the next reviewed source."
+                    }
                     $ErrorActionPreference = $prevEAP
                     if ($pwCode -eq 0) {
                         Write-Success "Playwright Chromium installed (browser tools ready)"
@@ -3489,6 +3607,11 @@ function Install-NodeDeps {
                     Write-Warn "Playwright Chromium install could not be launched: $_"
                     Write-Info "Run manually later: cd `"$InstallDir`"; npx playwright install chromium"
                 } finally {
+                    if ($previousPlaywrightHost) {
+                        $env:PLAYWRIGHT_DOWNLOAD_HOST = $previousPlaywrightHost
+                    } else {
+                        Remove-Item Env:\PLAYWRIGHT_DOWNLOAD_HOST -ErrorAction SilentlyContinue
+                    }
                     Pop-Location
                 }
             }
@@ -3568,38 +3691,8 @@ function Install-CuaDriver {
         return
     }
 
-    Write-Info "Installing Computer Use driver (cua-driver)..."
-    $prevEAP = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    try {
-        # Same upstream installer `hermes computer-use install` runs. Bounded
-        # via a background job: the upstream installer serializes with its own
-        # lock (600s stale window), so the ceiling sits above that -- matching
-        # Hermes' _CUA_INSTALLER_TIMEOUT (660s).
-        $job = Start-Job -ScriptBlock {
-            Invoke-RestMethod -UseBasicParsing "https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.ps1" | Invoke-Expression
-        }
-        if (Wait-Job $job -Timeout 660) {
-            Receive-Job $job -ErrorAction SilentlyContinue | Out-Null
-            Remove-Job $job -Force -ErrorAction SilentlyContinue
-            if (Get-Command cua-driver -ErrorAction SilentlyContinue) {
-                Write-Success "Computer Use driver installed (enable via 'hermes tools' -> Computer Use)"
-            } else {
-                Write-Warn "Computer Use driver install did not complete -- it will install on demand when you enable the tool."
-                Write-Info "Install later with: hermes computer-use install"
-            }
-        } else {
-            Stop-Job $job -ErrorAction SilentlyContinue
-            Remove-Job $job -Force -ErrorAction SilentlyContinue
-            Write-Warn "Computer Use driver install timed out -- it will install on demand when you enable the tool."
-            Write-Info "Install later with: hermes computer-use install"
-        }
-    } catch {
-        Write-Warn "Computer Use driver install failed: $_"
-        Write-Info "Install later with: hermes computer-use install"
-    } finally {
-        $ErrorActionPreference = $prevEAP
-    }
+    Write-Warn "Computer Use driver is not present in this reviewed package."
+    Write-Info "Ask an administrator to supply the pinned cua-driver artifact; Hermes will not execute a remote installer."
 }
 
 # Clear the cached Electron download + any half-written unpacked output so the
@@ -3651,9 +3744,6 @@ function Clear-ElectronBuildCache {
     return $removed
 }
 
-# Last-resort Electron mirror after GitHub download fails (#47266).
-$script:DesktopElectronFallbackMirror = "https://npmmirror.com/mirrors/electron/"
-
 # Electron package dir -- workspace-local nest first, then root hoist.
 function Get-ElectronDir {
     param([string]$InstallDir)
@@ -3672,7 +3762,7 @@ function Test-ElectronDist {
 
 # Best-effort: run electron/install.js to populate dist/ (optional mirror).
 function Restore-ElectronDist {
-    param([string]$InstallDir, [string]$Mirror)
+    param([string]$InstallDir, [string]$Mirror, [switch]$Official)
     if (Test-ElectronDist -InstallDir $InstallDir) { return $true }
 
     $electronDir = Get-ElectronDir -InstallDir $InstallDir
@@ -3689,7 +3779,11 @@ function Restore-ElectronDist {
     Remove-Item -LiteralPath (Join-Path $electronDir 'path.txt') -Force -ErrorAction SilentlyContinue
 
     $prevMirror = $env:ELECTRON_MIRROR
-    if ($Mirror) { $env:ELECTRON_MIRROR = $Mirror }
+    if ($Official) {
+        Remove-Item Env:\ELECTRON_MIRROR -ErrorAction SilentlyContinue
+    } elseif ($Mirror) {
+        $env:ELECTRON_MIRROR = $Mirror
+    }
     try {
         # Out-Host so the downloader's progress shows on the console WITHOUT
         # leaking into this function's return value (PowerShell returns every
@@ -3698,7 +3792,11 @@ function Restore-ElectronDist {
         & $node.Source $installer 2>&1 | ForEach-Object { "$_" } | Out-Host
     } catch {
     } finally {
-        $env:ELECTRON_MIRROR = $prevMirror
+        if ($null -eq $prevMirror) {
+            Remove-Item Env:\ELECTRON_MIRROR -ErrorAction SilentlyContinue
+        } else {
+            $env:ELECTRON_MIRROR = $prevMirror
+        }
     }
     return (Test-Path -LiteralPath $distExe)
 }
@@ -3715,9 +3813,9 @@ function Test-ElectronPkgStagedMissingDist {
 
 function Try-RestoreElectronDist {
     param([string]$InstallDir)
-    if (Restore-ElectronDist -InstallDir $InstallDir) { return $true }
-    if ($env:ELECTRON_MIRROR) { return $false }
-    return Restore-ElectronDist -InstallDir $InstallDir -Mirror $script:DesktopElectronFallbackMirror
+    if (Restore-ElectronDist -InstallDir $InstallDir -Mirror $script:DesktopElectronPrimaryMirror) { return $true }
+    if (Restore-ElectronDist -InstallDir $InstallDir -Mirror $script:DesktopElectronSecondaryMirror) { return $true }
+    return Restore-ElectronDist -InstallDir $InstallDir -Official
 }
 
 function Install-DesktopVoiceDeps {
@@ -3938,7 +4036,7 @@ function Install-Desktop {
             $restored = $false
             if (-not (Test-ElectronDist -InstallDir $InstallDir)) {
                 $purged = @(Clear-ElectronBuildCache -DesktopDir $desktopDir)
-                $restored = Restore-ElectronDist -InstallDir $InstallDir
+                $restored = Restore-ElectronDist -InstallDir $InstallDir -Mirror $script:DesktopElectronSecondaryMirror
             }
             if ($restored) {
                 Write-Warn "Desktop build failed - refreshed the Electron download, retrying once:"
@@ -3947,21 +4045,22 @@ function Install-Desktop {
                 $code = $LASTEXITCODE
             }
         }
-        if ($code -ne 0 -and -not $env:ELECTRON_MIRROR) {
-            $mirror = $script:DesktopElectronFallbackMirror
-            Write-Warn "Desktop build still failing - the Electron download from GitHub looks blocked."
-            Write-Warn "Re-downloading Electron via a public mirror ($mirror), then rebuilding:"
-            Write-Info "  (set ELECTRON_MIRROR yourself to use a different/trusted mirror)"
+        if ($code -ne 0) {
+            Write-Warn "Both approved domestic Electron sources failed; trying the pinned official artifact once."
             if (-not (Test-ElectronDist -InstallDir $InstallDir)) {
-                Restore-ElectronDist -InstallDir $InstallDir -Mirror $mirror | Out-Null
+                Restore-ElectronDist -InstallDir $InstallDir -Official | Out-Null
             }
             $prevMirror = $env:ELECTRON_MIRROR
-            $env:ELECTRON_MIRROR = $mirror
+            Remove-Item Env:\ELECTRON_MIRROR -ErrorAction SilentlyContinue
             try {
                 & $npmExe run pack 2>&1 | ForEach-Object { "$_" } | Tee-Object -FilePath $buildLog
                 $code = $LASTEXITCODE
             } finally {
-                $env:ELECTRON_MIRROR = $prevMirror
+                if ($null -eq $prevMirror) {
+                    Remove-Item Env:\ELECTRON_MIRROR -ErrorAction SilentlyContinue
+                } else {
+                    $env:ELECTRON_MIRROR = $prevMirror
+                }
             }
         }
         $ErrorActionPreference = $prevEAP
@@ -4389,10 +4488,8 @@ function Write-Completion {
 # ============================================================================
 #
 # install.ps1 supports a small, stable "stage protocol" that lets programmatic
-# callers (the desktop GUI's onboarding wizard, CI, future install.sh, etc.)
-# drive the install one step at a time and surface progress/errors with their
-# own UI.  CLI users running the canonical `irm | iex` one-liner never
-# encounter this -- default invocation behaves exactly as before.
+# callers (the desktop GUI's onboarding wizard and reviewed installers) drive
+# the install one step at a time and surface progress/errors with their own UI.
 #
 # Entry points:
 #
@@ -4457,7 +4554,7 @@ function Write-Completion {
 # implements it.  ``Title`` is what UIs show; ``Category`` lets UIs group
 # stages; ``NeedsUserInput`` tells UIs "this stage prompts -- either skip it
 # or arrange to provide answers another way."
-$InstallStages = @(
+$RuntimeStageDefinitions = @(
     @{ Name = "uv";               Title = "Installing uv package manager";        Category = "prereqs";      NeedsUserInput = $false; Worker = "Stage-Uv" }
     @{ Name = "python";           Title = "Verifying Python $PythonVersion";      Category = "prereqs";      NeedsUserInput = $false; Worker = "Stage-Python" }
     @{ Name = "git";              Title = "Installing Git";                       Category = "prereqs";      NeedsUserInput = $false; Worker = "Stage-Git" }
@@ -4471,10 +4568,10 @@ $InstallStages = @(
 if ($IncludeDesktop) {
     # Insert AFTER node-deps so workspace npm is already installed when
     # the desktop build runs. Inserted only when explicitly requested
-    # (Hermes-Setup.exe), never via the irm|iex CLI one-liner.
-    $InstallStages += @{ Name = "desktop"; Title = "Building desktop app"; Category = "install"; NeedsUserInput = $false; Worker = "Stage-Desktop" }
+    # (Hermes-Setup.exe), never via an unreviewed remote bootstrap script.
+    $RuntimeStageDefinitions += @{ Name = "desktop"; Title = "Building desktop app"; Category = "install"; NeedsUserInput = $false; Worker = "Stage-Desktop" }
 }
-$InstallStages += @(
+$RuntimeStageDefinitions += @(
     @{ Name = "path";             Title = "Adding Hermes to PATH";                Category = "finalize";     NeedsUserInput = $false; Worker = "Stage-Path" }
     @{ Name = "config-templates"; Title = "Writing configuration templates";      Category = "finalize";     NeedsUserInput = $false; Worker = "Stage-ConfigTemplates" }
     @{ Name = "platform-sdks";    Title = "Installing messaging platform SDKs";   Category = "finalize";     NeedsUserInput = $false; Worker = "Stage-PlatformSdks" }
@@ -4484,6 +4581,20 @@ $InstallStages += @(
     @{ Name = "configure";        Title = "Configuring API keys and models";      Category = "post-install"; NeedsUserInput = $true;  Worker = "Stage-Configure" }
     @{ Name = "gateway";          Title = "Starting messaging gateway";           Category = "post-install"; NeedsUserInput = $true;  Worker = "Stage-Gateway" }
 )
+
+$AuthStageDefinitions = @(
+    @{ Name = "auth-prerequisites"; Title = "Preparing authentication prerequisites"; Category = "prereqs"; NeedsUserInput = $false; Worker = "Stage-AuthPrerequisites" }
+    @{ Name = "repository";         Title = "Verifying Hermes repository";          Category = "install"; NeedsUserInput = $false; Worker = "Stage-Repository" }
+    @{ Name = "venv";               Title = "Creating authentication environment";  Category = "install"; NeedsUserInput = $false; Worker = "Stage-Venv" }
+    @{ Name = "python-auth-deps";   Title = "Installing authentication dependencies"; Category = "install"; NeedsUserInput = $false; Worker = "Stage-AuthDependencies" }
+    @{ Name = "auth-complete";      Title = "Publishing authentication runtime";     Category = "finalize"; NeedsUserInput = $false; Worker = "Stage-AuthComplete" }
+)
+
+if ($BootstrapScope -eq "auth") {
+    $InstallStages = $AuthStageDefinitions
+} else {
+    $InstallStages = $RuntimeStageDefinitions
+}
 
 # Stage workers -- thin wrappers that delegate to the existing Install-* /
 # Test-* / Invoke-* functions while preserving their error semantics.  Kept
@@ -4498,10 +4609,15 @@ $InstallStages += @(
 # process), and throws cleanly if uv truly isn't installed yet.
 function Stage-Uv               { if (-not (Install-Uv))     { throw "uv installation failed" } }
 function Stage-Python           { Resolve-UvCmd; if (-not (Test-Python))    { throw "Python $PythonVersion not available" } }
+function Stage-AuthPrerequisites {
+    if (-not (Install-Uv)) { throw "uv installation failed" }
+    Resolve-UvCmd
+    if (-not (Test-Python)) { throw "Python $PythonVersion not available" }
+}
 function Stage-Git              {
     if (-not (Install-Git)) {
         if ($script:GitInstallFailureReason) { throw $script:GitInstallFailureReason }
-        throw "Git not available and auto-install failed -- install from https://git-scm.com/download/win then re-run"
+        throw "Git is unavailable. Ask your administrator for the reviewed bundled Git runtime."
     }
 }
 # Node is optional (browser tools degrade gracefully without it).  Surface
@@ -4512,13 +4628,26 @@ function Stage-Git              {
 # not be installed" hint instead of aborting.
 function Stage-Node             {
     if (-not (Test-Node)) {
-        $script:_StageSkippedReason = "Node.js not available; browser tools will be unavailable until node is installed manually from https://nodejs.org/en/download/"
+        $script:_StageSkippedReason = "Node.js not available; ask your administrator for the reviewed Node runtime package."
     }
 }
 function Stage-SystemPackages   { Install-SystemPackages }
 function Stage-Repository       { Install-Repository }
-function Stage-Venv             { Resolve-UvCmd; Install-Venv }
+function Stage-Venv             {
+    Resolve-UvCmd
+    if ($BootstrapScope -eq "auth") { Install-AuthVenv } else { Install-Venv }
+}
 function Stage-Dependencies     { Resolve-UvCmd; Install-Dependencies }
+function Stage-AuthDependencies {
+    try {
+        Resolve-UvCmd
+        Install-AuthDependencies
+    } catch {
+        Restore-AuthVenvTransaction
+        throw
+    }
+}
+function Stage-AuthComplete     { Write-AuthBootstrapComplete }
 function Stage-NodeDeps         { Install-NodeDeps }
 function Stage-Desktop          { Install-DesktopVoiceDeps; Install-Desktop }
 function Stage-Path             { Set-PathVariable }
@@ -4710,6 +4839,7 @@ try {
     if ($Manifest) {
         $payload = @{
             protocol_version = $InstallStageProtocolVersion
+            bootstrap_scope  = $BootstrapScope
             stages = @($InstallStages | ForEach-Object {
                 @{
                     name             = $_.Name
@@ -4771,8 +4901,6 @@ try {
     Write-Host ""
     Write-Err "Installation failed: $_"
     Write-Host ""
-    Write-Info "If the error is unclear, try downloading and running the script directly:"
-    Write-Host "  Invoke-WebRequest -Uri 'https://hermes-agent.nousresearch.com/install.ps1' -OutFile install.ps1" -ForegroundColor Yellow
-    Write-Host "  .\install.ps1" -ForegroundColor Yellow
+    Write-Info "If the error is unclear, ask your administrator for a complete reviewed installer and the sanitized bootstrap log."
     Write-Host ""
 }

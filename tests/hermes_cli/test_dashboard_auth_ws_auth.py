@@ -20,10 +20,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from hermes_cli import web_server
+from hermes_cli.client_auth.runtime import (
+    AuthScope,
+    BackendScopeTokenRegistry,
+)
 from hermes_cli.dashboard_auth import clear_providers, register_provider
 from hermes_cli.dashboard_auth.ws_tickets import (
     _reset_for_tests,
     consume_internal_credential,
+    consume_ticket,
     internal_ws_credential,
     mint_ticket,
 )
@@ -94,6 +99,45 @@ def insecure_public_app():
     web_server.app.state.auth_required = prev_required
 
 
+@pytest.fixture
+def desktop_scope_app(monkeypatch):
+    """Loopback Desktop backend authenticated by a short-lived scope bearer."""
+    _reset_for_tests()
+    clear_providers()
+    auth = AuthScope("0123456789abcdef0123456789abcdef", 7)
+    registry = BackendScopeTokenRegistry(
+        authorize=lambda _boundary, *, expected: expected,
+    )
+    bearer = "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo"
+    registry.register(
+        bearer,
+        connection_id="local",
+        expected=auth,
+        ttl_seconds=60,
+    )
+    prev_host = getattr(web_server.app.state, "bound_host", None)
+    prev_required = getattr(web_server.app.state, "auth_required", None)
+    prev_scope = getattr(
+        web_server.app.state,
+        "desktop_scope_tokens_required",
+        False,
+    )
+    web_server.app.state.bound_host = "127.0.0.1"
+    web_server.app.state.auth_required = False
+    web_server.app.state.desktop_scope_tokens_required = True
+    monkeypatch.setattr(web_server, "backend_scope_tokens", registry)
+    client = TestClient(web_server.app, base_url="http://127.0.0.1:8080")
+    yield client, bearer, grant_claim(registry, bearer)
+    _reset_for_tests()
+    web_server.app.state.bound_host = prev_host
+    web_server.app.state.auth_required = prev_required
+    web_server.app.state.desktop_scope_tokens_required = prev_scope
+
+
+def grant_claim(registry: BackendScopeTokenRegistry, bearer: str) -> dict[str, object]:
+    return registry.authorize(bearer, "test.inspect").claim()
+
+
 def _logged_in(client: TestClient) -> None:
     """Drive the stub OAuth round trip so the client holds session cookies."""
     r1 = client.get("/auth/login?provider=stub", follow_redirects=False)
@@ -146,6 +190,18 @@ class TestWsTicketEndpoint:
             f"body[:200]={body[:200]!r})"
         )
 
+    def test_desktop_scope_header_mints_a_scope_bound_ticket(self, desktop_scope_app):
+        client, bearer, expected_claim = desktop_scope_app
+        response = client.post(
+            "/api/auth/ws-ticket",
+            headers={"X-Hermes-Session-Token": bearer},
+        )
+
+        assert response.status_code == 200
+        info = consume_ticket(response.json()["ticket"])
+        assert info["provider"] == "desktop-scope"
+        assert info["auth_scope"] == expected_claim
+
 
 # ---------------------------------------------------------------------------
 # _ws_auth_ok — unit-level (synthetic WebSocket-shaped object)
@@ -187,8 +243,10 @@ def _fake_ws(*, query: dict, client_host: str = "127.0.0.1", path: str = "/api/p
             return self._q.get(k, default)
 
     return SimpleNamespace(
+        app=web_server.app,
         query_params=_QP(query),
         client=SimpleNamespace(host=client_host),
+        state=SimpleNamespace(),
         url=SimpleNamespace(path=path),
     )
 
@@ -242,6 +300,85 @@ class TestWsAuthOkGated:
         if log_file.exists():
             content = log_file.read_text()
             assert "ws_ticket_rejected" in content
+
+
+class TestWsAuthOkDesktopScope:
+    """Desktop backends accept only scope-bound, single-use WS tickets."""
+
+    @pytest.fixture(autouse=True)
+    def _desktop_scope(self, monkeypatch):
+        now = [100.0]
+        auth = AuthScope("0123456789abcdef0123456789abcdef", 7)
+        registry = BackendScopeTokenRegistry(
+            clock=lambda: now[0],
+            authorize=lambda _boundary, *, expected: expected,
+        )
+        bearer = "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo"
+        grant = registry.register(
+            bearer,
+            connection_id="local",
+            expected=auth,
+            ttl_seconds=60,
+        )
+        previous = getattr(
+            web_server.app.state,
+            "desktop_scope_tokens_required",
+            False,
+        )
+        web_server.app.state.desktop_scope_tokens_required = True
+        monkeypatch.setattr(web_server, "backend_scope_tokens", registry)
+        self.now = now
+        self.grant = grant
+        yield
+        web_server.app.state.desktop_scope_tokens_required = previous
+
+    def test_scope_ticket_is_accepted_once_without_bearer_in_url(self):
+        ticket = mint_ticket(
+            user_id="desktop:local",
+            provider="desktop-scope",
+            auth_scope=self.grant.claim(),
+        )
+
+        assert web_server._ws_auth_ok(_fake_ws(query={"ticket": ticket})) is True
+        assert web_server._ws_auth_ok(_fake_ws(query={"ticket": ticket})) is False
+
+    def test_legacy_query_token_and_unbound_ticket_are_rejected(self):
+        token_ws = _fake_ws(query={"token": web_server._SESSION_TOKEN})
+        unbound = mint_ticket(user_id="u1", provider="stub")
+
+        assert web_server._ws_auth_ok(token_ws) is False
+        assert web_server._ws_auth_ok(_fake_ws(query={"ticket": unbound})) is False
+
+    @pytest.mark.asyncio
+    async def test_expired_scope_closes_an_established_socket_before_next_message(self):
+        ticket = mint_ticket(
+            user_id="desktop:local",
+            provider="desktop-scope",
+            auth_scope=self.grant.claim(),
+        )
+
+        class FakeWebSocket:
+            def __init__(self):
+                template = _fake_ws(query={"ticket": ticket})
+                self.app = template.app
+                self.client = template.client
+                self.query_params = template.query_params
+                self.state = template.state
+                self.url = template.url
+                self.closed = None
+
+            async def close(self, **kwargs):
+                self.closed = kwargs
+
+        ws = FakeWebSocket()
+        assert web_server._ws_auth_ok(ws) is True
+        self.now[0] = self.grant.valid_until
+
+        assert not await web_server._ws_client_runtime_authorized(
+            ws,
+            "dashboard.ws.message",
+        )
+        assert ws.closed == {"code": 4401, "reason": "Hermes login required"}
 
 
 class TestWsRequestIsAllowedGated:
@@ -426,4 +563,3 @@ class TestGatewayWsUrl:
         gw_cred = gw.split("internal=")[1].split("&")[0]
         sc_cred = sc.split("internal=")[1].split("&")[0]
         assert gw_cred == sc_cred
-

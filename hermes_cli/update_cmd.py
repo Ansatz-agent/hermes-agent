@@ -774,385 +774,16 @@ def _print_update_completion(message: str) -> None:
 
 
 def _update_via_zip(args, *, had_desktop_app_before_update: bool = False):
-    """Update Hermes Agent by downloading a ZIP archive.
+    """Reject unmanaged source replacement on packaged installations.
 
-    Used on Windows when git file I/O is broken (antivirus, NTFS filter
-    drivers causing 'Invalid argument' errors on file creation).
+    Release packages update through their signed platform installer. A runtime
+    source archive has no registered domestic origin/provenance, so Hermes does
+    not download one from an official host as an implicit fallback.
     """
-    active_tool_dependencies = _m()._capture_active_tool_dependencies()
-
-    import tempfile
-    import zipfile
-    from urllib.request import urlretrieve
-
-    # The ZIP fallback exists for Windows git-file-I/O breakage. It pulls a
-    # static archive from GitHub, which is fine for the default "main"
-    # channel but would silently ignore --branch and update from main even
-    # if the user asked for something else — exactly the silent-divergence
-    # bug --branch was added to prevent. Refuse to proceed in that case
-    # rather than lie.
-    branch = _m()._resolve_update_branch(args)
-    if branch != "main":
-        print(
-            f"✗ --branch={branch} is not supported on the Windows ZIP-fallback "
-            "update path."
-        )
-        print(
-            "  This path runs when git file I/O is broken on the system. "
-            "Either resolve the git-side breakage (typically an antivirus "
-            "or NTFS filter holding files open) and rerun `hermes update "
-            f"--branch {branch}`, or update against main with `hermes update`."
-        )
-        _m().sys.exit(1)
-    zip_url = (
-        f"https://github.com/NousResearch/hermes-agent/archive/refs/heads/{branch}.zip"
-    )
-
-    print("→ Downloading latest version...")
-    tmp_dir = tempfile.mkdtemp(prefix="hermes-update-")
-    try:
-        zip_path = os.path.join(tmp_dir, f"hermes-agent-{branch}.zip")
-        urlretrieve(zip_url, zip_path)
-
-        print("→ Extracting...")
-        import stat as _stat
-        with zipfile.ZipFile(zip_path, "r") as zf:
-            # Validate paths to prevent zip-slip (path traversal) AND reject
-            # symlink members. A GitHub source ZIP for hermes-agent itself
-            # should never contain symlinks — they'd point outside the
-            # extracted tree and let an attacker who can compromise the
-            # update mirror plant arbitrary files via the update path.
-            tmp_dir_real = os.path.realpath(tmp_dir)
-            for member in zf.infolist():
-                member_path = os.path.realpath(os.path.join(tmp_dir, member.filename))
-                if (
-                    not member_path.startswith(tmp_dir_real + os.sep)
-                    and member_path != tmp_dir_real
-                ):
-                    raise ValueError(
-                        f"Zip-slip detected: {member.filename} escapes extraction directory"
-                    )
-                # Unix mode lives in the upper 16 bits of external_attr;
-                # mask to the file-type bits.
-                mode = (member.external_attr >> 16) & 0o170000
-                if _stat.S_ISLNK(mode):
-                    raise ValueError(
-                        f"ZIP contains unsupported symlink member: {member.filename}"
-                    )
-            zf.extractall(tmp_dir)
-
-        # GitHub ZIPs extract to hermes-agent-<branch>/
-        extracted = os.path.join(tmp_dir, f"hermes-agent-{branch}")
-        if not os.path.isdir(extracted):
-            # Try to find it
-            for d in os.listdir(tmp_dir):
-                candidate = os.path.join(tmp_dir, d)
-                if os.path.isdir(candidate) and d != "__MACOSX":
-                    extracted = candidate
-                    break
-
-        # Copy updated files over existing installation, preserving venv/node_modules/.git
-        preserve = {"venv", "node_modules", ".git", ".env"}
-        entries = [i for i in os.listdir(extracted) if i not in preserve]
-
-        # Two-phase replace (#76104). Phase 1 copies every entry — directories
-        # AND top-level files — to a sibling staging path without touching
-        # anything live; phase 2 swaps them all in with same-filesystem
-        # renames and rolls back every swap if any one fails. Replacing
-        # entries one-at-a-time (the previous shape) meant an interruption
-        # partway left `agent/` new and `tools/` stale — all files valid, the
-        # tree unbootable. Files matter as much as directories here: the repo
-        # root holds 20 first-party modules (run_agent.py, cli.py,
-        # hermes_constants.py, ...).
-        #
-        # Staging costs one extra copy of the tree on disk. Check up front so
-        # we fail with a clear message instead of running out mid-copy.
-        need = sum(
-            os.path.getsize(os.path.join(dirpath, f))
-            for entry in entries
-            for dirpath, _dirs, files in os.walk(os.path.join(extracted, entry))
-            for f in files
-        ) + sum(
-            os.path.getsize(os.path.join(extracted, e))
-            for e in entries
-            if os.path.isfile(os.path.join(extracted, e))
-        )
-        # Only the staging copy is new — the live tree already occupies its
-        # space and the swaps are renames, not copies. Ask for the staging
-        # copy plus 20% headroom rather than a full 2x, which would block
-        # updates that would have succeeded on exactly the space-constrained
-        # machines most likely to hit this path.
-        required = int(need * 1.2)
-        free = shutil.disk_usage(str(_m().PROJECT_ROOT)).free
-        if free < required:
-            raise RuntimeError(
-                f"not enough free disk space to stage the update safely "
-                f"(need ~{required // (1024 * 1024)} MB, have "
-                f"{free // (1024 * 1024)} MB)"
-            )
-
-        staged: list[tuple[str, str]] = []
-        try:
-            for item in entries:
-                src = os.path.join(extracted, item)
-                dst = os.path.join(str(_m().PROJECT_ROOT), item)
-                staged.append((_stage_replacement(src, dst), dst))
-        except Exception:
-            # Nothing is live yet; drop the partial staging copies so a retry
-            # starts from the same free space this attempt did.
-            _discard_staged(staged)
-            raise
-
-        try:
-            _commit_staged_replacements(staged)
-        except Exception:
-            # The rollback already restored every swapped entry, but staging
-            # copies for the not-yet-swapped entries (potentially most of a
-            # full tree) are still on disk. Drop them, or the retry's
-            # up-front free-space check — which runs BEFORE the lazy
-            # per-entry leftover cleanup — fails on litter this attempt
-            # left behind: the exact "retry fails harder" failure mode
-            # _discard_staged exists to prevent. Safe post-rollback: swapped
-            # entries' staging paths were renamed away, and _discard_staged
-            # skips paths that no longer exist.
-            _discard_staged(staged)
-            raise
-        update_count = len(staged)
-
-        print(f"✓ Updated {update_count} items from ZIP")
-
-    except Exception as e:
-        print(f"✗ ZIP update failed: {e}")
-        # The two-phase replace either commits every entry or rolls them all
-        # back, so a failure here does not leave a mixed-version tree — don't
-        # scare the user toward a reinstall they don't need.
-        print("  Your existing install was left in place.")
-        print(
-            "  Re-run `hermes update` to retry; if the agent won't start, "
-            "reinstall from https://hermes-agent.nousresearch.com"
-        )
-        _m().sys.exit(1)
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-
-    # Clear stale bytecode after ZIP extraction
-    removed = _m()._clear_bytecode_cache(_m().PROJECT_ROOT)
-    if removed:
-        print(
-            f"  ✓ Cleared {removed} stale __pycache__ director{'y' if removed == 1 else 'ies'}"
-        )
-    _m()._record_bytecode_fingerprint()
-    _m()._refresh_bootstrap_cache_scripts(branch)
-
-    # Reinstall Python dependencies. Prefer .[all], but if one optional extra
-    # breaks on this machine, keep base deps and reinstall the remaining extras
-    # individually so update does not silently strip working capabilities.
-    #
-    # Self-lock deferral (relocated preflight — #86735): the ZIP code swap
-    # above is already committed; defer only the dependency sync when this
-    # process holds a native extension the sync must rewrite.
-    _m()._abort_dependency_sync_if_self_locked()
-    print("→ Updating Python dependencies...")
-
-    from hermes_cli.managed_uv import ensure_uv, update_managed_uv
-
-    # Keep managed uv current — runs `uv self update` if we already have one.
-    update_managed_uv()
-
-    uv_bin = ensure_uv()
-
-    pip_cmd = [_m().sys.executable, "-m", "pip"]
-    if not uv_bin:
-        uv_bin = _ensure_uv_for_termux(pip_cmd)
-    if uv_bin:
-        uv_env = {**os.environ, "VIRTUAL_ENV": str(_m().PROJECT_ROOT / "venv")}
-        if _m()._is_termux_env(uv_env):
-            uv_env.pop("PYTHONPATH", None)
-            uv_env.pop("PYTHONHOME", None)
-        _m()._install_python_dependencies_with_optional_fallback([uv_bin, "pip"], env=uv_env)
-    else:
-        # Use sys.executable to explicitly call the venv's pip module,
-        # avoiding PEP 668 'externally-managed-environment' errors on Debian/Ubuntu.
-        # Some environments lose pip inside the venv; bootstrap it back with
-        # ensurepip before trying the editable install.
-        try:
-            subprocess.run(
-                pip_cmd + ["--version"],
-                cwd=_m().PROJECT_ROOT,
-                check=True,
-                capture_output=True,
-            )
-        except subprocess.CalledProcessError:
-            subprocess.run(
-                [_m().sys.executable, "-m", "ensurepip", "--upgrade", "--default-pip"],
-                cwd=_m().PROJECT_ROOT,
-                check=True,
-            )
-        _m()._install_python_dependencies_with_optional_fallback(pip_cmd)
-
-    install_prefix = [uv_bin, "pip"] if uv_bin else pip_cmd
-    install_env = uv_env if uv_bin else None
-    _m()._restore_active_tool_dependencies(
-        active_tool_dependencies,
-        install_prefix,
-        env=install_env,
-    )
-
-    # ZIP path parity: heal the active memory provider's bridge packages
-    # after the dependency reinstall, same as the git-pull path (#53272,
-    # #70636).
-    _m()._refresh_active_memory_provider_dependencies()
-
-    # Now that dependencies are installed, verify the tree actually imports.
-    # The copy loop above replaces top-level entries one at a time in
-    # os.listdir order, so an interruption between (say) `agent/` and `tools/`
-    # leaves a tree whose files all parse but cannot be imported together —
-    # the ImportError-on-startup class this guard exists to catch. Deliberately
-    # placed *after* the dependency reinstall so a genuinely-new third-party
-    # requirement isn't misreported as a partial copy. There is no SHA to roll
-    # back to here, so surface it with a concrete recovery step rather than
-    # reporting a successful update over a bricked install.
-    import_ok, failing_module, import_error = _validate_critical_modules_import(
-        _m().PROJECT_ROOT
-    )
-    if not import_ok:
-        print()
-        print("✗ Update left the install in an unimportable state:")
-        print(f"  {failing_module}: {import_error}")
-        print()
-        print("  This usually means the copy was interrupted partway through.")
-        print("  Re-run `hermes update` to complete it.")
-        _m().sys.exit(1)
-
-    node_failures = _update_node_dependencies()
-    _m()._build_web_ui(_m().PROJECT_ROOT / "web")
-    _rebuild_desktop_after_update(
-        _m().PROJECT_ROOT / "apps" / "desktop",
-        had_desktop_app_before_update=had_desktop_app_before_update,
-    )
-
-    # Sync skills
-    try:
-        from tools.skills_sync import sync_skills
-
-        print("→ Syncing bundled skills...")
-        result = sync_skills(quiet=True)
-        if result["copied"]:
-            print(f"  + {len(result['copied'])} new: {', '.join(result['copied'])}")
-        if result.get("updated"):
-            print(
-                f"  ↑ {len(result['updated'])} updated: {', '.join(result['updated'])}"
-            )
-        if result.get("user_modified"):
-            print(f"  ~ {len(result['user_modified'])} user-modified (kept)")
-            print(
-                "    → see them: hermes skills list-modified  "
-                "(diff/reset to resume updates)"
-            )
-        if result.get("cleaned"):
-            print(f"  − {len(result['cleaned'])} removed from manifest")
-        if result.get("relocated"):
-            print(
-                f"  → {len(result['relocated'])} moved to new upstream paths: "
-                f"{', '.join(result['relocated'])}"
-            )
-        if not result["copied"] and not result.get("updated"):
-            print("  ✓ Skills are up to date")
-    except Exception:
-        pass
-
-    # Seed the model-catalog disk cache from the freshly-unpacked checkout
-    # (same rationale as the git-pull path in _cmd_update_impl). Non-fatal.
-    try:
-        from hermes_cli.model_catalog import seed_cache_from_checkout
-
-        if seed_cache_from_checkout(_m().PROJECT_ROOT):
-            print("  ✓ Model catalog cache refreshed from checkout")
-    except Exception as e:
-        logger.debug("Model catalog seed during zip update failed: %s", e)
-
-    # ── Post-update state.db integrity guard (#68474) ─────────────────
-    # Same as the git-pull path: verify state.db survived the ZIP update
-    # and auto-restore from the most recent pre-update snapshot if needed.
-    try:
-        from hermes_cli.backup import _quick_snapshot_root, verify_sqlite_integrity
-
-        _state_path = get_hermes_home() / "state.db"
-        if _state_path.exists():
-            _state_ok = verify_sqlite_integrity(
-                _state_path, check_header=True, run_pragma=True
-            )
-            if not _state_ok.get("valid"):
-                print()
-                print(
-                    "⚠ state.db is corrupted after update: "
-                    + _state_ok.get("message", "unknown error")
-                )
-                _snap_root = _quick_snapshot_root(get_hermes_home())
-                if _snap_root.exists():
-                    _snap_dirs = sorted(
-                        (d for d in _snap_root.iterdir() if d.is_dir()),
-                        reverse=True,
-                    )
-                    for _snap_dir in _snap_dirs:
-                        _snap_state = _snap_dir / "state.db"
-                        if _snap_state.exists():
-                            _snap_ok = verify_sqlite_integrity(
-                                _snap_state, check_header=True, run_pragma=True
-                            )
-                            if _snap_ok.get("valid"):
-                                try:
-                                    import shutil as _shutil
-
-                                    _shutil.copy2(_snap_state, _state_path)
-                                    _restored_ok = verify_sqlite_integrity(
-                                        _state_path,
-                                        check_header=True,
-                                        run_pragma=True,
-                                    )
-                                    if _restored_ok.get("valid"):
-                                        print(
-                                            "  ✓ Auto-restored from snapshot "
-                                            f"{_snap_dir.name}"
-                                        )
-                                    else:
-                                        print(
-                                            "  ✗ Auto-restore FAILED — restored "
-                                            "copy also failed integrity"
-                                        )
-                                    break
-                                except OSError as _exc:
-                                    print(
-                                        f"  ✗ Auto-restore file copy failed: {_exc}"
-                                    )
-                                    break
-    except Exception as exc:
-        logger.debug(
-            "Post-update state.db integrity check (zip path) failed: %s", exc
-        )
-
-    print()
-    if node_failures:
-        print(
-            "⚠ Update partially complete — Node.js dependencies for "
-            f"{', '.join(node_failures)} did not refresh."
-        )
-        print("  Code and Python deps are updated, but the dashboard/TUI may")
-        print("  be in a mixed state until the Node deps are rebuilt.")
-    else:
-        _print_update_completion("✓ Update complete!")
-    try:
-        _print_curator_first_run_notice()
-    except Exception as e:
-        logger.debug("Curator first-run notice failed: %s", e)
-    try:
-        _print_curator_recent_run_notice()
-    except Exception as e:
-        logger.debug("Curator recent-run notice failed: %s", e)
-    # Don't stop a working dashboard when the Node refresh failed — see the
-    # git-update path for rationale (#30271).
-    _finish_dashboard_update_cleanup(node_failures)
-
+    del args, had_desktop_app_before_update
+    print("✗ Automatic source-archive update is unavailable for this installation.")
+    print("  Install a reviewed release package supplied by your administrator.")
+    _m().sys.exit(1)
 def _stash_local_changes_if_needed(git_cmd: list[str], cwd: Path) -> Optional[str]:
     status = subprocess.run(
         git_cmd + ["status", "--porcelain"],
@@ -1486,13 +1117,11 @@ def _discard_stashed_changes(
     return True
 
 OFFICIAL_REPO_URLS = {
-    "https://github.com/NousResearch/hermes-agent.git",
     "git@github.com:NousResearch/hermes-agent.git",
-    "https://github.com/NousResearch/hermes-agent",
     "git@github.com:NousResearch/hermes-agent",
 }
 
-OFFICIAL_REPO_URL = "https://github.com/NousResearch/hermes-agent.git"
+OFFICIAL_REPO_URL = "git@github.com:NousResearch/hermes-agent.git"
 
 SKIP_UPSTREAM_PROMPT_FILE = ".skip_upstream_prompt"
 
@@ -1632,7 +1261,7 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
             print("→ Adding upstream remote...")
             if _add_upstream_remote(git_cmd, cwd):
                 print(
-                    "  ✓ Added upstream: https://github.com/NousResearch/hermes-agent.git"
+                    "  ✓ Added the reviewed upstream remote."
                 )
                 has_upstream = True
             else:
@@ -1640,7 +1269,7 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
                 return
         else:
             print(
-                "  Skipped. Run 'git remote add upstream https://github.com/NousResearch/hermes-agent.git' to add later."
+                "  Skipped. Ask an administrator for the reviewed upstream remote."
             )
             _mark_skip_upstream_prompt()
             return
@@ -2427,6 +2056,12 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
     """
     from hermes_cli.config import detect_install_method, recommended_update_command_for_method
     method = detect_install_method(_m().PROJECT_ROOT)
+    if method == "desktop-bundle":
+        from hermes_cli.config import format_desktop_bundle_update_message
+
+        print(format_desktop_bundle_update_message())
+        sys.exit(1)
+
     if method == "docker":
         # Docker can't ``git fetch`` from within the container.  Surface the
         # same long-form ``docker pull`` guidance ``hermes update`` (apply
@@ -4454,9 +4089,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
             use_zip_update = True
         else:
             print("✗ Not a git repository. Please reinstall:")
-            print(
-                "  curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash"
-            )
+            print("  Install a reviewed release package supplied by your administrator.")
             sys.exit(1)
 
     # On Windows, git can fail with "unable to write loose object file: Invalid argument"

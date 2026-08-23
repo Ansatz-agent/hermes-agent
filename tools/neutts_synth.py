@@ -12,6 +12,11 @@ Requires: python -m pip install -U neutts[all]
 System:   apt install espeak-ng  (or brew install espeak-ng)
 """
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.tools.neutts_synth")
+
 import argparse
 import struct
 import sys
@@ -54,8 +59,8 @@ def main():
     parser.add_argument("--out", required=True, help="Output WAV path")
     parser.add_argument("--ref-audio", required=True, help="Reference voice audio path")
     parser.add_argument("--ref-text", required=True, help="Reference voice transcript path")
-    parser.add_argument("--model", default="neuphonic/neutts-air-q4-gguf",
-                        help="HuggingFace backbone model repo")
+    parser.add_argument("--model", required=True, help="Local backbone model directory")
+    parser.add_argument("--codec", required=True, help="Local codec model directory")
     parser.add_argument("--device", default="cpu", help="Device (cpu/cuda/mps)")
     args = parser.parse_args()
 
@@ -68,11 +73,19 @@ def main():
     # Validate inputs
     ref_audio = Path(args.ref_audio).expanduser()
     ref_text_path = Path(args.ref_text).expanduser()
+    model_path = Path(args.model).expanduser()
+    codec_path = Path(args.codec).expanduser()
     if not ref_audio.exists():
         print(f"Error: reference audio not found: {ref_audio}", file=sys.stderr)
         sys.exit(1)
     if not ref_text_path.exists():
         print(f"Error: reference text not found: {ref_text_path}", file=sys.stderr)
+        sys.exit(1)
+    if not model_path.is_dir() or not codec_path.is_dir():
+        print(
+            "Error: NeuTTS requires administrator-supplied local model and codec directories",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     ref_text = ref_text_path.read_text(encoding="utf-8").strip()
@@ -85,9 +98,9 @@ def main():
         sys.exit(1)
 
     tts = NeuTTS(
-        backbone_repo=args.model,
+        backbone_repo=str(model_path),
         backbone_device=backbone_device,
-        codec_repo="neuphonic/neucodec",
+        codec_repo=str(codec_path),
         codec_device=codec_device,
     )
     ref_codes = tts.encode_reference(str(ref_audio))

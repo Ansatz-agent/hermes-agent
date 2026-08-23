@@ -30,6 +30,14 @@ unset HERMES_MAIN_WRAPPER_ENV_READY
 
 drop() { [ "$(id -u)" = 0 ] && set -- s6-setuidgid hermes "$@"; exec "$@"; }
 
+wait_for_auth() {
+    if [ "$(id -u)" = 0 ]; then
+        s6-setuidgid hermes python -m hermes_cli.client_auth.runtime wait container.main.start
+    else
+        python -m hermes_cli.client_auth.runtime wait container.main.start
+    fi
+}
+
 # --- Reject the unsupported `docker run --user <uid>:<gid>` start ---
 # Mirror the guard in stage2-hook.sh (cont-init). This is the surface the
 # user actually sees in `docker run` output: when the container is pinned to
@@ -79,8 +87,32 @@ cd /opt/data
 cd "$_hermes_orig_cwd"
 
 if [ $# -eq 0 ]; then
+    wait_for_auth
     drop hermes
 fi
+
+case "$1" in
+    login|logout|-h|--help|-V|--version)
+        drop hermes "$@"
+        ;;
+    auth)
+        if [ "${2:-}" = status ] && [ $# -eq 2 ]; then
+            drop hermes "$@"
+        fi
+        ;;
+    hermes)
+        case "${2:-}" in
+            login|logout|-h|--help|-V|--version)
+                drop "$@"
+                ;;
+        esac
+        if [ "${2:-}" = auth ] && [ "${3:-}" = status ] && [ $# -eq 3 ]; then
+            drop "$@"
+        fi
+        wait_for_auth
+        drop "$@"
+        ;;
+esac
 
 if command -v "$1" >/dev/null 2>&1; then
     # Bare executable — pass through directly.
@@ -88,4 +120,5 @@ if command -v "$1" >/dev/null 2>&1; then
 fi
 
 # Hermes subcommand pass-through.
+wait_for_auth
 drop hermes "$@"

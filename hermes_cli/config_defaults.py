@@ -1582,7 +1582,8 @@ DEFAULT_CONFIG = {
         "neutts": {
             "ref_audio": "",  # Path to reference voice audio (empty = bundled default)
             "ref_text": "",   # Path to reference voice transcript (empty = bundled default)
-            "model": "neuphonic/neutts-air-q4-gguf",  # HuggingFace model repo
+            "model": "",  # Administrator-supplied local backbone directory
+            "codec": "",  # Administrator-supplied local codec directory
             "device": "cpu",  # cpu, cuda, or mps
         },
         "piper": {
@@ -1611,7 +1612,7 @@ DEFAULT_CONFIG = {
         # the raw transcript is also echoed back to the user as a 🎙️ message.
         # Set false to keep STT for the agent while suppressing that user-facing echo.
         "echo_transcripts": True,
-        "provider": "local",  # "local" (free, faster-whisper) | "groq" | "openai" (Whisper API) | "mistral" (Voxtral Transcribe) | "elevenlabs" (Scribe) | "deepinfra"
+        "provider": "local",  # "local" (free, faster-whisper) | "sensevoice" (free, local, Mandarin-first) | "groq" | "openai" (Whisper API) | "mistral" (Voxtral Transcribe) | "elevenlabs" (Scribe) | "deepinfra"
         # Global language hint applied to EVERY provider unless a per-provider
         # language overrides it. Defaults to "en" — Whisper auto-detection
         # frequently misidentifies short/accented clips, which reads as
@@ -1637,6 +1638,11 @@ DEFAULT_CONFIG = {
             "no_speech_prob_threshold": 0.6,  # drop a segment only if no_speech_prob is ABOVE this...
             "logprob_threshold": -1.0,  # ...AND its avg_logprob is BELOW this (both must hit)
             "unload_after_idle_seconds": 0,  # 0=never (default); e.g. 300 releases the model after 5min idle
+        },
+        "sensevoice": {
+            "language": "zh",
+            "use_itn": True,
+            "unload_after_idle_seconds": 300,
         },
         "groq": {
             "model": "whisper-large-v3-turbo",  # whisper-large-v3, whisper-large-v3-turbo, distil-whisper-large-v3-en
@@ -2571,14 +2577,11 @@ DEFAULT_CONFIG = {
         "backup_count": 3,     # Number of rotated backup files to keep
     },
 
-    # Remotely-hosted model catalog manifest.  When enabled, the CLI fetches
-    # curated model lists for OpenRouter and Nous Portal from this URL,
-    # falling back to the in-repo snapshot on network failure.  Lets us
-    # update model picker lists without shipping a hermes-agent release.
-    # The default URL is served by the docs site GitHub Pages deploy.
+    # Optional operator-hosted model catalog. No public remote is contacted
+    # unless an administrator explicitly configures this URL.
     "model_catalog": {
         "enabled": True,
-        "url": "https://hermes-agent.nousresearch.com/docs/api/model-catalog.json",
+        "url": "",
         # Disk cache TTL in hours.  Beyond this, the CLI refetches on the
         # next /model or `hermes model` invocation; network failures
         # silently fall back to the stale cache.
@@ -2645,7 +2648,7 @@ DEFAULT_CONFIG = {
     # a corporate proxy).  ETag conditional GET ensures refreshes are
     # cheap (304 = no download).
     "models_dev": {
-        "url": "",  # empty = default https://models.dev/api.json
+        "url": "",  # empty = built-in models.dev metadata endpoint
     },
 
     # Network settings — workarounds for connectivity issues.

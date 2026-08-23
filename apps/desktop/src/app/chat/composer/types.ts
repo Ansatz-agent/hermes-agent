@@ -2,6 +2,7 @@ import type { ReactNode } from 'react'
 
 import type { SubmitTextOptions } from '@/app/session/hooks/use-prompt-actions/utils'
 import type { HermesGateway } from '@/hermes'
+import type { SttPreparationErrorCode, SttPreparationResponse } from '@/types/hermes'
 
 import type { DroppedFile } from '../hooks/use-composer-actions'
 
@@ -36,6 +37,7 @@ export interface ChatBarProps {
   disabled: boolean
   focusKey?: string | null
   maxRecordingSeconds?: number
+  sttProvider?: string
   state: ChatBarState
   gateway?: HermesGateway | null
   queueSessionKey?: string | null
@@ -58,6 +60,16 @@ export interface ChatBarProps {
   onSubmit: (value: string, options?: SubmitTextOptions) => Promise<boolean> | boolean
   onTranscribeAudio?: (audio: Blob) => Promise<string>
 }
+
+export interface SenseVoiceReadiness {
+  ready: boolean
+  required: boolean
+  retry: () => Promise<void>
+  retrying: boolean
+  status?: SttPreparationResponse
+}
+
+export type { SttPreparationErrorCode }
 
 export type VoiceStatus = 'idle' | 'recording' | 'transcribing'
 

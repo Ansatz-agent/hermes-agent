@@ -28,6 +28,11 @@ Usage:
     )
 """
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.tools.vision_tools")
+
 import base64
 import contextlib
 import asyncio

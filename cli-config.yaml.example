@@ -1311,7 +1311,7 @@ platform_toolsets:
 # Voice Transcription (Speech-to-Text)
 # =============================================================================
 # Automatically transcribe voice messages on messaging platforms.
-# Providers: local (free, faster-whisper) | groq (free tier) | openai (Whisper API) | mistral (Voxtral Transcribe)
+# Providers: local (free, faster-whisper) | sensevoice (free, local, Mandarin-first) | groq (free tier) | openai (Whisper API) | mistral (Voxtral Transcribe)
 # Set the corresponding API key in .env: GROQ_API_KEY, OPENAI_API_KEY, or MISTRAL_API_KEY.
 stt:
   enabled: true
@@ -1358,6 +1358,10 @@ stt:
     # no_speech_prob_threshold: 0.6  # drop a segment only if no_speech_prob > this...
     # logprob_threshold: -1.0       # ...AND avg_logprob < this (both must hit — quiet real speech survives)
     # unload_after_idle_seconds: 0  # 0=never unload (default); e.g. 300 releases the model after 5min idle (frees VRAM on GPU; next voice message reloads it)
+  # sensevoice:
+  #   language: "zh"               # Mandarin-first default; supports zh/en/ja/ko/yue
+  #   use_itn: true                 # normalize spoken numbers and punctuation
+  #   unload_after_idle_seconds: 300  # release the recognizer after 5min idle
   language: "en"               # GLOBAL language hint for every STT provider (per-provider language wins). Set "" for auto-detect.
   # groq:
   #   model: "whisper-large-v3-turbo"

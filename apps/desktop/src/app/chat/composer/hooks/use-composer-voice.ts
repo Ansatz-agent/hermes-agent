@@ -1,6 +1,8 @@
 import { useStore } from '@nanostores/react'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { prepareSenseVoice } from '@/hermes'
 import { useI18n } from '@/i18n'
 import { chatMessageText, collectUnspokenTurnSpeech } from '@/lib/chat-messages'
 import { triggerHaptic } from '@/lib/haptics'
@@ -9,13 +11,14 @@ import { $voiceConversationStartRequest, takeVoiceConversationStart } from '@/st
 import { resetBrowseState } from '@/store/composer-input-history'
 import { $gateway } from '@/store/gateway'
 import { notify, notifyError } from '@/store/notifications'
+import { $connection } from '@/store/session'
 import { $autoSpeakReplies, $voiceStopPhrase, setAutoSpeakReplies } from '@/store/voice-prefs'
 import { resumeWakeAfterVoice } from '@/store/wake-word'
 
 import type { ComposerTarget } from '../focus'
 import { onComposerVoiceToggleRequest } from '../focus'
 import { useComposerScope } from '../scope'
-import type { ChatBarProps } from '../types'
+import type { ChatBarProps, SenseVoiceReadiness } from '../types'
 
 import { useAutoSpeakReplies } from './use-auto-speak-replies'
 import { useVoiceConversation } from './use-voice-conversation'
@@ -34,9 +37,62 @@ interface UseComposerVoiceArgs {
   onSubmit: ChatBarProps['onSubmit']
   onTranscribeAudio: ChatBarProps['onTranscribeAudio']
   sessionId: string | null | undefined
+  sttProvider?: string
   /** This composer's focus-bus key — voice toggles targeting another
    *  composer (or the active one, when not us) are ignored. */
   target: ComposerTarget
+}
+
+const SENSEVOICE_PREPARATION_POLL_MS = 1_000
+const SENSEVOICE_TRANSPORT_ERROR = { code: 'download_failed', state: 'error' } as const
+
+export function useSenseVoiceReadiness(sttProvider?: string): SenseVoiceReadiness {
+  const connection = useStore($connection)
+  const queryClient = useQueryClient()
+  const [retrying, setRetrying] = useState(false)
+  const required = sttProvider?.trim().toLowerCase() === 'sensevoice' && connection?.mode === 'local'
+  const connectionScope = [connection?.baseUrl, connection?.connectionId, connection?.profile].join(':')
+  const queryKey = useMemo(() => ['stt', 'sensevoice', 'prepare', connectionScope] as const, [connectionScope])
+
+  const query = useQuery({
+    enabled: required,
+    queryFn: () => prepareSenseVoice(false),
+    queryKey,
+    refetchInterval: current =>
+      current.state.status !== 'error' && current.state.data?.state === 'preparing'
+        ? SENSEVOICE_PREPARATION_POLL_MS
+        : false,
+    refetchOnWindowFocus: false,
+    retry: false
+  })
+
+  const status = query.isError ? SENSEVOICE_TRANSPORT_ERROR : query.data
+
+  const retry = useCallback(async () => {
+    if (!required || retrying) {
+      return
+    }
+
+    setRetrying(true)
+
+    try {
+      await queryClient.cancelQueries({ exact: true, queryKey })
+      const next = await prepareSenseVoice(true)
+      queryClient.setQueryData(queryKey, next)
+    } catch {
+      queryClient.setQueryData(queryKey, SENSEVOICE_TRANSPORT_ERROR)
+    } finally {
+      setRetrying(false)
+    }
+  }, [queryClient, queryKey, required, retrying])
+
+  return {
+    ready: !required || status?.state === 'ready',
+    required,
+    retry,
+    retrying,
+    status
+  }
 }
 
 /**
@@ -56,6 +112,7 @@ export function useComposerVoice({
   onSubmit,
   onTranscribeAudio,
   sessionId,
+  sttProvider,
   target
 }: UseComposerVoiceArgs) {
   const { t } = useI18n()
@@ -65,13 +122,20 @@ export function useComposerVoice({
   const lastSpokenIdRef = useRef<string | null>(null)
   const ownsWakeIndicatorRef = useRef(false)
   const voiceStartRequest = useStore($voiceConversationStartRequest)
+  const senseVoiceReadiness = useSenseVoiceReadiness(sttProvider)
 
-  const { dictate, voiceActivityState, voiceStatus } = useVoiceRecorder({
+  const { dictate: recordDictation, voiceActivityState, voiceStatus } = useVoiceRecorder({
     focusInput,
     maxRecordingSeconds,
     onTranscript: insertText,
     onTranscribeAudio
   })
+
+  const dictate = useCallback(() => {
+    if (senseVoiceReadiness.ready) {
+      recordDictation()
+    }
+  }, [recordDictation, senseVoiceReadiness.ready])
 
   /** Auto-speak selector: the latest unspoken reply only — a backlog collapses to the newest. */
   const pendingResponse = () => {
@@ -133,7 +197,7 @@ export function useComposerVoice({
   const conversation = useVoiceConversation({
     busy,
     consumePendingResponse,
-    enabled: voiceConversationActive,
+    enabled: voiceConversationActive && senseVoiceReadiness.ready,
     onFatalError: () => setVoiceConversationActive(false),
     // Speaking over the model mid-generation interrupts the in-flight turn —
     // the same seam as the Stop button — so the interjection becomes the next
@@ -172,11 +236,10 @@ export function useComposerVoice({
     []
   )
 
-  // The `composer.voice` hotkey (Ctrl+B) toggles the conversation. Starting
-  // with STT unconfigured lets the conversation surface its own "configure
-  // speech-to-text" notice rather than silently no-opping.
+  // The `composer.voice` hotkey (Ctrl+B) toggles the conversation. A local
+  // SenseVoice install stays gated until preparation has completed.
   const toggleVoiceConversation = useCallback(() => {
-    if (disabled) {
+    if (disabled || !senseVoiceReadiness.ready) {
       return
     }
 
@@ -186,7 +249,7 @@ export function useComposerVoice({
     } else {
       setVoiceConversationActive(true)
     }
-  }, [conversation, disabled, voiceConversationActive])
+  }, [conversation, disabled, senseVoiceReadiness.ready, voiceConversationActive])
 
   useEffect(
     () => onComposerVoiceToggleRequest(toggled => toggled === target && toggleVoiceConversation()),
@@ -194,10 +257,23 @@ export function useComposerVoice({
   )
 
   useEffect(() => {
-    if (target === 'main' && !disabled && takeVoiceConversationStart(voiceStartRequest) && !voiceConversationActive) {
+    if (
+      target === 'main' &&
+      !disabled &&
+      senseVoiceReadiness.ready &&
+      takeVoiceConversationStart(voiceStartRequest) &&
+      !voiceConversationActive
+    ) {
       setVoiceConversationActive(true)
     }
-  }, [disabled, target, voiceConversationActive, voiceStartRequest])
+  }, [disabled, senseVoiceReadiness.ready, target, voiceConversationActive, voiceStartRequest])
+
+  useEffect(() => {
+    if (!senseVoiceReadiness.ready && voiceConversationActive) {
+      setVoiceConversationActive(false)
+      void conversation.end()
+    }
+  }, [conversation, senseVoiceReadiness.ready, voiceConversationActive])
 
   const resumeWakeIfPaused = useCallback(() => {
     if (!wakePausedRef.current) {
@@ -262,7 +338,11 @@ export function useComposerVoice({
 
   // Explicit start/end for the on-screen conversation controls (the hotkey uses
   // the gated toggle above).
-  const startConversation = useCallback(() => setVoiceConversationActive(true), [])
+  const startConversation = useCallback(() => {
+    if (senseVoiceReadiness.ready) {
+      setVoiceConversationActive(true)
+    }
+  }, [senseVoiceReadiness.ready])
 
   const endConversation = useCallback(() => {
     setVoiceConversationActive(false)
@@ -288,6 +368,7 @@ export function useComposerVoice({
     dictate,
     endConversation,
     handleToggleAutoSpeak,
+    senseVoiceReadiness,
     startConversation,
     voiceActivityState,
     voiceConversationActive,

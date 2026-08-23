@@ -6,8 +6,16 @@
 
 import fs from "node:fs"
 import path from "node:path"
-import { spawnSync } from "node:child_process"
+import { spawn, spawnSync } from "node:child_process"
 import { createRequire } from "node:module"
+
+import {
+  buildRestrictedVolumeDmg,
+  ensureMacSigningIdentity,
+  isMacDmgRequest,
+  packagedMacAppName,
+  shouldUseRestrictedVolumeFallback,
+} from "./macos-dmg-builder.mjs"
 
 const require = createRequire(import.meta.url)
 
@@ -36,6 +44,57 @@ function electronBuilderCli() {
   return path.join(path.dirname(pkgJson), rel)
 }
 
+function runBuilder(command, args, captureOutput) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [command, ...args], {
+      stdio: captureOutput ? ["inherit", "pipe", "pipe"] : "inherit",
+    })
+    let output = ""
+    const remember = (chunk, destination) => {
+      destination.write(chunk)
+      output = `${output}${chunk.toString("utf8")}`.slice(-2_000_000)
+    }
+    if (captureOutput) {
+      child.stdout.on("data", (chunk) => remember(chunk, process.stdout))
+      child.stderr.on("data", (chunk) => remember(chunk, process.stderr))
+    }
+    child.once("error", (error) => resolve({ status: null, error, output }))
+    child.once("close", (status) => resolve({ status, error: null, output }))
+  })
+}
+
+function runCheck(command, args, label) {
+  const result = spawnSync(command, args, { stdio: "inherit" })
+  if (result.error) {
+    console.error(`[run-electron-builder] ${label} failed to start: ${result.error.message}`)
+    return false
+  }
+  if (result.status !== 0) {
+    console.error(`[run-electron-builder] ${label} failed with exit code ${result.status ?? "unknown"}`)
+    return false
+  }
+  return true
+}
+
+function macPackagePaths() {
+  const desktopRoot = path.resolve(import.meta.dirname, "..")
+  const desktopPackage = JSON.parse(fs.readFileSync(path.join(desktopRoot, "package.json"), "utf8"))
+  const arch = process.arch
+  const appDirectory = arch === "x64" ? "mac" : `mac-${arch}`
+  const releaseDirectory = path.join(desktopRoot, "release")
+  return {
+    packagedApp: path.join(releaseDirectory, appDirectory, packagedMacAppName(desktopPackage)),
+    dmgPath: path.join(
+      releaseDirectory,
+      desktopPackage.build.artifactName
+        .replace("${version}", desktopPackage.version)
+        .replace("${os}", "mac")
+        .replace("${arch}", arch)
+        .replace("${ext}", "dmg"),
+    ),
+  }
+}
+
 const dist = electronDistDir()
 const args = []
 if (dist && fs.existsSync(distBinary(dist))) {
@@ -46,13 +105,56 @@ if (dist && fs.existsSync(distBinary(dist))) {
       "via @electron/get (electronVersion + ELECTRON_MIRROR)."
   )
 }
-args.push(...process.argv.slice(2))
+const requestedArgs = ensureMacSigningIdentity(process.argv.slice(2))
+args.push(...requestedArgs)
 
-const result = spawnSync(process.execPath, [electronBuilderCli(), ...args], {
-  stdio: "inherit",
-})
+const macDmgRequested = isMacDmgRequest(requestedArgs)
+const result = await runBuilder(electronBuilderCli(), args, macDmgRequested)
+
 if (result.error) {
   console.error(`[run-electron-builder] spawn failed: ${result.error.message}`)
   process.exit(1)
 }
-process.exit(result.status == null ? 1 : result.status)
+
+if (!macDmgRequested) {
+  process.exit(result.status == null ? 1 : result.status)
+}
+
+const { packagedApp, dmgPath } = macPackagePaths()
+const useFallback = shouldUseRestrictedVolumeFallback({
+  args: requestedArgs,
+  status: result.status,
+  output: result.output,
+  packagedAppExists: fs.existsSync(packagedApp),
+})
+
+if (result.status !== 0 && !useFallback) {
+  process.exit(result.status == null ? 1 : result.status)
+}
+
+if (!runCheck("codesign", ["--verify", "--deep", "--strict", packagedApp], "packaged app signature verification")) {
+  process.exit(1)
+}
+
+if (useFallback) {
+  console.warn(
+    "[run-electron-builder] mounted DMG volume denied by macOS; " +
+      "using the verified restricted-volume fallback.",
+  )
+  try {
+    buildRestrictedVolumeDmg({ packagedApp, dmgPath })
+  } catch (error) {
+    console.error(
+      `[run-electron-builder] restricted-volume fallback failed: ${error instanceof Error ? error.message : String(error)}`,
+    )
+    process.exit(1)
+  }
+} else if (!fs.existsSync(dmgPath)) {
+  console.error(`[run-electron-builder] expected DMG was not produced: ${dmgPath}`)
+  process.exit(1)
+} else if (!runCheck("hdiutil", ["verify", dmgPath], "DMG verification")) {
+  process.exit(1)
+}
+
+console.log(`[run-electron-builder] verified DMG: ${dmgPath}`)
+process.exit(0)

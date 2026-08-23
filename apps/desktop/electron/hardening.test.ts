@@ -922,6 +922,42 @@ function readMain() {
   return fs.readFileSync(path.join(__dirname, 'main.ts'), 'utf8').replace(/\r\n/g, '\n')
 }
 
+test('local auth Retry owns one explicit bridge recovery path', () => {
+  const source = readMain()
+  const recoveryStart = source.indexOf('async function recoverDesktopAuthBridge(')
+  assert.notEqual(recoveryStart, -1, 'the local bridge recovery function must exist')
+  const recoveryEnd = source.indexOf('\nfunction ', recoveryStart + 1)
+  const recoveryBody = source.slice(recoveryStart, recoveryEnd === -1 ? undefined : recoveryEnd)
+
+  assert.match(recoveryBody, /connectionId !== 'local'/, 'remote connections must not use local bridge recovery')
+  assert.match(
+    recoveryBody,
+    /failedBridge !== desktopAuthBridge/,
+    'only the exact bridge still owned by Desktop may be replaced'
+  )
+  assert.match(recoveryBody, /desktopAuthBridge\?\.close\(\)/, 'the failed bridge must close before replacement')
+  assert.match(recoveryBody, /const replacement = createDesktopAuthBridge\(\)/, 'recovery must create a fresh bridge')
+  assert.match(recoveryBody, /desktopAuthBridge = replacement/, 'Desktop must own the replacement for shutdown')
+
+  const coordinatorStart = source.indexOf('const coordinator = new AuthCoordinator(bridge')
+  assert.notEqual(coordinatorStart, -1, 'the local auth coordinator must exist')
+  const coordinatorWiring = source.slice(coordinatorStart, coordinatorStart + 260)
+  assert.match(
+    coordinatorWiring,
+    /recoverBridge: recoverDesktopAuthBridge/,
+    'the local coordinator must receive the owned recovery callback'
+  )
+
+  const handlerStart = source.indexOf("guardedHandle('hermes:auth:status'")
+  assert.notEqual(handlerStart, -1, 'the auth status handler must exist')
+  const handlerBody = source.slice(handlerStart, handlerStart + 360)
+  assert.match(
+    handlerBody,
+    /coordinator\.refresh\(id, \{ recoverRuntime: id === 'local' \}\)/,
+    'only a renderer status request for the local connection may opt into recovery'
+  )
+})
+
 test('coerceDesktopConnectionConfig routes token persistence through resolvePersistedRemoteToken', () => {
   const source = readMain()
   const fnStart = source.indexOf('function coerceDesktopConnectionConfig(')
@@ -953,8 +989,8 @@ test('connection-config save and apply IPC handlers route payloads through coerc
   const source = readMain()
 
   for (const channel of ['hermes:connection-config:save', 'hermes:connection-config:apply']) {
-    const handlerStart = source.indexOf(`ipcMain.handle('${channel}'`)
-    assert.notEqual(handlerStart, -1, `${channel} handler must exist`)
+    const handlerStart = source.indexOf(`guardedHandle('${channel}'`)
+    assert.notEqual(handlerStart, -1, `${channel} authenticated handler must exist`)
     const handlerBody = source.slice(handlerStart, handlerStart + 400)
     assert.match(
       handlerBody,

@@ -12,7 +12,27 @@ import pytest
 
 pytest.importorskip("nemo_relay")
 
-from agent import relay_llm, relay_runtime
+from agent import ansatz_trace_policy, relay_llm, relay_runtime
+
+
+def test_product_llm_trace_keeps_content_and_redacts_provider_credentials(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        ansatz_trace_policy,
+        "ansatz_product_trace_enabled",
+        lambda: True,
+    )
+    request = {
+        "messages": [{"role": "user", "content": "complete prompt"}],
+        "extra_headers": {"authorization": "Bearer provider-secret"},
+    }
+
+    observed = relay_llm._trace_jsonable(request)
+
+    assert observed["messages"] == request["messages"]
+    assert observed["extra_headers"]["authorization"] == "[REDACTED]"
+    assert request["extra_headers"]["authorization"] == "Bearer provider-secret"
 
 
 @pytest.fixture()

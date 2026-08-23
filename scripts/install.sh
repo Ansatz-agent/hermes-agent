@@ -5,11 +5,8 @@
 # Installation script for Linux, macOS, and Android/Termux.
 # Uses uv for desktop/server installs and Python's stdlib venv + pip on Termux.
 #
-# Usage:
-#   curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
-#
-# Or with options:
-#   curl -fsSL ... | bash -s -- --no-venv --skip-setup
+# Usage (administrator-supplied reviewed package):
+#   ./install.sh --bundled-source --no-venv --skip-setup
 #
 # ============================================================================
 
@@ -43,8 +40,6 @@ NC='\033[0m' # No Color
 BOLD='\033[1m'
 
 # Configuration
-REPO_URL_SSH="git@github.com:NousResearch/hermes-agent.git"
-REPO_URL_HTTPS="https://github.com/NousResearch/hermes-agent.git"
 HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
 # INSTALL_DIR is resolved AFTER arg parsing and OS detection so we can pick an
 # FHS-style layout for root installs.  Track whether the user gave us an
@@ -82,6 +77,48 @@ STAGE_NAME=""
 JSON_OUTPUT=false
 NON_INTERACTIVE=false
 INCLUDE_DESKTOP=false
+BUNDLED_SOURCE=false
+BUNDLED_TOOLCHAIN_ROOT=""
+BOOTSTRAP_SCOPE="runtime"
+
+DESKTOP_PYTHON_PRIMARY_MIRROR="https://mirrors.ustc.edu.cn/pypi/simple"
+DESKTOP_PYTHON_FALLBACK_MIRROR="https://pypi.tuna.tsinghua.edu.cn/simple"
+DESKTOP_NPM_REGISTRY="https://registry.npmmirror.com"
+DESKTOP_NPM_OFFICIAL_REGISTRY="https://registry.npmjs.org"
+DESKTOP_NODE_MIRROR="https://registry.npmmirror.com/-/binary/node/"
+DESKTOP_NODE_FALLBACK_MIRROR="https://npmmirror.com/mirrors/node/"
+DESKTOP_NODE_OFFICIAL_MIRROR="https://nodejs.org/dist/"
+DESKTOP_PLAYWRIGHT_MIRROR="https://registry.npmmirror.com/-/binary/playwright"
+DESKTOP_PLAYWRIGHT_FALLBACK_MIRROR="https://npmmirror.com/mirrors/playwright/"
+DESKTOP_ELECTRON_PRIMARY_MIRROR="https://npmmirror.com/mirrors/electron/"
+DESKTOP_ELECTRON_SECONDARY_MIRROR="https://registry.npmmirror.com/-/binary/electron/"
+
+# Product-managed child processes never inherit package/model redirect knobs.
+# Installers set one reviewed domestic-first policy for every transitive child.
+unset UV_INDEX UV_INDEX_URL UV_EXTRA_INDEX_URL UV_CONFIG_FILE UV_PYTHON \
+    PIP_INDEX_URL PIP_EXTRA_INDEX_URL PIP_CONFIG_FILE \
+    NPM_CONFIG_REGISTRY npm_config_registry NPM_CONFIG_USERCONFIG \
+    NODEJS_ORG_MIRROR ELECTRON_MIRROR ELECTRON_BUILDER_BINARIES_MIRROR \
+    PLAYWRIGHT_DOWNLOAD_HOST HF_ENDPOINT HF_TOKEN HUGGING_FACE_HUB_TOKEN
+export UV_NO_CONFIG=1
+export UV_DEFAULT_INDEX="$DESKTOP_PYTHON_PRIMARY_MIRROR"
+export UV_INDEX="$DESKTOP_PYTHON_PRIMARY_MIRROR"
+export PIP_CONFIG_FILE=/dev/null
+export PIP_INDEX_URL="$DESKTOP_PYTHON_PRIMARY_MIRROR"
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+export PIP_NO_INPUT=1
+export HERMES_UV_FALLBACK_INDEX="$DESKTOP_PYTHON_FALLBACK_MIRROR"
+export NPM_CONFIG_USERCONFIG=/dev/null
+export NPM_CONFIG_REGISTRY="$DESKTOP_NPM_REGISTRY"
+export npm_config_registry="$DESKTOP_NPM_REGISTRY"
+export NODEJS_ORG_MIRROR="$DESKTOP_NODE_MIRROR"
+export HERMES_NODE_MIRROR="$DESKTOP_NODE_MIRROR"
+export PLAYWRIGHT_DOWNLOAD_HOST="$DESKTOP_PLAYWRIGHT_MIRROR"
+export ELECTRON_MIRROR="$DESKTOP_ELECTRON_PRIMARY_MIRROR"
+export ELECTRON_BUILDER_BINARIES_MIRROR="https://npmmirror.com/mirrors/electron-builder-binaries/"
+export HF_HUB_OFFLINE=1
+export HF_HUB_DISABLE_TELEMETRY=1
+MANAGED_DOWNLOAD_ENVIRONMENT=1
 
 # Detect non-interactive mode (e.g. curl | bash)
 # When stdin is not a terminal, read -p will fail with EOF,
@@ -147,6 +184,26 @@ while [[ $# -gt 0 ]]; do
             INCLUDE_DESKTOP=true
             shift
             ;;
+        --bundled-source)
+            BUNDLED_SOURCE=true
+            shift
+            ;;
+        --bundled-toolchain)
+            BUNDLED_TOOLCHAIN_ROOT="${2:-}"
+            if [ -z "$BUNDLED_TOOLCHAIN_ROOT" ]; then
+                echo "Missing bundled authentication toolchain path" >&2
+                exit 1
+            fi
+            shift 2
+            ;;
+        --bootstrap-scope)
+            BOOTSTRAP_SCOPE="${2:-}"
+            case "$BOOTSTRAP_SCOPE" in
+                auth|runtime) ;;
+                *) echo "Unknown bootstrap scope: ${BOOTSTRAP_SCOPE:-<empty>}" >&2; exit 1 ;;
+            esac
+            shift 2
+            ;;
         --dir)
             INSTALL_DIR="$2"
             INSTALL_DIR_EXPLICIT=true
@@ -183,6 +240,10 @@ while [[ $# -gt 0 ]]; do
             echo "  --json         Print a JSON result frame for --stage"
             echo "  --non-interactive  Skip stages that require user input"
             echo "  --include-desktop  Also build the desktop app (apps/desktop -> Hermes.app)"
+            echo "  --bundled-source  Use verified Desktop source already present at --dir;"
+            echo "                    never clone, fetch, pull, or check out repository data"
+            echo "  --bundled-toolchain PATH  Verified Desktop authentication toolchain"
+            echo "  --bootstrap-scope SCOPE  Desktop bootstrap scope: auth or runtime"
             echo "  --dir PATH     Installation directory"
             echo "                   default (non-root):  ~/.hermes/hermes-agent"
             echo "                   default (root, Linux): /usr/local/lib/hermes-agent"
@@ -324,11 +385,16 @@ emit_manifest() {
     # a GUI install ends up with a launchable app; the Electron app's own
     # first-launch bootstrap and the CLI one-liner omit it (building the
     # desktop from inside the already-running app would clobber it).
+    if [ "$BOOTSTRAP_SCOPE" = "auth" ]; then
+        printf '%s\n' '{"protocol_version":1,"bootstrap_scope":"auth","stages":[{"name":"auth-prerequisites","title":"Prepare authentication runtime","category":"auth","needs_user_input":false},{"name":"repository","title":"Prepare signed Hermes source","category":"auth","needs_user_input":false},{"name":"venv","title":"Create authentication environment","category":"auth","needs_user_input":false},{"name":"python-auth-deps","title":"Install authentication dependencies","category":"auth","needs_user_input":false},{"name":"auth-complete","title":"Finish authentication runtime","category":"auth","needs_user_input":false}]}'
+        return
+    fi
+
     local desktop_stage=""
     if [ "$INCLUDE_DESKTOP" = true ]; then
         desktop_stage='{"name":"desktop","title":"Build desktop app","category":"runtime","needs_user_input":false},'
     fi
-    printf '%s' '{"protocol_version":1,"stages":[{"name":"prerequisites","title":"System prerequisites","category":"runtime","needs_user_input":false},{"name":"repository","title":"Download Hermes Agent","category":"runtime","needs_user_input":false},{"name":"venv","title":"Create Python virtual environment","category":"runtime","needs_user_input":false},{"name":"python-deps","title":"Install Python dependencies","category":"runtime","needs_user_input":false},{"name":"node-deps","title":"Install browser-tool dependencies","category":"runtime","needs_user_input":false},{"name":"path","title":"Install hermes command","category":"runtime","needs_user_input":false},{"name":"config","title":"Prepare config and skills","category":"configuration","needs_user_input":false},{"name":"setup","title":"Configure API keys and settings","category":"configuration","needs_user_input":true},{"name":"gateway","title":"Configure gateway service","category":"configuration","needs_user_input":true},'"$desktop_stage"'{"name":"complete","title":"Finish install","category":"runtime","needs_user_input":false}]}'
+    printf '%s' '{"protocol_version":1,"bootstrap_scope":"runtime","stages":[{"name":"prerequisites","title":"System prerequisites","category":"runtime","needs_user_input":false},{"name":"repository","title":"Download Hermes Agent","category":"runtime","needs_user_input":false},{"name":"venv","title":"Create Python virtual environment","category":"runtime","needs_user_input":false},{"name":"python-deps","title":"Install Python dependencies","category":"runtime","needs_user_input":false},{"name":"node-deps","title":"Install browser-tool dependencies","category":"runtime","needs_user_input":false},{"name":"path","title":"Install hermes command","category":"runtime","needs_user_input":false},{"name":"config","title":"Prepare config and skills","category":"configuration","needs_user_input":false},{"name":"setup","title":"Configure API keys and settings","category":"configuration","needs_user_input":true},{"name":"gateway","title":"Configure gateway service","category":"configuration","needs_user_input":true},'"$desktop_stage"'{"name":"complete","title":"Finish install","category":"runtime","needs_user_input":false}]}'
     printf '\n'
 }
 
@@ -534,8 +600,7 @@ detect_os() {
         CYGWIN*|MINGW*|MSYS*)
             OS="windows"
             DISTRO="windows"
-            log_error "Windows detected. Please use the PowerShell installer:"
-            log_info "  iex (irm https://hermes-agent.nousresearch.com/install.ps1)"
+            log_error "Windows detected. Use the reviewed PowerShell installer supplied by your administrator."
             exit 1
             ;;
         *)
@@ -552,11 +617,149 @@ detect_os() {
 # Dependency checks
 # ============================================================================
 
+validate_bundled_toolchain_root() {
+    [ -n "$BUNDLED_TOOLCHAIN_ROOT" ] || return 1
+
+    case "$BUNDLED_TOOLCHAIN_ROOT" in
+        /*) ;;
+        *) log_error "Bundled authentication toolchain path must be absolute"; return 1 ;;
+    esac
+
+    if [ ! -d "$BUNDLED_TOOLCHAIN_ROOT" ] || [ -L "$BUNDLED_TOOLCHAIN_ROOT" ]; then
+        log_error "Bundled authentication toolchain root is unavailable"
+        return 1
+    fi
+
+    local required
+    for required in manifest.json uv.gz python.tar.gz auth-requirements.txt; do
+        if [ ! -f "$BUNDLED_TOOLCHAIN_ROOT/$required" ] || [ -L "$BUNDLED_TOOLCHAIN_ROOT/$required" ]; then
+            log_error "Bundled authentication toolchain asset is unavailable: $required"
+            return 1
+        fi
+    done
+
+    if [ ! -d "$BUNDLED_TOOLCHAIN_ROOT/wheelhouse" ] || [ -L "$BUNDLED_TOOLCHAIN_ROOT/wheelhouse" ]; then
+        log_error "Bundled authentication wheelhouse is unavailable"
+        return 1
+    fi
+
+    return 0
+}
+
+validate_bundled_runtime_mirrors() {
+    if [ "$BUNDLED_SOURCE" != true ] || [ "$BOOTSTRAP_SCOPE" != "runtime" ]; then
+        return 0
+    fi
+
+    if [ "${UV_DEFAULT_INDEX:-}" != "$DESKTOP_PYTHON_PRIMARY_MIRROR" ] || \
+       [ "${HERMES_UV_FALLBACK_INDEX:-}" != "$DESKTOP_PYTHON_FALLBACK_MIRROR" ] || \
+       [ "${NPM_CONFIG_REGISTRY:-}" != "$DESKTOP_NPM_REGISTRY" ] || \
+       [ "${HERMES_NODE_MIRROR:-}" != "$DESKTOP_NODE_MIRROR" ] || \
+       [ "${PLAYWRIGHT_DOWNLOAD_HOST:-}" != "$DESKTOP_PLAYWRIGHT_MIRROR" ]; then
+        log_error "Bundled Desktop runtime mirror policy is unavailable"
+        return 1
+    fi
+
+    return 0
+}
+
+install_bundled_uv() {
+    validate_bundled_toolchain_root || return 1
+    mkdir -p "$HERMES_HOME/bin"
+
+    local managed_uv="$HERMES_HOME/bin/uv"
+    local temporary_uv="$managed_uv.tmp.$$"
+    rm -f "$temporary_uv"
+    if ! gzip -dc "$BUNDLED_TOOLCHAIN_ROOT/uv.gz" > "$temporary_uv"; then
+        rm -f "$temporary_uv"
+        log_error "Bundled uv archive extraction failed"
+        return 1
+    fi
+    chmod 0755 "$temporary_uv"
+
+    if ! "$temporary_uv" --version 2>/dev/null | grep -Eq '^uv [0-9]+\.[0-9]+\.[0-9]+'; then
+        rm -f "$temporary_uv"
+        log_error "Bundled uv executable validation failed"
+        return 1
+    fi
+
+    mv -f "$temporary_uv" "$managed_uv"
+    UV_CMD="$managed_uv"
+    UV_VERSION=$($UV_CMD --version 2>/dev/null)
+    log_success "Managed uv installed from the signed Desktop payload ($UV_VERSION)"
+}
+
+install_bundled_python() {
+    validate_bundled_toolchain_root || return 1
+    export UV_PYTHON_INSTALL_DIR="$HERMES_HOME/python"
+    export UV_PYTHON_BIN_DIR="$HERMES_HOME/python-bin"
+
+    local archive="$BUNDLED_TOOLCHAIN_ROOT/python.tar.gz"
+    local entry root_name temporary_root target_root python_bin
+    root_name=""
+
+    while IFS= read -r entry; do
+        [ -n "$entry" ] || continue
+        case "$entry" in
+            /*|../*|*/../*|*'/..')
+                log_error "Bundled Python archive contains an unsafe path"
+                return 1
+                ;;
+        esac
+        local candidate="${entry%%/*}"
+        [ -n "$candidate" ] || continue
+        if [ -z "$root_name" ]; then
+            root_name="$candidate"
+        elif [ "$candidate" != "$root_name" ]; then
+            log_error "Bundled Python archive must contain one runtime root"
+            return 1
+        fi
+    done < <(tar -tzf "$archive")
+
+    case "$root_name" in
+        cpython-3.11.*-macos-aarch64-none) ;;
+        *) log_error "Bundled Python runtime target is invalid"; return 1 ;;
+    esac
+
+    target_root="$UV_PYTHON_INSTALL_DIR/$root_name"
+    python_bin="$target_root/bin/python3.11"
+    if [ -x "$python_bin" ] && "$python_bin" --version 2>&1 | grep -Eq '^Python 3\.11\.'; then
+        return 0
+    fi
+
+    temporary_root="$HERMES_HOME/.python-install.$$"
+    rm -rf "$temporary_root"
+    mkdir -p "$temporary_root"
+    if ! tar -xzf "$archive" -C "$temporary_root"; then
+        rm -rf "$temporary_root"
+        log_error "Bundled Python runtime extraction failed"
+        return 1
+    fi
+
+    if [ ! -x "$temporary_root/$root_name/bin/python3.11" ] || \
+       ! "$temporary_root/$root_name/bin/python3.11" --version 2>&1 | grep -Eq '^Python 3\.11\.'; then
+        rm -rf "$temporary_root"
+        log_error "Bundled Python runtime validation failed"
+        return 1
+    fi
+
+    mkdir -p "$UV_PYTHON_INSTALL_DIR"
+    rm -rf "$target_root"
+    mv "$temporary_root/$root_name" "$target_root"
+    rm -rf "$temporary_root"
+    log_success "Python 3.11 installed from the signed Desktop payload"
+}
+
 install_uv() {
     if [ "$DISTRO" = "termux" ]; then
         log_info "Termux detected — using Python's stdlib venv + pip instead of uv"
         UV_CMD=""
         return 0
+    fi
+
+    if [ -n "$BUNDLED_TOOLCHAIN_ROOT" ]; then
+        install_bundled_uv
+        return $?
     fi
 
     # Hermes owns its own uv at $HERMES_HOME/bin/uv.  Always install there —
@@ -572,47 +775,30 @@ install_uv() {
         return 0
     fi
 
-    log_info "Installing managed uv into $HERMES_HOME/bin ..."
+    log_info "Preparing managed uv in $HERMES_HOME/bin ..."
     mkdir -p "$HERMES_HOME/bin"
 
-    # Two-stage: download the installer, then run it.  Piping
-    # `curl | sh` masks curl failures (sh exits 0 on empty stdin)
-    # and conflates network errors with installer errors.
-    local _uv_install_log _uv_installer
-    _uv_install_log="$(mktemp 2>/dev/null || echo "/tmp/hermes-uv-install.$$.log")"
-    _uv_installer="$(mktemp 2>/dev/null || echo "/tmp/hermes-uv-installer.$$.sh")"
-    if ! curl -LsSf https://astral.sh/uv/install.sh -o "$_uv_installer" 2>"$_uv_install_log"; then
-        log_error "Failed to download uv installer from https://astral.sh/uv/install.sh"
-        log_info "curl output:"
-        sed 's/^/    /' "$_uv_install_log" >&2
-        log_info "Install manually: https://docs.astral.sh/uv/getting-started/installation/"
-        rm -f "$_uv_install_log" "$_uv_installer"
-        exit 1
-    fi
-    # UV_UNMANAGED_INSTALL tells the astral installer to place the binary
-    # directly into $HERMES_HOME/bin instead of ~/.local/bin.
-    if UV_UNMANAGED_INSTALL="$HERMES_HOME/bin" sh "$_uv_installer" >>"$_uv_install_log" 2>&1; then
-        rm -f "$_uv_installer"
-        if [ -x "$_managed_uv" ]; then
+    # Packaged Desktop always supplies a hash-verified uv payload. A source
+    # install may adopt an already installed executable, but never downloads
+    # and executes a remote installer script.
+    local _existing_uv
+    _existing_uv="$(command -v uv 2>/dev/null || true)"
+    if [ -n "$_existing_uv" ] && [ -x "$_existing_uv" ]; then
+        cp "$_existing_uv" "$_managed_uv.tmp.$$"
+        chmod 0755 "$_managed_uv.tmp.$$"
+        if "$_managed_uv.tmp.$$" --version 2>/dev/null | grep -Eq '^uv [0-9]+\.[0-9]+\.[0-9]+'; then
+            mv -f "$_managed_uv.tmp.$$" "$_managed_uv"
             UV_CMD="$_managed_uv"
-        else
-            log_error "uv installer reported success but binary not found at $_managed_uv"
-            log_info "Installer output:"
-            sed 's/^/    /' "$_uv_install_log" >&2
-            rm -f "$_uv_install_log"
-            exit 1
+            UV_VERSION=$($UV_CMD --version 2>/dev/null)
+            log_success "Managed uv adopted from the local installation ($UV_VERSION)"
+            return 0
         fi
-        rm -f "$_uv_install_log"
-        UV_VERSION=$($UV_CMD --version 2>/dev/null)
-        log_success "Managed uv installed ($UV_VERSION)"
-    else
-        log_error "Failed to install uv"
-        log_info "Installer output:"
-        sed 's/^/    /' "$_uv_install_log" >&2
-        log_info "Install manually: https://docs.astral.sh/uv/getting-started/installation/"
-        rm -f "$_uv_install_log" "$_uv_installer"
-        exit 1
+        rm -f "$_managed_uv.tmp.$$"
     fi
+
+    log_error "A verified uv payload is unavailable."
+    log_info "Use the packaged Desktop installer or ask an administrator to place a reviewed uv binary at $_managed_uv."
+    return 1
 }
 
 check_python() {
@@ -636,6 +822,10 @@ check_python() {
     fi
 
     log_info "Checking Python $PYTHON_VERSION..."
+
+    if [ -n "$BUNDLED_TOOLCHAIN_ROOT" ]; then
+        install_bundled_python || exit 1
+    fi
 
     # Let uv handle Python — it can download and manage Python versions
     # First check if a suitable Python is already available
@@ -823,6 +1013,85 @@ npm_supports_npmrc() {
     return 0
 }
 
+# The npm range the install manifest demands. Read from engines.npm rather
+# than duplicated here so the two can never drift; falls back to the current
+# range when the manifest is unreadable.
+managed_npm_engines_range() {
+    local manifest="$INSTALL_DIR/package.json" range
+    if [ -r "$manifest" ]; then
+        # sed, not node: this runs before a usable node is guaranteed.
+        range=$(sed -n '/"engines"/,/}/p' "$manifest" \
+            | sed -n 's/.*"npm"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+            | head -1)
+        if [ -n "$range" ]; then
+            printf '%s\n' "$range"
+            return 0
+        fi
+    fi
+    printf '<11.10.0 || >=11.17.0\n'
+}
+
+# Upgrade the managed tree's bundled npm out of the .npmrc-incompatible band.
+#
+# The reviewed latest-v26.x mirrors can serve a Node whose bundled npm sits in
+# the 11.10-11.16 band that engines.npm excludes (v26.0.0 bundles 11.12.1), so
+# the toolchain the installer just provisioned failed its very first
+# `npm install` with EBADENGINE. Provision a compatible npm here instead.
+#
+# Three details are load-bearing, mirroring _nb_ensure_bundled_npm_range in
+# scripts/lib/node-bootstrap.sh:
+#   - a temp cwd, so the checkout's own .npmrc (engine-strict, min-release-age)
+#     does not gate the very upgrade meant to satisfy it;
+#   - npm_config_min_release_age=0, which also neutralises a user ~/.npmrc;
+#   - an explicit --prefix at the managed tree, because
+#     configure_managed_node_npm_prefix pointed global installs at the command
+#     link dir, and without the override this installs a second npm elsewhere
+#     while the managed tree stays stale.
+#
+# Best-effort: a failure here leaves a working Node with an old npm, and the
+# node-deps `npm install` that follows fails loudly rather than silently.
+ensure_managed_npm_compatible() {
+    local npm_bin="$HERMES_HOME/node/bin/npm"
+    [ -x "$npm_bin" ] || return 0
+
+    local bundled_version
+    bundled_version="$(PATH="$HERMES_HOME/node/bin:$PATH" "$npm_bin" --version 2>/dev/null)"
+    if npm_supports_npmrc "$bundled_version"; then
+        return 0
+    fi
+
+    local range
+    range="$(managed_npm_engines_range)"
+    log_info "Bundled npm ${bundled_version:-unavailable} cannot honor this repo's .npmrc — upgrading to npm@$range..."
+    local tmp_cwd
+    tmp_cwd=$(mktemp -d)
+    if (
+        cd "$tmp_cwd" || exit 1
+        CI=1 npm_config_min_release_age=0 \
+            PATH="$HERMES_HOME/node/bin:$PATH" \
+            run_npm_with_mirror_fallback "$NODE_DEPS_TIMEOUT" \
+            "$npm_bin" install --global \
+                --prefix "$HERMES_HOME/node" \
+                "npm@$range" \
+                --no-fund --no-audit --progress=false >/dev/null 2>&1
+    ); then
+        rm -rf "$tmp_cwd"
+        local upgraded_version
+        upgraded_version="$(PATH="$HERMES_HOME/node/bin:$PATH" "$npm_bin" --version 2>/dev/null)"
+        if npm_supports_npmrc "$upgraded_version"; then
+            log_success "npm $upgraded_version installed (Hermes-managed)"
+            return 0
+        fi
+        log_warn "npm upgrade command completed but managed npm is still ${upgraded_version:-unavailable}."
+        return 1
+    fi
+
+    rm -rf "$tmp_cwd"
+    log_warn "Could not upgrade bundled npm to $range — npm install may fail with EBADENGINE."
+    log_warn "Fix manually: npm install -g --prefix \"$HERMES_HOME/node\" npm@\"$range\""
+    return 1
+}
+
 check_node() {
     log_info "Checking Node.js (for browser tools)..."
 
@@ -858,10 +1127,28 @@ check_node() {
     # Prefer a Hermes-managed Node from a previous run over a too-old system one.
     if [ -x "$HERMES_HOME/node/bin/node" ] && [ -x "$HERMES_HOME/node/bin/npm" ] \
         && node_satisfies_build "$("$HERMES_HOME/node/bin/node" --version)"; then
-        export PATH="$HERMES_HOME/node/bin:$PATH"
-        log_success "Node.js $("$HERMES_HOME/node/bin/node" --version) found (Hermes-managed)"
-        HAS_NODE=true
-        return 0
+        local managed_npm_version
+        # Probe with the managed bin dir already on PATH: managed npm is a
+        # `#!/usr/bin/env node` script, and a packaged GUI bootstrap has no
+        # other node on PATH yet. Probing bare yields an empty version
+        # (`env: node: No such file or directory`), which read as
+        # incompatible and wiped a perfectly compatible managed tree.
+        managed_npm_version="$(PATH="$HERMES_HOME/node/bin:$PATH" "$HERMES_HOME/node/bin/npm" --version 2>/dev/null)"
+        if npm_supports_npmrc "$managed_npm_version"; then
+            export PATH="$HERMES_HOME/node/bin:$PATH"
+            log_success "Node.js $("$HERMES_HOME/node/bin/node" --version) found (Hermes-managed)"
+            HAS_NODE=true
+            return 0
+        fi
+        log_warn "npm $managed_npm_version cannot honor this repo's .npmrc (npm 11.10-11.16 ignore"
+        log_warn "min-release-age-exclude) — repairing the Hermes-managed npm in place..."
+        if ensure_managed_npm_compatible; then
+            export PATH="$HERMES_HOME/node/bin:$PATH"
+            log_success "Node.js $("$HERMES_HOME/node/bin/node" --version) found (Hermes-managed; npm repaired)"
+            HAS_NODE=true
+            return 0
+        fi
+        log_warn "Managed npm repair failed — replacing Hermes-managed Node $NODE_VERSION..."
     fi
 
     if command -v node &> /dev/null && ! command -v npm &> /dev/null; then
@@ -916,34 +1203,46 @@ install_node() {
             ;;
     esac
 
-    # Resolve the latest v${NODE_VERSION}.x.x tarball name from the index page
-    local index_url="https://nodejs.org/dist/latest-v${NODE_VERSION}.x/"
-    local tarball_name
-    tarball_name=$(curl -fsSL "$index_url" \
-        | grep -oE "node-v${NODE_VERSION}\.[0-9]+\.[0-9]+-${node_os}-${node_arch}\.tar\.xz" \
-        | head -1)
-
-    # Fallback to .tar.gz if .tar.xz not available
-    if [ -z "$tarball_name" ]; then
-        tarball_name=$(curl -fsSL "$index_url" \
-            | grep -oE "node-v${NODE_VERSION}\.[0-9]+\.[0-9]+-${node_os}-${node_arch}\.tar\.gz" \
-            | head -1)
-    fi
-
-    if [ -z "$tarball_name" ]; then
-        log_warn "Could not find Node.js $NODE_VERSION binary for $node_os-$node_arch"
-        log_info "Install manually: https://nodejs.org/en/download/"
-        HAS_NODE=false
-        return 0
-    fi
-
-    local download_url="${index_url}${tarball_name}"
     local tmp_dir
     tmp_dir=$(mktemp -d)
+    local tarball_name=""
+    local index_url=""
+    local index_page=""
+    local node_mirror
+    local node_mirrors=(
+        "${HERMES_NODE_MIRROR:-$DESKTOP_NODE_MIRROR}"
+        "$DESKTOP_NODE_FALLBACK_MIRROR"
+        "$DESKTOP_NODE_OFFICIAL_MIRROR"
+    )
 
-    log_info "Downloading $tarball_name..."
-    if ! curl -fsSL "$download_url" -o "$tmp_dir/$tarball_name"; then
-        log_warn "Download failed"
+    for node_mirror in "${node_mirrors[@]}"; do
+        index_url="${node_mirror%/}/latest-v${NODE_VERSION}.x/"
+        if ! index_page=$(curl --connect-timeout 15 --max-time 60 -fsSL "$index_url"); then
+            log_warn "Managed Node.js mirror failed; trying the next reviewed source."
+            continue
+        fi
+        tarball_name=$(printf '%s' "$index_page" \
+            | grep -oE "node-v${NODE_VERSION}\.[0-9]+\.[0-9]+-${node_os}-${node_arch}\.tar\.xz" \
+            | head -1)
+        if [ -z "$tarball_name" ]; then
+            tarball_name=$(printf '%s' "$index_page" \
+                | grep -oE "node-v${NODE_VERSION}\.[0-9]+\.[0-9]+-${node_os}-${node_arch}\.tar\.gz" \
+                | head -1)
+        fi
+        if [ -z "$tarball_name" ]; then
+            log_warn "Node.js archive was not listed by the current managed mirror; trying the next source."
+            continue
+        fi
+        log_info "Downloading $tarball_name..."
+        if curl --connect-timeout 15 --max-time 300 -fsSL "${index_url}${tarball_name}" -o "$tmp_dir/$tarball_name"; then
+            break
+        fi
+        tarball_name=""
+        log_warn "Managed Node.js download failed; trying the next reviewed source."
+    done
+
+    if [ -z "$tarball_name" ] || [ ! -f "$tmp_dir/$tarball_name" ]; then
+        log_warn "Could not obtain Node.js $NODE_VERSION for $node_os-$node_arch from the managed sources"
         rm -rf "$tmp_dir"
         HAS_NODE=false
         return 0
@@ -988,6 +1287,10 @@ install_node() {
     local installed_ver
     installed_ver=$("$HERMES_HOME/node/bin/node" --version 2>/dev/null)
     log_success "Node.js $installed_ver installed to ~/.hermes/node/"
+
+    # The archive may bundle an npm the repo's .npmrc excludes — heal it now,
+    # before the first `npm install` can die with EBADENGINE.
+    ensure_managed_npm_compatible || true
     HAS_NODE=true
 }
 
@@ -997,6 +1300,9 @@ check_network_prerequisites() {
     local url
     local failed=false
     local checks=("https://pypi.org/simple/" "https://duckduckgo.com/")
+    if [ "$BUNDLED_SOURCE" = true ] && [ "$BOOTSTRAP_SCOPE" = "runtime" ]; then
+        checks=("$UV_DEFAULT_INDEX" "$NPM_CONFIG_REGISTRY")
+    fi
 
     if ! command -v curl >/dev/null 2>&1; then
         log_warn "curl not found; skipping connectivity probes"
@@ -1242,178 +1548,68 @@ show_manual_install_hint() {
 # Installation
 # ============================================================================
 
+validate_bundled_source() {
+    local marker_path="$INSTALL_DIR/.hermes-bundled-source.json"
+
+    if [ ! -f "$marker_path" ]; then
+        log_error "Bundled source marker not found: $marker_path"
+        return 1
+    fi
+
+    local required_path
+    for required_path in \
+        "pyproject.toml" \
+        "hermes_cli/main.py" \
+        "tools/sensevoice_stt.py" \
+        "scripts/install.sh"; do
+        if [ ! -f "$INSTALL_DIR/$required_path" ]; then
+            log_error "Bundled source is missing required file: $required_path"
+            return 1
+        fi
+    done
+
+    if [ -n "$INSTALL_COMMIT" ]; then
+        if [ "${#INSTALL_COMMIT}" -ne 40 ]; then
+            log_error "Bundled source commit must be exactly 40 hexadecimal characters"
+            return 1
+        fi
+        case "$INSTALL_COMMIT" in
+            *[!0-9a-fA-F]*)
+                log_error "Bundled source commit must be exactly 40 hexadecimal characters"
+                return 1
+                ;;
+        esac
+        if ! grep -Eq '"commit"[[:space:]]*:[[:space:]]*"'"$INSTALL_COMMIT"'"' "$marker_path"; then
+            log_error "Bundled source marker does not match requested commit $INSTALL_COMMIT"
+            return 1
+        fi
+    fi
+
+    return 0
+}
+
+write_install_method_stamp() {
+    local method="git"
+    if [ "$BUNDLED_SOURCE" = true ]; then
+        method="desktop-bundle"
+    fi
+    printf '%s\n' "$method" > "$INSTALL_DIR/.install_method"
+}
+
 clone_repo() {
     log_info "Installing to $INSTALL_DIR..."
 
-    # An interrupted previous clone leaves a .git with no initial commit, where
-    # the update path's `git stash` / `git checkout` abort with "You do not
-    # have the initial commit yet" and fail the install (#40998). Move such a
-    # partial checkout aside -- never delete it, in case it holds something the
-    # user wants -- so the fresh-clone path below can proceed.
-    if [ -d "$INSTALL_DIR/.git" ] && ! git -C "$INSTALL_DIR" rev-parse --verify HEAD >/dev/null 2>&1; then
-        backup_dir="${INSTALL_DIR}.broken-$(date -u +%Y%m%d-%H%M%S)"
-        log_warn "Existing checkout at $INSTALL_DIR has no commits (interrupted clone)."
-        log_warn "Moving it aside to $backup_dir before re-cloning."
-        mv "$INSTALL_DIR" "$backup_dir"
+    if [ "$BUNDLED_SOURCE" = true ]; then
+        validate_bundled_source || return 1
+        cd "$INSTALL_DIR"
+        log_success "Using verified backend source bundled with Hermes Desktop"
+        return 0
     fi
 
-    if [ -d "$INSTALL_DIR" ]; then
-        if [ -d "$INSTALL_DIR/.git" ]; then
-            log_info "Existing installation found, updating..."
-            cd "$INSTALL_DIR"
-
-            local autostash_ref=""
-            discard_update_lockfile_churn "$INSTALL_DIR"
-            if [ -n "$(git status --porcelain)" ]; then
-                # A previously interrupted update can leave the index with
-                # unmerged entries. In that state `git stash` aborts with
-                # "could not write index" and the later `git checkout` aborts
-                # with "you need to resolve your current index first", failing
-                # the whole install at the repository stage. Clear the conflict
-                # markers with `git reset` first -- this keeps working-tree
-                # changes (they're still stashed just below) and only drops the
-                # index-level conflict state. Mirrors the `hermes update` path
-                # (#4735).
-                if [ -n "$(git ls-files --unmerged)" ]; then
-                    log_info "Clearing unmerged index entries from a previous conflict..."
-                    git reset -q
-                fi
-                local stash_name
-                stash_name="hermes-install-autostash-$(date -u +%Y%m%d-%H%M%S)"
-                log_info "Local changes detected, stashing before update..."
-                git stash push --include-untracked -m "$stash_name"
-                autostash_ref="stash@{0}"
-            fi
-
-            # Fetch only the target branch. A bare `git fetch origin` pulls
-            # every ref, and this repo carries thousands of auto-generated
-            # branches — on a non-single-branch checkout that turns each update
-            # into a multi-minute download that can stall the installer.
-            git remote set-branches origin "$BRANCH" 2>/dev/null || true
-            git fetch origin "$BRANCH"
-            git checkout "$BRANCH"
-            # Managed installs should follow origin/$BRANCH exactly. If the
-            # checkout has diverged (or has local-only commits), ff-only pull
-            # cannot succeed — mirror ``hermes update`` and reset to the
-            # fetched remote so bootstrap/install can recover.
-            if ! git pull --ff-only origin "$BRANCH"; then
-                log_warn "Fast-forward not possible; resetting managed install to origin/$BRANCH..."
-                git reset --hard "origin/$BRANCH"
-            fi
-
-            if [ -n "$autostash_ref" ]; then
-                local restore_now="yes"
-                if [ -t 0 ] && [ -t 1 ]; then
-                    echo
-                    log_warn "Local changes were stashed before updating."
-                    log_warn "Restoring them may reapply local customizations onto the updated codebase."
-                    printf "Restore local changes now? [Y/n] "
-                    read -r restore_answer
-                    case "$restore_answer" in
-                        ""|y|Y|yes|YES|Yes) restore_now="yes" ;;
-                        *) restore_now="no" ;;
-                    esac
-                fi
-
-                if [ "$restore_now" = "yes" ]; then
-                    log_info "Restoring local changes..."
-                    local restore_output=""
-                    local restore_ok="yes"
-                    if restore_output="$(git stash apply "$autostash_ref" 2>&1)"; then
-                        restore_ok="yes"
-                    else
-                        restore_ok="no"
-                    fi
-                    local conflicted_files=""
-                    conflicted_files="$(git diff --name-only --diff-filter=U || true)"
-                    if [ "$restore_ok" = "yes" ] && [ -z "$conflicted_files" ]; then
-                        git stash drop "$autostash_ref" >/dev/null
-                        log_warn "Local changes were restored on top of the updated codebase."
-                        log_warn "Review git diff / git status if Hermes behaves unexpectedly."
-                    else
-                        log_error "Update pulled new code, but restoring local changes hit conflicts."
-                        if [ -n "$restore_output" ]; then
-                            printf '%s\n' "$restore_output"
-                        fi
-                        if [ -n "$conflicted_files" ]; then
-                            printf '\nConflicted files:\n'
-                            while IFS= read -r file; do
-                                [ -n "$file" ] && printf '  • %s\n' "$file"
-                            done <<EOF
-$conflicted_files
-EOF
-                        fi
-                        printf '\n'
-                        log_info "Your stashed changes are preserved — nothing is lost."
-                        log_info "  Stash ref: $autostash_ref"
-                        git reset --hard HEAD >/dev/null 2>&1 || true
-                        log_info "Working tree reset to clean state."
-                        log_info "Restore your changes later with: git stash apply $autostash_ref"
-                    fi
-                else
-                    log_info "Skipped restoring local changes."
-                    log_info "Your changes are still preserved in git stash."
-                    log_info "Restore manually with: git stash apply $autostash_ref"
-                fi
-            fi
-        else
-            log_error "Directory exists but is not a git repository: $INSTALL_DIR"
-            log_info "Remove it or choose a different directory with --dir"
-            exit 1
-        fi
-    else
-        # Try SSH first (for private repo access), fall back to HTTPS
-        # GIT_SSH_COMMAND disables interactive prompts and sets a short timeout
-        # so SSH fails fast instead of hanging when no key is configured.
-        log_info "Trying SSH clone..."
-        if GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=5" \
-           git clone --depth 1 --branch "$BRANCH" "$REPO_URL_SSH" "$INSTALL_DIR" 2>/dev/null; then
-            log_success "Cloned via SSH"
-        else
-            rm -rf "$INSTALL_DIR" 2>/dev/null  # Clean up partial SSH clone
-            log_info "SSH failed, trying HTTPS..."
-            if git clone --depth 1 --branch "$BRANCH" "$REPO_URL_HTTPS" "$INSTALL_DIR"; then
-                log_success "Cloned via HTTPS"
-            else
-                log_error "Failed to clone repository"
-                exit 1
-            fi
-        fi
-    fi
-
-    cd "$INSTALL_DIR"
-
-    if [ -n "$INSTALL_COMMIT" ]; then
-        # A commit pin must never move an existing install BACKWARDS. The
-        # bootstrap installer bakes its build-time commit into the binary
-        # (BUILD_PIN_COMMIT) and passes it as --commit on every install-mode
-        # run -- including the one the desktop's failure screen retries. An
-        # installer built months ago would otherwise rewind a current checkout
-        # to its build commit, stranding the user on ancient code with a
-        # current venv. Only pin when the target is not already an ancestor of
-        # HEAD; a fresh clone has no such ancestry and pins normally.
-        if ! git cat-file -e "$INSTALL_COMMIT^{commit}" 2>/dev/null; then
-            git fetch origin "$INSTALL_COMMIT" || true
-        fi
-        if git rev-parse --verify --quiet HEAD >/dev/null 2>&1 \
-           && git merge-base --is-ancestor "$INSTALL_COMMIT" HEAD 2>/dev/null \
-           && [ "$(git rev-parse "$INSTALL_COMMIT^{commit}" 2>/dev/null)" != "$(git rev-parse HEAD)" ]; then
-            if [ "$FORCE_COMMIT" = true ]; then
-                log_warn "--force-commit: rolling this install back to $INSTALL_COMMIT."
-                git checkout --detach "$INSTALL_COMMIT"
-            else
-                log_warn "Ignoring --commit $INSTALL_COMMIT: the checkout is already newer."
-                log_warn "Pinning to it would roll this install back. Pass --force-commit to override."
-            fi
-        else
-            log_info "Pinning checkout to commit $INSTALL_COMMIT..."
-            git checkout --detach "$INSTALL_COMMIT"
-        fi
-    fi
-
-    log_success "Repository ready"
+    log_error "Automatic source download is unavailable without a reviewed bundled payload."
+    log_info "Use the packaged Desktop installer supplied by your administrator."
+    return 1
 }
-
 setup_venv() {
     if [ "$USE_VENV" = false ]; then
         log_info "Skipping virtual environment (--no-venv)"
@@ -1459,6 +1655,7 @@ setup_venv() {
 
 install_deps() {
     log_info "Installing dependencies..."
+    local release_uv_config="$INSTALL_DIR/uv.toml"
 
     # Re-pin UV_PYTHON to the venv interpreter. setup_venv already does this,
     # but the bootstrap runs install stages (`venv`, `python-deps`) as separate
@@ -1561,7 +1758,7 @@ install_deps() {
     # Install the main package in editable mode with all extras.
     #
     # Hash-verified install (Tier 0) — when uv.lock is present, prefer
-    # `uv sync --locked`. The lockfile records SHA256 hashes for every
+    # a lock-backed install. The lockfile records SHA256 hashes for every
     # transitive, so a compromised transitive (different hash than what
     # we shipped) is REJECTED by the resolver. This is the *only* path
     # that protects against the "direct dep is fine, but the dep's dep
@@ -1571,6 +1768,13 @@ install_deps() {
     # lockfile is stale, missing, or out-of-sync with the current
     # extras spec, NOT because they're equivalent in posture.
     if [ -f "uv.lock" ]; then
+        if [ ! -f "$release_uv_config" ]; then
+            if [ "$BUNDLED_SOURCE" = true ]; then
+                log_error "The signed Desktop uv configuration is missing."
+                return 1
+            fi
+            release_uv_config=""
+        fi
         log_info "Trying tier: hash-verified (uv.lock) ..."
         log_info "(this resolves + downloads the curated [all] set — first run on a"
         log_info " fresh venv can take 1-5 minutes; uv prints progress below)"
@@ -1595,13 +1799,91 @@ install_deps() {
         #                  This respects the curation in pyproject.toml.
         # uv's own progress UI handles TTY detection and downgrades
         # gracefully when stdout/stderr aren't terminals.
-        if UV_PROJECT_ENVIRONMENT="$INSTALL_DIR/venv" $UV_CMD sync --extra all --locked; then
+        local -a release_uv_args=()
+        if [ -n "$release_uv_config" ]; then
+            release_uv_args=(--config-file "$release_uv_config")
+        fi
+
+        # A packaged Desktop install uses fixed domestic mirrors, but uv treats
+        # the default index URL as part of lock identity. Running `uv sync
+        # --locked` with a mirror override therefore rejects an otherwise
+        # current, generic PyPI lock before downloading anything. Export the
+        # already-signed lock without network/index overrides, then make both
+        # approved mirrors install that exact hash set. This keeps the lock
+        # mirror-independent and preserves fail-closed hash verification.
+        if [ "$BUNDLED_SOURCE" = true ]; then
+            local runtime_requirements_dir="$HERMES_HOME/tmp"
+            local runtime_requirements=""
+            local bundled_python="${UV_PYTHON:-$INSTALL_DIR/venv/bin/python}"
+            mkdir -p "$runtime_requirements_dir"
+            runtime_requirements="$(mktemp "$runtime_requirements_dir/runtime-requirements.XXXXXX")" || {
+                log_error "Could not create the signed Desktop dependency export."
+                return 1
+            }
+
+            if ! env -u UV_DEFAULT_INDEX UV_OFFLINE=1 "$UV_CMD" export \
+                --frozen \
+                --extra all \
+                --no-dev \
+                --no-emit-project \
+                --format requirements.txt \
+                --output-file "$runtime_requirements" \
+                "${release_uv_args[@]}"; then
+                rm -f "$runtime_requirements"
+                log_error "The signed Desktop dependency lock could not be exported."
+                return 1
+            fi
+
+            if [ ! -s "$runtime_requirements" ] || \
+               ! grep -q -- '--hash=sha256:' "$runtime_requirements" || \
+               grep -Eiq '(https?://|git\+)' "$runtime_requirements"; then
+                rm -f "$runtime_requirements"
+                log_error "The signed Desktop dependency export failed its safety checks."
+                return 1
+            fi
+
+            if ! UV_DEFAULT_INDEX="$DESKTOP_PYTHON_PRIMARY_MIRROR" \
+                "$UV_CMD" pip sync --require-hashes \
+                --python "$bundled_python" "$runtime_requirements"; then
+                log_info "Primary Python mirror failed; retrying the same signed hashes with the approved fallback mirror..."
+                if ! UV_DEFAULT_INDEX="$HERMES_UV_FALLBACK_INDEX" \
+                    "$UV_CMD" pip sync --require-hashes \
+                    --python "$bundled_python" "$runtime_requirements"; then
+                    rm -f "$runtime_requirements"
+                    log_error "The signed Desktop dependency lock could not be installed."
+                    log_info "Packaged Hermes will not fall back to an unlocked package resolve."
+                    return 1
+                fi
+            fi
+
+            rm -f "$runtime_requirements"
+            if ! env -u UV_DEFAULT_INDEX UV_OFFLINE=1 "$UV_CMD" pip install \
+                --no-deps \
+                --no-build-isolation \
+                --editable "$INSTALL_DIR" \
+                --python "$bundled_python"; then
+                log_error "The signed Desktop project could not be installed offline."
+                return 1
+            fi
+
             log_success "Main package installed (hash-verified via uv.lock)"
             log_success "All dependencies installed"
             return 0
         fi
+
+        if UV_PROJECT_ENVIRONMENT="$INSTALL_DIR/venv" "$UV_CMD" sync --extra all --locked "${release_uv_args[@]}"; then
+            log_success "Main package installed (hash-verified via uv.lock)"
+            log_success "All dependencies installed"
+            return 0
+        fi
+
         log_warn "uv.lock sync failed (see uv output above), falling back to PyPI resolve..."
     else
+        if [ "$BUNDLED_SOURCE" = true ]; then
+            log_error "The signed Desktop dependency lock is missing."
+            return 1
+        fi
+
         log_info "uv.lock not found — falling back to PyPI resolve (no hash verification)"
     fi
 
@@ -1709,6 +1991,68 @@ PY
     log_success "Main package installed"
 
     log_success "All dependencies installed"
+}
+
+install_auth_deps() {
+    local auth_project="$INSTALL_DIR/desktop_auth_runtime"
+    local auth_uv_config="$auth_project/uv.toml"
+    local auth_python="$INSTALL_DIR/venv/bin/python"
+
+    if [ "$DISTRO" = "windows" ]; then
+        auth_python="$INSTALL_DIR/venv/Scripts/python.exe"
+    fi
+
+    if [ ! -f "$auth_project/pyproject.toml" ] || [ ! -f "$auth_project/uv.lock" ] || [ ! -f "$auth_uv_config" ]; then
+        log_error "Signed authentication dependency lock is missing"
+        return 1
+    fi
+    if [ ! -x "$auth_python" ]; then
+        log_error "Authentication Python environment is unavailable at $auth_python"
+        return 1
+    fi
+
+    export VIRTUAL_ENV="$INSTALL_DIR/venv"
+    export UV_PYTHON="$auth_python"
+    log_info "Installing the locked authentication dependency set..."
+
+    if [ -n "$BUNDLED_TOOLCHAIN_ROOT" ]; then
+        validate_bundled_toolchain_root || return 1
+        if ! "$UV_CMD" pip sync "$BUNDLED_TOOLCHAIN_ROOT/auth-requirements.txt" \
+            --python "$auth_python" \
+            --require-hashes \
+            --no-index \
+            --find-links "$BUNDLED_TOOLCHAIN_ROOT/wheelhouse" \
+            --offline \
+            --only-binary :all:; then
+            log_error "Bundled authentication dependency installation failed"
+            return 1
+        fi
+    # This is deliberately fail-closed. The non-bundled Desktop path never
+    # falls back to an unlocked `uv pip install` or another package index when
+    # the release lock is missing, stale, or unavailable.
+    elif ! UV_PROJECT_ENVIRONMENT="$INSTALL_DIR/venv" \
+        "$UV_CMD" sync --project "$auth_project" --locked --no-install-project \
+        --config-file "$auth_uv_config"; then
+        log_error "Locked authentication dependency installation failed"
+        return 1
+    fi
+
+    if ! "$auth_python" -c 'import httpx, keyring, hermes_cli.client_auth.bridge'; then
+        log_error "Authentication runtime import validation failed"
+        return 1
+    fi
+
+    log_success "Authentication dependencies installed"
+}
+
+write_auth_bootstrap_marker() {
+    local marker_path="$INSTALL_DIR/.hermes-auth-bootstrap-complete"
+    local marker_tmp="${marker_path}.tmp.$$"
+
+    printf '%s\n' '{"schemaVersion":1,"scope":"auth"}' > "$marker_tmp"
+    chmod 600 "$marker_tmp" 2>/dev/null || true
+    mv -f "$marker_tmp" "$marker_path"
+    log_success "Authentication runtime ready"
 }
 
 setup_path() {
@@ -1935,6 +2279,7 @@ EOF
 }
 
 copy_config_templates() {
+    local install_scope="${1:-cli}"
     log_info "Setting up configuration files..."
 
     # Create ~/.hermes directory structure (config at top level, code in subdir)
@@ -1963,6 +2308,24 @@ copy_config_templates() {
         if [ -f "$INSTALL_DIR/cli-config.yaml.example" ]; then
             cp "$INSTALL_DIR/cli-config.yaml.example" "$HERMES_HOME/config.yaml"
             log_success "Created ~/.hermes/config.yaml from template"
+            if [ "$install_scope" = "desktop" ]; then
+                local provider_anchor='  # provider: "local"          # auto-detected if omitted'
+                local desktop_provider='  provider: "sensevoice"       # fresh Hermes Desktop default'
+                local anchor_count
+                local config_tmp
+                anchor_count="$(grep -Fxc "$provider_anchor" "$HERMES_HOME/config.yaml" || true)"
+                config_tmp="$(mktemp "$HERMES_HOME/.config.yaml.desktop.XXXXXX")"
+                if [ "$anchor_count" = "1" ]; then
+                    awk -v old="$provider_anchor" -v new="$desktop_provider" \
+                        '{ if ($0 == old) print new; else print }' \
+                        "$HERMES_HOME/config.yaml" > "$config_tmp"
+                    mv "$config_tmp" "$HERMES_HOME/config.yaml"
+                    log_success "Selected SenseVoice for the fresh Desktop config"
+                else
+                    rm -f "$config_tmp"
+                    log_warn "Desktop STT default was not applied: expected one provider anchor, found $anchor_count; keeping the valid auto-detected config"
+                fi
+            fi
         fi
     else
         log_info "~/.hermes/config.yaml already exists, keeping it"
@@ -2163,6 +2526,18 @@ run_with_timeout() {
     return 124
 }
 
+run_npm_with_mirror_fallback() {
+    local timeout_seconds="$1"
+    shift
+    if NPM_CONFIG_REGISTRY="$DESKTOP_NPM_REGISTRY" npm_config_registry="$DESKTOP_NPM_REGISTRY" \
+        run_with_timeout "$timeout_seconds" "$@"; then
+        return 0
+    fi
+    log_info "Domestic npm registry failed; retrying the bounded command through the official registry..."
+    NPM_CONFIG_REGISTRY="$DESKTOP_NPM_OFFICIAL_REGISTRY" npm_config_registry="$DESKTOP_NPM_OFFICIAL_REGISTRY" \
+        run_with_timeout "$timeout_seconds" "$@"
+}
+
 # Return success only when the host is an apt release NEWER than the newest one
 # Playwright's platform resolver recognizes — the exact condition that makes
 # `playwright install` hang uninterruptibly (#35166). We scope the override
@@ -2222,8 +2597,9 @@ playwright_fallback_platform() {
 # An operator-provided PLAYWRIGHT_HOST_PLATFORM_OVERRIDE is always respected:
 # it is inherited by the first attempt, and the retry is skipped.
 #
-# Usage: run_playwright_install <timeout_seconds> npx playwright install [args...]
-run_playwright_install() {
+# Run once against the currently selected PLAYWRIGHT_DOWNLOAD_HOST while
+# preserving the supported platform-override retry.
+_run_playwright_install_for_current_mirror() {
     local timeout_seconds="$1"
     shift
 
@@ -2255,6 +2631,28 @@ run_playwright_install() {
     log_info "(apt releases newer than Playwright knows hang at this step; see #35166)"
     PLAYWRIGHT_HOST_PLATFORM_OVERRIDE="$fallback" \
         run_browser_install_with_timeout "$timeout_seconds" "$@"
+}
+
+# Usage: run_playwright_install <timeout_seconds> npx playwright install [args...]
+# Every attempt is bounded by the helper above. Domestic mirrors are tried in
+# reviewed order before Playwright's official default is allowed.
+run_playwright_install() {
+    local timeout_seconds="$1"
+    shift
+
+    local mirror
+    for mirror in "$DESKTOP_PLAYWRIGHT_MIRROR" "$DESKTOP_PLAYWRIGHT_FALLBACK_MIRROR" "__official__"; do
+        if [ "$mirror" = "__official__" ]; then
+            if ( unset PLAYWRIGHT_DOWNLOAD_HOST; _run_playwright_install_for_current_mirror "$timeout_seconds" "$@" ); then
+                return 0
+            fi
+        elif PLAYWRIGHT_DOWNLOAD_HOST="$mirror" \
+            _run_playwright_install_for_current_mirror "$timeout_seconds" "$@"; then
+            return 0
+        fi
+        log_warn "Playwright download source failed; trying the next reviewed source."
+    done
+    return 1
 }
 
 configure_browser_env_from_system_browser() {
@@ -2308,7 +2706,7 @@ install_node_deps() {
         # A failed npm install used to still print "✓ Node.js dependencies
         # installed", hiding the degradation from the user (#77003). Now it
         # fails the install outright instead of burying the warning (#85297).
-        if ! run_with_timeout "$NODE_DEPS_TIMEOUT" npm install --silent; then
+        if ! run_npm_with_mirror_fallback "$NODE_DEPS_TIMEOUT" npm install --silent; then
             log_error "npm install failed or timed out; Node.js dependencies were not installed"
             restore_dirty_lockfiles "$INSTALL_DIR"
             return 1
@@ -2319,6 +2717,7 @@ install_node_deps() {
         # Playwright's --with-deps only supports apt-based systems natively.
         # For Arch/Manjaro we install the system libs via pacman first.
         # Other systems must install Chromium dependencies manually.
+        local browser_engine_ready=false
         if [ "$SKIP_BROWSER" = true ]; then
             log_info "Skipping Playwright/Chromium install (--skip-browser)"
             log_info "Browser tools will be unavailable until you run manually:"
@@ -2332,6 +2731,7 @@ install_node_deps() {
         if [ -n "$DETECTED_BROWSER_EXECUTABLE" ]; then
             log_success "Using explicit browser override: $DETECTED_BROWSER_EXECUTABLE"
             log_info "Skipping bundled Chromium download (AGENT_BROWSER_EXECUTABLE_PATH is set)."
+            browser_engine_ready=true
         else
             case "$DISTRO" in
                 ubuntu|debian|raspbian|pop|linuxmint|elementary|zorin|kali|parrot)
@@ -2344,20 +2744,24 @@ install_node_deps() {
                     # exact command the admin needs to run separately.
                     if [ "$(id -u)" -eq 0 ] || (command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null); then
                         log_info "Installing Playwright Chromium with system dependencies..."
-                        cd "$INSTALL_DIR" && run_playwright_install 600 npx playwright install --with-deps chromium || {
+                        if cd "$INSTALL_DIR" && run_playwright_install 600 npx playwright install --with-deps chromium; then
+                            browser_engine_ready=true
+                        else
                             log_warn "Playwright browser installation failed — browser tools will not work."
                             log_warn "Try running manually: cd $INSTALL_DIR && npx playwright install --with-deps chromium"
-                        }
+                        fi
                     else
                         log_warn "No sudo available — skipping system-library install (--with-deps)."
                         log_info "Ask an administrator to run, one time, as root:"
                         log_info "  sudo npx playwright install-deps chromium"
                         log_info "  (from $INSTALL_DIR, after Node.js deps are installed)"
                         log_info "Installing Chromium binary into this user's Playwright cache..."
-                        cd "$INSTALL_DIR" && run_playwright_install 600 npx playwright install chromium || {
+                        if cd "$INSTALL_DIR" && run_playwright_install 600 npx playwright install chromium; then
+                            browser_engine_ready=true
+                        else
                             log_warn "Playwright browser installation failed — browser tools will not work."
                             log_warn "Try running manually: cd $INSTALL_DIR && npx playwright install chromium"
-                        }
+                        fi
                     fi
                     ;;
                 arch|manjaro|cachyos|endeavouros|garuda)
@@ -2374,37 +2778,55 @@ install_node_deps() {
                             log_warn "  sudo pacman -S nss atk at-spi2-core cups libdrm libxkbcommon mesa pango cairo alsa-lib"
                         fi
                     fi
-                    cd "$INSTALL_DIR" && run_playwright_install 600 npx playwright install chromium || {
+                    if cd "$INSTALL_DIR" && run_playwright_install 600 npx playwright install chromium; then
+                        browser_engine_ready=true
+                    else
                         log_warn "Playwright browser installation failed — browser tools will not work."
-                    }
+                    fi
                     ;;
                 fedora|rhel|centos|rocky|alma)
                     log_warn "Playwright does not support automatic dependency installation on RPM-based systems."
                     log_info "Install Chromium system dependencies manually before using browser tools:"
                     log_info "  sudo dnf install nss atk at-spi2-core cups-libs libdrm libxkbcommon mesa-libgbm pango cairo alsa-lib"
-                    cd "$INSTALL_DIR" && run_playwright_install 600 npx playwright install chromium || {
+                    if cd "$INSTALL_DIR" && run_playwright_install 600 npx playwright install chromium; then
+                        browser_engine_ready=true
+                    else
                         log_warn "Playwright browser installation failed — install dependencies above and retry."
-                    }
+                    fi
                     ;;
                 opensuse*|sles)
                     log_warn "Playwright does not support automatic dependency installation on zypper-based systems."
                     log_info "Install Chromium system dependencies manually before using browser tools:"
                     log_info "  sudo zypper install mozilla-nss libatk-1_0-0 at-spi2-core cups-libs libdrm2 libxkbcommon0 Mesa-libgbm1 pango cairo libasound2"
-                    cd "$INSTALL_DIR" && run_playwright_install 600 npx playwright install chromium || {
+                    if cd "$INSTALL_DIR" && run_playwright_install 600 npx playwright install chromium; then
+                        browser_engine_ready=true
+                    else
                         log_warn "Playwright browser installation failed — install dependencies above and retry."
-                    }
+                    fi
                     ;;
                 *)
                     log_warn "Playwright does not support automatic dependency installation on $DISTRO."
                     log_info "Install Chromium/browser system dependencies for your distribution, then run:"
                     log_info "  cd $INSTALL_DIR && npx playwright install chromium"
                     log_info "Browser tools will not work until dependencies are installed."
-                    cd "$INSTALL_DIR" && run_playwright_install 600 npx playwright install chromium || true
+                    if cd "$INSTALL_DIR" && run_playwright_install 600 npx playwright install chromium; then
+                        browser_engine_ready=true
+                    else
+                        log_warn "Playwright browser installation failed — browser tools will not work."
+                    fi
                     ;;
             esac
         fi
         fi
-        log_success "Browser engine setup complete"
+        if [ "$browser_engine_ready" = true ]; then
+            log_success "Browser engine setup complete"
+        elif [ "$BUNDLED_SOURCE" = true ] && [ "$BOOTSTRAP_SCOPE" = "runtime" ] && [ "$SKIP_BROWSER" = false ]; then
+            log_error "Playwright browser installation failed; packaged Desktop runtime is incomplete."
+            restore_dirty_lockfiles "$INSTALL_DIR"
+            return 1
+        else
+            log_warn "Browser engine setup incomplete; browser tools will remain unavailable."
+        fi
     fi
 
     # Install TUI dependencies
@@ -2414,7 +2836,7 @@ install_node_deps() {
         # Time-boxed: a stalled registry fetch would otherwise hang here (#39219).
         # Report success only on actual success, same as node-deps above
         # (#77003) — and fail the install outright (#85297).
-        if ! run_with_timeout "$NODE_DEPS_TIMEOUT" npm install --silent; then
+        if ! run_npm_with_mirror_fallback "$NODE_DEPS_TIMEOUT" npm install --silent; then
             log_error "TUI npm install failed or timed out; TUI dependencies were not installed"
             restore_dirty_lockfiles "$INSTALL_DIR"
             return 1
@@ -2491,24 +2913,8 @@ install_computer_use_driver() {
         return 0
     fi
 
-    log_info "Installing Computer Use driver (cua-driver)..."
-    # Same upstream installer `hermes computer-use install` runs; time-boxed
-    # so a stalled GitHub download can't hang the Hermes install. The
-    # upstream installer serializes with its own lock (600s stale window),
-    # so give it a ceiling above that — matching Hermes'
-    # _CUA_INSTALLER_TIMEOUT (660s).
-    local cua_log
-    cua_log="$(mktemp)"
-    if run_with_timeout 660 /bin/bash -c \
-        'curl -fsSL https://raw.githubusercontent.com/trycua/cua/main/libs/cua-driver/scripts/install.sh | /bin/bash' \
-        >"$cua_log" 2>&1; then
-        log_success "Computer Use driver installed (enable via 'hermes tools' → Computer Use)"
-    else
-        log_warn "Computer Use driver install failed — it will install on demand when you enable the tool."
-        log_info "Install later with: hermes computer-use install"
-        tail -n 5 "$cua_log" >&2 || true
-    fi
-    rm -f "$cua_log"
+    log_warn "Computer Use driver is not present in this reviewed package."
+    log_info "Ask an administrator to supply the pinned cua-driver artifact; Hermes will not execute a remote installer."
 }
 
 run_setup_wizard() {
@@ -2796,7 +3202,7 @@ ensure_browser() {
     log_file="$(mktemp)"
     # Time-boxed (#39219): a stalled npm registry fetch here would otherwise
     # hang the installer with no progress, same class as the desktop build.
-    if ! run_with_timeout "$NODE_DEPS_TIMEOUT" "$npm_bin" install -g --prefix "$HERMES_HOME/node" --silent --ignore-scripts \
+    if ! run_npm_with_mirror_fallback "$NODE_DEPS_TIMEOUT" "$npm_bin" install -g --prefix "$HERMES_HOME/node" --silent --ignore-scripts \
         "@askjo/camofox-browser@^1.5.2" \
         >"$log_file" 2>&1; then
         log_error "npm install failed or timed out:"
@@ -2922,20 +3328,19 @@ EOF
 # current OS. Signing auto-discovery is disabled so electron-builder falls back
 # to an ad-hoc signature instead of grabbing an unrelated Developer ID from the
 # keychain (a real signed/notarized .dmg needs Apple credentials — a separate
-# release concern). Optional $2 = an ELECTRON_MIRROR base URL for this attempt,
-# used as a fallback when the default GitHub release download is blocked.
+# release concern). Optional $2 is a registered mirror, or __official__ after
+# both bounded domestic attempts failed.
 _desktop_pack() {
     local desktop_dir="$1"
     local mirror="${2:-}"
-    if [ -n "$mirror" ]; then
+    if [ "$mirror" = "__official__" ]; then
+        ( cd "$desktop_dir" && env -u ELECTRON_MIRROR CSC_IDENTITY_AUTO_DISCOVERY=false npm run pack )
+    elif [ -n "$mirror" ]; then
         ( cd "$desktop_dir" && ELECTRON_MIRROR="$mirror" CSC_IDENTITY_AUTO_DISCOVERY=false npm run pack )
     else
         ( cd "$desktop_dir" && CSC_IDENTITY_AUTO_DISCOVERY=false npm run pack )
     fi
 }
-
-# Last-resort Electron mirror after GitHub download fails (#47266).
-DESKTOP_ELECTRON_FALLBACK_MIRROR="https://npmmirror.com/mirrors/electron/"
 
 # Per-attempt wall-clock cap for the desktop npm install / electron-builder pack
 # (#39219). A stalled (not failed) Electron download on a throttled/blocked link
@@ -2985,7 +3390,9 @@ _restore_electron_dist() {
     rm -rf "$electron_dir/dist" 2>/dev/null || true
     rm -f "$electron_dir/path.txt" 2>/dev/null || true
 
-    if [ -n "$mirror" ]; then
+    if [ "$mirror" = "__official__" ]; then
+        ( cd "$electron_dir" && env -u ELECTRON_MIRROR node install.js ) || true
+    elif [ -n "$mirror" ]; then
         ( cd "$electron_dir" && ELECTRON_MIRROR="$mirror" node install.js ) || true
     else
         ( cd "$electron_dir" && node install.js ) || true
@@ -3002,8 +3409,9 @@ _electron_pkg_staged_missing_dist() {
 
 _restore_electron_dist_with_fallback() {
     local install_dir="$1"
-    _restore_electron_dist "$install_dir" \
-        || { [ -z "${ELECTRON_MIRROR:-}" ] && _restore_electron_dist "$install_dir" "$DESKTOP_ELECTRON_FALLBACK_MIRROR"; }
+    _restore_electron_dist "$install_dir" "$DESKTOP_ELECTRON_PRIMARY_MIRROR" \
+        || _restore_electron_dist "$install_dir" "$DESKTOP_ELECTRON_SECONDARY_MIRROR" \
+        || _restore_electron_dist "$install_dir" "__official__"
 }
 
 # Build apps/desktop into a launchable native app. Mirrors install.ps1's
@@ -3094,10 +3502,12 @@ install_desktop() {
     log_info "Installing desktop workspace dependencies (includes Electron ~150MB, 1-3min)..."
     local _deps_start _deps_remaining
     _deps_start=$(date +%s)
-    if run_with_timeout "$DESKTOP_BUILD_TIMEOUT" bash -c 'cd "$1" && npm ci' _ "$INSTALL_DIR"; then
+    if NPM_CONFIG_REGISTRY="$DESKTOP_NPM_REGISTRY" npm_config_registry="$DESKTOP_NPM_REGISTRY" \
+         run_with_timeout "$DESKTOP_BUILD_TIMEOUT" bash -c 'cd "$1" && npm ci' _ "$INSTALL_DIR"; then
         log_success "Desktop workspace dependencies installed"
     elif _deps_remaining=$(( DESKTOP_BUILD_TIMEOUT - ($(date +%s) - _deps_start) )); \
          [ "$_deps_remaining" -lt 30 ] && _deps_remaining=30; \
+         NPM_CONFIG_REGISTRY="$DESKTOP_NPM_OFFICIAL_REGISTRY" npm_config_registry="$DESKTOP_NPM_OFFICIAL_REGISTRY" \
          run_with_timeout "$_deps_remaining" bash -c 'cd "$1" && npm install' _ "$INSTALL_DIR"; then
         log_success "Desktop workspace dependencies installed"
     elif _electron_pkg_staged_missing_dist "$INSTALL_DIR"; then
@@ -3118,7 +3528,7 @@ install_desktop() {
         return 1
     fi
 
-    # 2. Build, with up to three escalating attempts so a transient/blocked
+    # 2. Build with bounded primary, secondary and then official attempts.
     #    Electron download self-heals instead of failing the whole install:
     #      a) plain `npm run pack` (downloads Electron from GitHub),
     #      b) on failure, purge a corrupt cached zip + stale unpacked dir and
@@ -3127,30 +3537,28 @@ install_desktop() {
     #         the GitHub-blocked/throttled case (the repeating "retrying" log).
     log_info "Building desktop app (this takes 1-3 minutes)..."
     local pack_ok=false
-    if run_with_timeout "$DESKTOP_BUILD_TIMEOUT" _desktop_pack "$desktop_dir"; then
+    if run_with_timeout "$DESKTOP_BUILD_TIMEOUT" _desktop_pack "$desktop_dir" "$DESKTOP_ELECTRON_PRIMARY_MIRROR"; then
         pack_ok=true
     else
         local purged=""
         local restored=false
         if ! _electron_dist_ok "$INSTALL_DIR"; then
             purged="$(clear_electron_build_cache "$desktop_dir")"
-            if _restore_electron_dist "$INSTALL_DIR"; then restored=true; fi
+            if _restore_electron_dist "$INSTALL_DIR" "$DESKTOP_ELECTRON_SECONDARY_MIRROR"; then restored=true; fi
         fi
         if [ "$restored" = true ]; then
             log_warn "Desktop build failed; refreshed the Electron download and retrying once..."
-            if run_with_timeout "$DESKTOP_BUILD_TIMEOUT" _desktop_pack "$desktop_dir"; then
+            if run_with_timeout "$DESKTOP_BUILD_TIMEOUT" _desktop_pack "$desktop_dir" "$DESKTOP_ELECTRON_SECONDARY_MIRROR"; then
                 pack_ok=true
             fi
         fi
     fi
 
-    # (c) GitHub blocked → mirror fallback (#47266).
-    if [ "$pack_ok" = false ] && [ -z "${ELECTRON_MIRROR:-}" ]; then
-        log_warn "Desktop build still failing — the Electron download from GitHub looks blocked."
-        log_warn "Re-downloading Electron via a public mirror ($DESKTOP_ELECTRON_FALLBACK_MIRROR), then rebuilding..."
-        log_warn "  (set ELECTRON_MIRROR yourself to use a different/trusted mirror)"
-        _electron_dist_ok "$INSTALL_DIR" || _restore_electron_dist "$INSTALL_DIR" "$DESKTOP_ELECTRON_FALLBACK_MIRROR" || true
-        if run_with_timeout "$DESKTOP_BUILD_TIMEOUT" _desktop_pack "$desktop_dir" "$DESKTOP_ELECTRON_FALLBACK_MIRROR"; then
+    # (c) Official @electron/get source only after both domestic sources fail.
+    if [ "$pack_ok" = false ]; then
+        log_warn "Both approved domestic Electron sources failed; trying the pinned official artifact once."
+        _electron_dist_ok "$INSTALL_DIR" || _restore_electron_dist "$INSTALL_DIR" "__official__" || true
+        if run_with_timeout "$DESKTOP_BUILD_TIMEOUT" _desktop_pack "$desktop_dir" "__official__"; then
             pack_ok=true
         fi
     fi
@@ -3277,13 +3685,23 @@ run_stage_body() {
     local stage="$1"
 
     case "$stage" in
-        prerequisites)
+        auth-prerequisites)
             print_banner
             detect_os
             resolve_install_layout
             install_uv
             check_python
-            check_git
+            ;;
+        prerequisites)
+            print_banner
+            detect_os
+            resolve_install_layout
+            validate_bundled_runtime_mirrors || return 1
+            install_uv
+            check_python
+            if [ "$BUNDLED_SOURCE" != true ]; then
+                check_git
+            fi
             check_node
             check_network_prerequisites
             install_system_packages
@@ -3291,7 +3709,9 @@ run_stage_body() {
         repository)
             detect_os
             resolve_install_layout
-            check_git
+            if [ "$BUNDLED_SOURCE" != true ]; then
+                check_git
+            fi
             clone_repo
             ;;
         venv)
@@ -3305,14 +3725,24 @@ run_stage_body() {
         python-deps)
             detect_os
             resolve_install_layout
+            validate_bundled_runtime_mirrors || return 1
             require_install_dir
             install_uv
             check_python
             install_deps
             ;;
+        python-auth-deps)
+            detect_os
+            resolve_install_layout
+            require_install_dir
+            install_uv
+            check_python
+            install_auth_deps
+            ;;
         node-deps)
             detect_os
             resolve_install_layout
+            validate_bundled_runtime_mirrors || return 1
             require_install_dir
             check_node
             install_node_deps || return
@@ -3330,7 +3760,7 @@ run_stage_body() {
             detect_os
             resolve_install_layout
             require_install_dir
-            copy_config_templates
+            copy_config_templates desktop
             ;;
         setup)
             detect_os
@@ -3366,7 +3796,18 @@ run_stage_body() {
             # bind-mounted into a Docker gateway too), so a stamp there gets
             # clobbered by the container's 'docker' stamp and wrongly blocks
             # 'hermes update' on this host install. See detect_install_method().
-            echo "git" > "$INSTALL_DIR/.install_method"
+            write_install_method_stamp
+            ;;
+        auth-complete)
+            detect_os
+            resolve_install_layout
+            require_install_dir
+            # Publish the guarded CLI launchers while only the authentication
+            # environment exists. The exact auth-free commands are handled
+            # before the full CLI import wall; every protected entrypoint still
+            # fails closed until online authentication and runtime install.
+            setup_path
+            write_auth_bootstrap_marker
             ;;
         *)
             log_error "Unknown stage: $stage"
@@ -3425,7 +3866,9 @@ main() {
     resolve_install_layout
     install_uv
     check_python
-    check_git
+    if [ "$BUNDLED_SOURCE" != true ]; then
+        check_git
+    fi
     check_node
     check_network_prerequisites
     install_system_packages
@@ -3455,7 +3898,7 @@ main() {
     # gateway too), so a stamp there gets clobbered by the container's 'docker'
     # stamp and wrongly blocks 'hermes update' on this host install.
     # See detect_install_method().
-    echo "git" > "$INSTALL_DIR/.install_method"
+    write_install_method_stamp
 }
 
 if [ "$MANIFEST_MODE" = true ]; then

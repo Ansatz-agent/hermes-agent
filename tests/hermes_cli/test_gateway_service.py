@@ -1220,10 +1220,10 @@ class TestProfileArg:
         unit = gateway_cli.generate_systemd_unit(system=True, run_as_user="alice")
 
         assert "ExecStart=" in unit
-        assert "--profile mybot gateway run" in unit
+        assert "hermes_cli.client_auth.runtime service gateway mybot" in unit
         assert f'HERMES_HOME={target_home / ".hermes" / "profiles" / "mybot"}' in unit
 
-    def test_launchd_plist_wraps_gateway_stderr_with_timestamps(self, tmp_path, monkeypatch):
+    def test_launchd_plist_starts_locked_gateway_service(self, tmp_path, monkeypatch):
         profile_dir = tmp_path / ".hermes" / "profiles" / "mybot"
         profile_dir.mkdir(parents=True)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
@@ -1237,18 +1237,10 @@ class TestProfileArg:
         assert program_args == [
             "/usr/bin/python3",
             "-m",
-            "hermes_cli.stderr_timestamp",
-            "--error-log",
-            str(profile_dir / "logs" / "gateway.error.log"),
-            "--",
-            "/usr/bin/python3",
-            "-m",
-            "hermes_cli.main",
-            "--profile",
-            "mybot",
+            "hermes_cli.client_auth.runtime",
+            "service",
             "gateway",
-            "run",
-            "--replace",
+            "mybot",
         ]
 
     def test_launchd_plist_path_uses_real_user_home_not_profile_home(self, tmp_path, monkeypatch):
@@ -1562,8 +1554,8 @@ class TestMigrateLegacyCommand:
             text=True,
             timeout=15,
         )
-        assert result.returncode == 0
-        assert "migrate-legacy" in result.stdout
+        assert result.returncode == 20
+        assert "AUTH_REQUIRED" in result.stderr
 
     def test_gateway_command_migrate_legacy_dispatches(
         self, tmp_path, monkeypatch, capsys
@@ -1601,8 +1593,8 @@ class TestGatewayStatusParser:
             timeout=15,
         )
 
-        assert result.returncode == 0
-        assert "unrecognized arguments" not in result.stderr
+        assert result.returncode == 20
+        assert "AUTH_REQUIRED" in result.stderr
 
 
     def test_migrate_legacy_on_unsupported_platform_prints_message(

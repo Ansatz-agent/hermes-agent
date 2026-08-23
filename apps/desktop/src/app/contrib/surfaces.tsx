@@ -21,6 +21,7 @@ import { ChatView } from '../chat'
 import { ChatSidebar } from '../chat/sidebar'
 import { TerminalPaneChrome } from '../right-sidebar/terminal/chrome'
 import { contributedRoutes, NEW_CHAT_ROUTE, ROUTES_AREA, sessionRoute } from '../routes'
+import { useAccountStatusbarItem } from '../shell/hooks/use-account-statusbar-item'
 import { useStatusSnapshot } from '../shell/hooks/use-status-snapshot'
 import { useStatusbarItems } from '../shell/hooks/use-statusbar-items'
 import { ModelMenuPanel } from '../shell/model-menu-panel'
@@ -82,6 +83,7 @@ export const StatusbarSurface = memo(function StatusbarSurface({
   const { inferenceStatus, statusSnapshot } = useStatusSnapshot(gatewayState, actions.requestGateway)
   const extraLeftItems = useStatusbarContributions('left')
   const extraRightItems = useStatusbarContributions('right')
+  const accountItem = useAccountStatusbarItem()
 
   const { leftStatusbarItems, statusbarItems } = useStatusbarItems({
     agentsOpen,
@@ -99,7 +101,7 @@ export const StatusbarSurface = memo(function StatusbarSurface({
     toggleCommandCenter: actions.toggleCommandCenter
   })
 
-  return <StatusbarControls items={statusbarItems} leftItems={leftStatusbarItems} />
+  return <StatusbarControls items={[...statusbarItems, accountItem]} leftItems={leftStatusbarItems} />
 })
 
 /** The workspace pane: the real route table (chat + full-page views + plugin
@@ -108,10 +110,12 @@ export const StatusbarSurface = memo(function StatusbarSurface({
  *  atoms, so streaming never round-trips through the controller. */
 export const ChatRoutesSurface = memo(function ChatRoutesSurface({
   actions,
-  maxVoiceRecordingSeconds
+  maxVoiceRecordingSeconds,
+  sttProvider
 }: {
   actions: WiringActions
   maxVoiceRecordingSeconds?: number
+  sttProvider?: string
 }) {
   const activeGatewayProfile = useStore($activeGatewayProfile)
   const gateway = useStore($gateway)
@@ -139,6 +143,7 @@ export const ChatRoutesSurface = memo(function ChatRoutesSurface({
       gateway={gateway}
       maxVoiceRecordingSeconds={maxVoiceRecordingSeconds}
       modelMenuContent={modelMenuContent}
+      sttProvider={sttProvider}
       {...chatActions}
     />
   )

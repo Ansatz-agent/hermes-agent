@@ -70,3 +70,33 @@ def test_install_agent_browser_no_longer_references_agent_browser_cmd_shim() -> 
     body = _extract_function_body(INSTALL_PS1.read_text(), "Install-AgentBrowser")
 
     assert "agent-browser.cmd" not in body
+
+
+def test_windows_install_is_domestic_first_and_never_executes_remote_installers() -> None:
+    text = INSTALL_PS1.read_text()
+    uv_body = _extract_function_body(text, "Install-Uv")
+    cua_body = _extract_function_body(text, "Install-CuaDriver")
+
+    assert '$script:DesktopElectronPrimaryMirror = "https://npmmirror.com/mirrors/electron/"' in text
+    assert '$script:DesktopElectronSecondaryMirror = "https://registry.npmmirror.com/-/binary/electron/"' in text
+    assert "DesktopElectronFallbackMirror" not in text
+    assert "astral.sh" not in uv_body
+    assert "Invoke-Expression" not in uv_body
+    assert "raw.githubusercontent.com" not in cua_body
+    assert "Invoke-Expression" not in cua_body
+    assert '$env:NPM_CONFIG_REGISTRY = "https://registry.npmmirror.com"' in text
+    assert '$env:PLAYWRIGHT_DOWNLOAD_HOST = "https://registry.npmmirror.com/-/binary/playwright"' in text
+    assert text.index('$script:NodePrimaryMirror = "https://registry.npmmirror.com/-/binary/node/"') < text.index('$script:NodeSecondaryMirror = "https://npmmirror.com/mirrors/node/"') < text.index('$script:NodeOfficialMirror = "https://nodejs.org/dist/"')
+    assert "git-for-windows/git/releases/download" not in text
+    assert "NousResearch/hermes-agent.git" not in text
+    assert "hermes-agent.nousresearch.com/install.ps1" not in text
+
+    git_body = _extract_function_body(text, "Install-Git")
+    repo_body = _extract_function_body(text, "Install-Repository")
+    assert "Invoke-WebRequest" not in git_body
+    assert "Assert-BundledSource" in repo_body
+    assert "Automatic source download is unavailable" in repo_body
+    node_body = _extract_function_body(text, "Test-Node")
+    assert "@($script:NodePrimaryMirror, $script:NodeSecondaryMirror, $script:NodeOfficialMirror)" in node_body
+    node_deps_body = _extract_function_body(text, "Install-NodeDeps")
+    assert "@($script:PlaywrightPrimaryMirror, $script:PlaywrightSecondaryMirror, $null)" in node_deps_body

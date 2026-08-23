@@ -3,18 +3,37 @@
 from pathlib import Path
 import tomllib
 
-def _load_optional_dependencies():
+
+def _load_pyproject():
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
     with pyproject_path.open("rb") as handle:
-        project = tomllib.load(handle)["project"]
+        return tomllib.load(handle)
+
+def _load_optional_dependencies():
+    project = _load_pyproject()["project"]
     return project["optional-dependencies"]
 
 
 def _load_package_data():
-    pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
-    with pyproject_path.open("rb") as handle:
-        tool = tomllib.load(handle)["tool"]
+    tool = _load_pyproject()["tool"]
     return tool["setuptools"]["package-data"]
+
+
+def test_all_extra_includes_the_pinned_build_backend_for_offline_project_install():
+    """The bundled runtime installs the local project with build isolation disabled.
+
+    Every pinned build requirement must therefore already be present in the
+    hash-verified dependency set exported from the ``all`` extra.
+    """
+    pyproject = _load_pyproject()
+    build_requirements = set(pyproject["build-system"]["requires"])
+    all_requirements = set(pyproject["project"]["optional-dependencies"]["all"])
+
+    assert build_requirements.issubset(all_requirements), (
+        "the all extra must include every pinned build-system requirement for "
+        "the bundled offline local-project install; missing: "
+        f"{sorted(build_requirements - all_requirements)}"
+    )
 
 
 def test_matrix_extra_not_in_all():

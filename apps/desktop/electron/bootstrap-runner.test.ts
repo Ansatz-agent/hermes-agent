@@ -8,14 +8,18 @@ import { test } from 'vitest'
 import {
   buildPinArgs,
   buildPosixPinArgs,
+  buildPowerShellBootstrapArgs,
   cachedScriptPath,
   hasExistingGitCheckout,
   installedAgentInstallScript,
   installRefForStamp,
   isPinnedCommit,
+  progressHeartbeatMsForStage,
   resolveInstallScript,
   resolveMarkerPinnedCommit,
-  runBootstrap
+  runBootstrap,
+  shouldPrepareWindowsPackagedAuthRuntime,
+  usesDomesticRuntimeMirrors
 } from './bootstrap-runner'
 
 const SCRIPT_NAME = process.platform === 'win32' ? 'install.ps1' : 'install.sh'
@@ -93,6 +97,147 @@ test('fresh bootstrap args include the packaged commit pin', () => {
     }),
     ['--dir', '/tmp/hermes-agent', '--hermes-home', '/tmp/hermes', '--branch', 'main', '--commit', installStamp.commit]
   )
+})
+
+test('Windows bundled runtime args keep the verified source and Git runtime local', () => {
+  assert.deepEqual(
+    buildPowerShellBootstrapArgs({
+      installStamp: { commit: 'a'.repeat(40), branch: 'main' },
+      activeRoot: 'C:\\Users\\tester\\AppData\\Local\\hermes\\hermes-agent',
+      hermesHome: 'C:\\Users\\tester\\AppData\\Local\\hermes',
+      bundledSource: true,
+      bootstrapScope: 'runtime'
+    }),
+    [
+      '-HermesHome',
+      'C:\\Users\\tester\\AppData\\Local\\hermes',
+      '-InstallDir',
+      'C:\\Users\\tester\\AppData\\Local\\hermes\\hermes-agent',
+      '-BootstrapScope',
+      'runtime',
+      '-Commit',
+      'a'.repeat(40),
+      '-Branch',
+      'main',
+      '-BundledSource',
+      '-SkipComputerUse'
+    ]
+  )
+})
+
+test('auth bootstrap args select only the installer auth scope', () => {
+  assert.deepEqual(
+    buildPosixPinArgs({
+      installStamp: { commit: 'a'.repeat(40), branch: 'main' },
+      activeRoot: '/tmp/hermes-agent',
+      hermesHome: '/tmp/hermes',
+      bootstrapScope: 'auth'
+    }),
+    [
+      '--dir',
+      '/tmp/hermes-agent',
+      '--hermes-home',
+      '/tmp/hermes',
+      '--branch',
+      'main',
+      '--commit',
+      'a'.repeat(40),
+      '--bootstrap-scope',
+      'auth'
+    ]
+  )
+
+  assert.deepEqual(
+    buildPowerShellBootstrapArgs({
+      installStamp: { commit: 'a'.repeat(40), branch: 'main' },
+      activeRoot: 'C:\\Hermes\\hermes-agent',
+      hermesHome: 'C:\\Hermes',
+      bootstrapScope: 'auth'
+    }),
+    [
+      '-HermesHome',
+      'C:\\Hermes',
+      '-InstallDir',
+      'C:\\Hermes\\hermes-agent',
+      '-BootstrapScope',
+      'auth',
+      '-Commit',
+      'a'.repeat(40),
+      '-Branch',
+      'main'
+    ]
+  )
+})
+
+test('bundled Desktop bootstrap args include the verified authentication toolchain root', () => {
+  assert.deepEqual(
+    buildPosixPinArgs({
+      installStamp: null,
+      activeRoot: '/managed/hermes-agent',
+      hermesHome: '/managed/home',
+      bundledSource: true,
+      bundledToolchainRoot: '/Applications/Hermes.app/Contents/Resources/bootstrap/auth-toolchain',
+      bootstrapScope: 'auth'
+    }),
+    [
+      '--dir',
+      '/managed/hermes-agent',
+      '--hermes-home',
+      '/managed/home',
+      '--bundled-source',
+      '--skip-computer-use',
+      '--bundled-toolchain',
+      '/Applications/Hermes.app/Contents/Resources/bootstrap/auth-toolchain',
+      '--bootstrap-scope',
+      'auth'
+    ]
+  )
+})
+
+test('domestic mirrors are limited to the post-login bundled runtime scope', () => {
+  assert.equal(usesDomesticRuntimeMirrors({ bundledSource: true, bootstrapScope: 'runtime' }), true)
+  assert.equal(usesDomesticRuntimeMirrors({ bundledSource: true, bootstrapScope: 'auth' }), false)
+  assert.equal(usesDomesticRuntimeMirrors({ bundledSource: false, bootstrapScope: 'runtime' }), false)
+})
+
+test('Windows packaged authentication uses only the verified local toolchain', () => {
+  assert.equal(
+    shouldPrepareWindowsPackagedAuthRuntime({
+      platform: 'win32',
+      bootstrapScope: 'auth',
+      bundledSource: true,
+      bundledToolchain: { root: 'C:\\Hermes\\auth-toolchain' }
+    }),
+    true
+  )
+  assert.equal(
+    shouldPrepareWindowsPackagedAuthRuntime({
+      platform: 'win32',
+      bootstrapScope: 'runtime',
+      bundledSource: true,
+      bundledToolchain: { root: 'C:\\Hermes\\auth-toolchain' }
+    }),
+    false
+  )
+  assert.equal(
+    shouldPrepareWindowsPackagedAuthRuntime({
+      platform: 'win32',
+      bootstrapScope: 'auth',
+      bundledSource: false,
+      bundledToolchain: null
+    }),
+    false
+  )
+})
+
+test('progress heartbeats are limited to known long package stages', () => {
+  for (const stage of ['auth-prerequisites', 'python-auth-deps', 'python-deps', 'node-deps']) {
+    assert.ok((progressHeartbeatMsForStage(stage) || 0) > 0)
+  }
+
+  for (const stage of ['repository', 'venv', 'path', 'config', 'complete']) {
+    assert.equal(progressHeartbeatMsForStage(stage), undefined)
+  }
 })
 
 test('existing-checkout bootstrap args keep branch but skip the packaged commit pin', () => {
@@ -272,3 +417,94 @@ test('resolveInstallScript rethrows when the 404 fallback is unavailable', async
     fs.rmSync(home, { recursive: true, force: true })
   }
 })
+
+test.skipIf(process.platform === 'win32')('runBootstrap reports a stable idle-timeout terminal event', async () => {
+  const home = mkTmpHome()
+
+  try {
+    const sourceRoot = path.join(home, 'source')
+    const scriptsDir = path.join(sourceRoot, 'scripts')
+    const scriptPath = path.join(scriptsDir, 'install.sh')
+    const events = []
+
+    fs.mkdirSync(scriptsDir, { recursive: true })
+    fs.writeFileSync(
+      scriptPath,
+      [
+        '#!/bin/bash',
+        'case "$*" in',
+        '  *--manifest*) printf \'%s\\n\' \'{"protocol_version":1,"bootstrap_scope":"runtime","stages":[{"name":"stall","title":"Stall"}]}\'; exit 0 ;;',
+        'esac',
+        "printf 'started\\n'",
+        'while :; do sleep 1; done'
+      ].join('\n')
+    )
+
+    const result = await runBootstrap({
+      installStamp: null,
+      activeRoot: path.join(home, 'agent'),
+      sourceRepoRoot: sourceRoot,
+      hermesHome: home,
+      logRoot: path.join(home, 'logs'),
+      onEvent: event => events.push(event),
+      timeouts: { idleMs: 100, killGraceMs: 50, manifestHardMs: 1_000, stageHardMs: 2_000, totalMs: 3_000 }
+    })
+
+    assert.equal(result.ok, false)
+    assert.equal(result.error, 'BOOTSTRAP_IDLE_TIMEOUT')
+    assert.ok(
+      events.some(
+        event =>
+          event.type === 'progress' &&
+          event.stage === 'stall' &&
+          event.completed === 0 &&
+          event.total === null &&
+          event.unit === 'items'
+      ),
+      'a running stage should emit honest indeterminate progress before installer output arrives'
+    )
+    assert.ok(events.some(event => event.type === 'failed' && event.error === 'BOOTSTRAP_IDLE_TIMEOUT'))
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test.skipIf(process.platform === 'win32')(
+  'runBootstrap enforces a hard stage deadline despite active output',
+  async () => {
+    const home = mkTmpHome()
+
+    try {
+      const sourceRoot = path.join(home, 'source')
+      const scriptsDir = path.join(sourceRoot, 'scripts')
+      const scriptPath = path.join(scriptsDir, 'install.sh')
+
+      fs.mkdirSync(scriptsDir, { recursive: true })
+      fs.writeFileSync(
+        scriptPath,
+        [
+          '#!/bin/bash',
+          'case "$*" in',
+          '  *--manifest*) printf \'%s\\n\' \'{"protocol_version":1,"bootstrap_scope":"runtime","stages":[{"name":"stall","title":"Stall"}]}\'; exit 0 ;;',
+          'esac',
+          "while :; do printf 'progress\\n'; sleep 0.02; done"
+        ].join('\n')
+      )
+
+      const result = await runBootstrap({
+        installStamp: null,
+        activeRoot: path.join(home, 'agent'),
+        sourceRepoRoot: sourceRoot,
+        hermesHome: home,
+        logRoot: path.join(home, 'logs'),
+        onEvent: () => {},
+        timeouts: { idleMs: 1_000, killGraceMs: 50, manifestHardMs: 1_000, stageHardMs: 150, totalMs: 3_000 }
+      })
+
+      assert.equal(result.ok, false)
+      assert.equal(result.error, 'BOOTSTRAP_STAGE_TIMEOUT')
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  }
+)

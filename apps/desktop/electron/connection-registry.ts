@@ -27,6 +27,7 @@
  * these into the IPC layer and owns file I/O + secret encryption.
  */
 
+import { type ConnectionScope, requireAuthenticatedConnectionScope } from './auth-bridge'
 import {
   hostLabelFromBaseUrl,
   modeIsRemoteLike,
@@ -162,6 +163,39 @@ export function backendScopeKey(connectionId: null | string | undefined, profile
 /** All pool keys owned by a connection share this prefix (used to stop them on remove). */
 export function backendScopePrefix(connectionId: string): string {
   return `conn:${String(connectionId).trim()}::`
+}
+
+/** Runtime-only route ownership. This tuple must never be serialized into the
+ * connection registry: it is valid only while the matching auth owner lives. */
+export interface AuthenticatedBackendRoute {
+  connectionId: string
+  profile: string
+  scope: ConnectionScope
+}
+
+export function bindAuthenticatedBackendRoute(
+  connectionId: string,
+  profile: null | string | undefined,
+  scope: ConnectionScope
+): AuthenticatedBackendRoute {
+  const id = String(connectionId || '').trim()
+  let authenticated: ConnectionScope
+
+  try {
+    authenticated = requireAuthenticatedConnectionScope(scope)
+  } catch {
+    throw new TypeError('Backend route auth scope is invalid')
+  }
+
+  if (!id || authenticated.connection_id !== id) {
+    throw new TypeError('Backend route auth scope does not match its connection')
+  }
+
+  return {
+    connectionId: id,
+    profile: String(profile ?? '').trim() || 'default',
+    scope: { ...authenticated }
+  }
 }
 
 // ── Union agent roster ──────────────────────────────────────────────────────

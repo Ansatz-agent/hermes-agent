@@ -3,6 +3,64 @@ import { defineFieldCopy } from '@/app/settings/field-copy'
 import { defineLocale } from './define-locale'
 
 export const zhHant = defineLocale({
+  auth: {
+    title: '登入 Ansatz Voice Trace Client',
+    description: '完整離線執行環境安裝完成後方可登入帳戶。',
+    serverLabel: '帳戶伺服器',
+    traceNotice:
+      '完整對話 Trace（包括輸入、模型回覆、工具參數與結果）會自動上傳，且僅平台管理員可查看。上傳無法關閉；原始音訊和憑證不會上傳。',
+    username: '使用者名稱',
+    password: '密碼',
+    signIn: '登入',
+    signingIn: '正在登入…',
+    retry: '重試',
+    checking: '正在驗證帳戶工作階段…',
+    preparingRuntime: '正在準備安全登入服務…',
+    preparingStage: (current, total, title) => `正在準備安全登入服務（${current}/${total}）：${title}…`,
+    runtimeTitle: '正在安裝 Ansatz Voice Trace Client',
+    runtimeDescription: '必須先安裝完整離線執行環境，之後才會開放帳戶登入。',
+    preparingFullRuntime: '正在安裝完整離線執行環境…',
+    preparingFullStage: (current, total, title) => `正在安裝完整離線執行環境（${current}/${total}）：${title}…`,
+    runtimePreparationFailed: 'Ansatz Voice Trace Client 無法安裝本機執行環境，請重試安裝。',
+    administratorManaged: '帳戶發放與密碼協助由伺服器管理員統一處理。',
+    accountMenu: '帳戶',
+    signOut: '登出',
+    signingOut: '正在登出…',
+    bootstrap: {
+      preparingAuthTitle: '正在準備安全登入服務',
+      stagesComplete: (completed, total) => `已完成 ${completed}/${total} 個階段`,
+      stagePosition: (current, total, title) => `第 ${current}/${total} 階段：${title}`,
+      elapsed: elapsed => `目前階段 · ${elapsed}`,
+      overallProgressLabel: 'Ansatz Voice Trace Client 執行環境安裝',
+      authPreparationFailed: '無法準備安全登入服務。',
+      runtimePreparationFailed: '無法安裝 Ansatz Voice Trace Client 本機執行環境。',
+      failedAt: title => `失敗階段：${title}`,
+      runningWithElapsed: (state, elapsed) => `${state} · ${elapsed}`,
+      knownProgress: (completed, total, unit, percent) =>
+        `${completed} / ${total}${unit ? ` ${unit}` : ''}，${percent}%`,
+      unknownProgress: (completed, unit) => `${completed}${unit ? ` ${unit}` : ''}`,
+      stageStates: {
+        pending: '等待中',
+        running: '進行中',
+        succeeded: '已完成',
+        skipped: '已完成',
+        failed: '失敗'
+      },
+      units: { packages: '個套件', items: '項', files: '個檔案', steps: '個步驟' }
+    },
+    reasons: {
+      interactiveLoginRequired: '請輸入伺服器管理員提供的帳戶憑證。',
+      invalidCredentials: '使用者名稱或密碼不正確。',
+      rateLimited: '登入嘗試過於頻繁，請稍後重試。',
+      runtimeUnavailable: '安全帳戶服務暫時無法使用，請重試。',
+      serverUnavailable: '帳戶伺服器暫時無法使用，請重試。',
+      sessionExpired: '工作階段已過期，請重新登入。',
+      sessionRejected: '工作階段已失效，請重新登入。',
+      signedOut: '請使用伺服器管理員提供的帳戶登入。',
+      vaultUnavailable: '此裝置的安全憑證儲存空間無法使用。'
+    }
+  },
+
   common: {
     apply: '套用',
     back: '返回',

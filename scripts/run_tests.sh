@@ -109,13 +109,14 @@ fi
 
 
 # ── Windows location variables (computed before we drop env) ───────────────
-# `env -i` forwards HOME, which is enough on POSIX. Native Windows CPython
-# resolves Path.home() from USERPROFILE (or HOMEDRIVE+HOMEPATH), stdlib
-# platform paths come from LOCALAPPDATA/APPDATA, ssl/sockets need SYSTEMROOT,
-# and tempfile needs TEMP/TMP. Dropping them breaks collection on native
-# Windows (issues #67385, #70813). These are location variables, not
-# credentials, so forwarding them keeps the isolation intent intact. Each is
-# only forwarded when actually set, so POSIX runs are byte-for-byte unchanged.
+# `env -i` forwards HOME plus the host's private temporary-directory hint.
+# macOS libc requires TMPDIR to resolve _CS_DARWIN_USER_TEMP_DIR; dropping it
+# makes the native auth broker fail closed before it can create its owner-only
+# Unix socket. Native Windows CPython resolves Path.home() from USERPROFILE (or
+# HOMEDRIVE+HOMEPATH), stdlib platform paths come from LOCALAPPDATA/APPDATA,
+# ssl/sockets need SYSTEMROOT, and tempfile needs TEMP/TMP. These are location
+# variables, not credentials, so forwarding them keeps the isolation intent
+# intact. Each is only forwarded when actually set.
 WIN_ENV=()
 for _win_var in USERPROFILE HOMEDRIVE HOMEPATH LOCALAPPDATA APPDATA SYSTEMROOT TEMP TMP; do
   if [ -n "${!_win_var:-}" ]; then
@@ -169,6 +170,7 @@ echo "▶ launching test runner"
 exec env -i \
   PATH="$PATH" \
   HOME="$HOME" \
+  ${TMPDIR:+TMPDIR="$TMPDIR"} \
   ${WIN_ENV[@]+"${WIN_ENV[@]}"} \
   ${TEST_ENV[@]+"${TEST_ENV[@]}"} \
   TZ=UTC \

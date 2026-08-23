@@ -11,8 +11,15 @@ const bootstrapBackend = {
   platform: 'linux'
 }
 
+const connectionScope = {
+  connection_id: 'local',
+  runtime_instance_id: 'runtime-1',
+  epoch: 3
+}
+
 function startupOptions(overrides: Record<string, unknown> = {}) {
   return {
+    connectionScope,
     connectRemote: vi.fn(async remote => ({ baseUrl: remote.baseUrl, mode: 'remote' as const })),
     ensureLocalRuntime: vi.fn(async backend => ({ ...backend, command: 'hermes' })),
     prepareLocalBackend: vi.fn(async () => bootstrapBackend),
@@ -44,7 +51,7 @@ test('remote apply re-resolves the saved connection without ensuring a local run
     connection: { baseUrl: savedRemote.baseUrl, mode: 'remote' }
   })
   assert.deepEqual(options.resolveRemote.mock.calls, [[], []])
-  assert.deepEqual(options.connectRemote.mock.calls, [[savedRemote]])
+  assert.deepEqual(options.connectRemote.mock.calls, [[savedRemote, connectionScope]])
   assert.equal(options.ensureLocalRuntime.mock.calls.length, 0)
 })
 
@@ -92,8 +99,19 @@ test('continue local waits for update exclusion and ensures the prepared runtime
   assert.deepEqual(await pending, { kind: 'local', backend: runtimeBackend })
   assert.deepEqual(options.waitForLocalStart.mock.calls, [[]])
   assert.deepEqual(options.prepareLocalBackend.mock.calls, [[]])
-  assert.deepEqual(options.ensureLocalRuntime.mock.calls, [[bootstrapBackend]])
+  assert.deepEqual(options.ensureLocalRuntime.mock.calls, [[bootstrapBackend, connectionScope]])
   assert.deepEqual(options.resolveRemote.mock.calls, [[]])
+})
+
+test('missing or malformed auth scope rejects before any backend resolution or preparation', async () => {
+  const options = startupOptions({ connectionScope: null })
+
+  await assert.rejects(runPrimaryBackendStartup(options as any), /auth_required/)
+  assert.equal(options.resolveRemote.mock.calls.length, 0)
+  assert.equal(options.waitForLocalStart.mock.calls.length, 0)
+  assert.equal(options.prepareLocalBackend.mock.calls.length, 0)
+  assert.equal(options.connectRemote.mock.calls.length, 0)
+  assert.equal(options.ensureLocalRuntime.mock.calls.length, 0)
 })
 
 test('reset rejects with a typed error and never enters either backend', async () => {

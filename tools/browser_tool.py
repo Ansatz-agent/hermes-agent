@@ -49,6 +49,11 @@ Usage:
     browser_click("@e5", task_id="task_123")
 """
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.tools.browser_tool")
+
 import atexit
 import functools
 import json

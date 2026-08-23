@@ -1433,6 +1433,44 @@ def test_concurrent_turn_skips_relay_before_scope_stack_can_interleave(
     ]
 
 
+def test_turn_scope_exports_complete_user_and_assistant_io(direct_runtime):
+    coordinator = relay_runtime.SESSION_COORDINATOR
+    profile_key = relay_runtime.current_profile_key()
+    lease = coordinator.acquire_conversation(
+        profile_key=profile_key,
+        session_id="complete-io-session",
+        platform="desktop",
+    )
+
+    turn = coordinator.begin_turn(
+        lease,
+        turn_id="turn-1",
+        task_id="task-1",
+        user_input="完整用户问题",
+    )
+    coordinator.end_turn(
+        turn,
+        outcome="success",
+        assistant_output="完整助手回复",
+    )
+
+    turn_start = next(
+        event
+        for event in direct_runtime.events
+        if event[0] == "scope.push" and event[1] == relay_runtime.TURN_SCOPE
+    )
+    turn_end = next(
+        event
+        for event in direct_runtime.events
+        if event[0] == "scope.pop" and event[1] == turn.handle
+    )
+    assert turn_start[3]["input"] == {"user": "完整用户问题"}
+    assert turn_end[2]["output"] == {
+        "assistant": "完整助手回复",
+        "outcome": "success",
+    }
+
+
 def test_concurrent_turn_skips_shared_metrics_scope_creation(direct_runtime):
     coordinator = relay_runtime.SESSION_COORDINATOR
     profile_key = relay_runtime.current_profile_key()

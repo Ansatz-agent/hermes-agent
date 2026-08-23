@@ -86,9 +86,9 @@ export type ReadinessProbeAuth = OauthRestAuth | { kind: 'token'; token: string 
  *
  * `oauth` reuses `resolveOauthRestAuth` so the probe and every other oauth
  * REST call make the identical bearer-vs-cookie choice. `token` presents the
- * connection's session token. `local` (and anything unrecognized) stays
- * public: a loopback backend has no gate, and sending credentials it never
- * issued would be meaningless.
+ * connection's session token; `scope` presents the Desktop backend's
+ * short-lived scope bearer through the same header transport. `local` (and
+ * anything unrecognized) stays public.
  */
 export function resolveReadinessProbeAuth(
   authMode: string | null | undefined,
@@ -99,7 +99,7 @@ export function resolveReadinessProbeAuth(
     return resolveOauthRestAuth(nativeAccessToken)
   }
 
-  if (authMode === 'token') {
+  if (authMode === 'token' || authMode === 'scope') {
     return { kind: 'token', token: connectionToken ?? null }
   }
 

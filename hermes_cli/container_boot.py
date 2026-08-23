@@ -5,8 +5,8 @@ on every container restart. Profile directories under
 ``$HERMES_HOME/profiles/<name>/`` live on the persistent VOLUME, and
 each one records its gateway's last state in ``gateway_state.json``.
 This module bridges the two: on every container boot, walk the
-persistent profiles, recreate the s6 service slots, and auto-start
-only those whose last recorded state was ``running``.
+persistent profiles and recreate the s6 service slots in the down state.
+The auth runtime later applies the separately persisted desired intent.
 
 Wired into the image as /etc/cont-init.d/02-reconcile-profiles by the
 Dockerfile (Phase 4 Task 4.0). Runs as root after 01-hermes-setup
@@ -27,16 +27,6 @@ from pathlib import Path
 from typing import Literal, Sequence
 
 log = logging.getLogger(__name__)
-
-# Only this desired state triggers automatic restart. Everything else
-# (startup_failed, starting, stopped, missing) registers the slot in
-# the down state and waits for explicit user action — this avoids the
-# crash-loop where a broken gateway keeps being restarted across
-# `docker restart` cycles. Older installs only have gateway_state;
-# newer lifecycle commands persist desired_state separately so a transient
-# runtime state (draining/startup_failed) does not erase the operator's
-# durable start/stop intent across pod/container recreation.
-_AUTOSTART_STATES = frozenset({"running"})
 
 # Transient runtime sub-states of a RUNNING gateway. A gateway only ever
 # reaches these while it is up and serving, so they are NOT an operator stop
@@ -132,21 +122,11 @@ def reconcile_profile_gateways(
     """
     actions: list[ReconcileAction] = []
 
-    # A multiplexing root/default gateway owns inbound platform connections
-    # for every profile. Named slots must still be registered (so explicit
-    # lifecycle management remains available), but booting them from their
-    # persisted run intent would create additional multiplex owners.
-    from utils import is_truthy_value
-
-    multiplex_profiles = is_truthy_value(
-        os.environ.get("GATEWAY_MULTIPLEX_PROFILES"),
-    )
-
     # Default profile — always register, even if nothing has ever
     # populated the root profile dir. The slot exists so
     # ``hermes gateway start`` (no ``-p``) has somewhere to land;
-    # auto-up only when the prior state was "running" (same rule as
-    # named profiles). If the container was launched with the legacy
+    # and preserve the prior desired state without starting it. If the
+    # container was launched with the legacy
     # `gateway run` command and no state exists yet, seed that intent
     # as `running` so the s6 reconciler preserves the pre-s6 behavior.
     legacy_default_state = _maybe_migrate_legacy_gateway_run_state(
@@ -155,14 +135,13 @@ def reconcile_profile_gateways(
         dry_run=dry_run,
     )
     default_prior_state = legacy_default_state or _read_desired_state(hermes_home)
-    default_should_start = default_prior_state in _AUTOSTART_STATES
     if not dry_run:
         _cleanup_stale_runtime_files(hermes_home)
-        _register_service(scandir, "default", start=default_should_start)
+        _register_service(scandir, "default", start=False)
     actions.append(ReconcileAction(
         profile="default",
         prior_state=default_prior_state,
-        action="started" if default_should_start else "registered",
+        action="registered",
         prior_exit=_read_prior_exit_label(hermes_home),
     ))
 
@@ -191,18 +170,14 @@ def reconcile_profile_gateways(
                 continue
 
             prior_state = _read_desired_state(entry)
-            should_start = (
-                not multiplex_profiles and prior_state in _AUTOSTART_STATES
-            )
-
             if not dry_run:
                 _cleanup_stale_runtime_files(entry)
-                _register_service(scandir, entry.name, start=should_start)
+                _register_service(scandir, entry.name, start=False)
 
             actions.append(ReconcileAction(
                 profile=entry.name,
                 prior_state=prior_state,
-                action="started" if should_start else "registered",
+                action="registered",
                 prior_exit=_read_prior_exit_label(entry),
             ))
 

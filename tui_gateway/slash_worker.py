@@ -16,6 +16,11 @@ import hermes_bootstrap
 
 hermes_bootstrap.harden_import_path()
 
+if __name__ == "__main__":
+    from hermes_cli.client_auth.guard import enforce_direct_entrypoint
+
+    enforce_direct_entrypoint("direct.tui_gateway.slash_worker")
+
 import argparse
 import contextlib
 import io

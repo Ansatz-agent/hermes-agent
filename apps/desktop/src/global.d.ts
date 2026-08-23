@@ -14,6 +14,17 @@ export {}
 declare global {
   interface Window {
     hermesDesktop: {
+      auth: {
+        status: (connectionId?: string) => Promise<DesktopAccountStatus>
+        login: (username: string, password: string, connectionId?: string) => Promise<DesktopAccountStatus>
+        logout: (connectionId?: string) => Promise<DesktopAccountStatus>
+        onChanged: (callback: (status: DesktopAccountStatus, connectionId?: string) => void) => () => void
+      }
+      authBootstrap: {
+        getState: () => Promise<DesktopSafeBootstrapState>
+        retry: () => Promise<{ ok: boolean }>
+        onChanged: (callback: (payload: DesktopSafeBootstrapEvent) => void) => () => void
+      }
       // Resolve a backend connection. Omit `profile` (or pass the primary) for
       // the window's backend; pass a named profile to lazily spawn/reuse that
       // profile's backend from the pool.
@@ -402,6 +413,17 @@ declare global {
   }
 }
 
+interface DesktopAccountStatus {
+  state: 'checking' | 'authenticated' | 'signed_out' | 'locked'
+  username: string | null
+  runtime_instance_id: string
+  epoch: number
+  valid_until: number
+  session_expires_at: string | null
+  reason: string | null
+  runtime_ready: boolean
+}
+
 export interface DesktopMarketplaceSearchItem {
   extensionId: string
   displayName: string
@@ -560,6 +582,11 @@ export interface DesktopUpdateProgress {
 }
 
 export interface HermesConnection {
+  authScope?: {
+    connection_id: string
+    runtime_instance_id: string
+    epoch: number
+  }
   baseUrl: string
   darwinMajor?: number
   isFullscreen: boolean
@@ -567,7 +594,7 @@ export interface HermesConnection {
   // 'cloud' saved-config entry resolves to a 'remote' connection under the hood
   // (cloud-auto-discovery Q3/Q6), so this never carries 'cloud'.
   mode?: 'local' | 'remote'
-  authMode?: 'oauth' | 'token'
+  authMode?: 'oauth' | 'scope' | 'token'
   remoteHost?: string
   remoteIdentity?: string
   remoteKind?: 'cloud' | 'ssh' | 'url'
@@ -905,6 +932,18 @@ export interface DesktopBootstrapStageResult {
   startedAt: number | null
   json: { ok: boolean; skipped?: boolean; reason?: string | null; stage: string } | null
   error: string | null
+  progress?: DesktopBootstrapProgress | null
+}
+
+export type DesktopBootstrapProgressUnit = 'bytes' | 'packages' | 'items' | 'files' | 'steps'
+
+export interface DesktopBootstrapProgress {
+  stage: string
+  completed: number
+  total: number | null
+  unit: DesktopBootstrapProgressUnit
+  label: string
+  updatedAt: number
 }
 
 export interface DesktopBootstrapUnsupportedPlatform {
@@ -921,9 +960,15 @@ export interface DesktopBootstrapSetupChoice {
 
 export interface DesktopBootstrapState {
   active: boolean
-  manifest: { type: 'manifest'; stages: DesktopBootstrapStageDescriptor[]; protocolVersion: number | null } | null
+  manifest: {
+    type: 'manifest'
+    stages: DesktopBootstrapStageDescriptor[]
+    protocolVersion: number | null
+    bootstrapScope?: 'auth' | 'runtime'
+  } | null
   stages: Record<string, DesktopBootstrapStageResult>
   error: string | null
+  failedStage?: string | null
   log: Array<{ ts: number; stage: string | null; line: string; stream?: 'stdout' | 'stderr' }>
   startedAt: number | null
   completedAt: number | null
@@ -939,7 +984,12 @@ export type DesktopBootstrapEvent =
       platform?: string
       activeRoot?: string
     }
-  | { type: 'manifest'; stages: DesktopBootstrapStageDescriptor[]; protocolVersion: number | null }
+  | {
+      type: 'manifest'
+      stages: DesktopBootstrapStageDescriptor[]
+      protocolVersion: number | null
+      bootstrapScope?: 'auth' | 'runtime'
+    }
   | {
       type: 'stage'
       name: string
@@ -947,6 +997,15 @@ export type DesktopBootstrapEvent =
       durationMs?: number
       json?: DesktopBootstrapStageResult['json']
       error?: string | null
+    }
+  | {
+      type: 'progress'
+      stage: string
+      completed: number
+      total: number | null
+      unit: DesktopBootstrapProgressUnit
+      label: string
+      updatedAt?: number
     }
   | { type: 'log'; stage?: string | null; line: string; stream?: 'stdout' | 'stderr' }
   | { type: 'complete'; marker: Record<string, unknown> }
@@ -959,7 +1018,47 @@ export type DesktopBootstrapEvent =
       docsUrl: string
     }
 
+export interface DesktopSafeBootstrapStageResult {
+  state: DesktopBootstrapStageState
+  durationMs: number | null
+  startedAt: number | null
+  error: 'bootstrap_failed' | null
+  progress: DesktopBootstrapProgress | null
+}
+
+export interface DesktopSafeBootstrapState {
+  active: boolean
+  manifest: {
+    type: 'manifest'
+    stages: DesktopBootstrapStageDescriptor[]
+    protocolVersion: number | null
+    bootstrapScope?: 'auth' | 'runtime'
+  } | null
+  stages: Record<string, DesktopSafeBootstrapStageResult>
+  error: 'bootstrap_failed' | null
+  failedStage: string | null
+  startedAt: number | null
+  completedAt: number | null
+}
+
+export type DesktopSafeBootstrapEvent =
+  | { type: 'dismissed' }
+  | NonNullable<DesktopSafeBootstrapState['manifest']>
+  | {
+      type: 'stage'
+      name: string
+      state: DesktopBootstrapStageState
+      durationMs?: number
+      error?: 'bootstrap_failed'
+    }
+  | (DesktopBootstrapProgress & { type: 'progress' })
+  | { type: 'complete'; completedAt: number }
+  | { type: 'failed'; stage?: string; error: 'bootstrap_failed' }
+
 export interface HermesApiRequest {
+  // Exact execution target. Main-process authorization rejects the request if
+  // this connection's current runtime scope is absent or stale.
+  connectionId?: string
   path: string
   method?: string
   body?: unknown

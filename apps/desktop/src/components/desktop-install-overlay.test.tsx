@@ -106,6 +106,20 @@ describe('DesktopInstallOverlay first-run setup', () => {
     expect(screen.queryByText(/Fetching installer manifest/i)).toBeNull()
   })
 
+  it('limits the pre-auth bootstrap shell to local auth runtime installation', async () => {
+    installDesktopMock(
+      bootstrapState({
+        setupChoice: { platform: 'win32', activeRoot: 'C:\\Users\\me\\AppData\\Local\\hermes\\hermes-agent' }
+      })
+    )
+
+    render(<DesktopInstallOverlay authRuntimeOnly />)
+
+    expect(await screen.findByText('Install Hermes locally')).toBeTruthy()
+    expect(screen.queryByText('Connect to existing Hermes')).toBeNull()
+    expect(screen.queryByRole('link')).toBeNull()
+  })
+
   it('continues local bootstrap only when Install Hermes locally is selected', async () => {
     const desktop = installDesktopMock(
       bootstrapState({

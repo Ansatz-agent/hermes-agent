@@ -973,6 +973,10 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
     and /steer injection — used when this call is one segment of a larger
     mixed batch and the segmented dispatcher owns the turn-end work.
     """
+    from hermes_cli.client_auth.runtime import require_authorized
+
+    auth_scope = require_authorized("agent.tools.concurrent")
+
     tool_calls = assistant_message.tool_calls
     num_tools = len(tool_calls)
 
@@ -1182,6 +1186,7 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
         start_order,
     ):
         """Worker function executed in a thread."""
+        require_authorized("agent.tool.worker", expected=auth_scope)
         # Register this worker tid so the agent can fan out an interrupt
         # to it — see AIAgent.interrupt().  Must happen first thing, and
         # must be paired with discard + clear in the finally block.
@@ -1815,6 +1820,10 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
     and /steer injection — used when this call is one segment of a larger
     mixed batch and the segmented dispatcher owns the turn-end work.
     """
+    from hermes_cli.client_auth.runtime import require_authorized
+
+    auth_scope = require_authorized("agent.tools.sequential")
+
     # Resolve the context-scaled tool-output budget once per turn.
     _tool_budget = _budget_for_agent(agent)
 
@@ -1824,6 +1833,7 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
         return _run_sequential_tool_execution_middleware(agent, **kwargs)
 
     for i, tool_call in enumerate(assistant_message.tool_calls, 1):
+        require_authorized("agent.tool.sequential", expected=auth_scope)
         if getattr(agent, "_incremental_persistence_failed", False):
             return
         # SAFETY: check interrupt BEFORE starting each tool.
