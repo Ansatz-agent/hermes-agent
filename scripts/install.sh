@@ -1013,6 +1013,85 @@ npm_supports_npmrc() {
     return 0
 }
 
+# The npm range the install manifest demands. Read from engines.npm rather
+# than duplicated here so the two can never drift; falls back to the current
+# range when the manifest is unreadable.
+managed_npm_engines_range() {
+    local manifest="$INSTALL_DIR/package.json" range
+    if [ -r "$manifest" ]; then
+        # sed, not node: this runs before a usable node is guaranteed.
+        range=$(sed -n '/"engines"/,/}/p' "$manifest" \
+            | sed -n 's/.*"npm"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+            | head -1)
+        if [ -n "$range" ]; then
+            printf '%s\n' "$range"
+            return 0
+        fi
+    fi
+    printf '<11.10.0 || >=11.17.0\n'
+}
+
+# Upgrade the managed tree's bundled npm out of the .npmrc-incompatible band.
+#
+# The reviewed latest-v26.x mirrors can serve a Node whose bundled npm sits in
+# the 11.10-11.16 band that engines.npm excludes (v26.0.0 bundles 11.12.1), so
+# the toolchain the installer just provisioned failed its very first
+# `npm install` with EBADENGINE. Provision a compatible npm here instead.
+#
+# Three details are load-bearing, mirroring _nb_ensure_bundled_npm_range in
+# scripts/lib/node-bootstrap.sh:
+#   - a temp cwd, so the checkout's own .npmrc (engine-strict, min-release-age)
+#     does not gate the very upgrade meant to satisfy it;
+#   - npm_config_min_release_age=0, which also neutralises a user ~/.npmrc;
+#   - an explicit --prefix at the managed tree, because
+#     configure_managed_node_npm_prefix pointed global installs at the command
+#     link dir, and without the override this installs a second npm elsewhere
+#     while the managed tree stays stale.
+#
+# Best-effort: a failure here leaves a working Node with an old npm, and the
+# node-deps `npm install` that follows fails loudly rather than silently.
+ensure_managed_npm_compatible() {
+    local npm_bin="$HERMES_HOME/node/bin/npm"
+    [ -x "$npm_bin" ] || return 0
+
+    local bundled_version
+    bundled_version="$(PATH="$HERMES_HOME/node/bin:$PATH" "$npm_bin" --version 2>/dev/null)"
+    if npm_supports_npmrc "$bundled_version"; then
+        return 0
+    fi
+
+    local range
+    range="$(managed_npm_engines_range)"
+    log_info "Bundled npm ${bundled_version:-unavailable} cannot honor this repo's .npmrc — upgrading to npm@$range..."
+    local tmp_cwd
+    tmp_cwd=$(mktemp -d)
+    if (
+        cd "$tmp_cwd" || exit 1
+        CI=1 npm_config_min_release_age=0 \
+            PATH="$HERMES_HOME/node/bin:$PATH" \
+            run_npm_with_mirror_fallback "$NODE_DEPS_TIMEOUT" \
+            "$npm_bin" install --global \
+                --prefix "$HERMES_HOME/node" \
+                "npm@$range" \
+                --no-fund --no-audit --progress=false >/dev/null 2>&1
+    ); then
+        rm -rf "$tmp_cwd"
+        local upgraded_version
+        upgraded_version="$(PATH="$HERMES_HOME/node/bin:$PATH" "$npm_bin" --version 2>/dev/null)"
+        if npm_supports_npmrc "$upgraded_version"; then
+            log_success "npm $upgraded_version installed (Hermes-managed)"
+            return 0
+        fi
+        log_warn "npm upgrade command completed but managed npm is still ${upgraded_version:-unavailable}."
+        return 1
+    fi
+
+    rm -rf "$tmp_cwd"
+    log_warn "Could not upgrade bundled npm to $range — npm install may fail with EBADENGINE."
+    log_warn "Fix manually: npm install -g --prefix \"$HERMES_HOME/node\" npm@\"$range\""
+    return 1
+}
+
 check_node() {
     log_info "Checking Node.js (for browser tools)..."
 
@@ -1049,7 +1128,12 @@ check_node() {
     if [ -x "$HERMES_HOME/node/bin/node" ] && [ -x "$HERMES_HOME/node/bin/npm" ] \
         && node_satisfies_build "$("$HERMES_HOME/node/bin/node" --version)"; then
         local managed_npm_version
-        managed_npm_version="$("$HERMES_HOME/node/bin/npm" --version 2>/dev/null)"
+        # Probe with the managed bin dir already on PATH: managed npm is a
+        # `#!/usr/bin/env node` script, and a packaged GUI bootstrap has no
+        # other node on PATH yet. Probing bare yields an empty version
+        # (`env: node: No such file or directory`), which read as
+        # incompatible and wiped a perfectly compatible managed tree.
+        managed_npm_version="$(PATH="$HERMES_HOME/node/bin:$PATH" "$HERMES_HOME/node/bin/npm" --version 2>/dev/null)"
         if npm_supports_npmrc "$managed_npm_version"; then
             export PATH="$HERMES_HOME/node/bin:$PATH"
             log_success "Node.js $("$HERMES_HOME/node/bin/node" --version) found (Hermes-managed)"
@@ -1057,7 +1141,14 @@ check_node() {
             return 0
         fi
         log_warn "npm $managed_npm_version cannot honor this repo's .npmrc (npm 11.10-11.16 ignore"
-        log_warn "min-release-age-exclude) — replacing Hermes-managed Node $NODE_VERSION..."
+        log_warn "min-release-age-exclude) — repairing the Hermes-managed npm in place..."
+        if ensure_managed_npm_compatible; then
+            export PATH="$HERMES_HOME/node/bin:$PATH"
+            log_success "Node.js $("$HERMES_HOME/node/bin/node" --version) found (Hermes-managed; npm repaired)"
+            HAS_NODE=true
+            return 0
+        fi
+        log_warn "Managed npm repair failed — replacing Hermes-managed Node $NODE_VERSION..."
     fi
 
     if command -v node &> /dev/null && ! command -v npm &> /dev/null; then
@@ -1196,6 +1287,10 @@ install_node() {
     local installed_ver
     installed_ver=$("$HERMES_HOME/node/bin/node" --version 2>/dev/null)
     log_success "Node.js $installed_ver installed to ~/.hermes/node/"
+
+    # The archive may bundle an npm the repo's .npmrc excludes — heal it now,
+    # before the first `npm install` can die with EBADENGINE.
+    ensure_managed_npm_compatible || true
     HAS_NODE=true
 }
 
