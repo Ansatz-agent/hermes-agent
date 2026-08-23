@@ -58,7 +58,7 @@ test('managed Python discovery ignores the project venv and resolves interpreter
   }])
 })
 
-test('Windows uv discovery resolves uv.exe from the host PATH', () => {
+test('Windows uv discovery falls back to where.exe', () => {
   const calls = []
   const uvPath = 'C:\\hostedtoolcache\\uv\\0.12.5\\x64\\uv.exe'
 
@@ -77,6 +77,27 @@ test('Windows uv discovery resolves uv.exe from the host PATH', () => {
 
   assert.equal(result, uvPath)
   assert.deepEqual(calls, [{ command: 'where.exe', args: ['uv'] }])
+})
+
+test('Windows uv discovery reads the mixed-case runner Path before spawning a locator', () => {
+  const calls = []
+  const uvPath = 'C:\\hostedtoolcache\\uv\\0.12.5\\x64\\uv.exe'
+
+  const result = findUv(
+    { Path: `C:\\Windows\\System32;C:\\hostedtoolcache\\uv\\0.12.5\\x64` },
+    'C:\\repo',
+    {
+      platform: 'win32',
+      existsSync: candidate => candidate === uvPath,
+      execute: (command, args) => {
+        calls.push({ command, args })
+        throw new Error('secondary locator unavailable')
+      }
+    }
+  )
+
+  assert.equal(result, uvPath)
+  assert.deepEqual(calls, [])
 })
 
 function makeFixture() {

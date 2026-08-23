@@ -585,6 +585,15 @@ export function findUv(
     }
   }
 
+  const pathValue = Object.entries(env).find(([key]) => key.toUpperCase() === 'PATH')?.[1]
+  if (typeof pathValue === 'string') {
+    for (const rawDirectory of pathValue.split(pathApi.delimiter)) {
+      const directory = rawDirectory.trim().replace(/^"(.*)"$/, '$1')
+      const candidate = pathApi.join(directory, executable)
+      if (pathApi.isAbsolute(candidate) && existsSync(candidate)) return candidate
+    }
+  }
+
   try {
     const command = platform === 'win32' ? 'where.exe' : '/usr/bin/which'
     for (const candidate of String(execute(command, ['uv'])).split(/\r?\n/).filter(Boolean)) {
