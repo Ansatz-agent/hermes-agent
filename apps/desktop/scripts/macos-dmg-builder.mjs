@@ -6,6 +6,20 @@ import { spawnSync } from "node:child_process"
 export const RESTRICTED_DMG_VOLUME_ERROR =
   "ditto: /Volumes/Install Ansatz Voice Trace Client/Ansatz Voice Trace Client.app: Operation not permitted"
 
+export function packagedMacAppName(desktopPackage) {
+  const executableName = desktopPackage?.build?.executableName
+  const productName = desktopPackage?.productName
+  const bundleName = typeof executableName === "string" && executableName.length > 0
+    ? executableName
+    : productName
+
+  if (typeof bundleName !== "string" || bundleName.length === 0) {
+    throw new Error("desktop package lacks executableName and productName")
+  }
+
+  return `${bundleName}.app`
+}
+
 function hasMacTarget(args) {
   return args.some((arg) => arg === "--mac" || arg.startsWith("--mac="))
 }

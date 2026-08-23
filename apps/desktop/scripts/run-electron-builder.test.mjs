@@ -9,8 +9,17 @@ import {
   RESTRICTED_DMG_VOLUME_ERROR,
   buildRestrictedVolumeDmg,
   ensureMacSigningIdentity,
+  packagedMacAppName,
   shouldUseRestrictedVolumeFallback,
 } from "./macos-dmg-builder.mjs"
+
+test("packaged macOS app path follows electron-builder executableName", () => {
+  const desktopPackage = JSON.parse(
+    fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  )
+
+  assert.equal(packagedMacAppName(desktopPackage), "AnsatzVoiceTraceClient.app")
+})
 
 test("macOS package builds use explicit ad-hoc signing when identity discovery is disabled", () => {
   assert.deepEqual(

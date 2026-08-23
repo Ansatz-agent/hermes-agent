@@ -8,6 +8,14 @@ import test from 'node:test'
 const repoRoot = path.resolve(import.meta.dirname, '..')
 const buildScript = path.join(repoRoot, 'scripts', 'build-desktop-dmg.sh')
 
+test('pipeline verifies the executableName macOS bundle produced by electron-builder', () => {
+  const source = fs.readFileSync(buildScript, 'utf8')
+  assert.match(
+    source,
+    /PACKAGED_APP="\$RELEASE_DIR\/mac-arm64\/AnsatzVoiceTraceClient\.app"/
+  )
+})
+
 function runCheck(version) {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-dmg-node-'))
   const fakeNode = path.join(tempRoot, 'node')
@@ -33,7 +41,7 @@ function runPipeline({
 }) {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-dmg-pipeline-'))
   const releaseDir = path.join(tempRoot, 'release')
-  const packagedApp = path.join(releaseDir, 'mac-arm64', 'Hermes.app')
+  const packagedApp = path.join(releaseDir, 'mac-arm64', 'AnsatzVoiceTraceClient.app')
   const fakeNode = path.join(tempRoot, 'node')
   const fakeNpm = path.join(tempRoot, 'npm')
   const fakeCodesign = path.join(tempRoot, 'codesign')
@@ -51,7 +59,7 @@ function runPipeline({
   )
   const artifactPath = path.join(
     releaseDir,
-    `Hermes-test-${process.pid}-${Date.now()}-mac-arm64.dmg`
+    `Ansatz-Voice-Trace-Client-test-${process.pid}-${Date.now()}-mac-arm64.dmg`
   )
 
   fs.writeFileSync(
@@ -82,7 +90,7 @@ exec '${process.execPath}' "$@"
   )
   fs.writeFileSync(
     fakeNpm,
-    `#!/bin/sh\nprintf '%s|%s|%s|%s\\n' "$PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD" "$ELECTRON_MIRROR" "$ELECTRON_BUILDER_BINARIES_MIRROR" "$*" >> "$HERMES_DMG_TEST_RECORD"\nif [ "\${1:-}" = "run" ]; then\n  mkdir -p "$HERMES_DMG_TEST_PACKAGED_APP"\nfi\nif [ "\${HERMES_DMG_TEST_VOLUME_DENIED:-0}" = "1" ] && [ "\${1:-}" = "run" ]; then\n  printf '%s\\n' 'ditto: /Volumes/Install Hermes/Hermes.app: Operation not permitted' >&2\n  exit 1\nfi\nif [ "\${HERMES_DMG_TEST_PRODUCE:-0}" = "1" ] && [ "\${1:-}" = "run" ]; then\n  mkdir -p "$(dirname "$HERMES_DMG_TEST_ARTIFACT")"\n  printf '%s\\n' 'fake dmg' > "$HERMES_DMG_TEST_ARTIFACT"\nfi\n`,
+    `#!/bin/sh\nprintf '%s|%s|%s|%s\\n' "$PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD" "$ELECTRON_MIRROR" "$ELECTRON_BUILDER_BINARIES_MIRROR" "$*" >> "$HERMES_DMG_TEST_RECORD"\nif [ "\${1:-}" = "run" ]; then\n  mkdir -p "$HERMES_DMG_TEST_PACKAGED_APP"\nfi\nif [ "\${HERMES_DMG_TEST_VOLUME_DENIED:-0}" = "1" ] && [ "\${1:-}" = "run" ]; then\n  printf '%s\\n' 'ditto: /Volumes/Install Ansatz Voice Trace Client/Ansatz Voice Trace Client.app: Operation not permitted' >&2\n  exit 1\nfi\nif [ "\${HERMES_DMG_TEST_PRODUCE:-0}" = "1" ] && [ "\${1:-}" = "run" ]; then\n  mkdir -p "$(dirname "$HERMES_DMG_TEST_ARTIFACT")"\n  printf '%s\\n' 'fake dmg' > "$HERMES_DMG_TEST_ARTIFACT"\nfi\n`,
     { mode: 0o755 }
   )
   fs.writeFileSync(
@@ -92,7 +100,7 @@ exec '${process.execPath}' "$@"
   )
   fs.writeFileSync(
     fakeHdiutil,
-    `#!/bin/sh\nprintf 'hdiutil|%s\\n' "$*" >> "$HERMES_DMG_TEST_RECORD"\ncase "\${1:-}" in\n  create|convert)\n    for argument in "$@"; do output="$argument"; done\n    mkdir -p "$(dirname "$output")"\n    printf '%s\\n' 'fallback dmg' > "$output"\n    ;;\n  detach)\n    for argument in "$@"; do mount_point="$argument"; done\n    [ -d "$mount_point/Hermes.app" ]\n    [ "$(readlink "$mount_point/Applications")" = "/Applications" ]\n    printf '%s\\n' 'fallback-contents|Hermes.app|Applications->/Applications' >> "$HERMES_DMG_TEST_RECORD"\n    ;;\nesac\n`,
+    `#!/bin/sh\nprintf 'hdiutil|%s\\n' "$*" >> "$HERMES_DMG_TEST_RECORD"\ncase "\${1:-}" in\n  create|convert)\n    for argument in "$@"; do output="$argument"; done\n    mkdir -p "$(dirname "$output")"\n    printf '%s\\n' 'fallback dmg' > "$output"\n    ;;\n  detach)\n    for argument in "$@"; do mount_point="$argument"; done\n    [ -d "$mount_point/Ansatz Voice Trace Client.app" ]\n    [ "$(readlink "$mount_point/Applications")" = "/Applications" ]\n    printf '%s\\n' 'fallback-contents|Ansatz Voice Trace Client.app|Applications->/Applications' >> "$HERMES_DMG_TEST_RECORD"\n    ;;\nesac\n`,
     { mode: 0o755 }
   )
 
@@ -175,8 +183,8 @@ test('pipeline installs locked dependencies and builds the desktop DMG', () => {
     /1\|https:\/\/npmmirror\.com\/mirrors\/electron\/\|https:\/\/npmmirror\.com\/mirrors\/electron-builder-binaries\/\|run --workspace apps\/desktop dist:mac:dmg -- --config\.mac\.identity=-/
   )
   assert.match(record, /uv-lock-check\|lock --check --config-file .+\/uv\.toml/)
-  assert.match(record, /codesign\|--verify --deep --strict .+\/release\/mac-arm64\/Hermes\.app/)
-  assert.match(result.stdout, /Hermes-test-.+-mac-arm64\.dmg/)
+  assert.match(record, /codesign\|--verify --deep --strict .+\/release\/mac-arm64\/AnsatzVoiceTraceClient\.app/)
+  assert.match(result.stdout, /Ansatz-Voice-Trace-Client-test-.+-mac-arm64\.dmg/)
 })
 
 test('pipeline fails before npm when the signed runtime lock is stale', () => {
@@ -208,7 +216,7 @@ test('pipeline preserves a caller-provided builder binaries mirror', () => {
 test('pipeline fails when the current build produces no DMG', () => {
   const { result } = runPipeline({ produceDmg: false })
   assert.notEqual(result.status, 0)
-  assert.match(result.stderr, /no macOS arm64 Hermes DMG found/)
+  assert.match(result.stderr, /no macOS arm64 Ansatz Voice Trace Client DMG found/)
 })
 
 test('pipeline fails when the packaged app signature is invalid', () => {
@@ -223,11 +231,11 @@ test('pipeline falls back to hdiutil only when dmgbuild cannot write its mounted
   })
 
   assert.equal(result.status, 0, result.stderr)
-  assert.match(record, /hdiutil\|create -size \d+m -fs HFS\+ -volname Install Hermes -type UDIF /)
+  assert.match(record, /hdiutil\|create -size \d+m -fs HFS\+ -volname Install Ansatz Voice Trace Client -type UDIF /)
   assert.match(record, /hdiutil\|attach -nobrowse -mountpoint (?!\/Volumes\/)/)
-  assert.match(record, /fallback-contents\|Hermes\.app\|Applications->\/Applications/)
-  assert.match(record, /hdiutil\|convert .* -format UDZO -ov -o .*Hermes-0\.17\.0-mac-arm64\.dmg/)
-  assert.match(record, /hdiutil\|verify .*Hermes-0\.17\.0-mac-arm64\.dmg/)
+  assert.match(record, /fallback-contents\|Ansatz Voice Trace Client\.app\|Applications->\/Applications/)
+  assert.match(record, /hdiutil\|convert .* -format UDZO -ov -o .*Ansatz-Voice-Trace-Client-0\.17\.0-mac-arm64\.dmg/)
+  assert.match(record, /hdiutil\|verify .*Ansatz-Voice-Trace-Client-0\.17\.0-mac-arm64\.dmg/)
   assert.match(result.stdout, /restricted-volume fallback/)
-  assert.match(result.stdout, /Hermes-0\.17\.0-mac-arm64\.dmg/)
+  assert.match(result.stdout, /Ansatz-Voice-Trace-Client-0\.17\.0-mac-arm64\.dmg/)
 })

@@ -13,6 +13,7 @@ import {
   buildRestrictedVolumeDmg,
   ensureMacSigningIdentity,
   isMacDmgRequest,
+  packagedMacAppName,
   shouldUseRestrictedVolumeFallback,
 } from "./macos-dmg-builder.mjs"
 
@@ -82,7 +83,7 @@ function macPackagePaths() {
   const appDirectory = arch === "x64" ? "mac" : `mac-${arch}`
   const releaseDirectory = path.join(desktopRoot, "release")
   return {
-    packagedApp: path.join(releaseDirectory, appDirectory, `${desktopPackage.productName}.app`),
+    packagedApp: path.join(releaseDirectory, appDirectory, packagedMacAppName(desktopPackage)),
     dmgPath: path.join(
       releaseDirectory,
       desktopPackage.build.artifactName

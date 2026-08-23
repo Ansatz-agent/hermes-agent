@@ -58,7 +58,7 @@ fi
 [[ $# -eq 0 ]] || fail "unknown argument: $1"
 
 RELEASE_DIR="${HERMES_DMG_RELEASE_DIR:-$REPO_ROOT/apps/desktop/release}"
-PACKAGED_APP="$RELEASE_DIR/mac-arm64/Ansatz Voice Trace Client.app"
+PACKAGED_APP="$RELEASE_DIR/mac-arm64/AnsatzVoiceTraceClient.app"
 LOG_DIR="$REPO_ROOT/apps/desktop/build/logs"
 BUILD_LOG="$LOG_DIR/phase1-desktop-dmg-build.log"
 CONTRACT_SCRIPT="$REPO_ROOT/scripts/desktop-dmg-contract.mjs"
