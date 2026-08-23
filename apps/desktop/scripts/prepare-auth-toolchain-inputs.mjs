@@ -13,7 +13,7 @@ const PYTHON_FALLBACK = 'https://pypi.tuna.tsinghua.edu.cn/simple'
 
 const SAFE_ENV_KEYS = Object.freeze([
   'APPDATA', 'HOME', 'LANG', 'LC_ALL', 'LOCALAPPDATA', 'PATH', 'SYSTEMROOT',
-  'TEMP', 'TMP', 'TMPDIR', 'USER', 'USERPROFILE', 'WINDIR'
+  'TEMP', 'TMP', 'TMPDIR', 'USER', 'USERPROFILE', 'UV_PYTHON_INSTALL_DIR', 'WINDIR'
 ])
 
 export function buildAuthPayloadEnvironment(source = process.env) {

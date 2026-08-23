@@ -20,6 +20,7 @@ test('auth payload environment rejects inherited downloader redirects and creden
     PIP_INDEX_URL: 'https://attacker.invalid/pypi',
     PIP_EXTRA_INDEX_URL: 'https://attacker.invalid/extra',
     UV_CONFIG_FILE: '/tmp/attacker.toml',
+    UV_PYTHON_INSTALL_DIR: 'D:\\a\\_temp\\uv-python-dir',
     HF_TOKEN: 'secret-token',
     PYTHONPATH: '/tmp/injected'
   })
@@ -28,6 +29,7 @@ test('auth payload environment rejects inherited downloader redirects and creden
   assert.equal(env.PIP_INDEX_URL, 'https://mirrors.ustc.edu.cn/pypi/simple')
   assert.equal(env.PIP_EXTRA_INDEX_URL, undefined)
   assert.equal(env.UV_CONFIG_FILE, undefined)
+  assert.equal(env.UV_PYTHON_INSTALL_DIR, 'D:\\a\\_temp\\uv-python-dir')
   assert.equal(env.HF_TOKEN, undefined)
   assert.equal(env.PYTHONPATH, undefined)
   assert.equal(JSON.stringify(env).includes('attacker.invalid'), false)
