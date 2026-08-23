@@ -4,9 +4,11 @@ import { defineLocale } from './define-locale'
 
 export const zhHant = defineLocale({
   auth: {
-    title: '登入 Hermes',
-    description: '啟動任何 Agent 功能前，必須先驗證 Hermes 帳戶。',
+    title: '登入 Ansatz Voice Trace Client',
+    description: '完整離線執行環境安裝完成後方可登入帳戶。',
     serverLabel: '帳戶伺服器',
+    traceNotice:
+      '完整對話 Trace（包括輸入、模型回覆、工具參數與結果）會自動上傳，且僅平台管理員可查看。上傳無法關閉；原始音訊和憑證不會上傳。',
     username: '使用者名稱',
     password: '密碼',
     signIn: '登入',
@@ -15,11 +17,11 @@ export const zhHant = defineLocale({
     checking: '正在驗證帳戶工作階段…',
     preparingRuntime: '正在準備安全登入服務…',
     preparingStage: (current, total, title) => `正在準備安全登入服務（${current}/${total}）：${title}…`,
-    runtimeTitle: '帳戶驗證成功，正在準備 Hermes',
-    runtimeDescription: '帳戶驗證已通過。本機執行環境準備完成前，Hermes 將保持鎖定。',
-    preparingFullRuntime: '正在準備 Hermes 執行環境…',
-    preparingFullStage: (current, total, title) => `正在準備 Hermes 執行環境（${current}/${total}）：${title}…`,
-    runtimePreparationFailed: '無法完成 Hermes 本機執行環境準備，請重試或登出。',
+    runtimeTitle: '正在安裝 Ansatz Voice Trace Client',
+    runtimeDescription: '必須先安裝完整離線執行環境，之後才會開放帳戶登入。',
+    preparingFullRuntime: '正在安裝完整離線執行環境…',
+    preparingFullStage: (current, total, title) => `正在安裝完整離線執行環境（${current}/${total}）：${title}…`,
+    runtimePreparationFailed: 'Ansatz Voice Trace Client 無法安裝本機執行環境，請重試安裝。',
     administratorManaged: '帳戶發放與密碼協助由伺服器管理員統一處理。',
     accountMenu: '帳戶',
     signOut: '登出',
@@ -29,9 +31,9 @@ export const zhHant = defineLocale({
       stagesComplete: (completed, total) => `已完成 ${completed}/${total} 個階段`,
       stagePosition: (current, total, title) => `第 ${current}/${total} 階段：${title}`,
       elapsed: elapsed => `目前階段 · ${elapsed}`,
-      overallProgressLabel: 'Hermes 執行環境安裝',
+      overallProgressLabel: 'Ansatz Voice Trace Client 執行環境安裝',
       authPreparationFailed: '無法準備安全登入服務。',
-      runtimePreparationFailed: '無法完成 Hermes 本機執行環境準備。',
+      runtimePreparationFailed: '無法安裝 Ansatz Voice Trace Client 本機執行環境。',
       failedAt: title => `失敗階段：${title}`,
       runningWithElapsed: (state, elapsed) => `${state} · ${elapsed}`,
       knownProgress: (completed, total, unit, percent) =>

@@ -101,7 +101,60 @@ describe('AuthGate', () => {
     await waitFor(() => expect(auth.logout).toHaveBeenCalledWith('remote-a'))
   })
 
-  it('keeps an authenticated account behind the full-runtime readiness gate', async () => {
+  it('installs the complete runtime before exposing account credentials', async () => {
+    let emitBootstrap: ((event: Record<string, unknown>) => void) | null = null
+
+    const status = vi.fn().mockImplementationOnce(() => new Promise<DesktopAccountStatus>(() => {})).mockResolvedValueOnce({
+      ...signedOut,
+      runtime_ready: true
+    })
+
+    const bootstrap = {
+      getState: vi.fn(async () => ({
+        active: true,
+        manifest: {
+          type: 'manifest',
+          protocolVersion: 1,
+          bootstrapScope: 'runtime',
+          stages: [{ name: 'complete-runtime', title: 'Install complete offline runtime' }]
+        },
+        stages: {
+          'complete-runtime': {
+            state: 'running',
+            durationMs: null,
+            startedAt: 1_000,
+            error: null,
+            progress: null
+          }
+        },
+        error: null,
+        failedStage: null,
+        startedAt: 500,
+        completedAt: null
+      })),
+      onChanged: vi.fn(callback => {
+        emitBootstrap = callback
+
+        return () => {
+          emitBootstrap = null
+        }
+      }),
+      retry: vi.fn(async () => ({ ok: true }))
+    }
+
+    renderGate({ status }, null, <div>Protected Hermes application</div>, bootstrap)
+
+    expect(await screen.findByText('Install complete offline runtime')).not.toBeNull()
+    expect(screen.queryByLabelText('Username')).toBeNull()
+    expect(screen.queryByLabelText('Password')).toBeNull()
+
+    act(() => emitBootstrap?.({ type: 'complete', completedAt: 2_000 }))
+
+    expect(await screen.findByLabelText('Username')).not.toBeNull()
+    expect(screen.getByLabelText('Password')).not.toBeNull()
+  })
+
+  it('keeps credentials and protected capabilities hidden during complete runtime installation', async () => {
     const bootstrap = {
       getState: vi.fn(async () => ({
         active: true,
@@ -138,7 +191,7 @@ describe('AuthGate', () => {
       retry: vi.fn(async () => ({ ok: true }))
     }
 
-    const { auth } = renderGate(
+    renderGate(
       { status: vi.fn(async () => ({ ...authenticated, runtime_ready: false })) },
       null,
       <div>Protected Hermes application</div>,
@@ -149,8 +202,9 @@ describe('AuthGate', () => {
     expect(screen.getByText('Install Python dependencies')).not.toBeNull()
     expect(screen.queryByText('Protected Hermes application')).toBeNull()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Sign out' }))
-    await waitFor(() => expect(auth.logout).toHaveBeenCalledTimes(1))
+    expect(screen.queryByLabelText('Username')).toBeNull()
+    expect(screen.queryByLabelText('Password')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Sign out' })).toBeNull()
   })
 
   it('resynchronizes the running-stage elapsed time immediately when focus returns', async () => {
@@ -212,7 +266,7 @@ describe('AuthGate', () => {
     expect(screen.queryByText('Protected Hermes application')).toBeNull()
   })
 
-  it('keeps Retry and Sign out available after authenticated runtime preparation fails', async () => {
+  it('keeps Retry available after pre-auth runtime installation fails', async () => {
     const bootstrap = {
       getState: vi.fn(async () => ({
         active: false,
@@ -236,9 +290,9 @@ describe('AuthGate', () => {
       bootstrap
     )
 
-    expect(await screen.findByText('Hermes could not prepare its local runtime.')).not.toBeNull()
+    expect(await screen.findByText('Ansatz Voice Trace Client could not install its local runtime.')).not.toBeNull()
     expect((screen.getByRole('button', { name: 'Retry' }) as HTMLButtonElement).disabled).toBe(false)
-    expect(screen.getByRole('button', { name: 'Sign out' })).not.toBeNull()
+    expect(screen.queryByRole('button', { name: 'Sign out' })).toBeNull()
     expect(globalThis.document.body.textContent).not.toContain('sessionid')
     expect(globalThis.document.body.textContent).not.toContain('Traceback')
   })
@@ -246,7 +300,7 @@ describe('AuthGate', () => {
   it('shows only the fixed account login surface while signed out', async () => {
     renderGate()
 
-    expect(await screen.findByRole('heading', { name: 'Sign in to Hermes' })).not.toBeNull()
+    expect(await screen.findByRole('heading', { name: 'Sign in to Ansatz Voice Trace Client' })).not.toBeNull()
     expect(screen.getByText('https://c2sml.cn/agent')).not.toBeNull()
     expect(screen.getByLabelText('Username')).not.toBeNull()
     expect(screen.getByLabelText('Password').getAttribute('type')).toBe('password')
@@ -256,7 +310,9 @@ describe('AuthGate', () => {
     expect(screen.queryByText('Protected Hermes application')).toBeNull()
 
     for (const forbidden of ['Register', 'Create account', 'Reset password', 'Change password', 'Skip', 'Offline']) {
-      expect(screen.queryByText(forbidden, { exact: false })).toBeNull()
+      const accessibleName = new RegExp(forbidden, 'i')
+      expect(screen.queryByRole('button', { name: accessibleName })).toBeNull()
+      expect(screen.queryByRole('link', { name: accessibleName })).toBeNull()
     }
 
     expect(screen.queryByLabelText(/server/i)).toBeNull()
@@ -283,7 +339,7 @@ describe('AuthGate', () => {
     act(() => emit({ ...signedOut, state: 'locked', reason: 'session_expired', epoch: 3 }))
 
     expect(screen.queryByText('Protected Hermes application')).toBeNull()
-    expect(await screen.findByRole('heading', { name: 'Sign in to Hermes' })).not.toBeNull()
+    expect(await screen.findByRole('heading', { name: 'Sign in to Ansatz Voice Trace Client' })).not.toBeNull()
   })
 
   it('does not let an older status response overwrite a newer lock event', async () => {
@@ -296,7 +352,7 @@ describe('AuthGate', () => {
     const { emit } = renderGate({ status: vi.fn(() => pendingStatus) })
 
     act(() => emit({ ...signedOut, state: 'locked', reason: 'session_expired', epoch: 3 }))
-    expect(await screen.findByRole('heading', { name: 'Sign in to Hermes' })).not.toBeNull()
+    expect(await screen.findByRole('heading', { name: 'Sign in to Ansatz Voice Trace Client' })).not.toBeNull()
 
     await act(async () => {
       resolveStatus?.(authenticated)
@@ -542,7 +598,7 @@ describe('AuthGate', () => {
 
     act(() => emitBootstrap?.({ type: 'complete', completedAt: 2_000 }))
 
-    expect(await screen.findByRole('heading', { name: 'Sign in to Hermes' })).not.toBeNull()
+    expect(await screen.findByRole('heading', { name: 'Sign in to Ansatz Voice Trace Client' })).not.toBeNull()
     expect(status).toHaveBeenCalledTimes(2)
 
     act(() => emitBootstrap?.({ type: 'complete', completedAt: 2_000 }))
@@ -716,7 +772,7 @@ describe('AuthGate', () => {
   it('keeps signed bootstrap hidden until authentication completes', async () => {
     const { emit } = renderGate({}, <div>Signed auth runtime bootstrap</div>)
 
-    expect(await screen.findByRole('heading', { name: 'Sign in to Hermes' })).not.toBeNull()
+    expect(await screen.findByRole('heading', { name: 'Sign in to Ansatz Voice Trace Client' })).not.toBeNull()
     expect(screen.queryByText('Signed auth runtime bootstrap')).toBeNull()
     expect(screen.queryByText('Protected Hermes application')).toBeNull()
 

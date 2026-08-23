@@ -403,8 +403,6 @@ export function AuthGate({
     return <DesktopAuthContext.Provider value={authenticatedContext}>{children}</DesktopAuthContext.Provider>
   }
 
-  const waitingForRuntime = status.state === 'authenticated'
-
   const retry = () => {
     if (!auth || submitting) {
       return
@@ -419,7 +417,7 @@ export function AuthGate({
             throw new Error('bootstrap_retry_failed')
           }
 
-          return requestStatus(!waitingForRuntime)
+          return requestStatus(bootstrapState.manifest?.bootstrapScope !== 'runtime')
         })
         .catch(() => {
           commitBootstrapState({ ...bootstrapState, active: false, error: 'bootstrap_failed' })
@@ -472,13 +470,17 @@ export function AuthGate({
   const runtimeSnapshot = bootstrapState?.manifest?.bootstrapScope === 'runtime' ? bootstrapState : null
   const authSnapshot = bootstrapState?.manifest?.bootstrapScope !== 'runtime' ? bootstrapState : null
 
+  const showRuntimeBootstrap = Boolean(
+    runtimeSnapshot?.manifest &&
+      (runtimeSnapshot.active || runtimeSnapshot.error || runtimeSnapshot.completedAt === null)
+  )
+
   const showAuthBootstrap = Boolean(
-    !waitingForRuntime &&
+    !showRuntimeBootstrap &&
       authSnapshot &&
       (authSnapshot.active || authSnapshot.error || (status.state === 'checking' && authSnapshot.manifest))
   )
 
-  const showRuntimeBootstrap = Boolean(waitingForRuntime && runtimeSnapshot?.manifest)
   const showBootstrapProgress = showAuthBootstrap || showRuntimeBootstrap
 
   const showStatusRetry =
@@ -493,13 +495,13 @@ export function AuthGate({
         className="w-full max-w-md rounded-2xl border border-(--dt-border) bg-(--ui-card-surface) p-8 shadow-2xl"
       >
         <div aria-hidden="true" className="mb-6 text-2xl font-semibold tracking-tight">
-          Hermes
+          Ansatz Voice Trace Client
         </div>
         <h1 className="text-2xl font-semibold tracking-tight">
-          {waitingForRuntime ? t.auth.runtimeTitle : t.auth.title}
+          {showRuntimeBootstrap ? t.auth.runtimeTitle : t.auth.title}
         </h1>
         <p className="mt-2 text-sm leading-6 text-(--dt-muted-foreground)">
-          {waitingForRuntime ? t.auth.runtimeDescription : t.auth.description}
+          {showRuntimeBootstrap ? t.auth.runtimeDescription : t.auth.description}
         </p>
 
         <div className="mt-5 rounded-lg border border-(--dt-border) bg-(--ui-sidebar-surface) px-4 py-3">
@@ -508,6 +510,7 @@ export function AuthGate({
           </div>
           <code className="mt-1 block break-all text-sm">{ACCOUNT_SERVER}</code>
         </div>
+        <p className="mt-3 text-xs leading-5 text-(--dt-muted-foreground)">{t.auth.traceNotice}</p>
 
         {showAuthBootstrap && authSnapshot ? (
           <AuthBootstrapProgress mode="auth" now={now} onRetry={authSnapshot.error ? retry : undefined} state={authSnapshot} />
@@ -517,26 +520,20 @@ export function AuthGate({
           <AuthBootstrapProgress
             mode="runtime"
             now={now}
-            onLogout={() => void logout()}
             onRetry={runtimeSnapshot.error ? retry : undefined}
             state={runtimeSnapshot}
           />
         ) : null}
 
-        {!showBootstrapProgress && (status.state === 'checking' || waitingForRuntime) ? (
+        {!showBootstrapProgress && status.state === 'checking' ? (
           <div className="mt-6 space-y-4">
             <p className="text-sm" role="status">
-              {waitingForRuntime ? t.auth.preparingFullRuntime : t.auth.checking}
+              {t.auth.checking}
             </p>
-            {waitingForRuntime ? (
-              <Button onClick={() => void logout()} size="inline" variant="text">
-                {t.auth.signOut}
-              </Button>
-            ) : null}
           </div>
         ) : null}
 
-        {!showBootstrapProgress && status.state !== 'checking' && !waitingForRuntime ? (
+        {!showBootstrapProgress && status.state !== 'checking' ? (
           <form className="mt-6 space-y-4" onSubmit={submit}>
             <label className="block text-sm font-medium">
               <span>{t.auth.username}</span>
@@ -588,13 +585,6 @@ export function AuthGate({
           </div>
         ) : null}
 
-        {waitingForRuntime && !showBootstrapProgress && status.state !== 'checking' ? (
-          <div className="mt-4">
-            <Button disabled={submitting} onClick={() => void logout()} size="inline" variant="text">
-              {t.auth.signOut}
-            </Button>
-          </div>
-        ) : null}
         <p className="mt-6 border-t border-(--dt-border) pt-4 text-xs leading-5 text-(--dt-muted-foreground)">
           {t.auth.administratorManaged}
         </p>

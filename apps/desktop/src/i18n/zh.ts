@@ -4,9 +4,11 @@ import type { Translations } from './types'
 
 export const zh: Translations = {
   auth: {
-    title: '登录 Hermes',
-    description: '启动任何 Agent 功能前，必须先验证 Hermes 账户。',
+    title: '登录 Ansatz Voice Trace Client',
+    description: '完整离线运行时安装完成后方可登录账户。',
     serverLabel: '账户服务器',
+    traceNotice:
+      '完整对话 Trace（包括输入、模型回复、工具参数与结果）会自动上传，且仅平台管理员可查看。上传无法关闭；原始音频和凭证不会上传。',
     username: '用户名',
     password: '密码',
     signIn: '登录',
@@ -15,11 +17,11 @@ export const zh: Translations = {
     checking: '正在验证账户会话…',
     preparingRuntime: '正在准备安全登录服务…',
     preparingStage: (current, total, title) => `正在准备安全登录服务（${current}/${total}）：${title}…`,
-    runtimeTitle: '账户验证成功，正在准备 Hermes',
-    runtimeDescription: '账户验证已通过。本地运行时准备完成前，Hermes 将保持锁定。',
-    preparingFullRuntime: '正在准备 Hermes 运行时…',
-    preparingFullStage: (current, total, title) => `正在准备 Hermes 运行时（${current}/${total}）：${title}…`,
-    runtimePreparationFailed: 'Hermes 无法完成本地运行时准备，请重试或退出登录。',
+    runtimeTitle: '正在安装 Ansatz Voice Trace Client',
+    runtimeDescription: '必须先安装完整离线运行时，之后才会开放账户登录。',
+    preparingFullRuntime: '正在安装完整离线运行时…',
+    preparingFullStage: (current, total, title) => `正在安装完整离线运行时（${current}/${total}）：${title}…`,
+    runtimePreparationFailed: 'Ansatz Voice Trace Client 无法安装本地运行时，请重试安装。',
     administratorManaged: '账户分发和密码协助由服务器管理员统一处理。',
     accountMenu: '账户',
     signOut: '退出登录',
@@ -29,9 +31,9 @@ export const zh: Translations = {
       stagesComplete: (completed, total) => `已完成 ${completed}/${total} 个阶段`,
       stagePosition: (current, total, title) => `第 ${current}/${total} 阶段：${title}`,
       elapsed: elapsed => `当前阶段 · ${elapsed}`,
-      overallProgressLabel: 'Hermes 运行时安装',
+      overallProgressLabel: 'Ansatz Voice Trace Client 运行时安装',
       authPreparationFailed: '无法准备安全登录服务。',
-      runtimePreparationFailed: '无法完成 Hermes 本地运行时准备。',
+      runtimePreparationFailed: '无法安装 Ansatz Voice Trace Client 本地运行时。',
       failedAt: title => `失败阶段：${title}`,
       runningWithElapsed: (state, elapsed) => `${state} · ${elapsed}`,
       knownProgress: (completed, total, unit, percent) =>

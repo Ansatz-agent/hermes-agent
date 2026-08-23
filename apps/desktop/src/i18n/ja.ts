@@ -4,9 +4,11 @@ import { defineLocale } from './define-locale'
 
 export const ja = defineLocale({
   auth: {
-    title: 'Hermes にサインイン',
-    description: 'Agent 機能を起動する前に Hermes アカウントの認証が必要です。',
+    title: 'Ansatz Voice Trace Client にサインイン',
+    description: '完全なオフラインランタイムのインストール後にアカウントへサインインできます。',
     serverLabel: 'アカウントサーバー',
+    traceNotice:
+      '入力、モデル応答、ツール引数・結果を含む完全な会話 Trace は自動的にアップロードされ、プラットフォーム管理者のみが閲覧できます。アップロードは無効にできません。生音声と認証情報は除外されます。',
     username: 'ユーザー名',
     password: 'パスワード',
     signIn: 'サインイン',
@@ -16,12 +18,12 @@ export const ja = defineLocale({
     preparingRuntime: '安全なサインインサービスを準備中…',
     preparingStage: (current, total, title) =>
       `安全なサインインサービスを準備中（${current}/${total}）：${title}…`,
-    runtimeTitle: 'アカウントを確認済み、Hermes を準備中',
-    runtimeDescription: 'アカウントの確認が完了しました。ローカルランタイムの準備が完了するまで Hermes はロックされます。',
-    preparingFullRuntime: 'Hermes ランタイムを準備中…',
+    runtimeTitle: 'Ansatz Voice Trace Client をインストール中',
+    runtimeDescription: 'アカウントのサインインを表示する前に、完全なオフラインランタイムをインストールします。',
+    preparingFullRuntime: '完全なオフラインランタイムをインストール中…',
     preparingFullStage: (current, total, title) =>
-      `Hermes ランタイムを準備中（${current}/${total}）：${title}…`,
-    runtimePreparationFailed: 'Hermes のローカルランタイムを準備できませんでした。再試行するかサインアウトしてください。',
+      `完全なオフラインランタイムをインストール中（${current}/${total}）：${title}…`,
+    runtimePreparationFailed: 'Ansatz Voice Trace Client のローカルランタイムをインストールできませんでした。再試行してください。',
     administratorManaged: 'アカウントの発行とパスワードの支援はサーバー管理者が行います。',
     accountMenu: 'アカウント',
     signOut: 'サインアウト',
@@ -31,9 +33,9 @@ export const ja = defineLocale({
       stagesComplete: (completed, total) => `${total} 段階中 ${completed} 段階が完了`,
       stagePosition: (current, total, title) => `${total} 段階中 ${current}：${title}`,
       elapsed: elapsed => `現在の段階 · ${elapsed}`,
-      overallProgressLabel: 'Hermes ランタイムのインストール',
+      overallProgressLabel: 'Ansatz Voice Trace Client ランタイムのインストール',
       authPreparationFailed: '安全なサインインサービスを準備できませんでした。',
-      runtimePreparationFailed: 'Hermes のローカルランタイムを準備できませんでした。',
+      runtimePreparationFailed: 'Ansatz Voice Trace Client のローカルランタイムをインストールできませんでした。',
       failedAt: title => `失敗した段階：${title}`,
       runningWithElapsed: (state, elapsed) => `${state} · ${elapsed}`,
       knownProgress: (completed, total, unit, percent) =>

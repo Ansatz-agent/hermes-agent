@@ -14,13 +14,14 @@ const authenticated = {
   reason: null
 }
 
-test('renderer status requires authentication and full runtime readiness', async () => {
+test('renderer status reports installed runtime readiness across sign-in and sign-out', async () => {
   const gate = new DesktopRuntimeGate()
 
   assert.equal(gate.rendererStatus(authenticated).runtime_ready, false)
   await gate.prepare(async () => {})
   assert.equal(gate.rendererStatus(authenticated).runtime_ready, true)
-  assert.equal(gate.rendererStatus({ ...authenticated, state: 'signed_out' }).runtime_ready, false)
+  assert.equal(gate.rendererStatus({ ...authenticated, state: 'signed_out' }).runtime_ready, true)
+  assert.equal(gate.ready, true)
 })
 
 test('runtime preparation is single-flight', async () => {

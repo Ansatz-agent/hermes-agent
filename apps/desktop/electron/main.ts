@@ -31,11 +31,10 @@ import nodePty from 'node-pty'
 
 import { classifyActiveRuntime } from './active-runtime-state'
 import { ANSATZ_PRODUCT, resolveAnsatzRuntimeRoot } from './ansatz-product'
-import { AuthBridgeError, type BridgeStatus, DesktopAuthBridge } from './auth-bridge'
+import { AuthBridgeError, DesktopAuthBridge } from './auth-bridge'
 import { AuthCoordinator } from './auth-coordinator'
 import { isAuthRuntimeUsable } from './auth-runtime-contract'
 import { encodeScopeTokenRegistration, issueAuthScopeToken, sanitizeAuthChildEnvironment } from './auth-scope-token'
-import { runAuthenticatedRuntimePreparation } from './authenticated-runtime-preparation'
 import { stopBackendChild as stopBackendChildImpl, stopBackendTreesForUpdate } from './backend-child'
 import { dashboardFallbackArgs, sourceDeclaresServe } from './backend-command'
 import { createBackendConnectionState } from './backend-connection-state'
@@ -213,6 +212,7 @@ import { snapHudBounds } from './hud-snap'
 import { createHudSnapShortcut } from './hud-snap-shortcut'
 import { buildHudWindowUrl } from './hud-url'
 import { imageContextMenuItems } from './image-context-menu'
+import { prepareInstallFirstRuntime } from './install-first-runtime'
 import { createLinkTitleWindow, guardLinkTitleSession, readLinkTitleWindowTitle } from './link-title-window'
 import { ensureMainWindow } from './main-window-lifecycle'
 import { createMediaProtocolHandler, MEDIA_PROTOCOL } from './media-protocol'
@@ -343,7 +343,6 @@ import {
   writeSandboxMarker
 } from './windows-sandbox-fallback'
 import { installWindowsSystemCaTrust } from './windows-system-ca'
-import { readWindowsUserEnvVar } from './windows-user-env'
 import { isPackagedInstallPath as isPackagedInstallPathUnderRoots } from './workspace-cwd'
 import { readWslWindowsClipboardImage } from './wsl-clipboard-image'
 import { resolvePickerDefaultPath } from './wsl-path-bridge'
@@ -815,7 +814,7 @@ function desktopStatusForRenderer(status, connectionId = 'local') {
 function fullRuntimeBootstrapRequest(backendArgs = []) {
   return {
     kind: 'bootstrap-needed',
-    label: 'Hermes full runtime preparation required',
+    label: 'Ansatz Voice Trace Client full runtime installation required',
     command: null,
     args: backendArgs,
     bootstrap: true,
@@ -825,45 +824,20 @@ function fullRuntimeBootstrapRequest(backendArgs = []) {
     installStamp: INSTALL_STAMP,
     isPackaged: IS_PACKAGED,
     platform: process.platform,
-    reason: 'post-auth-runtime'
+    reason: 'install-first-runtime'
   }
 }
 
-async function prepareAuthenticatedDesktopRuntime(status: BridgeStatus) {
-  return runAuthenticatedRuntimePreparation({
-    observedStatus: status,
-    prepare: async () => {
-      await desktopRuntimeGate.prepare(async () => {
-        const candidate = resolveHermesBackend([])
-        const runtime = activeRuntimeState()
-        const authOnlyInstall = fs.existsSync(AUTH_BOOTSTRAP_COMPLETE_MARKER) && !runtime.hasValidMarker
+function resolveCompleteRuntimeBootstrapRequest() {
+  const candidate = resolveHermesBackend([])
+  const runtime = activeRuntimeState()
+  const authOnlyInstall = fs.existsSync(AUTH_BOOTSTRAP_COMPLETE_MARKER) && !runtime.hasValidMarker
 
-        if (candidate?.kind !== 'bootstrap-needed' && runtime.shouldUseActiveRuntime && !authOnlyInstall) {
-          return
-        }
+  if (candidate?.kind !== 'bootstrap-needed' && runtime.shouldUseActiveRuntime && !authOnlyInstall) {
+    return null
+  }
 
-        await ensureRuntime(candidate?.kind === 'bootstrap-needed' ? candidate : fullRuntimeBootstrapRequest(), {
-          scope: 'runtime'
-        })
-      })
-    },
-    currentStatus: () => desktopAuthCoordinator?.status('local') ?? null,
-    isAuthenticated: () => Boolean(desktopAuthCoordinator?.isAuthenticated('local')),
-    onCurrentReady: async currentStatus => {
-      enableDesktopCapabilityShell()
-      broadcastDesktopAuthStatus(currentStatus, 'local')
-
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        await startHermes()
-      }
-    },
-    onCurrentFailure: (error, currentStatus) => {
-      const failure = error as { code?: string; failedStage?: string }
-      const failureCode = failure?.failedStage || failure?.code || 'runtime-unavailable'
-      rememberLog(`[runtime] authenticated preparation failed: ${failureCode}`)
-      broadcastDesktopAuthStatus(currentStatus, 'local')
-    }
-  })
+  return candidate?.kind === 'bootstrap-needed' ? candidate : fullRuntimeBootstrapRequest()
 }
 
 async function startDesktopAuthRuntime() {
@@ -875,65 +849,56 @@ async function startDesktopAuthRuntime() {
     return desktopAuthStartupPromise
   }
 
-  const startup = (async () => {
-    const candidate = resolveHermesBackend([], { requirePythonModule: true })
+  const startup = prepareInstallFirstRuntime({
+    resolveBackend: resolveCompleteRuntimeBootstrapRequest,
+    ensureRuntime,
+    runtimeGate: desktopRuntimeGate,
+    startAuthBridge: async () => {
+      if (desktopAuthCoordinator) {
+        return
+      }
 
-    const packagedWindowsAuthReady =
-      IS_PACKAGED &&
-      IS_WINDOWS &&
-      isAuthRuntimeUsable({
-        activeRoot: ACTIVE_HERMES_ROOT,
-        bundledBootstrapRoot: BUNDLED_BOOTSTRAP_ROOT,
-        platform: process.platform,
-        requireLauncher: false
+      const bridge = createDesktopAuthBridge()
+
+      const coordinator = new AuthCoordinator(bridge, {
+        cleanup: cleanupDesktopCapabilities,
+        recoverBridge: recoverDesktopAuthBridge
       })
 
-    // A fresh packaged install may not have the canonical Python runtime yet.
-    // The signed bootstrap shell is the sole pre-auth executable exception: it
-    // installs the closed auth bridge, but never starts an Agent/backend.
-    if (!packagedWindowsAuthReady && candidate?.kind === 'bootstrap-needed') {
-      await ensureRuntime(candidate, { scope: 'auth' })
-    }
+      desktopAuthBridge = bridge
+      desktopAuthCoordinator = coordinator
+      coordinator.subscribe((status, connectionId) => {
+        broadcastDesktopAuthStatus(status, connectionId)
 
-    if (desktopAuthCoordinator) {
-      return
-    }
+        if (connectionId === 'local' && status.state === 'authenticated') {
+          enableDesktopCapabilityShell()
 
-    const bridge = createDesktopAuthBridge()
+          if (mainWindow && !mainWindow.isDestroyed()) {
+            void startHermes().catch(error => {
+              const failureCode = error?.code || 'backend-start-failed'
+              rememberLog(`[runtime] authenticated backend start failed: ${failureCode}`)
+            })
+          }
+        }
+      })
 
-    const coordinator = new AuthCoordinator(bridge, {
-      cleanup: cleanupDesktopCapabilities,
-      recoverBridge: recoverDesktopAuthBridge
-    })
+      try {
+        await coordinator.start()
+      } catch (error) {
+        if (desktopAuthCoordinator === coordinator) {
+          desktopAuthCoordinator = null
+        }
 
-    desktopAuthBridge = bridge
-    desktopAuthCoordinator = coordinator
-    coordinator.subscribe((status, connectionId) => {
-      broadcastDesktopAuthStatus(status, connectionId)
+        if (desktopAuthBridge === bridge) {
+          desktopAuthBridge = null
+        }
 
-      if (connectionId === 'local' && status.state === 'authenticated') {
-        void prepareAuthenticatedDesktopRuntime(status)
-      } else if (connectionId === 'local') {
-        desktopRuntimeGate.invalidate()
+        coordinator.stop()
+        bridge.close()
+        throw error
       }
-    })
-
-    try {
-      await coordinator.start()
-    } catch (error) {
-      if (desktopAuthCoordinator === coordinator) {
-        desktopAuthCoordinator = null
-      }
-
-      if (desktopAuthBridge === bridge) {
-        desktopAuthBridge = null
-      }
-
-      coordinator.stop()
-      bridge.close()
-      throw error
     }
-  })()
+  })
 
   desktopAuthStartupPromise = startup
 
@@ -1058,8 +1023,6 @@ async function cleanupDesktopCapabilities(connectionId = 'local') {
 
     return
   }
-
-  desktopRuntimeGate.invalidate()
 
   if (bootstrapAbortController) {
     bootstrapAbortController.abort()
@@ -14961,9 +14924,9 @@ app.whenReady().then(async () => {
   configureSpellChecker()
 
   // Create only the inert renderer shell first so a fresh install can display
-  // signed bootstrap progress. startDesktopAuthRuntime may install/start the
-  // closed auth bridge, but no Hermes backend can cross startHermes before a
-  // validated account scope exists.
+  // signed full-runtime progress. startDesktopAuthRuntime installs the complete
+  // packaged runtime before it starts the closed auth bridge; no backend can
+  // cross startHermes before a validated account scope exists.
   createWindow()
   await startDesktopAuthRuntime().catch(error => {
     const failureCode = error?.failedStage || error?.code || 'auth-runtime-unavailable'

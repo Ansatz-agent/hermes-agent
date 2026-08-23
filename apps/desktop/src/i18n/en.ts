@@ -4,9 +4,11 @@ import type { Translations } from './types'
 
 export const en: Translations = {
   auth: {
-    title: 'Sign in to Hermes',
-    description: 'Your Hermes account is required before any agent feature can start.',
+    title: 'Sign in to Ansatz Voice Trace Client',
+    description: 'Sign in after the complete offline runtime has been installed.',
     serverLabel: 'Account server',
+    traceNotice:
+      'Complete conversation Traces—including prompts, model replies, and tool arguments/results—are uploaded automatically for platform administrators only. Upload cannot be disabled. Raw audio and credentials are excluded.',
     username: 'Username',
     password: 'Password',
     signIn: 'Sign in',
@@ -15,11 +17,11 @@ export const en: Translations = {
     checking: 'Checking your account session…',
     preparingRuntime: 'Preparing the secure sign-in service…',
     preparingStage: (current, total, title) => `Preparing the secure sign-in service (${current}/${total}): ${title}…`,
-    runtimeTitle: 'Account verified, preparing Hermes',
-    runtimeDescription: 'Your account is verified. Hermes will remain locked until its local runtime is ready.',
-    preparingFullRuntime: 'Preparing Hermes runtime…',
-    preparingFullStage: (current, total, title) => `Preparing Hermes runtime (${current}/${total}): ${title}…`,
-    runtimePreparationFailed: 'Hermes could not prepare its local runtime. Retry or sign out.',
+    runtimeTitle: 'Installing Ansatz Voice Trace Client',
+    runtimeDescription: 'The complete offline runtime is installed before account sign-in becomes available.',
+    preparingFullRuntime: 'Installing the complete offline runtime…',
+    preparingFullStage: (current, total, title) => `Installing the complete offline runtime (${current}/${total}): ${title}…`,
+    runtimePreparationFailed: 'Ansatz Voice Trace Client could not install its local runtime. Retry installation.',
     administratorManaged: 'Accounts and password assistance are managed by the server administrator.',
     accountMenu: 'Account',
     signOut: 'Sign out',
@@ -29,9 +31,9 @@ export const en: Translations = {
       stagesComplete: (completed, total) => `${completed} of ${total} stages complete`,
       stagePosition: (current, total, title) => `Stage ${current} of ${total}: ${title}`,
       elapsed: elapsed => `Current stage · ${elapsed}`,
-      overallProgressLabel: 'Hermes runtime installation',
+      overallProgressLabel: 'Ansatz Voice Trace Client runtime installation',
       authPreparationFailed: 'Hermes could not prepare the secure sign-in service.',
-      runtimePreparationFailed: 'Hermes could not prepare its local runtime.',
+      runtimePreparationFailed: 'Ansatz Voice Trace Client could not install its local runtime.',
       failedAt: title => `Failed at: ${title}`,
       runningWithElapsed: (state, elapsed) => `${state} · ${elapsed}`,
       knownProgress: (completed, total, unit, percent) =>

@@ -16,7 +16,7 @@ export class DesktopRuntimeGate {
   rendererStatus<T extends { state: string }>(status: T): T & { runtime_ready: boolean } {
     return {
       ...status,
-      runtime_ready: status.state === 'authenticated' && this.ready
+      runtime_ready: this.ready
     }
   }
 

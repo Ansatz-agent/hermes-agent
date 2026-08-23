@@ -35,12 +35,14 @@ function renderGate({
   overlay?: ReactNode
 } = {}) {
   let changed: ((next: DesktopAccountStatus) => void) | null = null
+
   const auth = {
     status,
     login: vi.fn(async () => authenticated),
     logout: vi.fn(async () => signedOut),
     onChanged: vi.fn(callback => {
       changed = callback
+
       return () => {
         changed = null
       }
@@ -62,7 +64,7 @@ describe('Task 4 final-DMG auth UI contract', () => {
   it('mounts the fixed login surface before any protected bootstrap overlay', async () => {
     renderGate()
 
-    expect(await screen.findByRole('heading', { name: 'Sign in to Hermes' })).not.toBeNull()
+    expect(await screen.findByRole('heading', { name: 'Sign in to Ansatz Voice Trace Client' })).not.toBeNull()
     expect(screen.queryByText('Protected bootstrap overlay')).toBeNull()
     expect(screen.queryByText('Protected Hermes application')).toBeNull()
   })
@@ -70,14 +72,14 @@ describe('Task 4 final-DMG auth UI contract', () => {
   it('does not expose Retry while an account status request is still pending', async () => {
     renderGate({ status: vi.fn(() => new Promise<DesktopAccountStatus>(() => {})) })
 
-    expect(await screen.findByRole('heading', { name: 'Sign in to Hermes' })).not.toBeNull()
+    expect(await screen.findByRole('heading', { name: 'Sign in to Ansatz Voice Trace Client' })).not.toBeNull()
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
   })
 
   it('keeps authenticated users locked until the full runtime is ready', async () => {
     const { emit } = renderGate()
 
-    await screen.findByRole('heading', { name: 'Sign in to Hermes' })
+    await screen.findByRole('heading', { name: 'Sign in to Ansatz Voice Trace Client' })
     act(() => emit(authenticated as DesktopAccountStatus))
 
     expect(screen.queryByText('Protected Hermes application')).toBeNull()
