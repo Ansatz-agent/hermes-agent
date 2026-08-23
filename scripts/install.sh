@@ -1048,10 +1048,16 @@ check_node() {
     # Prefer a Hermes-managed Node from a previous run over a too-old system one.
     if [ -x "$HERMES_HOME/node/bin/node" ] && [ -x "$HERMES_HOME/node/bin/npm" ] \
         && node_satisfies_build "$("$HERMES_HOME/node/bin/node" --version)"; then
-        export PATH="$HERMES_HOME/node/bin:$PATH"
-        log_success "Node.js $("$HERMES_HOME/node/bin/node" --version) found (Hermes-managed)"
-        HAS_NODE=true
-        return 0
+        local managed_npm_version
+        managed_npm_version="$("$HERMES_HOME/node/bin/npm" --version 2>/dev/null)"
+        if npm_supports_npmrc "$managed_npm_version"; then
+            export PATH="$HERMES_HOME/node/bin:$PATH"
+            log_success "Node.js $("$HERMES_HOME/node/bin/node" --version) found (Hermes-managed)"
+            HAS_NODE=true
+            return 0
+        fi
+        log_warn "npm $managed_npm_version cannot honor this repo's .npmrc (npm 11.10-11.16 ignore"
+        log_warn "min-release-age-exclude) — replacing Hermes-managed Node $NODE_VERSION..."
     fi
 
     if command -v node &> /dev/null && ! command -v npm &> /dev/null; then
