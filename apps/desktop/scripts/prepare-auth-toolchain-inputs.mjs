@@ -560,29 +560,41 @@ export function prepareAuthToolchainInputs({
   }
 }
 
-export function findUv(env, projectRoot) {
+export function findUv(
+  env,
+  projectRoot,
+  {
+    platform = process.platform,
+    execute = defaultExecute,
+    existsSync = fs.existsSync,
+    homeDir = os.homedir()
+  } = {}
+) {
+  const pathApi = platform === 'win32' ? path.win32 : path
+  const executable = platform === 'win32' ? 'uv.exe' : 'uv'
+  const userHome = platform === 'win32' ? env.USERPROFILE : (env.HOME || homeDir)
   const candidates = [
     env.HERMES_AUTH_TOOLCHAIN_UV_PATH,
-    env.HERMES_HOME ? path.join(env.HERMES_HOME, 'bin', 'uv') : null,
-    path.join(os.homedir(), '.hermes', 'bin', 'uv')
+    env.HERMES_HOME ? pathApi.join(env.HERMES_HOME, 'bin', executable) : null,
+    userHome ? pathApi.join(userHome, '.hermes', 'bin', executable) : null
   ].filter(Boolean)
 
   for (const candidate of candidates) {
-    if (path.isAbsolute(candidate) && fs.existsSync(candidate)) {
+    if (pathApi.isAbsolute(candidate) && existsSync(candidate)) {
       return candidate
     }
   }
 
   try {
-    const candidate = String(defaultExecute('/usr/bin/which', ['uv'])).trim()
-    if (path.isAbsolute(candidate) && fs.existsSync(candidate)) {
-      return candidate
+    const command = platform === 'win32' ? 'where.exe' : '/usr/bin/which'
+    for (const candidate of String(execute(command, ['uv'])).split(/\r?\n/).filter(Boolean)) {
+      if (pathApi.isAbsolute(candidate) && existsSync(candidate)) return candidate
     }
   } catch {
     void 0
   }
 
-  throw new Error(`uv ${UV_VERSION} was not found for the DMG build at ${projectRoot}`)
+  throw new Error(`uv ${UV_VERSION} was not found for the ${platform} package build at ${projectRoot}`)
 }
 
 export function findManagedPython(uvPath, version, execute = defaultExecute) {

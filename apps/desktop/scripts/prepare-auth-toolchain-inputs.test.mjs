@@ -9,6 +9,7 @@ import {
   buildAuthLockEnvironment,
   buildAuthPayloadEnvironment,
   findManagedPython,
+  findUv,
   prepareAuthToolchainInputs
 } from './prepare-auth-toolchain-inputs.mjs'
 
@@ -55,6 +56,27 @@ test('managed Python discovery ignores the project venv and resolves interpreter
     command: '/opt/hermes/uv',
     args: ['python', 'find', '--no-project', '--managed-python', '--resolve-links', '3.11']
   }])
+})
+
+test('Windows uv discovery resolves uv.exe from the host PATH', () => {
+  const calls = []
+  const uvPath = 'C:\\hostedtoolcache\\uv\\0.12.5\\x64\\uv.exe'
+
+  const result = findUv(
+    { USERPROFILE: 'C:\\Users\\runneradmin' },
+    'C:\\repo',
+    {
+      platform: 'win32',
+      existsSync: candidate => candidate === uvPath,
+      execute: (command, args) => {
+        calls.push({ command, args })
+        return `${uvPath}\r\n`
+      }
+    }
+  )
+
+  assert.equal(result, uvPath)
+  assert.deepEqual(calls, [{ command: 'where.exe', args: ['uv'] }])
 })
 
 function makeFixture() {
