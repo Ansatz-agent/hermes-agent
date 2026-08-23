@@ -1,0 +1,234 @@
+import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import http from 'node:http'
+
+import { test } from 'vitest'
+
+import {
+  RefreshingTraceCredentialProvider,
+  type TraceCredentialSource,
+  TraceForwarder
+} from './trace-forwarder'
+
+const installationId = '11111111-1111-4111-8111-111111111111'
+const protobuf = Buffer.from([0x0a, 0x03, 0x01, 0x02, 0x03])
+
+async function post(
+  endpoint: string,
+  localBearer: string,
+  overrides: { body?: Buffer; headers?: Record<string, string> } = {}
+) {
+  const target = new URL(endpoint)
+  const body = overrides.body ?? protobuf
+
+  const headers = {
+    authorization: `Bearer ${localBearer}`,
+    'content-type': 'application/x-protobuf',
+    'x-hermes-session-id': 'session-1',
+    'x-trace-entrypoint': 'desktop',
+    'x-trace-run-id': 'run-1',
+    'x-telemetry-schema-version': '1',
+    ...overrides.headers
+  }
+
+  return new Promise<{ body: Buffer; status: number }>((resolve, reject) => {
+    const request = http.request(
+      {
+        hostname: target.hostname,
+        port: target.port,
+        path: target.pathname,
+        method: 'POST',
+        headers
+      },
+      response => {
+        const chunks: Buffer[] = []
+
+        response.on('data', chunk => chunks.push(Buffer.from(chunk)))
+        response.on('end', () =>
+          resolve({ body: Buffer.concat(chunks), status: response.statusCode ?? 0 })
+        )
+      }
+    )
+
+    request.on('error', reject)
+    request.end(body)
+  })
+}
+
+async function waitFor(predicate: () => boolean) {
+  const deadline = Date.now() + 2_000
+
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      assert.fail('timed out waiting for forwarder')
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 5))
+  }
+}
+
+function credentialSource(): TraceCredentialSource & { calls: boolean[] } {
+  return {
+    calls: [],
+    async load(forceRefresh) {
+      this.calls.push(forceRefresh)
+
+      return {
+        access_token: forceRefresh
+          ? 'public-trace-token-refreshed-1234567890'
+          : 'public-trace-token-initial-1234567890',
+        expires_at: '2099-08-23T14:15:00+00:00',
+        expires_in: 900,
+        installation_id: installationId
+      }
+    }
+  }
+}
+
+test('credential provider caches until 60 seconds before expiry and supports forced rotation', async () => {
+  let now = Date.parse('2099-08-23T14:00:00+00:00')
+  const source = credentialSource()
+  const provider = new RefreshingTraceCredentialProvider(source, { clock: () => now })
+
+  const first = await provider.current()
+  assert.equal(await provider.current(), first)
+  now = Date.parse(first.expires_at) - 60_000
+  await provider.current()
+  await provider.current({ forceRefresh: true })
+
+  assert.deepEqual(source.calls, [false, false, true])
+})
+
+test('loopback forwarder accepts exact protobuf and adds only the public bearer upstream', async () => {
+  const source = credentialSource()
+  const calls: Array<{ body: Buffer; headers: Headers }> = []
+
+  const forwarder = new TraceForwarder({
+    credentialProvider: new RefreshingTraceCredentialProvider(source),
+    fetchImpl: async (_input, init) => {
+      calls.push({ body: Buffer.from(init?.body as Buffer), headers: new Headers(init?.headers) })
+
+      return new Response(Buffer.alloc(0), {
+        status: 200,
+        headers: { 'content-type': 'application/x-protobuf' }
+      })
+    },
+    installationId
+  })
+
+  const started = await forwarder.start(7)
+
+  try {
+    const response = await post(started.endpoint, started.localBearer)
+    assert.equal(response.status, 200)
+    await waitFor(() => calls.length === 1)
+    assert.deepEqual(calls[0].body, protobuf)
+    assert.equal(calls[0].headers.get('authorization'), 'Bearer public-trace-token-initial-1234567890')
+    assert.equal(calls[0].headers.get('x-hermes-session-id'), 'session-1')
+    assert.equal(calls[0].headers.get('x-trace-run-id'), 'run-1')
+    assert.equal(calls[0].headers.has('x-local-authorization'), false)
+  } finally {
+    await forwarder.stop({ flushMs: 3_000 })
+  }
+})
+
+test('one upstream 401 forces one credential refresh and resends identical bytes once', async () => {
+  const source = credentialSource()
+  const bodies: Buffer[] = []
+  const authorizations: string[] = []
+
+  const forwarder = new TraceForwarder({
+    credentialProvider: new RefreshingTraceCredentialProvider(source),
+    fetchImpl: async (_input, init) => {
+      bodies.push(Buffer.from(init?.body as Buffer))
+      authorizations.push(new Headers(init?.headers).get('authorization') ?? '')
+
+      return new Response(Buffer.alloc(0), { status: bodies.length === 1 ? 401 : 200 })
+    },
+    installationId
+  })
+
+  const started = await forwarder.start(7)
+
+  try {
+    assert.equal((await post(started.endpoint, started.localBearer)).status, 200)
+    await waitFor(() => bodies.length === 2)
+    assert.deepEqual(bodies[0], bodies[1])
+    assert.deepEqual(authorizations, [
+      'Bearer public-trace-token-initial-1234567890',
+      'Bearer public-trace-token-refreshed-1234567890'
+    ])
+    assert.deepEqual(source.calls, [false, true])
+  } finally {
+    await forwarder.stop({ flushMs: 3_000 })
+  }
+})
+
+test('HTTP boundary rejects remote peers, bad local auth, media drift, encoding, oversize, and stale epoch', async () => {
+  let remoteAddress = '127.0.0.1'
+  let upstreamCalls = 0
+
+  const forwarder = new TraceForwarder({
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource()),
+    fetchImpl: async () => {
+      upstreamCalls += 1
+
+      return new Response(Buffer.alloc(0), { status: 200 })
+    },
+    installationId,
+    remoteAddressForRequest: () => remoteAddress
+  })
+
+  const first = await forwarder.start(7)
+
+  remoteAddress = '192.0.2.10'
+  assert.equal((await post(first.endpoint, first.localBearer)).status, 403)
+  remoteAddress = '127.0.0.1'
+  assert.equal((await post(first.endpoint, 'wrong-local-bearer')).status, 401)
+  assert.equal(
+    (await post(first.endpoint, first.localBearer, { headers: { 'content-type': 'application/json' } })).status,
+    415
+  )
+  assert.equal(
+    (await post(first.endpoint, first.localBearer, { headers: { 'content-encoding': 'gzip' } })).status,
+    415
+  )
+  assert.equal(
+    (await post(first.endpoint, first.localBearer, { body: Buffer.alloc(8 * 1024 * 1024 + 1) })).status,
+    413
+  )
+  await forwarder.stop({ flushMs: 0 })
+
+  const second = await forwarder.start(8)
+
+  try {
+    assert.equal((await post(second.endpoint, first.localBearer)).status, 401)
+    assert.equal(upstreamCalls, 0)
+  } finally {
+    await forwarder.stop({ flushMs: 0 })
+  }
+})
+
+test('desktop lifecycle starts Trace before local spawn and flushes it before backend teardown', () => {
+  const source = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
+  const prepareStart = source.indexOf('prepareLocalBackend: async () => {')
+  const prepareEnd = source.indexOf('resolveRemote:', prepareStart)
+  const prepare = source.slice(prepareStart, prepareEnd)
+
+  assert.ok(prepareStart >= 0)
+  assert.ok(
+    prepare.indexOf('await ensureDesktopTraceForwarder(connectionScope)') <
+      prepare.indexOf('return resolveHermesBackend(backendArgs)')
+  )
+
+  const cleanupStart = source.indexOf("async function cleanupDesktopCapabilities(connectionId = 'local')")
+  const cleanupEnd = source.indexOf('function enableDesktopCapabilityShell()', cleanupStart)
+  const cleanup = source.slice(cleanupStart, cleanupEnd)
+
+  assert.ok(cleanupStart >= 0)
+  assert.ok(
+    cleanup.indexOf('await stopDesktopTraceForwarder(3_000)') <
+      cleanup.indexOf('teardownPrimaryBackendAndWait({ soft: true })')
+  )
+  assert.match(source, /trace: desktopTraceContext/)
+})

@@ -316,6 +316,11 @@ def _build_provider_env_blocklist() -> frozenset:
         "GATEWAY_RELAY_ID",
         "GATEWAY_RELAY_SECRET",
         "GATEWAY_RELAY_DELIVERY_KEY",
+        "ANSATZ_TRACE_LOCAL_AUTHORIZATION",
+        "ANSATZ_TRACE_LOCAL_ENDPOINT",
+        "ANSATZ_TRACE_INSTALLATION_ID",
+        "ANSATZ_TRACE_ENTRYPOINT",
+        "HERMES_NEMO_RELAY_PLUGINS_TOML",
         "VERCEL_OIDC_TOKEN",
         "VERCEL_TOKEN",
         "VERCEL_PROJECT_ID",
@@ -383,6 +388,14 @@ def _is_hermes_internal_secret(key: str) -> bool:
     a model-driving CLI legitimately needs matches these patterns.
     """
     upper = key.upper()
+    if upper in {
+        "ANSATZ_TRACE_LOCAL_AUTHORIZATION",
+        "ANSATZ_TRACE_LOCAL_ENDPOINT",
+        "ANSATZ_TRACE_INSTALLATION_ID",
+        "ANSATZ_TRACE_ENTRYPOINT",
+        "HERMES_NEMO_RELAY_PLUGINS_TOML",
+    }:
+        return True
     if upper.startswith("AUXILIARY_") and (
         upper.endswith("_API_KEY") or upper.endswith("_BASE_URL")
     ):
@@ -561,6 +574,11 @@ _ALWAYS_STRIP_KEYS: frozenset[str] = frozenset({
     "GATEWAY_RELAY_ID",
     "GATEWAY_RELAY_SECRET",
     "GATEWAY_RELAY_DELIVERY_KEY",
+    "ANSATZ_TRACE_LOCAL_AUTHORIZATION",
+    "ANSATZ_TRACE_LOCAL_ENDPOINT",
+    "ANSATZ_TRACE_INSTALLATION_ID",
+    "ANSATZ_TRACE_ENTRYPOINT",
+    "HERMES_NEMO_RELAY_PLUGINS_TOML",
     "HASS_TOKEN",
     "EMAIL_PASSWORD",
     "HERMES_DASHBOARD_SESSION_TOKEN",

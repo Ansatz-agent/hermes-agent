@@ -280,6 +280,7 @@ import {
 } from './ssh-connection'
 import { createStreamThrottle } from './stream-throttle'
 import { nativeOverlayWidth as computeNativeOverlayWidth, macTitleBarOverlayHeight } from './titlebar-overlay-width'
+import { RefreshingTraceCredentialProvider, TraceForwarder } from './trace-forwarder'
 import {
   compareApiUrl,
   parseCompareBehindCount,
@@ -1027,6 +1028,10 @@ async function cleanupDesktopCapabilities(connectionId = 'local') {
   if (bootstrapAbortController) {
     bootstrapAbortController.abort()
   }
+
+  // Reject new local Trace batches, flush the old auth epoch for at most
+  // three seconds, and clear its credentials before stopping its backend.
+  await stopDesktopTraceForwarder(3_000)
 
   desktopCapabilityShellEnabled = false
   Menu.setApplicationMenu(null)
@@ -4544,7 +4549,8 @@ function createPythonBackend(root, label, backendArgs, options: any = {}) {
     env: buildDesktopBackendEnv({
       hermesHome: HERMES_HOME,
       pythonPathEntries: [root, ...getVenvSitePackagesEntries(venvRoot)],
-      venvRoot
+      venvRoot,
+      trace: desktopTraceContext
     }),
     root,
     bootstrap: Boolean(options.bootstrap),
@@ -4568,7 +4574,8 @@ function createActiveBackend(backendArgs) {
     env: buildDesktopBackendEnv({
       hermesHome: HERMES_HOME,
       pythonPathEntries: [ACTIVE_HERMES_ROOT, ...getVenvSitePackagesEntries(VENV_ROOT)],
-      venvRoot: VENV_ROOT
+      venvRoot: VENV_ROOT,
+      trace: desktopTraceContext
     }),
     root: ACTIVE_HERMES_ROOT,
     bootstrap: true,
@@ -8809,6 +8816,127 @@ const sshConnections = new Map<string, any>()
 const sshAuthBridges = new Map<string, any>()
 const desktopInstallationId = loadOrCreateInstallationId(DESKTOP_INSTALLATION_PATH)
 
+const DESKTOP_TRACE_PLUGINS_TOML = IS_PACKAGED
+  ? path.join(process.resourcesPath, 'ansatz-voice-trace', 'plugins.toml')
+  : path.join(SOURCE_REPO_ROOT, 'config', 'ansatz-voice-trace', 'plugins.toml')
+
+let desktopTraceContext = null
+let desktopTraceForwarder = null
+let desktopTraceGeneration = 0
+let desktopTraceStartupPromise = null
+
+async function ensureDesktopTraceForwarder(scope) {
+  if (desktopTraceContext && sameConnectionScope(desktopTraceContext.scope, scope)) {
+    return desktopTraceContext
+  }
+
+  if (desktopTraceStartupPromise) {
+    await desktopTraceStartupPromise
+
+    if (desktopTraceContext && sameConnectionScope(desktopTraceContext.scope, scope)) {
+      return desktopTraceContext
+    }
+  }
+
+  const generation = ++desktopTraceGeneration
+
+  const startup = (async () => {
+    const previous = desktopTraceForwarder
+
+    desktopTraceForwarder = null
+    desktopTraceContext = null
+
+    if (previous) {
+      await previous.stop({ flushMs: 0 })
+    }
+
+    const provider = new RefreshingTraceCredentialProvider({
+      load: async () => {
+        const bridge = desktopAuthBridge
+        const currentScope = desktopAuthCoordinator?.scope('local')
+
+        if (!bridge || !sameConnectionScope(currentScope, scope)) {
+          throw new AuthBridgeError('auth_required', 'session_rejected')
+        }
+
+        const credential = await bridge.traceToken({
+          installation_id: desktopInstallationId,
+          client_version: app.getVersion(),
+          telemetry_schema_version: '1'
+        })
+
+        if (
+          generation !== desktopTraceGeneration ||
+          !sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope)
+        ) {
+          throw new AuthBridgeError('auth_required', 'session_rejected')
+        }
+
+        return credential
+      }
+    })
+
+    // Authentication is not backend-ready until a current upload credential
+    // exists. The public token remains owned by Electron main.
+    await provider.current()
+
+    if (
+      generation !== desktopTraceGeneration ||
+      !sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope)
+    ) {
+      throw new AuthBridgeError('auth_required', 'session_rejected')
+    }
+
+    const forwarder = new TraceForwarder({
+      credentialProvider: provider,
+      installationId: desktopInstallationId
+    })
+
+    const started = await forwarder.start(scope.epoch)
+
+    if (
+      generation !== desktopTraceGeneration ||
+      !sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope)
+    ) {
+      await forwarder.stop({ flushMs: 0 })
+      throw new AuthBridgeError('auth_required', 'session_rejected')
+    }
+
+    desktopTraceForwarder = forwarder
+    desktopTraceContext = {
+      endpoint: started.endpoint,
+      installationId: desktopInstallationId,
+      localAuthorization: `Bearer ${started.localBearer}`,
+      pluginsToml: DESKTOP_TRACE_PLUGINS_TOML,
+      scope: { ...scope }
+    }
+
+    return desktopTraceContext
+  })()
+
+  desktopTraceStartupPromise = startup
+
+  try {
+    return await startup
+  } finally {
+    if (desktopTraceStartupPromise === startup) {
+      desktopTraceStartupPromise = null
+    }
+  }
+}
+
+async function stopDesktopTraceForwarder(flushMs = 3_000) {
+  desktopTraceGeneration += 1
+  const forwarder = desktopTraceForwarder
+
+  desktopTraceForwarder = null
+  desktopTraceContext = null
+
+  if (forwarder) {
+    await forwarder.stop({ flushMs })
+  }
+}
+
 const sshBootstrapCoordinator = createBootstrapCoordinator()
 
 let sshQuitTeardownDone = false
@@ -10092,6 +10220,7 @@ async function spawnPoolBackend(profile, entry) {
 
   const connectionScope = await requireDesktopConnectionScope()
   const scopeToken = issueAuthScopeToken(connectionScope)
+  await ensureDesktopTraceForwarder(connectionScope)
 
   // Same update mutual exclusion as the primary window's waitForLocalStart
   // (#73822): pool backends spawn from the same venv, so an ungated respawn
@@ -10267,6 +10396,7 @@ function stopAllPoolBackends() {
 }
 
 const backendShutdown = createBackendShutdownCoordinator(async () => {
+  await stopDesktopTraceForwarder(3_000)
   const primary = backendConnectionState.invalidate()
   const pooled = [...backendPool.values()].map(entry => entry.process).filter(Boolean)
 
@@ -10428,6 +10558,7 @@ async function startHermes() {
       ensureLocalRuntime: ensureRuntime,
       prepareLocalBackend: async () => {
         await advanceBootProgress('backend.runtime', 'Resolving Hermes runtime', 28)
+        await ensureDesktopTraceForwarder(connectionScope)
 
         return resolveHermesBackend(backendArgs)
       },

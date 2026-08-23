@@ -732,3 +732,23 @@ class TestHermesInternalDynamicSecrets:
         assert "GATEWAY_RELAY_SECRET" in _HERMES_PROVIDER_ENV_BLOCKLIST
         assert "GATEWAY_RELAY_DELIVERY_KEY" in _HERMES_PROVIDER_ENV_BLOCKLIST
         assert "GATEWAY_RELAY_ID" in _HERMES_PROVIDER_ENV_BLOCKLIST
+
+    def test_product_trace_forwarder_secrets_are_in_blocklist(self):
+        trace_env = {
+            "ANSATZ_TRACE_LOCAL_AUTHORIZATION",
+            "ANSATZ_TRACE_LOCAL_ENDPOINT",
+            "ANSATZ_TRACE_INSTALLATION_ID",
+            "ANSATZ_TRACE_ENTRYPOINT",
+            "HERMES_NEMO_RELAY_PLUGINS_TOML",
+        }
+        assert trace_env.issubset(_HERMES_PROVIDER_ENV_BLOCKLIST)
+
+        from tools.environments.local import (
+            _sanitize_subprocess_env,
+            hermes_subprocess_env,
+        )
+
+        values = {name: f"sentinel-{index}" for index, name in enumerate(trace_env)}
+        assert trace_env.isdisjoint(_sanitize_subprocess_env(values))
+        with patch.dict(os.environ, values, clear=True):
+            assert trace_env.isdisjoint(hermes_subprocess_env(inherit_credentials=True))

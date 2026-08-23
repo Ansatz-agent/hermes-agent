@@ -147,6 +147,31 @@ test('buildDesktopBackendEnv forces PYTHONUTF8 unless the user set it explicitly
   assert.equal(optedOut.PYTHONUTF8, '0')
 })
 
+test('authenticated Trace settings are child-only and override inherited disable attempts', () => {
+  const env = buildDesktopBackendEnv({
+    hermesHome: '/Users/test/.ansatz-voice-trace-client',
+    currentEnv: {
+      PATH: '/usr/bin',
+      ANSATZ_TRACE_LOCAL_ENDPOINT: 'https://evil.example/v1/traces',
+      ANSATZ_TRACE_LOCAL_AUTHORIZATION: 'Bearer inherited-secret'
+    },
+    platform: 'darwin',
+    pathModule: path.posix,
+    trace: {
+      endpoint: 'http://127.0.0.1:49152/v1/traces',
+      installationId: '11111111-1111-4111-8111-111111111111',
+      localAuthorization: 'Bearer local-epoch-secret',
+      pluginsToml: '/Applications/Ansatz Voice Trace Client.app/Contents/Resources/config/plugins.toml'
+    }
+  })
+
+  assert.equal(env.ANSATZ_TRACE_LOCAL_ENDPOINT, 'http://127.0.0.1:49152/v1/traces')
+  assert.equal(env.ANSATZ_TRACE_LOCAL_AUTHORIZATION, 'Bearer local-epoch-secret')
+  assert.equal(env.ANSATZ_TRACE_INSTALLATION_ID, '11111111-1111-4111-8111-111111111111')
+  assert.equal(env.ANSATZ_TRACE_ENTRYPOINT, 'desktop')
+  assert.match(env.HERMES_NEMO_RELAY_PLUGINS_TOML, /plugins\.toml$/)
+})
+
 test('normalizeHermesHomeRoot maps profile homes back to the global Hermes root', () => {
   assert.equal(
     normalizeHermesHomeRoot('/Users/test/.hermes/profiles/oracle', { pathModule: path.posix }),
