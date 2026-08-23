@@ -8355,6 +8355,7 @@ class AIAgent:
         task_started = False
         task_finished = False
         relay_outcome = "failed"
+        relay_assistant_output = None
 
         def _stop_durable_turn_lease_refresher() -> None:
             nonlocal durable_turn_lease_turn_active
@@ -8626,6 +8627,7 @@ class AIAgent:
                 relay_lease,
                 turn_id=relay_turn_id,
                 task_id=effective_task_id,
+                user_input=user_message,
             )
             # Keep existing tests and external relay-runtime shims that return
             # a minimal turn object compatible with the new opt-out flag.
@@ -8683,6 +8685,8 @@ class AIAgent:
                     # outer finally: a refresher firing between stop and join
                     # would otherwise set an interrupt that survives the clear.
             terminal = result if isinstance(result, dict) else {}
+            if terminal.get("final_response") is not None:
+                relay_assistant_output = terminal["final_response"]
             if terminal.get("interrupted") is True:
                 relay_outcome = "cancelled"
             elif terminal.get("failed") is True:
@@ -8716,9 +8720,11 @@ class AIAgent:
         finally:
             try:
                 if relay_turn is not None:
+                    end_turn_kwargs = {"outcome": relay_outcome}
+                    if relay_assistant_output is not None:
+                        end_turn_kwargs["assistant_output"] = relay_assistant_output
                     relay_runtime.SESSION_COORDINATOR.end_turn(
-                        relay_turn,
-                        outcome=relay_outcome,
+                        relay_turn, **end_turn_kwargs
                     )
             finally:
                 try:

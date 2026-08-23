@@ -2,6 +2,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto'
 import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 
 import type { TraceCredential } from './auth-bridge'
+import { deriveOtlpCorrelation } from './otlp-correlation'
 import {
   TraceForwarderQueue,
   type TraceForwarderQueueSummary,
@@ -232,16 +233,16 @@ export class TraceForwarder {
         return respond(response, 413)
       }
 
-      const metadata = traceMetadata(request)
-
-      if (!metadata) {
-        return respond(response, 400)
-      }
-
       const body = await readBoundedBody(request, this.maxBodyBytes)
 
       if (!body) {
         return respond(response, 413)
+      }
+
+      const metadata = traceMetadata(request, body)
+
+      if (!metadata) {
+        return respond(response, 400)
       }
 
       const accepted = this.queue.enqueue({
@@ -355,13 +356,30 @@ export class TraceForwarder {
   }
 }
 
-function traceMetadata(request: IncomingMessage): Omit<TraceQueueBatch, 'body' | 'contentType' | 'epoch'> | null {
+function traceMetadata(
+  request: IncomingMessage,
+  body: Buffer
+): Omit<TraceQueueBatch, 'body' | 'contentType' | 'epoch'> | null {
   const sessionId = singleHeader(request.headers['x-hermes-session-id'])
   const entrypoint = singleHeader(request.headers['x-trace-entrypoint'])
   const runId = singleHeader(request.headers['x-trace-run-id'])
   const telemetrySchemaVersion = singleHeader(request.headers['x-telemetry-schema-version'])
+  const supplied = [sessionId, entrypoint, runId, telemetrySchemaVersion].filter(Boolean).length
+
+  if (supplied === 0) {
+    const derived = deriveOtlpCorrelation(body)
+
+    return derived
+      ? {
+          ...derived,
+          entrypoint: 'desktop',
+          telemetrySchemaVersion: '1'
+        }
+      : null
+  }
 
   if (
+    supplied !== 4 ||
     !sessionId ||
     !CORRELATION_ID.test(sessionId) ||
     !entrypoint ||

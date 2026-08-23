@@ -24,18 +24,28 @@ test('product Trace uploads use the public same-origin Gateway API by default', 
 async function post(
   endpoint: string,
   localBearer: string,
-  overrides: { body?: Buffer; headers?: Record<string, string> } = {}
+  overrides: {
+    body?: Buffer
+    headers?: Record<string, string>
+    includeCorrelationHeaders?: boolean
+  } = {}
 ) {
   const target = new URL(endpoint)
   const body = overrides.body ?? protobuf
 
+  const correlationHeaders = overrides.includeCorrelationHeaders === false
+    ? {}
+    : {
+        'x-hermes-session-id': 'session-1',
+        'x-trace-entrypoint': 'desktop',
+        'x-trace-run-id': 'run-1',
+        'x-telemetry-schema-version': '1'
+      }
+
   const headers = {
     authorization: `Bearer ${localBearer}`,
     'content-type': 'application/x-protobuf',
-    'x-hermes-session-id': 'session-1',
-    'x-trace-entrypoint': 'desktop',
-    'x-trace-run-id': 'run-1',
-    'x-telemetry-schema-version': '1',
+    ...correlationHeaders,
     ...overrides.headers
   }
 
@@ -61,6 +71,50 @@ async function post(
     request.on('error', reject)
     request.end(body)
   })
+}
+
+function varint(value: number): Buffer {
+  const bytes: number[] = []
+  let remaining = value
+
+  do {
+    const byte = remaining & 0x7f
+
+    remaining = Math.floor(remaining / 128)
+    bytes.push(remaining > 0 ? byte | 0x80 : byte)
+  } while (remaining > 0)
+
+  return Buffer.from(bytes)
+}
+
+function lengthDelimited(field: number, value: Buffer | string): Buffer {
+  const body = typeof value === 'string' ? Buffer.from(value) : value
+
+  return Buffer.concat([varint((field << 3) | 2), varint(body.length), body])
+}
+
+function keyValue(key: string, value: string): Buffer {
+  const anyValue = lengthDelimited(1, value)
+
+  return Buffer.concat([lengthDelimited(1, key), lengthDelimited(2, anyValue)])
+}
+
+function relayOtlpPayload(sessionId: string, traceIdHex: string): Buffer {
+  const traceId = Buffer.from(traceIdHex, 'hex')
+  const spanId = Buffer.from('1122334455667788', 'hex')
+  const session = keyValue('nemo_relay.scope.metadata.session_id', sessionId)
+
+  const span = Buffer.concat([
+    lengthDelimited(1, traceId),
+    lengthDelimited(2, spanId),
+    lengthDelimited(5, 'hermes.turn'),
+    lengthDelimited(9, session)
+  ])
+
+  const scopeSpans = lengthDelimited(2, span)
+  const resourceSpans = lengthDelimited(2, scopeSpans)
+
+  return lengthDelimited(1, resourceSpans)
 }
 
 async function waitFor(predicate: () => boolean) {
@@ -135,6 +189,39 @@ test('loopback forwarder accepts exact protobuf and adds only the public bearer 
     assert.equal(calls[0].headers.get('x-hermes-session-id'), 'session-1')
     assert.equal(calls[0].headers.get('x-trace-run-id'), 'run-1')
     assert.equal(calls[0].headers.has('x-local-authorization'), false)
+  } finally {
+    await forwarder.stop({ flushMs: 3_000 })
+  }
+})
+
+test('real Relay OTLP without custom correlation headers is canonicalized for the Gateway', async () => {
+  const calls: Headers[] = []
+  const traceId = '00112233445566778899aabbccddeeff'
+
+  const forwarder = new TraceForwarder({
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource()),
+    fetchImpl: async (_input, init) => {
+      calls.push(new Headers(init?.headers))
+
+      return new Response(Buffer.alloc(0), { status: 200 })
+    },
+    installationId
+  })
+
+  const started = await forwarder.start(7)
+
+  try {
+    const response = await post(started.endpoint, started.localBearer, {
+      body: relayOtlpPayload('desktop-session-real', traceId),
+      includeCorrelationHeaders: false
+    })
+
+    assert.equal(response.status, 200)
+    await waitFor(() => calls.length === 1)
+    assert.equal(calls[0].get('x-hermes-session-id'), 'desktop-session-real')
+    assert.equal(calls[0].get('x-trace-run-id'), traceId)
+    assert.equal(calls[0].get('x-trace-entrypoint'), 'desktop')
+    assert.equal(calls[0].get('x-telemetry-schema-version'), '1')
   } finally {
     await forwarder.stop({ flushMs: 3_000 })
   }

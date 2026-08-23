@@ -17,7 +17,7 @@ import uuid
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from agent.codex_responses_adapter import _normalize_codex_response
@@ -2769,6 +2769,50 @@ class TestRunConversation:
         )
         coordinator.release_conversation.assert_called_once_with(relay_lease)
         assert agent._relay_pending_turn_id is None
+
+    def test_successful_turn_passes_complete_io_to_relay(self, agent):
+        relay_lease = SimpleNamespace(
+            parent_session_id="",
+            profile_key="/profile",
+            session_id=agent.session_id or "",
+        )
+        relay_turn = SimpleNamespace(relay_enabled=True)
+        coordinator = MagicMock()
+        coordinator.acquire_conversation.return_value = relay_lease
+        coordinator.begin_turn.return_value = relay_turn
+        terminal = {
+            "final_response": "完整助手回复",
+            "completed": True,
+            "failed": False,
+        }
+
+        with (
+            patch("agent.relay_runtime.SESSION_COORDINATOR", coordinator),
+            patch(
+                "agent.relay_runtime.current_profile_key",
+                return_value="/profile",
+            ),
+            patch("hermes_cli.observability.relay_shared_metrics.start_task_run"),
+            patch("hermes_cli.observability.relay_shared_metrics.finish_task_run"),
+            patch(
+                "agent.conversation_loop.run_conversation",
+                return_value=terminal,
+            ),
+        ):
+            result = agent.run_conversation("完整用户问题", task_id="task-1")
+
+        assert result is terminal
+        coordinator.begin_turn.assert_called_once_with(
+            relay_lease,
+            turn_id=ANY,
+            task_id="task-1",
+            user_input="完整用户问题",
+        )
+        coordinator.end_turn.assert_called_once_with(
+            relay_turn,
+            outcome="success",
+            assistant_output="完整助手回复",
+        )
 
     def test_stop_finish_reason_returns_response(self, agent):
         self._setup_agent(agent)

@@ -128,6 +128,15 @@ def pop_relay_scope(
     return pop(handle, **kwargs)
 
 
+def _turn_trace_value(value: Any) -> Any:
+    """Sanitize product trace I/O without changing the conversation value."""
+    from agent import ansatz_trace_policy
+
+    if ansatz_trace_policy.ansatz_product_trace_enabled():
+        return ansatz_trace_policy.redact_trace_value(value)
+    return value
+
+
 @dataclass
 class RelaySession:
     """One isolated Relay scope stack owned by a Hermes session."""
@@ -1051,6 +1060,7 @@ class RelaySessionCoordinator:
         *,
         turn_id: str,
         task_id: str,
+        user_input: Any = None,
     ) -> RelayTurnContext:
         if lease.released:
             raise RuntimeError("Hermes Relay conversation lease is released")
@@ -1105,7 +1115,11 @@ class RelaySessionCoordinator:
                     TURN_SCOPE,
                     lease.host.relay.ScopeType.Function,
                     handle=lease.session.handle,
-                    input={},
+                    input=(
+                        {"user": _turn_trace_value(user_input)}
+                        if user_input is not None
+                        else {}
+                    ),
                     metadata={
                         RUNTIME_SCHEMA_KEY: RUNTIME_SCHEMA_VERSION,
                         RUNTIME_INSTANCE_KEY: lease.host.runtime_id,
@@ -1124,6 +1138,7 @@ class RelaySessionCoordinator:
         turn: RelayTurnContext,
         *,
         outcome: str,
+        assistant_output: Any = None,
     ) -> None:
         with turn.finalize_lock:
             if turn.closed:
@@ -1135,10 +1150,15 @@ class RelaySessionCoordinator:
                 if isinstance(lease.host, RelayRuntime) and lease.session is not None:
                     self._finish_logical_calls(turn, outcome=outcome)
                     if turn.handle is not None:
+                        turn_output = {"outcome": outcome}
+                        if assistant_output is not None:
+                            turn_output["assistant"] = _turn_trace_value(
+                                assistant_output
+                            )
                         failure = lease.host._close_scope_handle(
                             lease.session,
                             turn.handle,
-                            output={"outcome": outcome},
+                            output=turn_output,
                             failure_label="turn scope close failed",
                         )
                         if failure:
