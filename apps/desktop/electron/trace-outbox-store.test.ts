@@ -821,3 +821,27 @@ test('compacts mixed segments only when conversation streaming is idle', async (
   assert.ok(fs.files.get(path)!.length < before)
   assert.equal((await store.peekEligible(Number.MAX_SAFE_INTEGER))?.batchId, second.batchId)
 })
+
+test('rejects malformed acknowledgements without writing a receipt and binds a root to one account', async () => {
+  const fs = new FakeTraceFileSystem()
+  const store = await TraceOutboxStore.open(options({ fs }))
+  const first = await store.enqueue(envelope('bound'))
+  const before = fs.events.filter(event => event === 'journal.write').length
+
+  await assert.rejects(
+    store.acknowledge(first.batchId, { batchId: first.batchId, outcome: 'accepted', receivedAt: Number.NaN }),
+    /invalid_trace_receipt/
+  )
+  assert.equal(fs.events.filter(event => event === 'journal.write').length, before)
+  await assert.rejects(
+    store.enqueue({
+      ...envelope('other-account'),
+      owner: {
+        ...envelope('other-account').owner,
+        accountId: '44444444-4444-4444-8444-444444444444',
+        accountKey: 'account-44444444-4444-4444-8444-444444444444'
+      }
+    }),
+    /trace_outbox_account_mismatch/
+  )
+})

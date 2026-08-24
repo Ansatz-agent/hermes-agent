@@ -237,6 +237,7 @@ export class TraceOutboxStore {
   private flushPromise: Promise<void> | null = null
   private flushTimer: ReturnType<typeof setTimeout> | null = null
   private journalTail: Promise<void> = Promise.resolve()
+  private writerTail: Promise<void> = Promise.resolve()
   private nextSequence = 0
   private pendingInputBytes = 0
   private pendingDeadline: number | null = null
@@ -499,7 +500,7 @@ export class TraceOutboxStore {
       return false
     }
 
-    return this.compactForCapacity()
+    return this.withWriterLock(() => this.compactForCapacity())
   }
 
   private async compactForCapacity(): Promise<boolean> {
@@ -789,7 +790,7 @@ export class TraceOutboxStore {
       item.state = 'flushing'
     })
 
-    const currentFlush = this.flushGroup(group)
+    const currentFlush = this.withWriterLock(() => this.flushGroup(group))
     this.flushPromise = currentFlush
 
     try {
@@ -1272,5 +1273,20 @@ export class TraceOutboxStore {
 
     this.journalTail = write.catch(() => undefined)
     await write
+  }
+
+  private async withWriterLock<T>(operation: () => Promise<T>): Promise<T> {
+    const prior = this.writerTail
+    let release!: () => void
+    this.writerTail = new Promise<void>(resolve => {
+      release = resolve
+    })
+    await prior
+
+    try {
+      return await operation()
+    } finally {
+      release()
+    }
   }
 }
