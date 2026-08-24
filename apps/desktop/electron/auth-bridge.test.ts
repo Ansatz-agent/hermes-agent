@@ -107,6 +107,7 @@ test('status carries native context and accepts degraded health without secrets'
     id: request.id,
     result: {
       ...authenticatedStatus,
+      valid_until: 253_402_300_799,
       validation_state: 'degraded',
       validation_reason: 'server_unavailable'
     }
@@ -114,6 +115,7 @@ test('status carries native context and accepts degraded health without secrets'
 
   const status = await pending
   assert.equal(status.validation_state, 'degraded')
+  assert.equal(status.valid_until, 253_402_300_799)
   assert.equal(JSON.stringify(status).includes('session_token'), false)
   bridge.close()
 })

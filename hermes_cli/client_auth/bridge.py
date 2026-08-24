@@ -12,6 +12,7 @@ from typing import BinaryIO
 from hermes_cli.client_auth.client import TraceCredential
 from hermes_cli.client_auth.runtime import (
     AuthRequired,
+    DURABLE_AUTHORIZATION_VALID_UNTIL,
     account_login,
     account_logout,
     account_status,
@@ -324,11 +325,12 @@ def _validated_public_result(value: object) -> dict[str, object]:
     if state == "locked" and reason not in _TERMINAL_REASONS:
         raise RuntimeError("invalid public result")
     result = dict(value)
-    if state == "authenticated":
+    if state == "authenticated" and valid_until != DURABLE_AUTHORIZATION_VALID_UNTIL:
         # Runtime leases use a process-local monotonic clock. Convert the
         # remaining duration to a Unix timestamp before returning it to a
         # Desktop process (including one reached over SSH), whose monotonic
-        # clock has a different origin.
+        # clock has a different origin. Durable native and legacy principals
+        # already carry the finite Unix sentinel used across process boundaries.
         remaining = max(0.0, float(valid_until) - time.monotonic())
         result["valid_until"] = time.time() + remaining
     return result

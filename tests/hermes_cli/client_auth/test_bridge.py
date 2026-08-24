@@ -7,8 +7,12 @@ from types import SimpleNamespace
 import pytest
 
 from hermes_cli.client_auth.bridge import _validated_public_result, dispatch, main, run_stream
-from hermes_cli.client_auth.client import TraceCredential
-from hermes_cli.client_auth.runtime import AuthRequired
+from hermes_cli.client_auth.client import NativeSessionCredential, TraceCredential
+from hermes_cli.client_auth.runtime import (
+    AuthRequired,
+    NativeCredentialRecord,
+    RuntimeSnapshot,
+)
 
 
 NATIVE_CONTEXT = {
@@ -107,6 +111,38 @@ def test_login_response_contains_scope_but_no_secret(monkeypatch):
 def test_public_bridge_status_rejects_extra_or_secret_fields():
     with pytest.raises(RuntimeError):
         _validated_public_result({**public_status(), "session_token": "secret-sentinel"})
+
+
+@pytest.mark.parametrize("nonfinite", [float("nan"), float("inf"), float("-inf")])
+def test_public_bridge_status_rejects_nonfinite_valid_until(nonfinite):
+    with pytest.raises(RuntimeError):
+        _validated_public_result(public_status(valid_until=nonfinite))
+
+
+def test_status_dispatches_restored_native_snapshot_with_finite_durable_lease(monkeypatch):
+    record = NativeCredentialRecord(
+        credential=NativeSessionCredential(
+            account_id="22222222-2222-4222-8222-222222222222",
+            session_id="33333333-3333-4333-8333-333333333333",
+            session_token="native-token-sentinel-12345678901234567890",
+            installation_id=NATIVE_CONTEXT["installation_id"],
+            username="alice",
+            issued_at="2026-08-24T12:00:00+00:00",
+        ),
+        last_validated_at="2026-08-24T12:00:00+00:00",
+    )
+    restored = RuntimeSnapshot.from_native_credential(record).degraded("server_unavailable")
+    monkeypatch.setattr("hermes_cli.client_auth.bridge.account_status", lambda: restored)
+
+    response = dispatch(
+        {"version": 2, "id": "1", "method": "status", "params": NATIVE_CONTEXT}
+    )
+
+    assert response["result"]["state"] == "authenticated"
+    assert response["result"]["validation_state"] == "degraded"
+    assert response["result"]["validation_reason"] == "server_unavailable"
+    assert response["result"]["valid_until"] == 253_402_300_799.0
+    assert "native-token-sentinel" not in json.dumps(response)
 
 
 def test_bridge_translates_runtime_lease_to_unix_epoch(monkeypatch):

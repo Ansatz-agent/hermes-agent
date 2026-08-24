@@ -4,6 +4,7 @@ import base64
 import errno
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
@@ -40,6 +41,10 @@ from hermes_cli.client_auth.client import (
 
 AUTH_EXIT_CODE = 20
 LEASE_SECONDS = 60.0
+# Unix timestamp for 9999-12-31T23:59:59Z. Durable native and migrated legacy
+# credentials remain authorized until explicit revocation, but their public
+# snapshots must stay JSON/JavaScript-safe and cannot carry infinity.
+DURABLE_AUTHORIZATION_VALID_UNTIL = 253_402_300_799.0
 LOGIN_ATTEMPT_LIMIT = 5
 LOGIN_ATTEMPT_WINDOW_SECONDS = 60.0
 OWNER_IDLE_SECONDS = 15.0 * 60.0
@@ -537,7 +542,7 @@ class RuntimeSnapshot:
         return cls(
             state=AuthState.AUTHENTICATED,
             epoch=epoch,
-            valid_until=float("inf"),
+            valid_until=DURABLE_AUTHORIZATION_VALID_UNTIL,
             runtime_instance_id=runtime_instance_id or secrets.token_hex(16),
             boot_id=_read_boot_id(),
             username=credential.username,
@@ -562,7 +567,7 @@ class RuntimeSnapshot:
         return cls(
             state=AuthState.AUTHENTICATED,
             epoch=epoch,
-            valid_until=float("inf"),
+            valid_until=DURABLE_AUTHORIZATION_VALID_UNTIL,
             runtime_instance_id=runtime_instance_id or secrets.token_hex(16),
             boot_id=_read_boot_id(),
             username=record.cookie_record.username,
@@ -2932,7 +2937,11 @@ def _snapshot_from_public(value: object) -> RuntimeSnapshot:
         raise AuthRequired("runtime_unavailable")
     if not isinstance(epoch, int) or isinstance(epoch, bool) or epoch < 0:
         raise AuthRequired("runtime_unavailable")
-    if not isinstance(valid_until, (int, float)) or isinstance(valid_until, bool):
+    if (
+        not isinstance(valid_until, (int, float))
+        or isinstance(valid_until, bool)
+        or not math.isfinite(valid_until)
+    ):
         raise AuthRequired("runtime_unavailable")
     if expires is not None and not isinstance(expires, str):
         raise AuthRequired("runtime_unavailable")

@@ -99,6 +99,28 @@ test('stores a full scope only after the bridge reports authenticated', async ()
   await assert.doesNotReject(coordinator.require('local', 'local'))
 })
 
+test('retains local scope for a finite degraded cached native status', async () => {
+  const cachedNative = {
+    ...authenticated,
+    valid_until: 253_402_300_799,
+    validation_state: 'degraded' as const,
+    validation_reason: 'server_unavailable' as const
+  }
+  const coordinator = new AuthCoordinator(fixedBridge(cachedNative), {
+    clock: () => 1_800_000_000,
+    pollIntervalMs: 0
+  })
+
+  await coordinator.start()
+
+  assert.deepEqual(coordinator.scope('local'), {
+    connection_id: 'local',
+    runtime_instance_id: 'runtime-1',
+    epoch: 2
+  })
+  await assert.doesNotReject(coordinator.require('local', 'local'))
+})
+
 test('logout invalidates and emits locked before cleanup or bridge logout', async () => {
   const { bridge, cleanup, coordinator } = fixture(authenticated)
   const order: string[] = []
