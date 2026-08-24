@@ -1,6 +1,10 @@
 import { spawn } from 'node:child_process'
 
-export const AUTH_BRIDGE_PROTOCOL_VERSION = 1
+import type { BridgeStatus } from '../auth-bridge-status'
+
+export type { BridgeStatus } from '../auth-bridge-status'
+
+export const AUTH_BRIDGE_PROTOCOL_VERSION = 2
 const PROTOCOL_VERSION = AUTH_BRIDGE_PROTOCOL_VERSION
 const MAX_LINE_BYTES = 64 * 1024
 const MAX_REQUEST_ID_LENGTH = 64
@@ -44,21 +48,31 @@ const SAFE_REASONS = new Set([
   'server_unavailable',
   'session_expired',
   'session_rejected',
+  'invalid_response',
+  'invalid_session_credential',
   'signed_out',
+  'session_revoked',
+  'account_disabled',
+  'account_revoked',
   'vault_unavailable'
 ])
 
+const VALIDATION_REASONS = new Set([
+  'rate_limited',
+  'runtime_unavailable',
+  'server_unavailable',
+  'session_expired',
+  'session_rejected',
+  'invalid_response',
+  'invalid_session_credential',
+  'vault_unavailable'
+])
+
+const TERMINAL_REASONS = new Set(['signed_out', 'session_revoked', 'account_disabled', 'account_revoked'])
+
 export type AuthMethod = 'status' | 'login' | 'logout' | 'trace_token'
 
-export type BridgeStatus = {
-  state: 'checking' | 'authenticated' | 'signed_out' | 'locked'
-  username: string | null
-  runtime_instance_id: string
-  epoch: number
-  valid_until: number
-  session_expires_at: string | null
-  reason: string | null
-}
+export type NativeClientContext = { installation_id: string; client_version: string }
 
 export type ConnectionScope = {
   connection_id: string
@@ -80,8 +94,8 @@ export type TraceCredential = {
 }
 
 type AuthRequest =
-  | { method: 'status'; params: Record<string, never> }
-  | { method: 'login'; params: { username: string; password: string } }
+  | { method: 'status'; params: NativeClientContext }
+  | { method: 'login'; params: { username: string; password: string } & NativeClientContext }
   | { method: 'logout'; params: Record<string, never> }
   | { method: 'trace_token'; params: TraceTokenRequest }
 
@@ -108,6 +122,7 @@ type DesktopAuthBridgeOptions = {
   cwd: string
   env?: NodeJS.ProcessEnv
   onDiagnostic?: (message: string) => void
+  nativeClientContext: NativeClientContext
   pythonExecutable: string
   spawnChild?: SpawnChild
   timeoutMs?: number
@@ -192,6 +207,7 @@ export class DesktopAuthBridge {
   private readonly loginTimeoutMs: number
   private readonly logoutTimeoutMs: number
   private readonly timeoutMs: number
+  private readonly nativeClientContext: NativeClientContext
   private nextRequestId = 0n
   private stdoutBuffer = Buffer.alloc(0)
   private unavailable = false
@@ -201,6 +217,10 @@ export class DesktopAuthBridge {
     this.loginTimeoutMs = options.loginTimeoutMs ?? options.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS
     this.logoutTimeoutMs = options.logoutTimeoutMs ?? options.timeoutMs ?? DEFAULT_LOGOUT_TIMEOUT_MS
     this.onDiagnostic = options.onDiagnostic ?? (() => {})
+    if (!isNativeClientContext(options.nativeClientContext)) {
+      throw new AuthBridgeError('invalid_request')
+    }
+    this.nativeClientContext = { ...options.nativeClientContext }
 
     const spawnChild: SpawnChild =
       options.spawnChild ?? ((command, args, childOptions) => spawn(command, args, childOptions) as ChildLike)
@@ -227,11 +247,11 @@ export class DesktopAuthBridge {
   }
 
   status(): Promise<BridgeStatus> {
-    return this.invoke({ method: 'status', params: {} })
+    return this.invoke({ method: 'status', params: this.nativeClientContext })
   }
 
   login(username: string, password: string): Promise<BridgeStatus> {
-    return this.invoke({ method: 'login', params: { username, password } })
+    return this.invoke({ method: 'login', params: { username, password, ...this.nativeClientContext } })
   }
 
   logout(): Promise<BridgeStatus> {
@@ -424,7 +444,11 @@ function isValidRequest(value: unknown): value is AuthRequest {
 
   const paramKeys = Object.keys(value.params)
 
-  if (value.method === 'status' || value.method === 'logout') {
+  if (value.method === 'status') {
+    return isNativeClientContext(value.params)
+  }
+
+  if (value.method === 'logout') {
     return paramKeys.length === 0
   }
 
@@ -441,7 +465,7 @@ function isValidRequest(value: unknown): value is AuthRequest {
 
   return (
     value.method === 'login' &&
-    paramKeys.length === 2 &&
+    paramKeys.length === 4 &&
     Object.hasOwn(value.params, 'username') &&
     Object.hasOwn(value.params, 'password') &&
     typeof value.params.username === 'string' &&
@@ -449,7 +473,8 @@ function isValidRequest(value: unknown): value is AuthRequest {
     value.params.username.length <= 150 &&
     typeof value.params.password === 'string' &&
     value.params.password.length > 0 &&
-    value.params.password.length <= 4096
+    value.params.password.length <= 4096 &&
+    hasValidNativeClientContextFields(value.params)
   )
 }
 
@@ -479,8 +504,23 @@ function isTraceCredential(value: unknown, expectedInstallationId: string): valu
 
 function isUuidV4(value: unknown): value is string {
   return (
-    typeof value === 'string' &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+    typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+  )
+}
+
+function isNativeClientContext(value: unknown): value is NativeClientContext {
+  return (
+    isPlainObject(value) &&
+    sameKeys(value, ['installation_id', 'client_version']) &&
+    hasValidNativeClientContextFields(value)
+  )
+}
+
+function hasValidNativeClientContextFields(value: Record<string, unknown>): boolean {
+  return (
+    isUuidV4(value.installation_id) &&
+    typeof value.client_version === 'string' &&
+    /^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$/.test(value.client_version)
   )
 }
 
@@ -494,10 +534,17 @@ function isBridgeStatus(value: unknown): value is BridgeStatus {
     !sameKeys(value, [
       'state',
       'username',
+      'account_id',
+      'session_id',
+      'installation_id',
+      'principal_key',
       'runtime_instance_id',
       'epoch',
       'valid_until',
-      'session_expires_at',
+      'validation_state',
+      'validation_reason',
+      'last_validated_at',
+      'legacy',
       'reason'
     ])
   ) {
@@ -508,6 +555,10 @@ function isBridgeStatus(value: unknown): value is BridgeStatus {
     ['checking', 'authenticated', 'signed_out', 'locked'].includes(value.state) &&
     (value.username === null ||
       (typeof value.username === 'string' && value.username.length > 0 && value.username.length <= 150)) &&
+    isOptionalBoundedString(value.account_id) &&
+    isOptionalBoundedString(value.session_id) &&
+    isOptionalBoundedString(value.installation_id) &&
+    isOptionalBoundedString(value.principal_key) &&
     typeof value.runtime_instance_id === 'string' &&
     value.runtime_instance_id.length > 0 &&
     value.runtime_instance_id.length <= 128 &&
@@ -516,10 +567,21 @@ function isBridgeStatus(value: unknown): value is BridgeStatus {
     typeof value.valid_until === 'number' &&
     Number.isFinite(value.valid_until) &&
     value.valid_until >= 0 &&
-    (value.session_expires_at === null ||
-      (typeof value.session_expires_at === 'string' && value.session_expires_at.length <= 128)) &&
-    (value.reason === null || (typeof value.reason === 'string' && SAFE_REASONS.has(value.reason)))
+    ['unknown', 'validating', 'online', 'degraded'].includes(value.validation_state) &&
+    (value.validation_reason === null ||
+      (typeof value.validation_reason === 'string' && VALIDATION_REASONS.has(value.validation_reason))) &&
+    (value.last_validated_at === null ||
+      (typeof value.last_validated_at === 'string' &&
+        value.last_validated_at.length > 0 &&
+        value.last_validated_at.length <= 128)) &&
+    typeof value.legacy === 'boolean' &&
+    (value.reason === null || (typeof value.reason === 'string' && SAFE_REASONS.has(value.reason))) &&
+    (value.state !== 'locked' || (typeof value.reason === 'string' && TERMINAL_REASONS.has(value.reason)))
   )
+}
+
+function isOptionalBoundedString(value: unknown): value is string | null {
+  return value === null || (typeof value === 'string' && value.length > 0 && value.length <= 256)
 }
 
 function isBridgeRemoteError(value: unknown): value is { code: string; reason?: string } {

@@ -61,7 +61,10 @@ function makeFixture() {
   )
   writePeX64(path.join(toolchainRoot, 'uv.exe'))
   fs.writeFileSync(path.join(toolchainRoot, 'python-embed.zip'), 'fixture zip')
-  fs.writeFileSync(path.join(toolchainRoot, 'auth-requirements.txt'), `keyring==25.7.0 --hash=sha256:${'a'.repeat(64)}\n`)
+  fs.writeFileSync(
+    path.join(toolchainRoot, 'auth-requirements.txt'),
+    `keyring==25.7.0 --hash=sha256:${'a'.repeat(64)}\n`
+  )
   fs.writeFileSync(path.join(toolchainRoot, 'wheelhouse', 'keyring-25.7.0-py3-none-any.whl'), 'wheel')
 
   const manifest = {
@@ -119,7 +122,10 @@ test('Windows auth runtime uses System32 PowerShell and only bundled local packa
 
     assert.equal(result.runtimeRoot, path.join(fixture.activeRoot, 'auth-venv'))
     assert.deepEqual(retiredRoots, [fixture.activeRoot])
-    assert.equal(windowsPowerShellExecutable({ SystemRoot: 'C:\\Windows' }), 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
+    assert.equal(
+      windowsPowerShellExecutable({ SystemRoot: 'C:\\Windows' }),
+      'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'
+    )
     const expand = calls[0]
     assert.equal(expand.command, 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
     assert.ok(expand.args.includes('-NoProfile'))
@@ -134,8 +140,14 @@ test('Windows auth runtime uses System32 PowerShell and only bundled local packa
     assert.ok(install)
     assert.ok(install.args.includes('--no-index'))
     assert.ok(install.args.includes('--require-hashes'))
-    assert.equal(install.args.some(arg => /^https?:/i.test(arg)), false)
-    assert.match(fs.readFileSync(path.join(result.runtimeRoot, 'python313._pth'), 'utf8'), /^python313\.zip\n\.\nLib\\site-packages\n\.\.\nimport site\n$/)
+    assert.equal(
+      install.args.some(arg => /^https?:/i.test(arg)),
+      false
+    )
+    assert.match(
+      fs.readFileSync(path.join(result.runtimeRoot, 'python313._pth'), 'utf8'),
+      /^python313\.zip\n\.\nLib\\site-packages\n\.\.\nimport site\n$/
+    )
     assert.ok(fs.statSync(path.join(result.runtimeRoot, 'python.exe')).isFile())
     assert.ok(fs.statSync(result.managedUvPath).isFile())
     assert.ok(fs.statSync(path.join(fixture.activeRoot, 'bin', 'hermes.cmd')).isFile())
@@ -146,7 +158,7 @@ test('Windows auth runtime uses System32 PowerShell and only bundled local packa
       sourceCommit: SOURCE_COMMIT,
       sourceArchiveSha256: SOURCE_ARCHIVE_SHA256,
       authLockSha256: sha256(path.join(fixture.activeRoot, 'desktop_auth_runtime', 'uv.lock')),
-      protocolVersion: 1
+      protocolVersion: 2
     })
     assert.equal(fs.existsSync(path.join(fixture.activeRoot, 'auth-venv.pending-backup')), false)
   } finally {
@@ -206,7 +218,14 @@ test('Windows auth runtime restores the previous published runtime when verifica
           }
 
           if (options.command.endsWith('python.exe')) {
-            return { code: 1, killed: false, signal: null, stderr: 'verification failed', stdout: '', termination: null }
+            return {
+              code: 1,
+              killed: false,
+              signal: null,
+              stderr: 'verification failed',
+              stdout: '',
+              termination: null
+            }
           }
 
           return { code: 0, killed: false, signal: null, stderr: '', stdout: '', termination: null }

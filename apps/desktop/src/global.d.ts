@@ -1,5 +1,7 @@
 import type { GatewayWsUrlResult } from '@hermes/shared'
 
+import type { BridgeStatus } from '../auth-bridge-status'
+
 import type { WakeIndicatorState } from './lib/wake-indicator'
 import type {
   PetOverlayBounds,
@@ -413,14 +415,7 @@ declare global {
   }
 }
 
-interface DesktopAccountStatus {
-  state: 'checking' | 'authenticated' | 'signed_out' | 'locked'
-  username: string | null
-  runtime_instance_id: string
-  epoch: number
-  valid_until: number
-  session_expires_at: string | null
-  reason: string | null
+type DesktopAccountStatus = BridgeStatus & {
   runtime_ready: boolean
 }
 

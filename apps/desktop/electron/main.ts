@@ -671,8 +671,7 @@ function resolveHermesHome() {
     homeDirectory: app.getPath('home'),
     localAppData: process.env.LOCALAPPDATA,
     inheritedHermesHome: process.env.HERMES_HOME,
-    dedicatedRuntimeHomeOverride:
-      process.env[ANSATZ_PRODUCT.runtimeHomeOverrideEnvironmentVariable],
+    dedicatedRuntimeHomeOverride: process.env[ANSATZ_PRODUCT.runtimeHomeOverrideEnvironmentVariable],
     desktopUserDataOverride: USER_DATA_OVERRIDE,
     normalizeInheritedRoot: normalizeHermesHomeRoot
   })
@@ -785,12 +784,11 @@ function createDesktopAuthBridge() {
       requireLauncher: false
     })
 
-  const pythonExecutable =
-    packagedWindowsAuthReady
-      ? path.join(AUTH_VENV_ROOT, 'python.exe')
-      : candidate?.kind === 'python' && candidate.command
-        ? candidate.command
-        : getVenvPython(VENV_ROOT)
+  const pythonExecutable = packagedWindowsAuthReady
+    ? path.join(AUTH_VENV_ROOT, 'python.exe')
+    : candidate?.kind === 'python' && candidate.command
+      ? candidate.command
+      : getVenvPython(VENV_ROOT)
 
   const candidateRoot =
     candidate && 'root' in candidate && candidate.root && directoryExists(candidate.root) ? candidate.root : null
@@ -802,6 +800,10 @@ function createDesktopAuthBridge() {
   return new DesktopAuthBridge({
     cwd,
     env: ansatzAuthEnvironment(HERMES_HOME),
+    nativeClientContext: {
+      installation_id: desktopInstallationId,
+      client_version: app.getVersion()
+    },
     onDiagnostic: rememberLog,
     pythonExecutable
   })
@@ -8905,10 +8907,7 @@ async function ensureDesktopTraceForwarder(scope) {
     // exists. The public token remains owned by Electron main.
     await provider.current()
 
-    if (
-      generation !== desktopTraceGeneration ||
-      !sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope)
-    ) {
+    if (generation !== desktopTraceGeneration || !sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope)) {
       throw new AuthBridgeError('auth_required', 'session_rejected')
     }
 
@@ -8919,10 +8918,7 @@ async function ensureDesktopTraceForwarder(scope) {
 
     const started = await forwarder.start(scope.epoch)
 
-    if (
-      generation !== desktopTraceGeneration ||
-      !sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope)
-    ) {
+    if (generation !== desktopTraceGeneration || !sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope)) {
       await forwarder.stop({ flushMs: 0 })
       throw new AuthBridgeError('auth_required', 'session_rejected')
     }
@@ -9020,6 +9016,10 @@ async function openRemoteDesktopAuthBridge(ssh, sshConfig) {
     const bridge = new DesktopAuthBridge({
       cwd: app.getPath('home'),
       env: {},
+      nativeClientContext: {
+        installation_id: desktopInstallationId,
+        client_version: app.getVersion()
+      },
       pythonExecutable: candidate.executable,
       spawnChild: (command, args) => {
         if (

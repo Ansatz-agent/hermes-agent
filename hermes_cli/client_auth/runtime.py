@@ -2085,7 +2085,14 @@ class MemoryOwner(_OwnerCore):
 class _EntryPointOwner(Protocol):
     def refresh(self) -> RuntimeSnapshot: ...
 
-    def login(self, username: str, password: bytearray) -> RuntimeSnapshot: ...
+    def login(
+        self,
+        username: str,
+        password: bytearray,
+        *,
+        installation_id: str | None = None,
+        client_version: str | None = None,
+    ) -> RuntimeSnapshot: ...
 
     def logout(self) -> RuntimeSnapshot: ...
 
@@ -2162,19 +2169,38 @@ class RemoteRuntimeOwner:
         with self._lock:
             return self._snapshot
 
-    def login(self, username: str, password: bytearray) -> RuntimeSnapshot:
+    def login(
+        self,
+        username: str,
+        password: bytearray,
+        *,
+        installation_id: str | None = None,
+        client_version: str | None = None,
+    ) -> RuntimeSnapshot:
+        if (installation_id is None) != (client_version is None):
+            raise AuthRequired("runtime_unavailable")
+        if installation_id is not None and (
+            _TRACE_INSTALLATION_ID.fullmatch(installation_id) is None
+            or not isinstance(client_version, str)
+            or re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}", client_version) is None
+        ):
+            raise AuthRequired("runtime_unavailable")
         try:
             password_text = password.decode("utf-8")
         except (AttributeError, UnicodeDecodeError):
             raise AuthRequired("invalid_credentials") from None
         try:
-            encoded = self._encode_request(
-                {
-                    "operation": "login",
-                    "username": username,
-                    "password": password_text,
-                }
-            )
+            request: dict[str, object] = {
+                "operation": "login",
+                "username": username,
+                "password": password_text,
+            }
+            if installation_id is not None and client_version is not None:
+                request.update(
+                    installation_id=installation_id,
+                    client_version=client_version,
+                )
+            encoded = self._encode_request(request)
         finally:
             password_text = ""
         try:
@@ -2544,21 +2570,46 @@ class OwnerBroker:
                 snapshot = self._owner.refresh()
             elif operation == "logout" and set(request) == {"version", "operation"}:
                 snapshot = self._owner.logout()  # type: ignore[attr-defined]
-            elif operation == "login" and set(request) == {
-                "version",
-                "operation",
-                "username",
-                "password",
-            }:
+            elif operation == "login" and set(request) in (
+                {"version", "operation", "username", "password"},
+                {
+                    "version",
+                    "operation",
+                    "username",
+                    "password",
+                    "installation_id",
+                    "client_version",
+                },
+            ):
                 username = request.get("username")
                 password_text = request.get("password")
-                if not isinstance(username, str) or not isinstance(password_text, str):
+                installation_id = request.get("installation_id")
+                client_version = request.get("client_version")
+                if (
+                    not isinstance(username, str)
+                    or not isinstance(password_text, str)
+                    or (installation_id is None) != (client_version is None)
+                    or (
+                        installation_id is not None
+                        and (
+                            not isinstance(installation_id, str)
+                            or _TRACE_INSTALLATION_ID.fullmatch(installation_id) is None
+                            or not isinstance(client_version, str)
+                            or re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}", client_version) is None
+                        )
+                    )
+                ):
                     raise AuthRequired("invalid_credentials")
                 password = bytearray(password_text.encode("utf-8"))
                 request["password"] = ""
                 password_text = ""
                 try:
-                    snapshot = self._owner.login(username, password)
+                    snapshot = self._owner.login(
+                        username,
+                        password,
+                        installation_id=installation_id,
+                        client_version=client_version,
+                    )
                 finally:
                     password[:] = b"\0" * len(password)
             elif operation == "authorize" and set(request) == {
@@ -3203,7 +3254,13 @@ def account_status() -> RuntimeSnapshot:
     return snapshot
 
 
-def account_login(username: str, password: bytearray) -> RuntimeSnapshot:
+def account_login(
+    username: str,
+    password: bytearray,
+    *,
+    installation_id: str | None = None,
+    client_version: str | None = None,
+) -> RuntimeSnapshot:
     with _entrypoint_owner_lock:
         owner = _entrypoint_owner
     if owner is None:
@@ -3234,7 +3291,14 @@ def account_login(username: str, password: bytearray) -> RuntimeSnapshot:
                 owner = _recover_entrypoint_owner(owner, force_start=True)
             except AuthRequired:
                 pass
-    return owner.login(username, password)
+    if installation_id is None and client_version is None:
+        return owner.login(username, password)
+    return owner.login(
+        username,
+        password,
+        installation_id=installation_id,
+        client_version=client_version,
+    )
 
 
 def account_logout() -> RuntimeSnapshot:

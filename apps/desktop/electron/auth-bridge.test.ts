@@ -9,10 +9,17 @@ import { AuthBridgeError, DesktopAuthBridge } from './auth-bridge'
 const authenticatedStatus = {
   state: 'authenticated' as const,
   username: 'alice',
+  account_id: '22222222-2222-4222-8222-222222222222',
+  session_id: '33333333-3333-4333-8333-333333333333',
+  installation_id: '11111111-1111-4111-8111-111111111111',
+  principal_key: 'account:22222222-2222-4222-8222-222222222222',
   runtime_instance_id: 'runtime-1',
   epoch: 3,
   valid_until: 42,
-  session_expires_at: '2026-08-18T13:00:00+00:00',
+  validation_state: 'online' as const,
+  validation_reason: null,
+  last_validated_at: '2026-08-24T12:00:00+00:00',
+  legacy: false,
   reason: null
 }
 
@@ -55,6 +62,10 @@ function bridgeFixture(overrides: Record<string, unknown> = {}) {
       SSH_CONNECTION: '127.0.0.1 40000 127.0.0.1 22'
     },
     onDiagnostic: message => diagnostics.push(message),
+    nativeClientContext: {
+      installation_id: '11111111-1111-4111-8111-111111111111',
+      client_version: '0.17.0'
+    },
     pythonExecutable: '/opt/hermes-agent/venv/bin/python',
     spawnChild,
     ...overrides
@@ -72,6 +83,75 @@ function readRequest(child: FakeChild): Promise<Record<string, unknown>> {
 function respond(child: FakeChild, payload: unknown) {
   child.stdout.write(`${JSON.stringify(payload)}\n`)
 }
+
+test('status carries native context and accepts degraded health without secrets', async () => {
+  const child = new FakeChild()
+  const bridge = new DesktopAuthBridge({
+    cwd: '/repo',
+    pythonExecutable: '/python',
+    nativeClientContext: {
+      installation_id: '11111111-1111-4111-8111-111111111111',
+      client_version: '0.17.0'
+    },
+    spawnChild: () => child as any
+  })
+  const pending = bridge.status()
+  const request = await readRequest(child)
+
+  assert.deepEqual(request.params, {
+    installation_id: '11111111-1111-4111-8111-111111111111',
+    client_version: '0.17.0'
+  })
+  respond(child, {
+    version: 2,
+    id: request.id,
+    result: {
+      ...authenticatedStatus,
+      validation_state: 'degraded',
+      validation_reason: 'server_unavailable'
+    }
+  })
+
+  const status = await pending
+  assert.equal(status.validation_state, 'degraded')
+  assert.equal(JSON.stringify(status).includes('session_token'), false)
+  bridge.close()
+})
+
+test('login injects native context while leaving renderer credentials out of status frames', async () => {
+  const { bridge, child } = bridgeFixture()
+  const pending = bridge.login('alice', 'password-sentinel')
+  const request = await readRequest(child)
+
+  assert.deepEqual(request.params, {
+    username: 'alice',
+    password: 'password-sentinel',
+    installation_id: '11111111-1111-4111-8111-111111111111',
+    client_version: '0.17.0'
+  })
+  respond(child, { version: 2, id: request.id, result: authenticatedStatus })
+
+  const status = await pending
+  assert.equal(JSON.stringify(status).includes('password-sentinel'), false)
+  bridge.close()
+})
+
+test('status frames with secret or extra fields fail closed', async () => {
+  const { bridge, child, diagnostics } = bridgeFixture()
+  const pending = bridge.status()
+  const request = await readRequest(child)
+
+  respond(child, { version: 2, id: request.id, result: { ...authenticatedStatus, session_token: 'secret-sentinel' } })
+
+  await assert.rejects(
+    pending,
+    error =>
+      error instanceof AuthBridgeError &&
+      error.code === 'runtime_unavailable' &&
+      !error.message.includes('secret-sentinel')
+  )
+  assert.equal(diagnostics.join('\n').includes('secret-sentinel'), false)
+})
 
 afterEach(() => {
   vi.useRealTimers()
@@ -102,10 +182,15 @@ test('starts only the closed auth module with bounded stdio and a secret-free en
 
   const pending = bridge.status()
   const request = await readRequest(child)
-  assert.deepEqual(request, { version: 1, id: '1', method: 'status', params: {} })
+  assert.deepEqual(request, {
+    version: 2,
+    id: '1',
+    method: 'status',
+    params: { installation_id: '11111111-1111-4111-8111-111111111111', client_version: '0.17.0' }
+  })
   assert.equal(JSON.stringify(spawnChild.mock.calls).includes('serve'), false)
 
-  respond(child, { version: 1, id: '1', result: authenticatedStatus })
+  respond(child, { version: 2, id: '1', result: authenticatedStatus })
   assert.deepEqual(await pending, authenticatedStatus)
   bridge.close()
 })
@@ -115,13 +200,13 @@ test('uses monotonically increasing bounded request ids', async () => {
 
   const first = bridge.status()
   const firstRequest = await readRequest(child)
-  respond(child, { version: 1, id: firstRequest.id, result: authenticatedStatus })
+  respond(child, { version: 2, id: firstRequest.id, result: authenticatedStatus })
   await first
 
   const second = bridge.logout()
   const secondRequest = await readRequest(child)
   respond(child, {
-    version: 1,
+    version: 2,
     id: secondRequest.id,
     result: { ...authenticatedStatus, state: 'signed_out', username: null, epoch: 4, reason: 'signed_out' }
   })
@@ -138,13 +223,13 @@ test('requests one short-lived Trace credential with exact installation identity
   const request = await readRequest(child)
 
   assert.deepEqual(request, {
-    version: 1,
+    version: 2,
     id: '1',
     method: 'trace_token',
     params: traceRequest
   })
 
-  respond(child, { version: 1, id: '1', result: traceCredential })
+  respond(child, { version: 2, id: '1', result: traceCredential })
   assert.deepEqual(await pending, traceCredential)
   bridge.close()
 })
@@ -170,7 +255,7 @@ test('Trace credentials fail closed on malformed, stale, or extra response field
         !error.message.includes(traceCredential.access_token)
     )
 
-    respond(child, { version: 1, id: request.id, result })
+    respond(child, { version: 2, id: request.id, result })
     await rejected
     assert.equal(diagnostics.join('\n').includes(traceCredential.access_token), false)
   }
@@ -214,8 +299,8 @@ test('rejects unknown methods and fields before writing stdin', async () => {
 test('malformed json and schema drift fail every request with a redacted runtime error', async () => {
   for (const response of [
     'not-json\n',
-    `${JSON.stringify({ version: 2, id: '1', result: authenticatedStatus })}\n`,
-    `${JSON.stringify({ version: 1, id: 'unexpected', result: authenticatedStatus })}\n`
+    `${JSON.stringify({ version: 1, id: '1', result: authenticatedStatus })}\n`,
+    `${JSON.stringify({ version: 2, id: 'unexpected', result: authenticatedStatus })}\n`
   ]) {
     const { bridge, child, diagnostics } = bridgeFixture()
     const first = bridge.login('alice', 'password-sentinel')
@@ -312,7 +397,7 @@ test('login has a longer bounded deadline than credential-free status', async ()
   assert.equal(child.kill.mock.calls.length, 0)
 
   const request = JSON.parse(String(child.stdin.read()))
-  respond(child, { version: 1, id: request.id, result: authenticatedStatus })
+  respond(child, { version: 2, id: request.id, result: authenticatedStatus })
   assert.deepEqual(await pending, authenticatedStatus)
   bridge.close()
 })
@@ -328,7 +413,7 @@ test('logout recovery has room to clear the local session after owner restart', 
 
   const request = JSON.parse(String(child.stdin.read()))
   respond(child, {
-    version: 1,
+    version: 2,
     id: request.id,
     result: { ...authenticatedStatus, state: 'signed_out', username: null, reason: 'signed_out' }
   })

@@ -8,10 +8,17 @@ import { AuthCoordinator, CoordinatorAuthRequiredError } from './auth-coordinato
 const signedOut: BridgeStatus = {
   state: 'signed_out',
   username: null,
+  account_id: null,
+  session_id: null,
+  installation_id: null,
+  principal_key: null,
   runtime_instance_id: 'runtime-1',
   epoch: 1,
   valid_until: 0,
-  session_expires_at: null,
+  validation_state: 'unknown',
+  validation_reason: null,
+  last_validated_at: null,
+  legacy: false,
   reason: 'signed_out'
 }
 
@@ -21,7 +28,12 @@ const authenticated: BridgeStatus = {
   username: 'alice',
   epoch: 2,
   valid_until: 90,
-  session_expires_at: '2026-08-18T13:00:00+00:00',
+  account_id: '22222222-2222-4222-8222-222222222222',
+  session_id: '33333333-3333-4333-8333-333333333333',
+  installation_id: '11111111-1111-4111-8111-111111111111',
+  principal_key: 'account:22222222-2222-4222-8222-222222222222',
+  validation_state: 'online',
+  last_validated_at: '2026-08-24T12:00:00+00:00',
   reason: null
 }
 
@@ -317,7 +329,10 @@ test('never publishes an authenticated scope when the bridge lease is already ex
   assert.equal(status.state, 'locked')
   assert.equal(status.reason, 'session_expired')
   assert.equal(coordinator.scope('local'), null)
-  assert.equal(events.some(event => event.state === 'authenticated'), false)
+  assert.equal(
+    events.some(event => event.state === 'authenticated'),
+    false
+  )
 })
 
 test('default clock evaluates bridge leases in Unix epoch seconds', async () => {
@@ -394,7 +409,10 @@ test('locking or logging out one remote connection does not mutate local or a pe
   await assert.doesNotReject(coordinator.require('local', 'local'))
   await assert.doesNotReject(coordinator.require('connection', 'remote-b'))
   await assert.rejects(coordinator.require('connection', 'remote-a'), /AUTH_REQUIRED/)
-  assert.deepEqual(cleanup.mock.calls.map(call => call[0]), ['remote-a'])
+  assert.deepEqual(
+    cleanup.mock.calls.map(call => call[0]),
+    ['remote-a']
+  )
 })
 
 test('replacing a remote bridge revokes its old scope before publishing the new owner', async () => {

@@ -9,10 +9,17 @@ import { AuthGate, type DesktopAccountStatus, useDesktopAuth } from './auth-gate
 const signedOut: DesktopAccountStatus = {
   state: 'signed_out',
   username: null,
+  account_id: null,
+  session_id: null,
+  installation_id: null,
+  principal_key: null,
   runtime_instance_id: 'runtime-1',
   epoch: 1,
   valid_until: 0,
-  session_expires_at: null,
+  validation_state: 'unknown',
+  validation_reason: null,
+  last_validated_at: null,
+  legacy: false,
   reason: 'signed_out',
   runtime_ready: false
 }
@@ -129,10 +136,13 @@ describe('AuthGate', () => {
   it('installs the complete runtime before exposing account credentials', async () => {
     let emitBootstrap: ((event: Record<string, unknown>) => void) | null = null
 
-    const status = vi.fn().mockImplementationOnce(() => new Promise<DesktopAccountStatus>(() => {})).mockResolvedValueOnce({
-      ...signedOut,
-      runtime_ready: true
-    })
+    const status = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise<DesktopAccountStatus>(() => {}))
+      .mockResolvedValueOnce({
+        ...signedOut,
+        runtime_ready: true
+      })
 
     const bootstrap = {
       getState: vi.fn(async () => ({
@@ -670,12 +680,7 @@ describe('AuthGate', () => {
       retry: vi.fn(async () => ({ ok: true }))
     }
 
-    const { auth } = renderGate(
-      { status },
-      null,
-      <ProtectedMountProbe onMount={onMount} />,
-      bootstrap
-    )
+    const { auth } = renderGate({ status }, null, <ProtectedMountProbe onMount={onMount} />, bootstrap)
 
     await screen.findByText('Finish install')
     act(() => emitBootstrap?.({ type: 'complete', completedAt: 2_000 }))
@@ -785,9 +790,7 @@ describe('AuthGate', () => {
       emitBootstrap?.({ type: 'failed', error: 'sessionid=secret Traceback private detail' })
     })
 
-    expect(
-      screen.getByText('Ansatz could not prepare the secure sign-in service.')
-    ).not.toBeNull()
+    expect(screen.getByText('Ansatz could not prepare the secure sign-in service.')).not.toBeNull()
     expect(globalThis.document.body.textContent).not.toContain('sessionid')
     expect(globalThis.document.body.textContent).not.toContain('Traceback')
 

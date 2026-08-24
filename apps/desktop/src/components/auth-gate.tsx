@@ -12,14 +12,12 @@ import {
 
 import { AuthBootstrapProgress } from '@/components/auth-bootstrap-progress'
 import { Button } from '@/components/ui/button'
-import type {
-  DesktopBootstrapProgressUnit,
-  DesktopSafeBootstrapEvent,
-  DesktopSafeBootstrapState
-} from '@/global'
+import type { DesktopBootstrapProgressUnit, DesktopSafeBootstrapEvent, DesktopSafeBootstrapState } from '@/global'
 import { useViewedInterval } from '@/hooks/use-viewed-interval'
 import { type Translations, useI18n } from '@/i18n'
 import { sanitizeAuthBootstrapText } from '@/lib/auth-bootstrap-progress'
+
+import type { BridgeStatus } from '../../auth-bridge-status'
 
 const ACCOUNT_SERVER = 'https://c2sml.cn/auth'
 const AUTH_REQUEST_TIMEOUT_MS = 15_000
@@ -42,16 +40,7 @@ function withAuthDeadline<T>(request: Promise<T>, timeoutMs = AUTH_REQUEST_TIMEO
   })
 }
 
-export type DesktopAccountStatus = {
-  state: 'checking' | 'authenticated' | 'signed_out' | 'locked'
-  username: string | null
-  runtime_instance_id: string
-  epoch: number
-  valid_until: number
-  session_expires_at: string | null
-  reason: string | null
-  runtime_ready: boolean
-}
+export type DesktopAccountStatus = BridgeStatus & { runtime_ready: boolean }
 
 export type DesktopAuthClient = {
   status: (connectionId?: string) => Promise<DesktopAccountStatus>
@@ -87,10 +76,17 @@ export function useDesktopAuth(): DesktopAuthContextValue {
 const unavailableStatus = (): DesktopAccountStatus => ({
   state: 'locked',
   username: null,
+  account_id: null,
+  session_id: null,
+  installation_id: null,
+  principal_key: null,
   runtime_instance_id: 'unavailable',
   epoch: 0,
   valid_until: 0,
-  session_expires_at: null,
+  validation_state: 'unknown',
+  validation_reason: 'runtime_unavailable',
+  last_validated_at: null,
+  legacy: false,
   reason: 'runtime_unavailable',
   runtime_ready: false
 })
@@ -162,7 +158,8 @@ function applyAuthBootstrapEvent(
     const previous = current.stages[event.stage]
     const units = new Set<DesktopBootstrapProgressUnit>(['bytes', 'packages', 'items', 'files', 'steps'])
     const completed = Number.isFinite(event.completed) && event.completed >= 0 ? event.completed : 0
-    const total = typeof event.total === 'number' && Number.isFinite(event.total) && event.total > 0 ? event.total : null
+    const total =
+      typeof event.total === 'number' && Number.isFinite(event.total) && event.total > 0 ? event.total : null
 
     if (!previous || !units.has(event.unit)) {
       return current
@@ -440,17 +437,10 @@ export function AuthGate({
     const request = ++requestRevision.current
     const observedEvent = eventRevision.current
 
-    const loginRequest = auth.login(
-      username.trim(),
-      password,
-      ...(connectionId === 'local' ? [] : [connectionId])
-    )
+    const loginRequest = auth.login(username.trim(), password, ...(connectionId === 'local' ? [] : [connectionId]))
 
     setPassword('')
-    void withAuthDeadline(
-      loginRequest,
-      AUTH_LOGIN_TIMEOUT_MS
-    )
+    void withAuthDeadline(loginRequest, AUTH_LOGIN_TIMEOUT_MS)
       .then(next => {
         if (request === requestRevision.current && observedEvent === eventRevision.current) {
           setStatus(next)
@@ -473,13 +463,13 @@ export function AuthGate({
 
   const showRuntimeBootstrap = Boolean(
     runtimeSnapshot?.manifest &&
-      (runtimeSnapshot.active || runtimeSnapshot.error || runtimeSnapshot.completedAt === null)
+    (runtimeSnapshot.active || runtimeSnapshot.error || runtimeSnapshot.completedAt === null)
   )
 
   const showAuthBootstrap = Boolean(
     !showRuntimeBootstrap &&
-      authSnapshot &&
-      (authSnapshot.active || authSnapshot.error || (status.state === 'checking' && authSnapshot.manifest))
+    authSnapshot &&
+    (authSnapshot.active || authSnapshot.error || (status.state === 'checking' && authSnapshot.manifest))
   )
 
   const showBootstrapProgress = showAuthBootstrap || showRuntimeBootstrap
@@ -512,7 +502,12 @@ export function AuthGate({
           <code className="mt-1 block break-all text-sm">{ACCOUNT_SERVER}</code>
         </div>
         {showAuthBootstrap && authSnapshot ? (
-          <AuthBootstrapProgress mode="auth" now={now} onRetry={authSnapshot.error ? retry : undefined} state={authSnapshot} />
+          <AuthBootstrapProgress
+            mode="auth"
+            now={now}
+            onRetry={authSnapshot.error ? retry : undefined}
+            state={authSnapshot}
+          />
         ) : null}
 
         {showRuntimeBootstrap && runtimeSnapshot ? (
@@ -569,11 +564,7 @@ export function AuthGate({
               </p>
             ) : null}
 
-            <Button
-              className="w-full"
-              disabled={submitting || !username.trim() || !password}
-              type="submit"
-            >
+            <Button className="w-full" disabled={submitting || !username.trim() || !password} type="submit">
               {submitting ? t.auth.signingIn : t.auth.signIn}
             </Button>
           </form>

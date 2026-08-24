@@ -9,10 +9,17 @@ function authenticatedStatus(overrides: Partial<BridgeStatus> = {}): BridgeStatu
   return {
     state: 'authenticated',
     username: 'alice',
+    account_id: '22222222-2222-4222-8222-222222222222',
+    session_id: '33333333-3333-4333-8333-333333333333',
+    installation_id: '11111111-1111-4111-8111-111111111111',
+    principal_key: 'account:22222222-2222-4222-8222-222222222222',
     runtime_instance_id: 'runtime-a',
     epoch: 7,
     valid_until: 60,
-    session_expires_at: null,
+    validation_state: 'online',
+    validation_reason: null,
+    last_validated_at: '2026-08-24T12:00:00+00:00',
+    legacy: false,
     reason: null,
     ...overrides
   }
@@ -22,10 +29,17 @@ function signedOutStatus(overrides: Partial<BridgeStatus> = {}): BridgeStatus {
   return {
     state: 'signed_out',
     username: null,
+    account_id: null,
+    session_id: null,
+    installation_id: null,
+    principal_key: null,
     runtime_instance_id: 'runtime-a',
     epoch: 8,
     valid_until: 0,
-    session_expires_at: null,
+    validation_state: 'unknown',
+    validation_reason: null,
+    last_validated_at: null,
+    legacy: false,
     reason: 'signed_out',
     ...overrides
   }

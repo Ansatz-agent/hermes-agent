@@ -427,10 +427,17 @@ function checkingStatus(): BridgeStatus {
   return {
     state: 'checking',
     username: null,
+    account_id: null,
+    session_id: null,
+    installation_id: null,
+    principal_key: null,
     runtime_instance_id: 'checking',
     epoch: 0,
     valid_until: 0,
-    session_expires_at: null,
+    validation_state: 'validating',
+    validation_reason: null,
+    last_validated_at: null,
+    legacy: false,
     reason: null
   }
 }
@@ -451,7 +458,10 @@ function lockFrom(status: BridgeStatus, reason: string): BridgeStatus {
     username: null,
     epoch: status.epoch + 1,
     valid_until: 0,
-    session_expires_at: null,
+    validation_state: 'unknown',
+    validation_reason: null,
+    last_validated_at: null,
+    legacy: false,
     reason
   }
 }
