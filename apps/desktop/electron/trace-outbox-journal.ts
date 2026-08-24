@@ -310,6 +310,8 @@ export class TraceJournal {
     return new TraceJournal(options)
   }
 
+  private recoveredTornTailOffset: number | null = null
+
   private constructor(private readonly options: TraceJournalOptions) {}
 
   async append(operations: readonly TraceJournalOperation[]): Promise<void> {
@@ -330,6 +332,7 @@ export class TraceJournal {
 
   async recover(): Promise<TraceJournalRecovery> {
     const contents = await this.options.fs.readFile(this.options.path)
+    this.recoveredTornTailOffset = null
 
     if (contents === null || contents.length === 0) {
       return { operations: [], recoveredTornTail: false }
@@ -342,6 +345,8 @@ export class TraceJournal {
       const newline = contents.indexOf(0x0a, offset)
 
       if (newline === -1) {
+        this.recoveredTornTailOffset = offset
+
         return { operations, recoveredTornTail: true }
       }
 
@@ -365,6 +370,21 @@ export class TraceJournal {
     }
 
     return { operations, recoveredTornTail: false }
+  }
+
+  async truncateRecoveredTornTail(): Promise<void> {
+    if (this.recoveredTornTailOffset === null) {
+      return
+    }
+
+    const contents = await this.options.fs.readFile(this.options.path)
+
+    if (contents === null) {
+      throw new Error('missing_trace_outbox_journal')
+    }
+
+    await this.options.fs.writeFile(this.options.path, contents.subarray(0, this.recoveredTornTailOffset))
+    this.recoveredTornTailOffset = null
   }
 
   async sync(): Promise<void> {

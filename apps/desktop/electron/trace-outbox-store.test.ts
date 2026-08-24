@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
 import { test } from 'vitest'
 
 import { createSafeStorageTraceKeyProtector } from './trace-outbox-crypto'
 import { type TraceFileSystem } from './trace-outbox-journal'
+import { decodeSegmentRecord } from './trace-outbox-record'
 import { TraceOutboxStore } from './trace-outbox-store'
 import { type DurableReceipt, type TraceEnvelopeInput } from './trace-outbox-types'
 
@@ -397,4 +398,105 @@ test('drains an overdue next group immediately after a slow prior group releases
 
   assert.equal(fs.events.filter(event => event === 'segment.write').length, 2)
   await second
+})
+
+type CrashPoint = 'segment-tail' | 'journal-tail' | 'after-segment-sync' | 'during-send' | 'after-receipt'
+
+interface CrashFixture {
+  expectedPendingBodies: string[]
+  journalLength: number
+  segmentLength: number
+}
+
+async function temporaryOutboxDirectory(): Promise<string> {
+  const tmpBase = resolve(process.cwd(), 'tmp')
+  await mkdir(tmpBase, { recursive: true })
+
+  return mkdtemp(join(tmpBase, 'trace-outbox-crash-'))
+}
+
+async function buildCrashFixture(root: string, crashPoint: CrashPoint): Promise<CrashFixture> {
+  const store = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+  const commits = [store.beginEnqueue(envelope('one')), store.beginEnqueue(envelope('two'))]
+  const batches = await Promise.all(commits.map(commit => commit.durable))
+  const segmentPath = join(root, 'segments', 'active.segment')
+  const journalPath = join(root, 'index.journal')
+  const journalLength = (await readFile(journalPath)).length
+  const segmentLength = (await readFile(segmentPath)).length
+
+  if (crashPoint === 'segment-tail') {
+    await appendFile(segmentPath, Buffer.from('torn-segment-tail', 'utf8'))
+  }
+
+  if (crashPoint === 'journal-tail') {
+    await appendFile(journalPath, Buffer.from('{"checksum":"torn-journal-tail"', 'utf8'))
+  }
+
+  if (crashPoint === 'after-segment-sync') {
+    await writeFile(journalPath, Buffer.alloc(0))
+  }
+
+  if (crashPoint === 'after-receipt') {
+    await commits[0].cancelForGatewayReceipt(receipt(batches[0].batchId, 'accepted'))
+  }
+
+  return {
+    expectedPendingBodies: crashPoint === 'after-receipt' ? ['trace:two'] : ['trace:one', 'trace:two'],
+    journalLength,
+    segmentLength
+  }
+}
+
+test.each<CrashPoint>(['segment-tail', 'journal-tail', 'after-segment-sync', 'during-send', 'after-receipt'])(
+  'recovers deterministic real-disk state after %s',
+  async crashPoint => {
+    const root = await temporaryOutboxDirectory()
+
+    try {
+      const fixture = await buildCrashFixture(root, crashPoint)
+      const recovered = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+      const diagnostics = await recovered.diagnostics()
+      const eligible = await recovered.peekEligible(Number.MAX_SAFE_INTEGER)
+
+      assert.equal(eligible?.body.toString('utf8'), fixture.expectedPendingBodies[0])
+      assert.equal(diagnostics.pending, fixture.expectedPendingBodies.length)
+      assert.equal(diagnostics.recoveredCorruptTail, crashPoint.endsWith('tail') ? 1 : 0)
+      assert.equal(new Set(fixture.expectedPendingBodies).size, fixture.expectedPendingBodies.length)
+
+      if (crashPoint === 'segment-tail') {
+        assert.equal((await readFile(join(root, 'segments', 'active.segment'))).length, fixture.segmentLength)
+        const third = await recovered.enqueue(envelope('three'))
+        assert.equal(third.sequence, 2)
+        assert.equal((await recovered.diagnostics()).pending, 3)
+      }
+
+      if (crashPoint === 'journal-tail') {
+        assert.equal((await readFile(join(root, 'index.journal'))).length, fixture.journalLength)
+      }
+    } finally {
+      await rm(root, { force: true, recursive: true })
+    }
+  }
+)
+
+test('quarantines a non-tail segment corruption without scanning later untrusted records', async () => {
+  const root = await temporaryOutboxDirectory()
+
+  try {
+    await buildCrashFixture(root, 'during-send')
+    const segmentPath = join(root, 'segments', 'active.segment')
+    const segment = Buffer.from(await readFile(segmentPath))
+    const first = decodeSegmentRecord(segment, 0)
+
+    assert.notEqual(first, null)
+    segment[first.nextOffset - 1] ^= 0x01
+    await writeFile(segmentPath, segment)
+
+    const recovered = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+
+    assert.equal(await recovered.peekEligible(Number.MAX_SAFE_INTEGER), undefined)
+    assert.equal((await recovered.diagnostics()).quarantined, 1)
+  } finally {
+    await rm(root, { force: true, recursive: true })
+  }
 })

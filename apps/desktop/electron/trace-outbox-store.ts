@@ -1,15 +1,21 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 
-import { encryptTraceRecord, type TraceKeyProtector } from './trace-outbox-crypto'
+import { decryptTraceRecord, encryptTraceRecord, type TraceKeyProtector } from './trace-outbox-crypto'
 import {
   nodeTraceFileSystem,
   type TraceFileSystem,
   TraceJournal,
   type TraceJournalOperation,
+  type TraceJournalPendingOperation,
   type TraceJournalReceiptOperation
 } from './trace-outbox-journal'
-import { encodeSegmentRecord, isValidTraceSegmentHeader } from './trace-outbox-record'
+import {
+  decodeSegmentRecord,
+  encodeSegmentRecord,
+  isValidTraceSegmentHeader,
+  type TraceSegmentHeader
+} from './trace-outbox-record'
 import {
   type DurableReceipt,
   type DurableTraceBatch,
@@ -51,7 +57,8 @@ interface PreparedRecord {
 interface StoredRecord {
   batch: Omit<DurableTraceBatch, 'body'>
   encodedBytes: number
-  state: 'pending' | 'receipt'
+  offset: number
+  state: 'pending' | 'quarantined' | 'receipt'
 }
 
 export interface TraceOutboxStoreOptions {
@@ -142,7 +149,7 @@ export class TraceOutboxStore {
       segmentPath: join(segmentDirectory, SEGMENT_FILE_NAME)
     })
 
-    await store.replayReceipts()
+    await store.recover()
 
     return store
   }
@@ -183,6 +190,9 @@ export class TraceOutboxStore {
   private pendingInputBytes = 0
   private pendingDeadline: number | null = null
   private segmentOffset = 0
+  private segmentWritable = true
+  private quarantinedSegments = 0
+  private recoveredCorruptTail = 0
 
   private constructor(
     private readonly config: {
@@ -268,8 +278,8 @@ export class TraceOutboxStore {
       payloadBytes,
       pending,
       pendingBytes: payloadBytes,
-      quarantined: 0,
-      recoveredCorruptTail: 0
+      quarantined: this.quarantinedSegments,
+      recoveredCorruptTail: this.recoveredCorruptTail
     }
   }
 
@@ -279,8 +289,60 @@ export class TraceOutboxStore {
     return receipt === undefined ? undefined : { ...receipt }
   }
 
-  private async replayReceipts(): Promise<void> {
+  async peekEligible(now: number): Promise<DurableTraceBatch | undefined> {
+    if (!Number.isSafeInteger(now) || now < 0) {
+      throw new RangeError('invalid_trace_outbox_peek_time')
+    }
+
+    const head = [...this.records.values()]
+      .filter(record => record.state === 'pending')
+      .sort((left, right) => left.batch.sequence - right.batch.sequence)[0]
+
+    if (head === undefined || head.batch.nextRetryAt > now) {
+      return undefined
+    }
+
+    try {
+      const segment = await this.config.fs.readFile(this.config.segmentPath)
+
+      if (segment === null) {
+        throw new Error('missing_trace_outbox_segment')
+      }
+
+      const decoded = decodeSegmentRecord(segment, head.offset)
+
+      if (
+        decoded === null ||
+        decoded.header.batchId !== head.batch.batchId ||
+        decoded.header.sequence !== head.batch.sequence ||
+        decoded.header.owner.accountKey !== head.batch.owner.accountKey
+      ) {
+        throw new Error('invalid_trace_outbox_segment_index')
+      }
+
+      const body = await decryptTraceRecord(
+        decoded.encrypted,
+        this.config.dataKey,
+        Buffer.from(`${decoded.header.owner.accountKey}/${decoded.header.batchId}`, 'utf8')
+      )
+
+      if (sha256(body) !== decoded.header.payloadSha256) {
+        throw new Error('invalid_trace_outbox_payload_digest')
+      }
+
+      return { ...decoded.header, body }
+    } catch {
+      head.state = 'quarantined'
+      this.quarantinedSegments = Math.max(this.quarantinedSegments, 1)
+
+      return undefined
+    }
+  }
+
+  private async recover(): Promise<void> {
+    const scanned = await this.scanActiveSegment()
     const recovered = await this.config.journal.recover()
+    const pendingOperations = new Set<string>()
 
     for (const operation of recovered.operations) {
       if (operation.op === 'receipt') {
@@ -288,8 +350,118 @@ export class TraceOutboxStore {
       }
 
       if (operation.op === 'pending') {
+        pendingOperations.add(operation.batchId)
         this.nextSequence = Math.max(this.nextSequence, operation.sequence + 1)
       }
+    }
+
+    for (const record of scanned.records) {
+      this.nextSequence = Math.max(this.nextSequence, record.header.sequence + 1)
+      const receipt = this.receipts.get(record.header.batchId)
+
+      this.records.set(record.header.batchId, {
+        batch: record.header,
+        encodedBytes: record.encodedBytes,
+        offset: record.offset,
+        state: receipt === undefined ? 'pending' : 'receipt'
+      })
+    }
+
+    this.segmentOffset = scanned.nextOffset
+    this.segmentWritable = !scanned.quarantined
+    this.quarantinedSegments = scanned.quarantined ? 1 : 0
+    this.recoveredCorruptTail = Number(scanned.recoveredTornTail || recovered.recoveredTornTail)
+
+    if (scanned.recoveredTornTail) {
+      await this.config.fs.writeFile(this.config.segmentPath, scanned.trustedPrefix)
+      await this.config.fs.syncFile(this.config.segmentPath)
+    }
+
+    if (recovered.recoveredTornTail) {
+      await this.config.journal.truncateRecoveredTornTail()
+      await this.config.journal.sync()
+    }
+
+    const reconstructed = scanned.records
+      .filter(record => !pendingOperations.has(record.header.batchId) && !this.receipts.has(record.header.batchId))
+      .map(record => this.pendingOperationFrom(record))
+
+    if (reconstructed.length > 0) {
+      await this.appendAndSyncJournal(reconstructed)
+    }
+  }
+
+  private async scanActiveSegment(): Promise<{
+    nextOffset: number
+    quarantined: boolean
+    records: Array<{ encodedBytes: number; header: TraceSegmentHeader; offset: number }>
+    recoveredTornTail: boolean
+    trustedPrefix: Buffer
+  }> {
+    const segment = await this.config.fs.readFile(this.config.segmentPath)
+
+    if (segment === null || segment.length === 0) {
+      return {
+        nextOffset: 0,
+        quarantined: false,
+        records: [],
+        recoveredTornTail: false,
+        trustedPrefix: Buffer.alloc(0)
+      }
+    }
+
+    const records: Array<{ encodedBytes: number; header: TraceSegmentHeader; offset: number }> = []
+    let offset = 0
+
+    while (offset < segment.length) {
+      try {
+        const decoded = decodeSegmentRecord(segment, offset)
+
+        if (decoded === null) {
+          return {
+            nextOffset: offset,
+            quarantined: false,
+            records,
+            recoveredTornTail: true,
+            trustedPrefix: Buffer.from(segment.subarray(0, offset))
+          }
+        }
+
+        records.push({ encodedBytes: decoded.nextOffset - offset, header: decoded.header, offset })
+        offset = decoded.nextOffset
+      } catch {
+        return {
+          nextOffset: offset,
+          quarantined: true,
+          records: [],
+          recoveredTornTail: false,
+          trustedPrefix: Buffer.alloc(0)
+        }
+      }
+    }
+
+    return {
+      nextOffset: offset,
+      quarantined: false,
+      records,
+      recoveredTornTail: false,
+      trustedPrefix: Buffer.from(segment)
+    }
+  }
+
+  private pendingOperationFrom(record: {
+    encodedBytes: number
+    header: TraceSegmentHeader
+    offset: number
+  }): TraceJournalOperation {
+    return {
+      op: 'pending',
+      batchId: record.header.batchId,
+      createdAt: record.header.createdAt,
+      length: record.encodedBytes,
+      offset: record.offset,
+      segment: SEGMENT_FILE_NAME,
+      sequence: record.header.sequence
     }
   }
 
@@ -352,9 +524,13 @@ export class TraceOutboxStore {
 
   private async flushGroup(group: PendingCommit[]): Promise<void> {
     try {
+      if (!this.segmentWritable) {
+        throw new Error('trace_outbox_segment_quarantined')
+      }
+
       const records = await Promise.all(group.map(item => this.prepareRecord(item)))
       let offset = this.segmentOffset
-      const pendingOperations: TraceJournalOperation[] = []
+      const pendingOperations: TraceJournalPendingOperation[] = []
 
       for (const record of records) {
         await this.config.fs.appendFile(this.config.segmentPath, record.encoded)
@@ -391,6 +567,7 @@ export class TraceOutboxStore {
         this.records.set(record.batch.batchId, {
           batch: metadata,
           encodedBytes: record.encoded.length,
+          offset: pendingOperations[index].offset,
           state: receipt === null ? 'pending' : 'receipt'
         })
 
