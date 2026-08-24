@@ -59,3 +59,22 @@ test('legacy Trace owners reject trusted account or session identities', () => {
   assert.throws(() => validateTraceOwner({ ...legacy, accountId: null }), /invalid_trace_owner/)
   assert.throws(() => validateTraceOwner({ ...legacy, sessionId: null }), /invalid_trace_owner/)
 })
+
+test('trusted Trace owners reject UUIDv4 prefixes followed by trailing text', () => {
+  assert.throws(
+    () =>
+      validateTraceOwner({
+        ...validOwner(),
+        sessionId: `${validOwner().sessionId!}-suffix`
+      }),
+    /invalid_trace_owner/
+  )
+  assert.throws(
+    () =>
+      validateTraceOwner({
+        ...validOwner(),
+        installationId: `${validOwner().installationId}-suffix`
+      }),
+    /invalid_account_key/
+  )
+})

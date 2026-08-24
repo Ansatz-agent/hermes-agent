@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 
 import { type EncryptedTraceRecord } from './trace-outbox-crypto'
-import { type DurableTraceBatch, type TraceOwner, validateTraceOwner } from './trace-outbox-types'
+import { type DurableTraceBatch, isCanonicalUuidV4, type TraceOwner, validateTraceOwner } from './trace-outbox-types'
 
 const RECORD_MAGIC = Buffer.from('ATOB', 'ascii')
 const RECORD_VERSION = 1
@@ -11,7 +11,6 @@ const MAX_HEADER_BYTES = 64 * 1024
 const MAX_CIPHERTEXT_BYTES = 64 * 1024 * 1024
 const NONCE_BYTES = 12
 const TAG_BYTES = 16
-const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const SHA256_HEX = /^[0-9a-f]{64}$/
 const CORRELATION_ID = /^[0-9A-Za-z][0-9A-Za-z._:-]{0,127}$/
 const ENTRYPOINTS = new Set(['cli', 'dashboard', 'desktop', 'voice'])
@@ -101,7 +100,7 @@ function isTraceSegmentHeader(value: unknown): value is TraceSegmentHeader {
   return (
     isNonNegativeSafeInteger(value.attempt) &&
     typeof value.batchId === 'string' &&
-    UUID_V4.test(value.batchId) &&
+    isCanonicalUuidV4(value.batchId) &&
     value.contentType === 'application/x-protobuf' &&
     isNonNegativeSafeInteger(value.createdAt) &&
     typeof value.entrypoint === 'string' &&

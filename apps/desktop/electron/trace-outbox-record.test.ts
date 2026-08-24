@@ -154,3 +154,25 @@ test('rejects checksummed headers with invalid durable metadata formats and boun
     assert.throws(() => decodeSegmentRecord(encoded, 0), /invalid_record_header/)
   }
 })
+
+test('rejects checksummed headers containing UUIDv4 prefixes followed by trailing text', async () => {
+  const input = await validRecord()
+
+  const invalidHeaders: TraceSegmentHeader[] = [
+    { ...input.header, batchId: `${input.header.batchId}-suffix` },
+    {
+      ...input.header,
+      owner: { ...input.header.owner, sessionId: `${input.header.owner.sessionId!}-suffix` }
+    },
+    {
+      ...input.header,
+      owner: { ...input.header.owner, installationId: `${input.header.owner.installationId}-suffix` }
+    }
+  ]
+
+  for (const header of invalidHeaders) {
+    const encoded = encodeSegmentRecord({ ...input, header })
+
+    assert.throws(() => decodeSegmentRecord(encoded, 0), /invalid_record_header/)
+  }
+})
