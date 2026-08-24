@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from html.parser import HTMLParser
 
@@ -131,7 +131,7 @@ class SessionStatus:
 
 @dataclass(frozen=True)
 class TraceCredential:
-    access_token: str
+    access_token: str = field(repr=False)
     expires_at: str
     expires_in: int
     installation_id: str
@@ -141,7 +141,7 @@ class TraceCredential:
 class NativeSessionCredential:
     account_id: str
     session_id: str
-    session_token: str
+    session_token: str = field(repr=False)
     installation_id: str
     username: str
     issued_at: str
@@ -804,6 +804,7 @@ def _parse_native_trace_credential(
     return _parse_trace_credential(
         response,
         expected_installation_id=credential.installation_id,
+        strict_rfc3339_expiry=True,
     )
 
 
@@ -811,6 +812,7 @@ def _parse_trace_credential(
     response: httpx.Response,
     *,
     expected_installation_id: str,
+    strict_rfc3339_expiry: bool = False,
 ) -> TraceCredential:
     if response.status_code == 401:
         raise SessionRejected()
@@ -840,6 +842,7 @@ def _parse_trace_credential(
         or any(character in access_token for character in "\r\n")
         or not isinstance(expires_at, str)
         or len(expires_at) > 128
+        or (strict_rfc3339_expiry and not _is_rfc3339(expires_at))
         or not isinstance(expires_in, int)
         or isinstance(expires_in, bool)
         or not 1 <= expires_in <= 900

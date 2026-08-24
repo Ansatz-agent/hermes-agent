@@ -769,3 +769,46 @@ def test_native_trace_token_rejects_cookie_credential_without_a_network_request(
         client.trace_token(valid_cookie_record().cookies)  # type: ignore[arg-type]
 
     assert requests == []
+
+
+def test_native_and_trace_credentials_do_not_render_tokens():
+    credential = native_credential()
+    trace = TraceCredential(
+        access_token="trace-secret-sentinel-1234567890",
+        expires_at="2099-08-23T14:15:00+00:00",
+        expires_in=900,
+        installation_id=INSTALLATION_ID,
+    )
+
+    for value, secret in (
+        (credential, SESSION_TOKEN),
+        (trace, "trace-secret-sentinel-1234567890"),
+    ):
+        assert secret not in repr(value)
+        assert secret not in str(value)
+
+
+@pytest.mark.parametrize(
+    "expires_at",
+    [
+        "2099-08-23 14:15:00+00:00",
+        "2099-08-23T14:15:00",
+        "2099-08-23T25:15:00+00:00",
+    ],
+)
+def test_native_trace_token_rejects_non_rfc3339_expiry(expires_at):
+    client, _ = make_client(
+        [
+            trace_response(
+                body={
+                    "access_token": "trace-token-sentinel-1234567890",
+                    "expires_at": expires_at,
+                    "expires_in": 900,
+                    "installation_id": INSTALLATION_ID,
+                }
+            )
+        ]
+    )
+
+    with pytest.raises(AuthServiceError, match="invalid_response"):
+        client.trace_token(native_credential())
