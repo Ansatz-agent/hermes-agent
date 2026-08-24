@@ -574,6 +574,55 @@ class BlockingNativeAuthClient(FakeAuthClient):
         )
 
 
+class BlockingBobWriteBackend(FakeSecretBackend):
+    """Stops immediately after Bob's blob reaches the backend."""
+
+    def __init__(self, raw: str | None = None) -> None:
+        super().__init__(raw=raw)
+        self.bob_persisted = threading.Event()
+        self.release_bob_persist = threading.Event()
+        self.alice_stale_persisted = threading.Event()
+        self._blocked = False
+
+    def write(self, raw: str) -> None:
+        super().write(raw)
+        account_id = json.loads(raw).get("account_id")
+        if self._blocked and account_id == ACCOUNT_ID:
+            self.alice_stale_persisted.set()
+        if not self._blocked and account_id == BOB_ACCOUNT_ID:
+            self._blocked = True
+            self.bob_persisted.set()
+            assert self.release_bob_persist.wait(timeout=2)
+
+
+class BlockingLegacyUpgradeClient(BlockingNativeAuthClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.legacy_validation_started = threading.Event()
+        self.release_legacy_validation = threading.Event()
+
+    def legacy_status(self, _cookies: dict[str, str]) -> SessionStatus:
+        self.legacy_validation_started.set()
+        assert self.release_legacy_validation.wait(timeout=2)
+        return status_at()
+
+    def issue_client_session(
+        self, cookies: dict[str, str], *, installation_id: str, client_version: str
+    ) -> NativeSessionCredential:
+        if cookies["__Host-ansatz_sessionid"] == "session-1":
+            return NativeSessionCredential(
+                account_id=ACCOUNT_ID,
+                session_id=NATIVE_SESSION_ID,
+                session_token="session-token-alice-sentinel-1234567890",
+                installation_id=installation_id,
+                username="alice",
+                issued_at="2026-08-24T12:00:00+00:00",
+            )
+        return super().issue_client_session(
+            cookies, installation_id=installation_id, client_version=client_version
+        )
+
+
 def blocking_native_owner_factory():
     clock = FakeClock()
     backend = FakeSecretBackend()
@@ -730,6 +779,101 @@ def test_stale_explicit_revoke_cannot_tombstone_newer_identity():
 
     assert outcomes == [bob]
     assert owner.snapshot() == bob
+    assert json.loads(backend.raw)["account_id"] == BOB_ACCOUNT_ID
+
+
+@pytest.mark.parametrize("explicit_revoke", [False, True])
+def test_newer_login_commit_excludes_alice_validation_after_bob_persists(explicit_revoke):
+    clock = FakeClock()
+    backend = BlockingBobWriteBackend()
+    client = BlockingNativeAuthClient()
+    owner = VaultOwner(client, secret_backend=backend, clock=clock, jitter=lambda *_: 1.0)
+    alice = owner.login(
+        "alice", bytearray(b"secret"), installation_id=INSTALLATION_ID, client_version="0.17.0"
+    )
+    if explicit_revoke:
+        client.native_status_error = ExplicitSessionRevocation(
+            code="session_revoked",
+            account_id=alice.account_id,
+            session_id=alice.session_id,
+            revoked_at="2026-08-24T12:00:00+00:00",
+        )
+    validation_results: list[RuntimeSnapshot] = []
+    validation = threading.Thread(target=lambda: validation_results.append(owner.validate_now()))
+    validation.start()
+    assert client.validation_started.wait(timeout=2)
+    login_results: list[RuntimeSnapshot] = []
+    failures: list[BaseException] = []
+
+    def login_bob() -> None:
+        try:
+            login_results.append(
+                owner.login(
+                    "bob",
+                    bytearray(b"secret"),
+                    installation_id=INSTALLATION_ID,
+                    client_version="0.17.0",
+                )
+            )
+        except BaseException as error:
+            failures.append(error)
+
+    bob_login = threading.Thread(target=login_bob)
+    bob_login.start()
+    assert backend.bob_persisted.wait(timeout=2)
+    client.release_validation.set()
+    assert not backend.alice_stale_persisted.wait(timeout=0.1)
+    backend.release_bob_persist.set()
+    bob_login.join(timeout=2)
+    validation.join(timeout=2)
+
+    assert failures == []
+    assert len(login_results) == 1
+    assert validation_results == login_results
+    assert owner.snapshot() == login_results[0]
+    assert json.loads(backend.raw)["account_id"] == BOB_ACCOUNT_ID
+    restarted = VaultOwner(client, secret_backend=backend, clock=clock, jitter=lambda *_: 1.0)
+    assert restarted.refresh().account_id == BOB_ACCOUNT_ID
+
+
+def test_newer_native_login_commit_excludes_legacy_upgrade_after_bob_persists():
+    clock = FakeClock()
+    backend = BlockingBobWriteBackend(raw=legacy_v1_blob())
+    client = BlockingLegacyUpgradeClient()
+    owner = VaultOwner(client, secret_backend=backend, clock=clock, jitter=lambda *_: 1.0)
+    owner.refresh()
+    validation_results: list[RuntimeSnapshot] = []
+    validation = threading.Thread(target=lambda: validation_results.append(owner.validate_now()))
+    validation.start()
+    assert client.legacy_validation_started.wait(timeout=2)
+    login_results: list[RuntimeSnapshot] = []
+    failures: list[BaseException] = []
+
+    def login_bob() -> None:
+        try:
+            login_results.append(
+                owner.login(
+                    "bob",
+                    bytearray(b"secret"),
+                    installation_id=INSTALLATION_ID,
+                    client_version="0.17.0",
+                )
+            )
+        except BaseException as error:
+            failures.append(error)
+
+    bob_login = threading.Thread(target=login_bob)
+    bob_login.start()
+    assert backend.bob_persisted.wait(timeout=2)
+    client.release_legacy_validation.set()
+    assert not backend.alice_stale_persisted.wait(timeout=0.1)
+    backend.release_bob_persist.set()
+    bob_login.join(timeout=2)
+    validation.join(timeout=2)
+
+    assert failures == []
+    assert validation_results == login_results
+    assert owner.snapshot() == login_results[0]
     assert json.loads(backend.raw)["account_id"] == BOB_ACCOUNT_ID
 
 

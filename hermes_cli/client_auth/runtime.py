@@ -1510,28 +1510,31 @@ class _OwnerCore:
             last_validated_at=credential.issued_at,
         )
         try:
-            self._secret_backend.write(_encode_native_blob(record))
-            if _decode_credential_blob(self._secret_backend.read() or "") != record:
-                raise AuthRequired("runtime_unavailable")
+            # This is the local mutation commit. It deliberately shares the
+            # validation mutation lock so no old validation can overwrite the
+            # credential store after this write but before publication.
+            with self._lock:
+                self._secret_backend.write(_encode_native_blob(record))
+                if _decode_credential_blob(self._secret_backend.read() or "") != record:
+                    raise AuthRequired("runtime_unavailable")
+                self._record = record
+                self._record_loaded = True
+                self._failed_login_attempts.clear()
+                self._last_authenticated_activity = now
+                self._validation_failures = 0
+                snapshot = RuntimeSnapshot.from_native_credential(
+                    record,
+                    runtime_instance_id=self._snapshot.runtime_instance_id,
+                    epoch=self._snapshot.epoch + 1,
+                ).online(last_validated_at=record.last_validated_at)
+                self._publish_locked(snapshot)
+                self._schedule_validation_locked(now)
         except Exception:
             reason = "vault_unavailable" if self._vault_required else "runtime_unavailable"
             self._lock_with_reason(reason)
             self._best_effort_remote_logout(cookie)
             raise AuthRequired(reason) from None
-        with self._lock:
-            self._record = record
-            self._record_loaded = True
-            self._failed_login_attempts.clear()
-            self._last_authenticated_activity = now
-            self._validation_failures = 0
-            snapshot = RuntimeSnapshot.from_native_credential(
-                record,
-                runtime_instance_id=self._snapshot.runtime_instance_id,
-                epoch=self._snapshot.epoch + 1,
-            ).online(last_validated_at=record.last_validated_at)
-            self._publish_locked(snapshot)
-            self._schedule_validation_locked(now)
-            return snapshot
+        return snapshot
 
     def _login_legacy(self, username: str, password: bytearray) -> RuntimeSnapshot:
         self._check_login_rate_limit()
