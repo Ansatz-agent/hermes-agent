@@ -1508,7 +1508,6 @@ class _OwnerCore:
                 return self._record
         try:
             raw = self._secret_backend.read()
-            record = _decode_cookie_blob(raw) if raw else None
         except Exception:
             reason = "vault_unavailable" if self._vault_required else "runtime_unavailable"
             with self._lock:
@@ -1518,6 +1517,28 @@ class _OwnerCore:
                 self._publish_locked(locked)
                 self._next_refresh_at = None
             raise AuthRequired(reason) from None
+        if raw:
+            try:
+                record = _decode_cookie_blob(raw)
+            except AuthRequired:
+                try:
+                    self._secret_backend.delete()
+                except Exception:
+                    reason = (
+                        "vault_unavailable"
+                        if self._vault_required
+                        else "runtime_unavailable"
+                    )
+                    with self._lock:
+                        if self._record_loaded:
+                            return self._record
+                        locked = self._snapshot.locked(reason, now=self._clock())
+                        self._publish_locked(locked)
+                        self._next_refresh_at = None
+                    raise AuthRequired(reason) from None
+                record = None
+        else:
+            record = None
         with self._lock:
             if self._record_loaded:
                 return self._record

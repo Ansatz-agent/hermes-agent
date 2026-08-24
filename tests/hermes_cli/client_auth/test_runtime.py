@@ -592,6 +592,19 @@ def test_graphical_vault_failure_never_falls_back_to_memory_or_file(tmp_path):
     assert set(tmp_path.iterdir()) == before
 
 
+def test_graphical_vault_discards_an_incompatible_saved_session_and_signs_out():
+    owner, secret_backend, auth_client, _clock = vault_owner_factory()
+    secret_backend.raw = '{"legacy_session":"stale"}'
+
+    snapshot = owner.refresh()
+
+    assert snapshot.state is AuthState.SIGNED_OUT
+    assert snapshot.reason is None
+    assert secret_backend.raw is None
+    assert secret_backend.delete_count == 1
+    assert auth_client.status_calls == 0
+
+
 def test_profiles_share_one_os_user_runtime_and_logout_revokes_both():
     owner, _secret_backend, _auth_client, _clock = memory_owner_factory()
     coder = owner.connect_consumer(profile="coder")
