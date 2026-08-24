@@ -37,7 +37,7 @@ def html_response(
 def redirect_response(
     status: int = 302,
     *,
-    location: str = "/agent/",
+    location: str = "/traces/",
     cookies: Iterable[str] = (),
 ) -> httpx.Response:
     return httpx.Response(
@@ -79,9 +79,12 @@ def trace_response(
 def valid_status_body() -> dict[str, object]:
     return {
         "authenticated": True,
+        "sub": "7",
         "username": "alice",
+        "role": "user",
         "server_time": "2026-08-18T12:00:00+00:00",
         "session_expires_at": "2026-09-01T12:00:00+00:00",
+        "trace_dashboard_url": "/traces/",
     }
 
 
@@ -112,13 +115,13 @@ def test_login_uses_only_fixed_origin_and_cookie_names():
         [
             html_response(
                 cookie=(
-                    "agent_history_csrftoken=csrf-1; Secure; Path=/agent/; SameSite=Lax"
+                    "__Host-ansatz_csrftoken=csrf-1; Secure; Path=/; SameSite=Lax"
                 )
             ),
             redirect_response(
                 cookies=(
-                    "agent_history_sessionid=session-1; Secure; HttpOnly; "
-                    "Path=/agent/; SameSite=Lax",
+                    "__Host-ansatz_sessionid=session-1; Secure; HttpOnly; "
+                    "Path=/; SameSite=Lax",
                 )
             ),
             json_response(200, valid_status_body()),
@@ -129,9 +132,9 @@ def test_login_uses_only_fixed_origin_and_cookie_names():
 
     assert result.username == "alice"
     assert [request.url.path for request in requests] == [
-        "/agent/accounts/login/",
-        "/agent/accounts/login/",
-        "/agent/api/session/",
+        "/auth/login/",
+        "/auth/login/",
+        "/auth/api/session/",
     ]
     assert {request.url.copy_with(path="/") for request in requests} == {
         httpx.URL(f"{AUTH_ORIGIN}/")
@@ -144,11 +147,11 @@ def test_login_accepts_django_masked_form_token_distinct_from_cookie_secret():
         [
             html_response(
                 csrf="masked-csrf-token",
-                cookie="agent_history_csrftoken=csrf-secret; Secure; Path=/agent/",
+                cookie="__Host-ansatz_csrftoken=csrf-secret; Secure; Path=/",
             ),
             redirect_response(
                 cookies=(
-                    "agent_history_sessionid=session-1; Secure; HttpOnly; Path=/agent/",
+                    "__Host-ansatz_sessionid=session-1; Secure; HttpOnly; Path=/",
                 )
             ),
             json_response(200, valid_status_body()),
@@ -178,15 +181,16 @@ def test_status_rejects_html_cross_origin_and_schema_drift(bad):
 @pytest.mark.parametrize(
     "set_cookie",
     [
-        "agent_history_sessionid=session-1; HttpOnly; Path=/agent/",
-        "agent_history_sessionid=session-1; Secure; HttpOnly; Path=/",
+        "__Host-ansatz_sessionid=session-1; HttpOnly; Path=/",
+        "__Host-ansatz_sessionid=session-1; Secure; HttpOnly; Path=/auth/",
+        "__Host-ansatz_sessionid=session-1; Secure; HttpOnly; Path=/; Domain=c2sml.cn",
     ],
 )
-def test_login_rejects_session_cookie_without_secure_agent_scope(set_cookie):
+def test_login_rejects_session_cookie_without_secure_host_scope(set_cookie):
     client, _ = make_client(
         [
             html_response(
-                cookie="agent_history_csrftoken=csrf-1; Secure; Path=/agent/"
+                cookie="__Host-ansatz_csrftoken=csrf-1; Secure; Path=/"
             ),
             redirect_response(cookies=(set_cookie,)),
         ]
@@ -212,11 +216,22 @@ def test_status_rejects_unauthenticated_response_with_typed_error():
         client.status(valid_cookie_record().cookies)
 
 
+def test_status_parses_stable_identity_role_and_dashboard_path():
+    client, _ = make_client([json_response(200, valid_status_body())])
+
+    status = client.status(valid_cookie_record().cookies)
+
+    assert status.sub == "7"
+    assert status.username == "alice"
+    assert status.role == "user"
+    assert status.trace_dashboard_url == "/traces/"
+
+
 def test_errors_never_include_password_cookie_or_response_body():
     client, _ = make_client(
         [
             html_response(
-                cookie="agent_history_csrftoken=csrf-1; Secure; Path=/agent/"
+                cookie="__Host-ansatz_csrftoken=csrf-1; Secure; Path=/"
             ),
             httpx.Response(
                 500,
@@ -237,8 +252,8 @@ def test_errors_never_include_password_cookie_or_response_body():
 
 def test_logout_clears_local_cookie_jar_when_server_is_unavailable():
     client, _ = make_client([httpx.Response(503)])
-    client._http.cookies.set(SESSION_COOKIE, "session-1", path="/agent/")
-    client._http.cookies.set(CSRF_COOKIE, "csrf-1", path="/agent/")
+    client._http.cookies.set(SESSION_COOKIE, "session-1", path="/")
+    client._http.cookies.set(CSRF_COOKIE, "csrf-1", path="/")
 
     with pytest.raises(AuthServiceError):
         client.logout(valid_cookie_record().cookies)
@@ -267,10 +282,10 @@ def test_trace_token_uses_fixed_authenticated_route_and_exact_installation_ident
     assert request.method == "POST"
     assert request.url == httpx.URL(f"{AUTH_ORIGIN}{TRACE_TOKEN_PATH}")
     assert request.headers["cookie"] == (
-        "agent_history_sessionid=session-1; agent_history_csrftoken=csrf-1"
+        "__Host-ansatz_sessionid=session-1; __Host-ansatz_csrftoken=csrf-1"
     )
     assert request.headers["x-csrftoken"] == "csrf-1"
-    assert request.headers["referer"] == f"{AUTH_ORIGIN}/agent/"
+    assert request.headers["referer"] == f"{AUTH_ORIGIN}/auth/"
     assert json.loads(request.content) == {
         "installation_id": "11111111-1111-4111-8111-111111111111",
         "client_version": "0.17.0",

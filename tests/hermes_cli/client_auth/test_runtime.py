@@ -223,9 +223,12 @@ def test_scope_token_control_eof_revokes_every_registered_bearer(monkeypatch):
 def status_at(*, server_second: int = 0, expiry_second: int = 120) -> SessionStatus:
     origin = datetime(2026, 8, 18, 12, 0, tzinfo=timezone.utc)
     return SessionStatus(
+        sub="7",
         username="alice",
+        role="user",
         server_time=(origin + timedelta(seconds=server_second)).isoformat(),
         session_expires_at=(origin + timedelta(seconds=expiry_second)).isoformat(),
+        trace_dashboard_url="/traces/",
     )
 
 
@@ -406,8 +409,8 @@ class FakeAuthClient:
     def __init__(self) -> None:
         self.record = CookieRecord(
             cookies={
-                "agent_history_sessionid": "session-1",
-                "agent_history_csrftoken": "csrf-1",
+                "__Host-ansatz_sessionid": "session-1",
+                "__Host-ansatz_csrftoken": "csrf-1",
             },
             username="alice",
             session_expires_at=status_at().session_expires_at,
@@ -1734,16 +1737,16 @@ def test_login_waits_for_a_concurrent_logout_instead_of_rejecting_password():
 def test_stale_status_cannot_delete_a_concurrent_successful_login():
     old_record = CookieRecord(
         cookies={
-            "agent_history_sessionid": "old-session",
-            "agent_history_csrftoken": "old-csrf",
+            "__Host-ansatz_sessionid": "old-session",
+            "__Host-ansatz_csrftoken": "old-csrf",
         },
         username="alice",
         session_expires_at=status_at().session_expires_at,
     )
     new_record = CookieRecord(
         cookies={
-            "agent_history_sessionid": "new-session",
-            "agent_history_csrftoken": "new-csrf",
+            "__Host-ansatz_sessionid": "new-session",
+            "__Host-ansatz_csrftoken": "new-csrf",
         },
         username="alice",
         session_expires_at=status_at().session_expires_at,

@@ -301,7 +301,7 @@ describe('AuthGate', () => {
     renderGate()
 
     expect(await screen.findByRole('heading', { name: 'Sign in to Ansatz Voice Trace Client' })).not.toBeNull()
-    expect(screen.getByText('https://c2sml.cn/agent')).not.toBeNull()
+    expect(screen.getByText('https://c2sml.cn/auth')).not.toBeNull()
     expect(screen.getByLabelText('Username')).not.toBeNull()
     expect(screen.getByLabelText('Password').getAttribute('type')).toBe('password')
     expect(screen.getByRole('button', { name: 'Sign in' })).not.toBeNull()

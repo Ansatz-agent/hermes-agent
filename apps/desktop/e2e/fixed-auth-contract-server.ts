@@ -4,11 +4,11 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import https from 'node:https'
 
 const ORIGIN = 'https://c2sml.cn' as const
-const LOGIN_PATH = '/agent/accounts/login/'
-const SESSION_PATH = '/agent/api/session/'
-const LOGOUT_PATH = '/agent/accounts/logout/'
-const CSRF_COOKIE = 'agent_history_csrftoken'
-const SESSION_COOKIE = 'agent_history_sessionid'
+const LOGIN_PATH = '/auth/login/'
+const SESSION_PATH = '/auth/api/session/'
+const LOGOUT_PATH = '/auth/logout/'
+const CSRF_COOKIE = '__Host-ansatz_csrftoken'
+const SESSION_COOKIE = '__Host-ansatz_sessionid'
 const MAX_FORM_BYTES = 64 * 1024
 
 type AuthEventName = 'login_page' | 'login_rejected' | 'login_accepted' | 'session_valid' | 'logout'
@@ -84,7 +84,7 @@ function sameOriginReferer(request: IncomingMessage): boolean {
   }
   try {
     const referer = new URL(value)
-    return referer.origin === ORIGIN && referer.pathname.startsWith('/agent/')
+    return referer.origin === ORIGIN && referer.pathname.startsWith('/auth/')
   } catch {
     return false
   }
@@ -141,7 +141,7 @@ export async function startFixedAuthContractServer(options: {
         const body = `<!doctype html><html><body><form method="post"><input type="hidden" name="csrfmiddlewaretoken" value="${currentCsrf}"></form></body></html>`
         send(response, 200, body, {
           'Content-Type': 'text/html; charset=utf-8',
-          'Set-Cookie': `${CSRF_COOKIE}=${currentCsrf}; Path=/agent/; Secure; SameSite=Lax`,
+          'Set-Cookie': `${CSRF_COOKIE}=${currentCsrf}; Path=/; Secure; SameSite=Lax`,
         })
         return
       }
@@ -170,8 +170,8 @@ export async function startFixedAuthContractServer(options: {
         sensitive.add(currentSession)
         record('login_accepted')
         send(response, 302, '', {
-          Location: '/agent/',
-          'Set-Cookie': `${SESSION_COOKIE}=${currentSession}; Path=/agent/; Secure; HttpOnly; SameSite=Lax`,
+          Location: '/traces/',
+          'Set-Cookie': `${SESSION_COOKIE}=${currentSession}; Path=/; Secure; HttpOnly; SameSite=Lax`,
         })
         return
       }
@@ -186,9 +186,12 @@ export async function startFixedAuthContractServer(options: {
         record('session_valid')
         sendJson(response, 200, {
           authenticated: true,
+          sub: '7',
           username,
+          role: 'user',
           server_time: serverTime.toISOString(),
           session_expires_at: new Date(serverTime.getTime() + 60 * 60 * 1000).toISOString(),
+          trace_dashboard_url: '/traces/',
         })
         return
       }
@@ -214,8 +217,8 @@ export async function startFixedAuthContractServer(options: {
         currentSession = null
         record('logout')
         send(response, 302, '', {
-          Location: '/agent/',
-          'Set-Cookie': `${SESSION_COOKIE}=; Path=/agent/; Secure; HttpOnly; Max-Age=0; SameSite=Lax`,
+          Location: '/auth/login/',
+          'Set-Cookie': `${SESSION_COOKIE}=; Path=/; Secure; HttpOnly; Max-Age=0; SameSite=Lax`,
         })
         return
       }

@@ -9,17 +9,25 @@ from html.parser import HTMLParser
 import httpx
 
 AUTH_ORIGIN = "https://c2sml.cn"
-AUTH_PREFIX = "/agent"
-LOGIN_PATH = f"{AUTH_PREFIX}/accounts/login/"
-LOGOUT_PATH = f"{AUTH_PREFIX}/accounts/logout/"
+AUTH_PREFIX = "/auth"
+LOGIN_PATH = f"{AUTH_PREFIX}/login/"
+LOGOUT_PATH = f"{AUTH_PREFIX}/logout/"
 SESSION_PATH = f"{AUTH_PREFIX}/api/session/"
 TRACE_TOKEN_PATH = f"{AUTH_PREFIX}/api/trace-token/"
-SESSION_COOKIE = "agent_history_sessionid"
-CSRF_COOKIE = "agent_history_csrftoken"
+SESSION_COOKIE = "__Host-ansatz_sessionid"
+CSRF_COOKIE = "__Host-ansatz_csrftoken"
 
 _COOKIE_NAMES = frozenset({SESSION_COOKIE, CSRF_COOKIE})
 _STATUS_KEYS = frozenset(
-    {"authenticated", "username", "server_time", "session_expires_at"}
+    {
+        "authenticated",
+        "sub",
+        "username",
+        "role",
+        "server_time",
+        "session_expires_at",
+        "trace_dashboard_url",
+    }
 )
 _TRACE_CREDENTIAL_KEYS = frozenset(
     {"access_token", "expires_at", "expires_in", "installation_id"}
@@ -57,9 +65,12 @@ class CookieRecord:
 
 @dataclass(frozen=True)
 class SessionStatus:
+    sub: str
     username: str
+    role: str
     server_time: str
     session_expires_at: str
+    trace_dashboard_url: str
 
 
 @dataclass(frozen=True)
@@ -237,7 +248,10 @@ def _require_same_origin_redirect(response: httpx.Response) -> None:
         target.scheme != "https"
         or target.host != httpx.URL(AUTH_ORIGIN).host
         or target.port != httpx.URL(AUTH_ORIGIN).port
-        or not target.path.startswith(f"{AUTH_PREFIX}/")
+        or not (
+            target.path.startswith(f"{AUTH_PREFIX}/")
+            or target.path.startswith("/traces/")
+        )
     ):
         raise AuthServiceError("invalid_redirect")
 
@@ -247,7 +261,12 @@ def _require_cookie(jar: object, name: str):
     if len(matches) != 1:
         raise AuthServiceError("invalid_cookie")
     cookie = matches[0]
-    if not cookie.value or not cookie.secure or cookie.path != f"{AUTH_PREFIX}/":
+    if (
+        not cookie.value
+        or not cookie.secure
+        or cookie.path != "/"
+        or cookie.domain_specified
+    ):
         raise AuthServiceError("invalid_cookie")
     return cookie
 
@@ -296,16 +315,38 @@ def _parse_session_status(response: httpx.Response) -> SessionStatus:
     if set(body) != _STATUS_KEYS or body.get("authenticated") is not True:
         raise AuthServiceError("invalid_response")
 
+    sub = body.get("sub")
     username = body.get("username")
+    role = body.get("role")
     server_time = body.get("server_time")
     session_expires_at = body.get("session_expires_at")
-    if not all(isinstance(value, str) and value for value in (username, server_time, session_expires_at)):
+    trace_dashboard_url = body.get("trace_dashboard_url")
+    if (
+        not isinstance(sub, str)
+        or not 1 <= len(sub) <= 128
+        or any(character.isspace() or ord(character) < 32 for character in sub)
+        or not isinstance(username, str)
+        or not 1 <= len(username) <= 150
+        or role not in {"user", "admin"}
+        or trace_dashboard_url != "/traces/"
+        or not all(
+            isinstance(value, str) and value
+            for value in (server_time, session_expires_at)
+        )
+    ):
         raise AuthServiceError("invalid_response")
     server_datetime = _parse_aware_datetime(server_time)
     expiry_datetime = _parse_aware_datetime(session_expires_at)
     if expiry_datetime <= server_datetime:
         raise SessionRejected()
-    return SessionStatus(username, server_time, session_expires_at)
+    return SessionStatus(
+        sub=sub,
+        username=username,
+        role=role,
+        server_time=server_time,
+        session_expires_at=session_expires_at,
+        trace_dashboard_url=trace_dashboard_url,
+    )
 
 
 def _validate_trace_request(

@@ -21,7 +21,7 @@ import { useViewedInterval } from '@/hooks/use-viewed-interval'
 import { type Translations, useI18n } from '@/i18n'
 import { sanitizeAuthBootstrapText } from '@/lib/auth-bootstrap-progress'
 
-const ACCOUNT_SERVER = 'https://c2sml.cn/agent'
+const ACCOUNT_SERVER = 'https://c2sml.cn/auth'
 const AUTH_REQUEST_TIMEOUT_MS = 15_000
 const AUTH_LOGIN_TIMEOUT_MS = 90_000
 
