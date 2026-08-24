@@ -26,6 +26,9 @@ import {
 
 const DEFAULT_GROUP_COMMIT_BYTES = 8 * 1024 * 1024
 const DEFAULT_GROUP_COMMIT_MS = 50
+const DEFAULT_CAPACITY_BYTES = 2 * 1024 * 1024 * 1024
+const RECORD_PREFIX_BYTES = 25
+const MAX_RECORD_BYTES = RECORD_PREFIX_BYTES + 64 * 1024 + 12 + 16 + 64 * 1024 * 1024 + 32
 const KEY_FILE_NAME = 'key.json'
 const SEGMENT_FILE_NAME = 'active.segment'
 const JOURNAL_FILE_NAME = 'index.journal'
@@ -62,6 +65,7 @@ interface StoredRecord {
 }
 
 export interface TraceOutboxStoreOptions {
+  capacityBytes?: number
   fs?: TraceFileSystem
   groupCommitBytes?: number
   groupCommitMs?: number
@@ -122,6 +126,7 @@ export class TraceOutboxStore {
     const fs = options.fs ?? nodeTraceFileSystem
     const groupCommitBytes = options.groupCommitBytes ?? DEFAULT_GROUP_COMMIT_BYTES
     const groupCommitMs = options.groupCommitMs ?? DEFAULT_GROUP_COMMIT_MS
+    const capacityBytes = options.capacityBytes ?? DEFAULT_CAPACITY_BYTES
 
     if (!Number.isSafeInteger(groupCommitBytes) || groupCommitBytes <= 0) {
       throw new RangeError('invalid_group_commit_bytes')
@@ -129,6 +134,10 @@ export class TraceOutboxStore {
 
     if (!Number.isSafeInteger(groupCommitMs) || groupCommitMs < 0 || groupCommitMs > DEFAULT_GROUP_COMMIT_MS) {
       throw new RangeError('invalid_group_commit_ms')
+    }
+
+    if (!Number.isSafeInteger(capacityBytes) || capacityBytes <= 0) {
+      throw new RangeError('invalid_trace_outbox_capacity')
     }
 
     await fs.mkdir(options.root)
@@ -140,6 +149,7 @@ export class TraceOutboxStore {
 
     const store = new TraceOutboxStore({
       dataKey,
+      capacityBytes,
       fs,
       groupCommitBytes,
       groupCommitMs,
@@ -197,6 +207,7 @@ export class TraceOutboxStore {
   private constructor(
     private readonly config: {
       dataKey: Buffer
+      capacityBytes: number
       fs: TraceFileSystem
       groupCommitBytes: number
       groupCommitMs: number
@@ -303,13 +314,19 @@ export class TraceOutboxStore {
     }
 
     try {
-      const segment = await this.config.fs.readFile(this.config.segmentPath)
+      const size = await this.config.fs.stat(this.config.segmentPath)
 
-      if (segment === null) {
+      if (size === null || head.offset + head.encodedBytes > size || head.encodedBytes > MAX_RECORD_BYTES) {
         throw new Error('missing_trace_outbox_segment')
       }
 
-      const decoded = decodeSegmentRecord(segment, head.offset)
+      const segment = await this.config.fs.readRange(this.config.segmentPath, head.offset, head.encodedBytes)
+
+      if (segment === null) {
+        throw new Error('trace_outbox_segment_short_read')
+      }
+
+      const decoded = decodeSegmentRecord(segment, 0)
 
       if (
         decoded === null ||
@@ -373,7 +390,7 @@ export class TraceOutboxStore {
     this.recoveredCorruptTail = Number(scanned.recoveredTornTail || recovered.recoveredTornTail)
 
     if (scanned.recoveredTornTail) {
-      await this.config.fs.writeFile(this.config.segmentPath, scanned.trustedPrefix)
+      await this.config.fs.truncateFile(this.config.segmentPath, scanned.nextOffset)
       await this.config.fs.syncFile(this.config.segmentPath)
     }
 
@@ -398,9 +415,9 @@ export class TraceOutboxStore {
     recoveredTornTail: boolean
     trustedPrefix: Buffer
   }> {
-    const segment = await this.config.fs.readFile(this.config.segmentPath)
+    const size = await this.config.fs.stat(this.config.segmentPath)
 
-    if (segment === null || segment.length === 0) {
+    if (size === null || size === 0) {
       return {
         nextOffset: 0,
         quarantined: false,
@@ -410,12 +427,68 @@ export class TraceOutboxStore {
       }
     }
 
+    if (size > this.config.capacityBytes) {
+      return { nextOffset: 0, quarantined: true, records: [], recoveredTornTail: false, trustedPrefix: Buffer.alloc(0) }
+    }
+
     const records: Array<{ encodedBytes: number; header: TraceSegmentHeader; offset: number }> = []
     let offset = 0
 
-    while (offset < segment.length) {
+    while (offset < size) {
       try {
-        const decoded = decodeSegmentRecord(segment, offset)
+        if (size - offset < RECORD_PREFIX_BYTES) {
+          return {
+            nextOffset: offset,
+            quarantined: false,
+            records,
+            recoveredTornTail: true,
+            trustedPrefix: Buffer.alloc(0)
+          }
+        }
+
+        const prefix = await this.config.fs.readRange(this.config.segmentPath, offset, RECORD_PREFIX_BYTES)
+
+        if (prefix === null) {
+          return {
+            nextOffset: offset,
+            quarantined: true,
+            records: [],
+            recoveredTornTail: false,
+            trustedPrefix: Buffer.alloc(0)
+          }
+        }
+
+        const recordLength =
+          RECORD_PREFIX_BYTES +
+          prefix.readUInt32BE(5) +
+          prefix.readUInt32BE(9) +
+          prefix.readUInt32BE(13) +
+          prefix.readUInt32BE(17) +
+          32
+
+        if (recordLength > MAX_RECORD_BYTES || recordLength > size - offset) {
+          return {
+            nextOffset: offset,
+            quarantined: false,
+            records,
+            recoveredTornTail: true,
+            trustedPrefix: Buffer.alloc(0)
+          }
+        }
+
+        const encoded = await this.config.fs.readRange(this.config.segmentPath, offset, recordLength)
+
+        if (encoded === null) {
+          return {
+            nextOffset: offset,
+            quarantined: true,
+            records: [],
+            recoveredTornTail: false,
+            trustedPrefix: Buffer.alloc(0)
+          }
+        }
+
+        const decoded = decodeSegmentRecord(encoded, 0)
 
         if (decoded === null) {
           return {
@@ -423,12 +496,12 @@ export class TraceOutboxStore {
             quarantined: false,
             records,
             recoveredTornTail: true,
-            trustedPrefix: Buffer.from(segment.subarray(0, offset))
+            trustedPrefix: Buffer.alloc(0)
           }
         }
 
-        records.push({ encodedBytes: decoded.nextOffset - offset, header: decoded.header, offset })
-        offset = decoded.nextOffset
+        records.push({ encodedBytes: decoded.nextOffset, header: decoded.header, offset })
+        offset += decoded.nextOffset
       } catch {
         return {
           nextOffset: offset,
@@ -445,7 +518,7 @@ export class TraceOutboxStore {
       quarantined: false,
       records,
       recoveredTornTail: false,
-      trustedPrefix: Buffer.from(segment)
+      trustedPrefix: Buffer.alloc(0)
     }
   }
 

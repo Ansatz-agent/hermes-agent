@@ -51,6 +51,12 @@ class FakeTraceFileSystem implements TraceFileSystem {
     return value === undefined ? null : Buffer.from(value)
   }
 
+  async readRange(path: string, offset: number, length: number): Promise<Buffer | null> {
+    const value = this.files.get(path)
+
+    return value === undefined ? null : Buffer.from(value.subarray(offset, offset + length))
+  }
+
   async rename(from: string, to: string): Promise<void> {
     this.allEvents.push(`rename:${from}:${to}`)
     const value = this.files.get(from)
@@ -61,6 +67,10 @@ class FakeTraceFileSystem implements TraceFileSystem {
 
     this.files.set(to, value)
     this.files.delete(from)
+  }
+
+  async stat(path: string): Promise<number | null> {
+    return this.files.get(path)?.length ?? null
   }
 
   async syncDirectory(path: string): Promise<void> {
@@ -78,6 +88,15 @@ class FakeTraceFileSystem implements TraceFileSystem {
     this.events.push(event)
     this.signal(event)
     await this.hooks[event]?.()
+  }
+
+  async truncateFile(path: string, length: number): Promise<void> {
+    const value = this.files.get(path)
+
+    if (value === undefined) {
+      throw new Error('missing_file')
+    }
+    this.files.set(path, value.subarray(0, length))
   }
 
   async unlink(path: string): Promise<void> {
@@ -108,6 +127,51 @@ class FakeTraceFileSystem implements TraceFileSystem {
     }
 
     this.waiters.delete(event)
+  }
+}
+
+class RangeOnlyTraceFileSystem extends FakeTraceFileSystem {
+  readonly rangeReads: Array<{ length: number; offset: number; path: string }> = []
+  rejectWholeReads = false
+  readonly reportedSizes = new Map<string, number>()
+
+  override async readFile(path: string): Promise<Buffer | null> {
+    if (this.rejectWholeReads && (path.endsWith('active.segment') || path.endsWith('index.journal'))) {
+      throw new Error('whole_file_read_forbidden')
+    }
+
+    return super.readFile(path)
+  }
+
+  async stat(path: string): Promise<number | null> {
+    const contents = this.files.get(path)
+
+    if (contents === undefined) {
+      return null
+    }
+
+    return this.reportedSizes.get(path) ?? contents.length
+  }
+
+  async readRange(path: string, offset: number, length: number): Promise<Buffer | null> {
+    this.rangeReads.push({ length, offset, path })
+    const contents = this.files.get(path)
+
+    if (contents === undefined) {
+      return null
+    }
+
+    return Buffer.from(contents.subarray(offset, offset + length))
+  }
+
+  async truncateFile(path: string, length: number): Promise<void> {
+    const contents = this.files.get(path)
+
+    if (contents === undefined) {
+      throw new Error('missing_file')
+    }
+
+    this.files.set(path, contents.subarray(0, length))
   }
 }
 
@@ -499,4 +563,36 @@ test('quarantines a non-tail segment corruption without scanning later untrusted
   } finally {
     await rm(root, { force: true, recursive: true })
   }
+})
+
+test('recovers and peeks through bounded range reads without whole segment or journal buffers', async () => {
+  const fs = new RangeOnlyTraceFileSystem()
+  const first = await TraceOutboxStore.open(options({ fs, groupCommitMs: 1 }))
+  await first.enqueue(envelope('bounded'))
+  fs.rejectWholeReads = true
+
+  const recovered = await TraceOutboxStore.open(options({ fs, groupCommitMs: 1 }))
+  const eligible = await recovered.peekEligible(Number.MAX_SAFE_INTEGER)
+
+  assert.equal(eligible?.body.toString(), 'trace:bounded')
+  assert.ok(fs.rangeReads.some(read => read.path.endsWith('index.journal')))
+  assert.ok(fs.rangeReads.some(read => read.path.endsWith('active.segment')))
+  assert.ok(fs.rangeReads.every(read => read.length <= 64 * 1024 * 1024 + 64 * 1024 + 64))
+})
+
+test('quarantines a sparse segment above capacity without reading its reported contents', async () => {
+  const fs = new RangeOnlyTraceFileSystem()
+  const initial = await TraceOutboxStore.open(options({ fs, groupCommitMs: 1 }))
+  await initial.enqueue(envelope('sparse'))
+  const segmentPath = '/outbox/segments/active.segment'
+  fs.reportedSizes.set(segmentPath, 3 * 1024 * 1024 * 1024)
+  fs.rejectWholeReads = true
+
+  const recovered = await TraceOutboxStore.open(options({ fs, groupCommitMs: 1 }))
+
+  assert.equal((await recovered.diagnostics()).quarantined, 1)
+  assert.equal(
+    fs.rangeReads.some(read => read.path === segmentPath),
+    false
+  )
 })

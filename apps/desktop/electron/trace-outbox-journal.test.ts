@@ -20,6 +20,12 @@ class MemoryFileSystem implements TraceFileSystem {
     return value === undefined ? null : Buffer.from(value)
   }
 
+  async readRange(path: string, offset: number, length: number): Promise<Buffer | null> {
+    const value = this.files.get(path)
+
+    return value === undefined ? null : Buffer.from(value.subarray(offset, offset + length))
+  }
+
   async rename(from: string, to: string): Promise<void> {
     const value = this.files.get(from)
 
@@ -31,9 +37,22 @@ class MemoryFileSystem implements TraceFileSystem {
     this.files.delete(from)
   }
 
+  async stat(path: string): Promise<number | null> {
+    return this.files.get(path)?.length ?? null
+  }
+
   async syncDirectory(): Promise<void> {}
 
   async syncFile(): Promise<void> {}
+
+  async truncateFile(path: string, length: number): Promise<void> {
+    const value = this.files.get(path)
+
+    if (value === undefined) {
+      throw new Error('missing_file')
+    }
+    this.files.set(path, value.subarray(0, length))
+  }
 
   async unlink(path: string): Promise<void> {
     this.files.delete(path)

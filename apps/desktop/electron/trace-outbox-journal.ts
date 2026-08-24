@@ -7,9 +7,12 @@ export interface TraceFileSystem {
   appendFile(path: string, data: Buffer): Promise<void>
   mkdir(path: string): Promise<void>
   readFile(path: string): Promise<Buffer | null>
+  readRange(path: string, offset: number, length: number): Promise<Buffer | null>
   rename(from: string, to: string): Promise<void>
+  stat(path: string): Promise<number | null>
   syncDirectory(path: string): Promise<void>
   syncFile(path: string): Promise<void>
+  truncateFile(path: string, length: number): Promise<void>
   unlink(path: string): Promise<void>
   writeFile(path: string, data: Buffer, options?: { exclusive?: boolean }): Promise<void>
 }
@@ -17,6 +20,8 @@ export interface TraceFileSystem {
 const UNSAFE_PATH = 'unsafe_trace_outbox_path'
 const PRIVATE_MODE_MASK = 0o077
 const NO_FOLLOW = constants.O_NOFOLLOW ?? 0
+const JOURNAL_CHUNK_BYTES = 64 * 1024
+const MAX_JOURNAL_BYTES = 2 * 1024 * 1024 * 1024
 
 function currentUid(): number | null {
   return typeof process.getuid === 'function' ? process.getuid() : null
@@ -112,6 +117,44 @@ export const nodeTraceFileSystem: TraceFileSystem = {
       throw error
     }
   },
+  async readRange(path: string, offset: number, length: number): Promise<Buffer | null> {
+    if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(length) || offset < 0 || length < 0) {
+      throw new RangeError('invalid_trace_outbox_range')
+    }
+
+    try {
+      await assertSafePath(path, 'file')
+      const handle = await openSafeFile(path, constants.O_RDONLY)
+
+      try {
+        const size = (await handle.stat()).size
+
+        if (offset > size || length > size - offset) {
+          return null
+        }
+        const output = Buffer.allocUnsafe(length)
+        let cursor = 0
+
+        while (cursor < length) {
+          const { bytesRead } = await handle.read(output, cursor, length - cursor, offset + cursor)
+
+          if (bytesRead === 0) {
+            return null
+          }
+          cursor += bytesRead
+        }
+
+        return output
+      } finally {
+        await handle.close()
+      }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return null
+      }
+      throw error
+    }
+  },
   async rename(from: string, to: string): Promise<void> {
     await assertSafePath(from, 'file')
 
@@ -126,6 +169,18 @@ export const nodeTraceFileSystem: TraceFileSystem = {
 
     await rename(from, to)
     await assertSafePath(to, 'file')
+  },
+  async stat(path: string): Promise<number | null> {
+    try {
+      await assertSafePath(path, 'file')
+
+      return (await lstat(path)).size
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        return null
+      }
+      throw error
+    }
   },
   async syncDirectory(path: string): Promise<void> {
     await assertSafePath(path, 'directory')
@@ -143,6 +198,15 @@ export const nodeTraceFileSystem: TraceFileSystem = {
 
     try {
       await handle.sync()
+    } finally {
+      await handle.close()
+    }
+  },
+  async truncateFile(path: string, length: number): Promise<void> {
+    const handle = await openSafeFile(path, constants.O_WRONLY)
+
+    try {
+      await handle.truncate(length)
     } finally {
       await handle.close()
     }
@@ -331,42 +395,55 @@ export class TraceJournal {
   }
 
   async recover(): Promise<TraceJournalRecovery> {
-    const contents = await this.options.fs.readFile(this.options.path)
     this.recoveredTornTailOffset = null
+    const size = await this.options.fs.stat(this.options.path)
 
-    if (contents === null || contents.length === 0) {
+    if (size === null || size === 0) {
       return { operations: [], recoveredTornTail: false }
+    }
+
+    if (size > MAX_JOURNAL_BYTES) {
+      throw new Error('trace_outbox_journal_too_large')
     }
 
     const operations: TraceJournalOperation[] = []
     let offset = 0
+    let pending = Buffer.alloc(0)
 
-    while (offset < contents.length) {
-      const newline = contents.indexOf(0x0a, offset)
+    while (offset < size) {
+      const length = Math.min(JOURNAL_CHUNK_BYTES, size - offset)
+      const chunk = await this.options.fs.readRange(this.options.path, offset, length)
 
-      if (newline === -1) {
-        this.recoveredTornTailOffset = offset
-
-        return { operations, recoveredTornTail: true }
+      if (chunk === null) {
+        throw new Error('trace_outbox_journal_short_read')
       }
+      offset += length
+      pending = Buffer.concat([pending, chunk])
 
-      const line = contents.subarray(offset, newline)
-
-      if (line.length === 0) {
-        throw new Error('invalid_journal_line')
+      if (pending.length > JOURNAL_CHUNK_BYTES) {
+        throw new Error('trace_outbox_journal_line_too_large')
       }
+      let newline: number
 
-      try {
-        operations.push(parseLine(line))
-      } catch (error) {
-        if (newline === contents.length - 1) {
-          throw error
+      while ((newline = pending.indexOf(0x0a)) !== -1) {
+        const line = pending.subarray(0, newline)
+
+        if (line.length === 0) {
+          throw new Error('invalid_journal_line')
         }
+        operations.push(parseLine(line))
+        pending = pending.subarray(newline + 1)
 
-        throw error
+        if (pending.length > JOURNAL_CHUNK_BYTES) {
+          throw new Error('trace_outbox_journal_line_too_large')
+        }
       }
+    }
 
-      offset = newline + 1
+    if (pending.length > 0) {
+      this.recoveredTornTailOffset = size - pending.length
+
+      return { operations, recoveredTornTail: true }
     }
 
     return { operations, recoveredTornTail: false }
@@ -377,13 +454,7 @@ export class TraceJournal {
       return
     }
 
-    const contents = await this.options.fs.readFile(this.options.path)
-
-    if (contents === null) {
-      throw new Error('missing_trace_outbox_journal')
-    }
-
-    await this.options.fs.writeFile(this.options.path, contents.subarray(0, this.recoveredTornTailOffset))
+    await this.options.fs.truncateFile(this.options.path, this.recoveredTornTailOffset)
     this.recoveredTornTailOffset = null
   }
 
