@@ -8,6 +8,10 @@ import { canonicalJson, type TraceFileSystem, TraceJournal } from './trace-outbo
 class MemoryFileSystem implements TraceFileSystem {
   readonly files = new Map<string, Buffer>()
 
+  async freeSpace(): Promise<{ available: number; total: number }> {
+    return { available: 20 * 1024 ** 3, total: 20 * 1024 ** 3 }
+  }
+
   async appendFile(path: string, data: Buffer): Promise<void> {
     this.files.set(path, Buffer.concat([this.files.get(path) ?? Buffer.alloc(0), data]))
   }

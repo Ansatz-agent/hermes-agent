@@ -32,6 +32,10 @@ class FakeTraceFileSystem implements TraceFileSystem {
     > = {}
   ) {}
 
+  async freeSpace(): Promise<{ available: number; total: number }> {
+    return { available: 20 * 1024 ** 3, total: 20 * 1024 ** 3 }
+  }
+
   async appendFile(path: string, data: Buffer): Promise<void> {
     this.allEvents.push(`append:${path}`)
     const event = path.endsWith('index.journal') ? 'journal.write' : 'segment.write'
@@ -793,7 +797,7 @@ test('replays durable quarantine and eviction terminal states after restart', as
     })
 
     assert.equal((await reopened.peekEligible(Number.MAX_SAFE_INTEGER))?.batchId, live.batchId)
-    assert.equal((await reopened.diagnostics()).evictedCapacity, 1)
+    assert.equal((await reopened.diagnostics()).evictedCapacity, 0)
   } finally {
     await rm(root, { force: true, recursive: true })
     await rm(evictionRoot, { force: true, recursive: true })

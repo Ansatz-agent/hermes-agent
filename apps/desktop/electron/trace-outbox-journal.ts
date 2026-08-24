@@ -1,11 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { constants, type Stats } from 'node:fs'
-import { lstat, mkdir, open, rename, unlink } from 'node:fs/promises'
+import { lstat, mkdir, open, rename, statfs, unlink } from 'node:fs/promises'
 import { type FileHandle } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
 export interface TraceFileSystem {
   appendFile(path: string, data: Buffer): Promise<void>
+  freeSpace(path: string): Promise<{ available: number; total: number }>
   mkdir(path: string): Promise<void>
   readFile(path: string): Promise<Buffer | null>
   readRange(path: string, offset: number, length: number): Promise<Buffer | null>
@@ -81,6 +82,28 @@ async function openSafeFile(path: string, flags: number): Promise<FileHandle> {
 }
 
 export const nodeTraceFileSystem: TraceFileSystem = {
+  async freeSpace(path: string): Promise<{ available: number; total: number }> {
+    const stats = await statfs(path)
+    const blockSize = Number(stats.bsize)
+    const availableBlocks = Number(stats.bavail)
+    const totalBlocks = Number(stats.blocks)
+
+    if (
+      !Number.isSafeInteger(blockSize) ||
+      !Number.isSafeInteger(availableBlocks) ||
+      !Number.isSafeInteger(totalBlocks)
+    ) {
+      throw new Error('invalid_trace_outbox_free_space')
+    }
+
+    const available = blockSize * availableBlocks
+    const total = blockSize * totalBlocks
+    if (!Number.isSafeInteger(available) || !Number.isSafeInteger(total) || available < 0 || total < 0) {
+      throw new Error('invalid_trace_outbox_free_space')
+    }
+
+    return { available, total }
+  },
   async appendFile(path: string, data: Buffer): Promise<void> {
     const handle = await openSafeFile(path, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT)
 

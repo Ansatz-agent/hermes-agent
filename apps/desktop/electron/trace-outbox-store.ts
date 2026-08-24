@@ -182,7 +182,7 @@ export class TraceOutboxStore {
     const store = new TraceOutboxStore({
       dataKey,
       capacityBytes,
-      freeSpace: options.freeSpace ?? (() => ({ available: Number.MAX_SAFE_INTEGER, total: Number.MAX_SAFE_INTEGER })),
+      freeSpace: options.freeSpace ?? (() => fs.freeSpace(options.root)),
       fs,
       groupCommitBytes,
       groupCommitMs,
@@ -248,6 +248,7 @@ export class TraceOutboxStore {
   private deduplicated = 0
   private evictedCapacity = 0
   private expired = 0
+  private accountKey: string | null = null
 
   private constructor(
     private readonly config: {
@@ -273,6 +274,12 @@ export class TraceOutboxStore {
 
   private beginEnqueueInternal(input: TraceEnvelopeInput, bypassNormalAdmission: boolean): PendingLocalCommit {
     validateTraceOwner(input.owner)
+
+    if (this.accountKey === null) {
+      this.accountKey = input.owner.accountKey
+    } else if (this.accountKey !== input.owner.accountKey) {
+      throw new Error('trace_outbox_account_mismatch')
+    }
 
     if (!Buffer.isBuffer(input.body)) {
       throw new TypeError('invalid_trace_payload')
@@ -456,8 +463,13 @@ export class TraceOutboxStore {
   }
 
   async acknowledge(batchId: string, receipt: DurableReceipt): Promise<void> {
-    if (receipt.batchId !== batchId) {
-      throw new TypeError('receipt_batch_mismatch')
+    if (
+      receipt.batchId !== batchId ||
+      (receipt.outcome !== 'accepted' && receipt.outcome !== 'duplicate') ||
+      !Number.isSafeInteger(receipt.receivedAt) ||
+      receipt.receivedAt < 0
+    ) {
+      throw new TypeError('invalid_trace_receipt')
     }
 
     await this.persistReceipt(receipt)
@@ -528,6 +540,11 @@ export class TraceOutboxStore {
     this.evictedCapacity = [...terminalStates.values()].filter(operation => operation.terminal === 'evicted').length
 
     for (const record of scanned.records) {
+      if (this.accountKey === null) {
+        this.accountKey = record.header.owner.accountKey
+      } else if (this.accountKey !== record.header.owner.accountKey) {
+        throw new Error('trace_outbox_account_mismatch')
+      }
       this.nextSequence = Math.max(this.nextSequence, record.header.sequence + 1)
       const receipt = this.receipts.get(record.header.batchId)
       const terminal = terminalStates.get(record.header.batchId)
@@ -974,6 +991,7 @@ export class TraceOutboxStore {
 
     if (record !== undefined) {
       record.state = 'receipt'
+      this.dedupe.delete(this.dedupeKey(record.batch))
     }
     this.pruneReceipts(this.config.now())
   }
@@ -1152,7 +1170,7 @@ export class TraceOutboxStore {
         if (operation.op === 'terminal') {
           const record = this.records.get(operation.batchId)
 
-          return operation.terminal === 'evicted' || record?.state === 'quarantined'
+          return record?.state === 'quarantined'
         }
 
         const record = this.records.get(operation.batchId)
