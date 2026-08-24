@@ -496,6 +496,36 @@ describe('AuthGate', () => {
     }
   )
 
+  it('does not merge a local transient status into an active remote authorization owner', async () => {
+    const remoteAuthenticated = {
+      ...authenticated,
+      username: 'remote-user',
+      account_id: 'remote-account',
+      session_id: 'remote-session',
+      principal_key: 'account:remote-account'
+    }
+
+    let localStatus: DesktopAccountStatus = authenticated
+
+    const { emit } = renderGate(
+      { status: vi.fn(async connectionId => (connectionId === 'remote-a' ? remoteAuthenticated : localStatus)) },
+      null,
+      <AuthProbe />
+    )
+
+    expect(await screen.findByRole('button', { name: 'alice:local' })).not.toBeNull()
+
+    act(() => emit(remoteAuthenticated, 'remote-a'))
+    expect(await screen.findByRole('button', { name: 'remote-user:remote-a' })).not.toBeNull()
+
+    localStatus = { ...signedOut, state: 'locked', reason: 'runtime_unavailable', epoch: 3 }
+    act(() => emit(localStatus, 'local'))
+
+    expect(screen.queryByRole('button', { name: 'remote-user:local' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'remote-user:remote-a' })).toBeNull()
+    expect(await screen.findByRole('heading', { name: 'Sign in to Ansatz' })).not.toBeNull()
+  })
+
   it('unmounts the protected tree when main emits signed out', async () => {
     const { emit } = renderGate({ status: vi.fn(async () => authenticated) })
     expect(await screen.findByText('Protected Hermes application')).not.toBeNull()
