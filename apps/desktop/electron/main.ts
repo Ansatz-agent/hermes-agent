@@ -60,6 +60,11 @@ import {
   resumeQuitAfterShutdown
 } from './backend-ownership'
 import {
+  backendExitedBeforeOwnershipError,
+  isProcessGoneError,
+  windowsProcessStartMarkerCommand
+} from './process-identity'
+import {
   canImportHermesCli,
   execProbeSync,
   PROBE_TIMEOUT_MS,
@@ -3393,7 +3398,7 @@ async function processStartMarker(pid) {
       '-NoProfile',
       '-NonInteractive',
       '-Command',
-      `$p = Get-Process -Id ${pid} -ErrorAction Stop; $p.StartTime.ToUniversalTime().Ticks`
+      windowsProcessStartMarkerCommand(pid)
     ])
 
     if (!/^\d+$/.test(ticks)) {
@@ -3435,7 +3440,7 @@ async function processIdentityMatches(identity) {
   try {
     return (await processStartMarker(identity.pid)) === identity.startMarker
   } catch (error) {
-    return error?.code === 'ENOENT' || error?.code === 'ESRCH' ? false : undefined
+    return isProcessGoneError(error) ? false : undefined
   }
 }
 
@@ -3537,6 +3542,11 @@ async function claimBackendChild(child, command, profile, nonce) {
   } catch (error) {
     stopBackendChild(child)
     await waitForBackendExit(child)
+
+    if (isProcessGoneError(error)) {
+      throw backendExitedBeforeOwnershipError(child?.pid, error)
+    }
+
     throw new Error(`Could not persist ownership for the Hermes backend: ${error.message}`)
   }
 }
@@ -10674,6 +10684,12 @@ async function spawnPoolBackend(profile, entry) {
 
   entry.process = child
   entry.token = scopeToken.bearer
+  // Attach diagnostics before the ownership probe. A backend can fail during
+  // Python import/startup in the short window before its PID identity is
+  // persisted; keeping stdout/stderr from the first byte makes the real
+  // startup cause visible instead of reducing it to a generic PID race.
+  child.stdout.on('data', rememberLog)
+  child.stderr.on('data', rememberLog)
   await claimBackendChild(child, `${backend.command} ${backend.args.join(' ')}`, profile, backendNonce)
   await writeBackendScopeToken(child, scopeToken)
   const traceBackendGeneration = backendNonce
@@ -10685,9 +10701,6 @@ async function spawnPoolBackend(profile, entry) {
       scheduleDesktopTraceTransportAttachRetry()
     })
   }
-
-  child.stdout.on('data', rememberLog)
-  child.stderr.on('data', rememberLog)
 
   let ready = false
   let rejectStart = null
@@ -11029,6 +11042,11 @@ async function startHermes() {
       })
     )
 
+    // Capture early interpreter/import failures before the ownership marker is
+    // queried. Otherwise a fast child exit is reported without the backend's
+    // useful stderr and looks like an ownership persistence bug.
+    hermesProcess.stdout.on('data', rememberLog)
+    hermesProcess.stderr.on('data', rememberLog)
     await claimBackendChild(hermesProcess, `${backend.command} ${backend.args.join(' ')}`, profile, backendNonce)
     await writeBackendScopeToken(hermesProcess, scopeToken)
 
@@ -11050,9 +11068,6 @@ async function startHermes() {
         scheduleDesktopTraceTransportAttachRetry()
       })
     }
-
-    hermesProcess.stdout.on('data', rememberLog)
-    hermesProcess.stderr.on('data', rememberLog)
     let backendReady = false
     let rejectBackendStart = null
 

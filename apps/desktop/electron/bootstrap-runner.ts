@@ -983,7 +983,8 @@ function validateBundledRuntime(activeRoot, hermesHome, bootstrapScope = 'runtim
 
     const child = spawn(python, ['-c', importProbe], {
       stdio: ['ignore', 'ignore', 'pipe'],
-      env: buildBundledRuntimeValidationEnvironment(activeRoot, hermesHome)
+      env: buildBundledRuntimeValidationEnvironment(activeRoot, hermesHome),
+      windowsHide: true
     })
 
     let stderr = ''
