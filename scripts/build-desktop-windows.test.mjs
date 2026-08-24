@@ -124,8 +124,8 @@ test('orchestrator runs all three authoritative commands in order', async () => 
       calls.push({ args: step.args, skip: step.env.HERMES_DESKTOP_SKIP_BUILD })
       fs.appendFileSync(step.logPath, `${step.command} ${step.args.join(' ')}\n`)
       if (step.args.includes('dist:win:nsis')) {
-        const artifact = path.join(releaseDir, 'Ansatz-Voice-Trace-Client-0.17.0-win-x64.exe')
-        const appExe = path.join(releaseDir, 'win-unpacked', 'AnsatzVoiceTraceClient.exe')
+        const artifact = path.join(releaseDir, 'Ansatz-0.17.0-win-x64.exe')
+        const appExe = path.join(releaseDir, 'win-unpacked', 'Ansatz.exe')
         fs.mkdirSync(path.dirname(appExe), { recursive: true })
         writeX64Pe(artifact)
         writeX64Pe(appExe)
@@ -151,7 +151,7 @@ test('orchestrator runs all three authoritative commands in order', async () => 
     assert.equal(calls[2].skip, '1')
     assert.match(
       fs.readFileSync(result.artifactPointer, 'utf8'),
-      /Ansatz-Voice-Trace-Client-0\.17\.0-win-x64\.exe/
+      /Ansatz-0\.17\.0-win-x64\.exe/
     )
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
@@ -200,8 +200,8 @@ test('orchestrator rejects a Playwright browser download in the retained log', a
         runner: async step => {
           fs.appendFileSync(step.logPath, 'Downloading Chromium 145.0.0 (playwright build v1208)\n')
           if (step.args.includes('dist:win:nsis')) {
-            const artifact = path.join(releaseDir, 'Ansatz-Voice-Trace-Client-0.17.0-win-x64.exe')
-            const appExe = path.join(releaseDir, 'win-unpacked', 'AnsatzVoiceTraceClient.exe')
+            const artifact = path.join(releaseDir, 'Ansatz-0.17.0-win-x64.exe')
+            const appExe = path.join(releaseDir, 'win-unpacked', 'Ansatz.exe')
             fs.mkdirSync(path.dirname(appExe), { recursive: true })
             writeX64Pe(artifact)
             writeX64Pe(appExe)

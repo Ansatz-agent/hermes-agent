@@ -136,7 +136,7 @@ function resolveDmgPath() {
     return path.join(RELEASE_ROOT, artifactName('mac', 'dmg'))
   }
 
-  const prefix = `Ansatz-Voice-Trace-Client-${PACKAGE_JSON.version}`
+  const prefix = `Ansatz-${PACKAGE_JSON.version}`
   const candidates = fs
     .readdirSync(RELEASE_ROOT)
     .filter(name => name.endsWith('.dmg'))

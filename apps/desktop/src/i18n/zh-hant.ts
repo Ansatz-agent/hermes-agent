@@ -4,7 +4,7 @@ import { defineLocale } from './define-locale'
 
 export const zhHant = defineLocale({
   auth: {
-    title: '登入 Ansatz Voice Trace Client',
+    title: '登入 Ansatz',
     description: '完整離線執行環境安裝完成後方可登入帳戶。',
     serverLabel: '帳戶伺服器',
     traceNotice:
@@ -17,11 +17,11 @@ export const zhHant = defineLocale({
     checking: '正在驗證帳戶工作階段…',
     preparingRuntime: '正在準備安全登入服務…',
     preparingStage: (current, total, title) => `正在準備安全登入服務（${current}/${total}）：${title}…`,
-    runtimeTitle: '正在安裝 Ansatz Voice Trace Client',
+    runtimeTitle: '正在安裝 Ansatz',
     runtimeDescription: '必須先安裝完整離線執行環境，之後才會開放帳戶登入。',
     preparingFullRuntime: '正在安裝完整離線執行環境…',
     preparingFullStage: (current, total, title) => `正在安裝完整離線執行環境（${current}/${total}）：${title}…`,
-    runtimePreparationFailed: 'Ansatz Voice Trace Client 無法安裝本機執行環境，請重試安裝。',
+    runtimePreparationFailed: 'Ansatz 無法安裝本機執行環境，請重試安裝。',
     administratorManaged: '帳戶發放與密碼協助由伺服器管理員統一處理。',
     accountMenu: '帳戶',
     signOut: '登出',
@@ -31,9 +31,9 @@ export const zhHant = defineLocale({
       stagesComplete: (completed, total) => `已完成 ${completed}/${total} 個階段`,
       stagePosition: (current, total, title) => `第 ${current}/${total} 階段：${title}`,
       elapsed: elapsed => `目前階段 · ${elapsed}`,
-      overallProgressLabel: 'Ansatz Voice Trace Client 執行環境安裝',
+      overallProgressLabel: 'Ansatz 執行環境安裝',
       authPreparationFailed: '無法準備安全登入服務。',
-      runtimePreparationFailed: '無法安裝 Ansatz Voice Trace Client 本機執行環境。',
+      runtimePreparationFailed: '無法安裝 Ansatz 本機執行環境。',
       failedAt: title => `失敗階段：${title}`,
       runningWithElapsed: (state, elapsed) => `${state} · ${elapsed}`,
       knownProgress: (completed, total, unit, percent) =>
@@ -120,14 +120,14 @@ export const zhHant = defineLocale({
   },
 
   boot: {
-    ready: 'Hermes Desktop 已就緒',
+    ready: 'Ansatz 已就緒',
     desktopBootFailedWithMessage: message => `桌面啟動失敗：${message}`,
     steps: {
       connectingGateway: '正在連線桌面閘道',
       loadingSettings: '正在載入 Hermes 設定',
       loadingSessions: '正在載入最近工作階段',
       startingDesktopConnection: '正在啟動桌面連線',
-      startingHermesDesktop: '正在啟動 Hermes Desktop…'
+      startingHermesDesktop: '正在啟動 Ansatz…'
     },
     errors: {
       backgroundExited: 'Hermes 背景程序已結束。',
@@ -190,7 +190,7 @@ export const zhHant = defineLocale({
       elevenLabsRejectedKey: 'ElevenLabs 拒絕了該 API 金鑰 (401)。',
       diskFull: '磁碟已滿 — 請騰出一些空間後再試。',
       gatewayAuthFailed: '閘道認證失敗 — 請檢查你的 API_SERVER_KEY。',
-      methodNotAllowed: '桌面後端拒絕了該請求 (405 Method Not Allowed)。請嘗試重新啟動 Hermes Desktop。',
+      methodNotAllowed: '桌面後端拒絕了該請求 (405 Method Not Allowed)。請嘗試重新啟動 Ansatz。',
       microphonePermission: '麥克風權限已被拒絕。',
       openaiRejectedApiKey: 'OpenAI 拒絕了該 API 金鑰。',
       openaiRejectedApiKeyWithStatus: status => `OpenAI 拒絕了該 API 金鑰 (${status} invalid_api_key)。`,
@@ -348,7 +348,7 @@ export const zhHant = defineLocale({
       advanced: '進階'
     },
     searchPlaceholder: {
-      about: '關於 Hermes Desktop',
+      about: '關於 Ansatz',
       config: '搜尋設定…',
       gateway: '閘道連線…',
       keys: '搜尋 API 金鑰…',
@@ -677,7 +677,7 @@ export const zhHant = defineLocale({
       }
     }),
     about: {
-      heading: 'Hermes Desktop',
+      heading: 'Ansatz',
       version: value => `版本 ${value}`,
       versionUnavailable: '版本不可用',
       updates: '更新',
@@ -759,7 +759,7 @@ export const zhHant = defineLocale({
       title: '閘道連線',
       envOverride: '環境變數覆寫',
       intro:
-        'Hermes Desktop 預設會啟動自己的本機閘道。如果您希望此應用程式控制另一台機器或可信代理後面已執行的 Hermes 後端，請使用遠端閘道。在下方按設定檔指定各自的遠端主機。',
+        'Ansatz 預設會啟動自己的本機閘道。如果您希望此應用程式控制另一台機器或可信代理後面已執行的 Hermes 後端，請使用遠端閘道。在下方按設定檔指定各自的遠端主機。',
       appliesTo: '套用至',
       allProfiles: '全部設定檔',
       defaultConnection: '預設連線適用於所有沒有自訂覆寫的設定檔。',
@@ -812,7 +812,7 @@ export const zhHant = defineLocale({
       enterUrlFirst: '請先輸入遠端 URL。',
       restartingTitle: '閘道連線正在重新啟動',
       savedTitle: '閘道設定已儲存',
-      restartingMessage: 'Hermes Desktop 將使用已儲存的設定重新連線。',
+      restartingMessage: 'Ansatz 將使用已儲存的設定重新連線。',
       savedMessage: '已儲存，下次重新啟動後生效。',
       connectedTo: (baseUrl, version) => `已連線至 ${baseUrl}${version ? ` · Hermes ${version}` : ''}`,
       reachableTitle: '遠端閘道可連線',
@@ -857,7 +857,7 @@ export const zhHant = defineLocale({
       sshErrHostKey: '自上次連線以來主機金鑰已變更。請確認這是預期的，然後執行 ssh-keygen -R <host> 並重新連線。',
       sshErrNotInstalled:
         '遠端主機上未安裝 Hermes。請在遠端安裝（curl -fsSL https://hermes-agent.nousresearch.com/install.sh | sh）或設定 Hermes 路徑。',
-      sshErrPlatform: '不支援的遠端平台。Hermes Desktop 的 SSH 模式支援 Linux、macOS 和 Windows 遠端主機。',
+      sshErrPlatform: '不支援的遠端平台。Ansatz 的 SSH 模式支援 Linux、macOS 和 Windows 遠端主機。',
       sshErrTimeout: 'SSH 連線逾時。主機可能無法存取或處於睡眠狀態。',
       sshErrUpdateRequired: '使用 Desktop SSH 連線前，請更新遠端主機上的 Hermes。',
       sshErrUnknown: 'SSH 連線失敗。'
@@ -2119,16 +2119,16 @@ export const zhHant = defineLocale({
     viewDocs: '檢視安裝文件',
     installTo: '將安裝至',
     retryAfterRun: '我已執行 -- 重試',
-    setupChoiceTitle: '設定 Hermes Desktop',
+    setupChoiceTitle: '設定 Ansatz',
     setupChoiceDesc: '將此應用程式連線到您已執行的 Hermes 閘道，或在這台電腦上本機安裝 Hermes。',
     connectExistingTitle: '連線到現有 Hermes',
     connectExistingShort: '連線現有環境',
     connectExistingDesc: '使用工作階段權杖或瀏覽器登入連線遠端後端。不會啟動本機安裝。',
     installLocalTitle: '本機安裝 Hermes',
     installLocalDesc: '下載 Hermes、建立 Python 環境，並在這台電腦上執行後端。',
-    localStartUnavailable: '無法啟動本機安裝。請重新啟動 Hermes Desktop 後再試一次。',
+    localStartUnavailable: '無法啟動本機安裝。請重新啟動 Ansatz 後再試一次。',
     remoteSetupTitle: '連線到現有 Hermes',
-    remoteSetupDesc: '輸入閘道 URL。Hermes Desktop 會偵測需要權杖還是瀏覽器登入。',
+    remoteSetupDesc: '輸入閘道 URL。Ansatz 會偵測需要權杖還是瀏覽器登入。',
     remoteUrlTitle: '閘道 URL',
     remoteUrlDesc: '使用 Hermes 閘道的基礎 URL；遠端位址請包含 https://。',
     remoteUrlPlaceholder: 'https://gateway.example.com/hermes',
@@ -2153,7 +2153,7 @@ export const zhHant = defineLocale({
     applyRemote: '套用並重新連線',
     backToSetup: '返回',
     failedTitle: '安裝失敗',
-    settingUpTitle: '正在設定 Hermes Agent',
+    settingUpTitle: '正在設定 Ansatz',
     finishingTitle: '正在收尾',
     failedDesc:
       '某個安裝步驟失敗。在 Windows 上，如果另一個 Hermes CLI 或桌面執行個體正在執行，可能會出現這種情況。請停止正在執行的 Hermes 執行個體後重試。可查看下方的詳細資訊或 desktop 記錄中的完整記錄。',
@@ -2175,7 +2175,7 @@ export const zhHant = defineLocale({
   },
 
   onboarding: {
-    headerTitle: '開始設定 Hermes Agent',
+    headerTitle: '開始設定 Ansatz',
     headerDesc: '連線模型提供方即可開始聊天。大多數選項只需一次點擊。',
     preparingInstall: 'Hermes 正在完成安裝。首次執行通常不到一分鐘。',
     starting: '正在啟動 Hermes…',
@@ -2324,7 +2324,7 @@ export const zhHant = defineLocale({
       update: '更新',
       updateInProgress: '更新中',
       commitsBehind: (count, branch) => `落後 ${branch} ${count} 個提交`,
-      desktopVersion: version => `Hermes Desktop v${version}`,
+      desktopVersion: version => `Ansatz v${version}`,
       backendVersion: version => `後端 v${version}`,
       clientLabel: version => `用戶端 v${version}`,
       connectionSsh: host => `SSH: ${host}`,
@@ -2759,8 +2759,8 @@ export const zhHant = defineLocale({
     sessionExportFailed: '無法匯出工作階段',
     imageSaved: '圖片已儲存',
     downloadStarted: '下載已開始',
-    restartToUseSaveImage: '重新啟動 Hermes Desktop 後可使用儲存圖片。',
-    restartToSaveImages: '重新啟動 Hermes Desktop 以儲存圖片',
+    restartToUseSaveImage: '重新啟動 Ansatz 後可使用儲存圖片。',
+    restartToSaveImages: '重新啟動 Ansatz 以儲存圖片',
     imageDownloadFailed: '圖片下載失敗',
     openImage: '開啟圖片',
     downloadImage: '下載圖片',

@@ -4,7 +4,7 @@ import type { Translations } from './types'
 
 export const zh: Translations = {
   auth: {
-    title: '登录 Ansatz Voice Trace Client',
+    title: '登录 Ansatz',
     description: '完整离线运行时安装完成后方可登录账户。',
     serverLabel: '账户服务器',
     traceNotice:
@@ -17,11 +17,11 @@ export const zh: Translations = {
     checking: '正在验证账户会话…',
     preparingRuntime: '正在准备安全登录服务…',
     preparingStage: (current, total, title) => `正在准备安全登录服务（${current}/${total}）：${title}…`,
-    runtimeTitle: '正在安装 Ansatz Voice Trace Client',
+    runtimeTitle: '正在安装 Ansatz',
     runtimeDescription: '必须先安装完整离线运行时，之后才会开放账户登录。',
     preparingFullRuntime: '正在安装完整离线运行时…',
     preparingFullStage: (current, total, title) => `正在安装完整离线运行时（${current}/${total}）：${title}…`,
-    runtimePreparationFailed: 'Ansatz Voice Trace Client 无法安装本地运行时，请重试安装。',
+    runtimePreparationFailed: 'Ansatz 无法安装本地运行时，请重试安装。',
     administratorManaged: '账户分发和密码协助由服务器管理员统一处理。',
     accountMenu: '账户',
     signOut: '退出登录',
@@ -31,9 +31,9 @@ export const zh: Translations = {
       stagesComplete: (completed, total) => `已完成 ${completed}/${total} 个阶段`,
       stagePosition: (current, total, title) => `第 ${current}/${total} 阶段：${title}`,
       elapsed: elapsed => `当前阶段 · ${elapsed}`,
-      overallProgressLabel: 'Ansatz Voice Trace Client 运行时安装',
+      overallProgressLabel: 'Ansatz 运行时安装',
       authPreparationFailed: '无法准备安全登录服务。',
-      runtimePreparationFailed: '无法安装 Ansatz Voice Trace Client 本地运行时。',
+      runtimePreparationFailed: '无法安装 Ansatz 本地运行时。',
       failedAt: title => `失败阶段：${title}`,
       runningWithElapsed: (state, elapsed) => `${state} · ${elapsed}`,
       knownProgress: (completed, total, unit, percent) =>
@@ -120,14 +120,14 @@ export const zh: Translations = {
   },
 
   boot: {
-    ready: 'Hermes 桌面版已就绪',
+    ready: 'Ansatz 已就绪',
     desktopBootFailedWithMessage: message => `桌面启动失败：${message}`,
     steps: {
       connectingGateway: '正在连接桌面网关',
       loadingSettings: '正在加载 Hermes 设置',
       loadingSessions: '正在加载最近会话',
       startingDesktopConnection: '正在启动桌面连接',
-      startingHermesDesktop: '正在启动 Hermes 桌面版…'
+      startingHermesDesktop: '正在启动 Ansatz…'
     },
     errors: {
       backgroundExited: 'Hermes 后台进程已退出。',
@@ -190,7 +190,7 @@ export const zh: Translations = {
       elevenLabsRejectedKey: 'ElevenLabs 拒绝了该 API key (401)。',
       diskFull: '磁盘已满 — 请腾出一些空间后再试。',
       gatewayAuthFailed: '网关认证失败 — 请检查你的 API_SERVER_KEY。',
-      methodNotAllowed: '桌面后端拒绝了该请求 (405 Method Not Allowed)。请尝试重启 Hermes Desktop。',
+      methodNotAllowed: '桌面后端拒绝了该请求 (405 Method Not Allowed)。请尝试重启 Ansatz。',
       microphonePermission: '麦克风权限已被拒绝。',
       openaiRejectedApiKey: 'OpenAI 拒绝了该 API key。',
       openaiRejectedApiKeyWithStatus: status => `OpenAI 拒绝了该 API key (${status} invalid_api_key)。`,
@@ -488,7 +488,7 @@ export const zh: Translations = {
       advanced: '高级'
     },
     searchPlaceholder: {
-      about: '关于 Hermes Desktop',
+      about: '关于 Ansatz',
       config: '搜索设置…',
       gateway: '网关连接…',
       keys: '搜索 API 密钥…',
@@ -817,7 +817,7 @@ export const zh: Translations = {
       }
     }),
     about: {
-      heading: 'Hermes Desktop',
+      heading: 'Ansatz',
       version: value => `版本 ${value}`,
       versionUnavailable: '版本不可用',
       updates: '更新',
@@ -950,7 +950,7 @@ export const zh: Translations = {
       title: '网关连接',
       envOverride: '环境变量覆盖',
       intro:
-        'Hermes Desktop 默认会启动自己的本地网关。当你希望此应用控制另一台机器上或可信代理后的现有 Hermes 后端时，可以使用远程网关。下面可按 profile 指定各自的远程主机。',
+        'Ansatz 默认会启动自己的本地网关。当你希望此应用控制另一台机器上或可信代理后的现有 Hermes 后端时，可以使用远程网关。下面可按 profile 指定各自的远程主机。',
       appliesTo: '应用于',
       allProfiles: '所有 profile',
       defaultConnection: '默认连接会用于所有没有自定义覆盖的 profile。',
@@ -1035,7 +1035,7 @@ export const zh: Translations = {
       enterUrlFirst: '请先输入远程 URL。',
       restartingTitle: '网关连接正在重启',
       savedTitle: '网关设置已保存',
-      restartingMessage: 'Hermes Desktop 将使用已保存设置重新连接（界面保持打开）。',
+      restartingMessage: 'Ansatz 将使用已保存设置重新连接（界面保持打开）。',
       savedMessage: '已保存，下一次重启生效。',
       connectedTo: (baseUrl, version) => `已连接到 ${baseUrl}${version ? ` · Hermes ${version}` : ''}`,
       reachableTitle: '远程网关可访问',
@@ -1080,7 +1080,7 @@ export const zh: Translations = {
       sshErrHostKey: '自上次连接以来主机密钥已更改。请确认这是预期的，然后运行 ssh-keygen -R <host> 并重新连接。',
       sshErrNotInstalled:
         '远程主机上未安装 Hermes。请在远程安装（curl -fsSL https://hermes-agent.nousresearch.com/install.sh | sh）或设置 Hermes 路径。',
-      sshErrPlatform: '不支持的远程平台。Hermes Desktop 的 SSH 模式支持 Linux、macOS 和 Windows 远程主机。',
+      sshErrPlatform: '不支持的远程平台。Ansatz 的 SSH 模式支持 Linux、macOS 和 Windows 远程主机。',
       sshErrTimeout: 'SSH 连接超时。主机可能无法访问或处于休眠状态。',
       sshErrUpdateRequired: '使用 Desktop SSH 连接前，请更新远程主机上的 Hermes。',
       sshErrUnknown: 'SSH 连接失败。'
@@ -2649,16 +2649,16 @@ export const zh: Translations = {
     viewDocs: '查看安装文档',
     installTo: '将安装到',
     retryAfterRun: '我已运行 -- 重试',
-    setupChoiceTitle: '设置 Hermes Desktop',
+    setupChoiceTitle: '设置 Ansatz',
     setupChoiceDesc: '将此应用连接到你已运行的 Hermes 网关，或在这台电脑上本地安装 Hermes。',
     connectExistingTitle: '连接到现有 Hermes',
     connectExistingShort: '连接现有环境',
     connectExistingDesc: '使用会话令牌或浏览器登录连接远程后端。不会启动本地安装。',
     installLocalTitle: '本地安装 Hermes',
     installLocalDesc: '下载 Hermes，创建 Python 环境，并在这台电脑上运行后端。',
-    localStartUnavailable: '无法启动本地安装。请重启 Hermes Desktop 后重试。',
+    localStartUnavailable: '无法启动本地安装。请重启 Ansatz 后重试。',
     remoteSetupTitle: '连接到现有 Hermes',
-    remoteSetupDesc: '输入网关 URL。Hermes Desktop 会检测需要令牌还是浏览器登录。',
+    remoteSetupDesc: '输入网关 URL。Ansatz 会检测需要令牌还是浏览器登录。',
     remoteUrlTitle: '网关 URL',
     remoteUrlDesc: '使用 Hermes 网关的基础 URL；远程地址请包含 https://。',
     remoteUrlPlaceholder: 'https://gateway.example.com/hermes',
@@ -2683,7 +2683,7 @@ export const zh: Translations = {
     applyRemote: '应用并重新连接',
     backToSetup: '返回',
     failedTitle: '安装失败',
-    settingUpTitle: '正在设置 Hermes Agent',
+    settingUpTitle: '正在设置 Ansatz',
     finishingTitle: '正在收尾',
     failedDesc:
       '某个安装步骤失败。在 Windows 上，如果另一个 Hermes CLI 或桌面实例正在运行，可能会出现这种情况。请停止正在运行的 Hermes 实例后重试。可查看下面的详情或 desktop 日志中的完整记录。',
@@ -2705,7 +2705,7 @@ export const zh: Translations = {
   },
 
   onboarding: {
-    headerTitle: '开始设置 Hermes Agent',
+    headerTitle: '开始设置 Ansatz',
     headerDesc: '连接模型提供方即可开始对话。大多数选项只需一次点击。',
     preparingInstall: 'Hermes 正在完成安装。首次运行通常不到一分钟。',
     starting: '正在启动 Hermes…',
@@ -2855,7 +2855,7 @@ export const zh: Translations = {
       update: '更新',
       updateInProgress: '正在更新',
       commitsBehind: (count, branch) => `落后 ${branch} ${count} 个提交`,
-      desktopVersion: version => `Hermes Desktop v${version}`,
+      desktopVersion: version => `Ansatz v${version}`,
       backendVersion: version => `后端 v${version}`,
       clientLabel: version => `客户端 v${version}`,
       connectionSsh: host => `SSH: ${host}`,

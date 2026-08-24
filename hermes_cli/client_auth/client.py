@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from html.parser import HTMLParser
 
+import httpcore
 import httpx
 
 AUTH_ORIGIN = "https://c2sml.cn"
+AUTH_HOST = "c2sml.cn"
+AUTH_FALLBACK_ADDRESS = "121.37.182.49"
 AUTH_PREFIX = "/auth"
 LOGIN_PATH = f"{AUTH_PREFIX}/login/"
 LOGOUT_PATH = f"{AUTH_PREFIX}/logout/"
@@ -81,14 +84,84 @@ class TraceCredential:
     installation_id: str
 
 
+class _PinnedAuthNetworkBackend(httpcore.NetworkBackend):
+    def __init__(self) -> None:
+        self._backend = httpcore.SyncBackend()
+
+    def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Iterable[httpcore.SOCKET_OPTION] | None = None,
+    ) -> httpcore.NetworkStream:
+        address = AUTH_FALLBACK_ADDRESS if host == AUTH_HOST else host
+        return self._backend.connect_tcp(
+            address,
+            port,
+            timeout=timeout,
+            local_address=local_address,
+            socket_options=socket_options,
+        )
+
+    def connect_unix_socket(
+        self,
+        path: str,
+        timeout: float | None = None,
+        socket_options: Iterable[httpcore.SOCKET_OPTION] | None = None,
+    ) -> httpcore.NetworkStream:
+        return self._backend.connect_unix_socket(
+            path,
+            timeout=timeout,
+            socket_options=socket_options,
+        )
+
+    def sleep(self, seconds: float) -> None:
+        self._backend.sleep(seconds)
+
+
+class _PinnedAuthTransport(httpx.HTTPTransport):
+    def __init__(self) -> None:
+        super().__init__(trust_env=False)
+        self._pool.close()
+        self._pool = httpcore.ConnectionPool(
+            ssl_context=httpx.create_ssl_context(trust_env=False),
+            max_connections=2,
+            max_keepalive_connections=1,
+            keepalive_expiry=30.0,
+            network_backend=_PinnedAuthNetworkBackend(),
+        )
+
+
 class AuthClient:
-    def __init__(self, transport: httpx.BaseTransport | None = None) -> None:
+    def __init__(
+        self,
+        transport: httpx.BaseTransport | None = None,
+        fallback_transport: httpx.BaseTransport | None = None,
+    ) -> None:
         self._http = httpx.Client(
             base_url=AUTH_ORIGIN,
             transport=transport,
             follow_redirects=False,
             timeout=15.0,
         )
+        if fallback_transport is not None:
+            self._fallback_http: httpx.Client | None = httpx.Client(
+                base_url=AUTH_ORIGIN,
+                transport=fallback_transport,
+                follow_redirects=False,
+                timeout=15.0,
+            )
+        elif transport is None:
+            self._fallback_http = httpx.Client(
+                base_url=AUTH_ORIGIN,
+                transport=_PinnedAuthTransport(),
+                follow_redirects=False,
+                timeout=15.0,
+            )
+        else:
+            self._fallback_http = None
 
     def login(self, username: str, password: bytearray) -> CookieRecord:
         if not isinstance(username, str) or not username.strip():
@@ -200,7 +273,17 @@ class AuthClient:
         try:
             response = self._http.request(method, path, **kwargs)
         except httpx.HTTPError:
-            raise AuthServiceError("server_unavailable") from None
+            fallback = self._fallback_http
+            if fallback is None:
+                raise AuthServiceError("server_unavailable") from None
+            try:
+                fallback.cookies.update(self._http.cookies)
+                response = fallback.request(method, path, **kwargs)
+            except httpx.HTTPError:
+                raise AuthServiceError("server_unavailable") from None
+            self._http.close()
+            self._http = fallback
+            self._fallback_http = None
         if response.status_code == 429:
             raise RateLimited()
         if response.status_code >= 500:

@@ -142,6 +142,53 @@ def test_login_uses_only_fixed_origin_and_cookie_names():
     assert set(result.cookies) == {SESSION_COOKIE, CSRF_COOKIE}
 
 
+def test_login_falls_back_to_the_tls_verified_direct_route_after_a_network_failure():
+    fallback_responses = iter(
+        [
+            html_response(
+                cookie=(
+                    "agent_history_csrftoken=csrf-1; Secure; Path=/agent/; SameSite=Lax"
+                )
+            ),
+            redirect_response(
+                cookies=(
+                    "agent_history_sessionid=session-1; Secure; HttpOnly; "
+                    "Path=/agent/; SameSite=Lax",
+                )
+            ),
+            json_response(200, valid_status_body()),
+        ]
+    )
+    primary_requests: list[httpx.Request] = []
+    fallback_requests: list[httpx.Request] = []
+
+    def primary_handler(request: httpx.Request) -> httpx.Response:
+        primary_requests.append(request)
+        raise httpx.ConnectTimeout("environment route unavailable", request=request)
+
+    def fallback_handler(request: httpx.Request) -> httpx.Response:
+        fallback_requests.append(request)
+        return next(fallback_responses)
+
+    client = AuthClient(
+        transport=httpx.MockTransport(primary_handler),
+        fallback_transport=httpx.MockTransport(fallback_handler),
+    )
+
+    result = client.login("alice", bytearray(b"secret"))
+
+    assert result.username == "alice"
+    assert len(primary_requests) == 1
+    assert [request.url.path for request in fallback_requests] == [
+        "/agent/accounts/login/",
+        "/agent/accounts/login/",
+        "/agent/api/session/",
+    ]
+    assert {request.url.copy_with(path="/") for request in fallback_requests} == {
+        httpx.URL(f"{AUTH_ORIGIN}/")
+    }
+
+
 def test_login_accepts_django_masked_form_token_distinct_from_cookie_secret():
     client, requests = make_client(
         [

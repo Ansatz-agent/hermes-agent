@@ -495,7 +495,7 @@ export function AuthGate({
         className="w-full max-w-md rounded-2xl border border-(--dt-border) bg-(--ui-card-surface) p-8 shadow-2xl"
       >
         <div aria-hidden="true" className="mb-6 text-2xl font-semibold tracking-tight">
-          Ansatz Voice Trace Client
+          Ansatz
         </div>
         <h1 className="text-2xl font-semibold tracking-tight">
           {showRuntimeBootstrap ? t.auth.runtimeTitle : t.auth.title}

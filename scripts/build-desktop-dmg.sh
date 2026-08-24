@@ -7,7 +7,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 EXPECTED_NODE_VERSION="v$(tr -d '[:space:]' < "$REPO_ROOT/.node-version")"
 
 fail() {
-  printf 'Ansatz Voice Trace Client DMG build: %s\n' "$1" >&2
+  printf 'Ansatz DMG build: %s\n' "$1" >&2
   exit 1
 }
 
@@ -58,7 +58,7 @@ fi
 [[ $# -eq 0 ]] || fail "unknown argument: $1"
 
 RELEASE_DIR="${HERMES_DMG_RELEASE_DIR:-$REPO_ROOT/apps/desktop/release}"
-PACKAGED_APP="$RELEASE_DIR/mac-arm64/AnsatzVoiceTraceClient.app"
+PACKAGED_APP="$RELEASE_DIR/mac-arm64/Ansatz.app"
 LOG_DIR="$REPO_ROOT/apps/desktop/build/logs"
 BUILD_LOG="$LOG_DIR/phase1-desktop-dmg-build.log"
 CONTRACT_SCRIPT="$REPO_ROOT/scripts/desktop-dmg-contract.mjs"
@@ -113,14 +113,14 @@ else
 fi
 
 if [[ "$BUILDER_STATUS" -ne 0 ]]; then
-  VOLUME_DENIED='ditto: /Volumes/Install Ansatz Voice Trace Client/Ansatz Voice Trace Client.app: Operation not permitted'
+  VOLUME_DENIED='ditto: /Volumes/Install Ansatz/Ansatz.app: Operation not permitted'
   [[ -d "$PACKAGED_APP" ]] || exit "$BUILDER_STATUS"
   grep -Fq "$VOLUME_DENIED" "$BUILD_LOG" || exit "$BUILDER_STATUS"
 
   APP_VERSION="$(node -p "require('./apps/desktop/package.json').version")"
-  FALLBACK_DMG="$RELEASE_DIR/Ansatz-Voice-Trace-Client-$APP_VERSION-mac-arm64.dmg"
+  FALLBACK_DMG="$RELEASE_DIR/Ansatz-$APP_VERSION-mac-arm64.dmg"
   FALLBACK_WORK="$(mktemp -d "${TMPDIR:-/tmp}/hermes-dmg-fallback.XXXXXX")"
-  FALLBACK_RW="$FALLBACK_WORK/Ansatz-Voice-Trace-Client-rw.dmg"
+  FALLBACK_RW="$FALLBACK_WORK/Ansatz-rw.dmg"
   FALLBACK_MOUNT="$FALLBACK_WORK/mount"
   FALLBACK_ATTACHED=0
   cleanup_fallback_work() {
@@ -138,12 +138,12 @@ if [[ "$BUILDER_STATUS" -ne 0 ]]; then
   run_logged hdiutil create \
     -size "${IMAGE_MIB}m" \
     -fs 'HFS+' \
-    -volname 'Install Ansatz Voice Trace Client' \
+    -volname 'Install Ansatz' \
     -type UDIF \
     "$FALLBACK_RW"
   run_logged hdiutil attach -nobrowse -mountpoint "$FALLBACK_MOUNT" "$FALLBACK_RW"
   FALLBACK_ATTACHED=1
-  run_logged /usr/bin/ditto "$PACKAGED_APP" "$FALLBACK_MOUNT/Ansatz Voice Trace Client.app"
+  run_logged /usr/bin/ditto "$PACKAGED_APP" "$FALLBACK_MOUNT/Ansatz.app"
   run_logged ln -s /Applications "$FALLBACK_MOUNT/Applications"
   run_logged hdiutil detach "$FALLBACK_MOUNT"
   FALLBACK_ATTACHED=0
@@ -156,4 +156,4 @@ run_logged codesign --verify --deep --strict "$PACKAGED_APP"
 node "$CONTRACT_SCRIPT" validate-log "$BUILD_LOG"
 DMG_PATH="$(node "$CONTRACT_SCRIPT" find-dmg "$RELEASE_DIR" "$BUILD_STARTED_AT_MS")"
 
-printf 'Ansatz Voice Trace Client DMG ready: %s\n' "$DMG_PATH"
+printf 'Ansatz DMG ready: %s\n' "$DMG_PATH"
