@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { test } from 'vitest'
 
 import { createSafeStorageTraceKeyProtector } from './trace-outbox-crypto'
-import { type TraceFileSystem } from './trace-outbox-journal'
+import { nodeTraceFileSystem, type TraceFileSystem, TraceJournal } from './trace-outbox-journal'
 import { decodeSegmentRecord } from './trace-outbox-record'
 import { TraceOutboxStore } from './trace-outbox-store'
 import { type DurableReceipt, type TraceEnvelopeInput } from './trace-outbox-types'
@@ -467,6 +467,7 @@ test('drains an overdue next group immediately after a slow prior group releases
 type CrashPoint = 'segment-tail' | 'journal-tail' | 'after-segment-sync' | 'during-send' | 'after-receipt'
 
 interface CrashFixture {
+  expectedPendingIds: string[]
   expectedPendingBodies: string[]
   journalLength: number
   segmentLength: number
@@ -505,6 +506,7 @@ async function buildCrashFixture(root: string, crashPoint: CrashPoint): Promise<
   }
 
   return {
+    expectedPendingIds: crashPoint === 'after-receipt' ? [batches[1].batchId] : batches.map(batch => batch.batchId),
     expectedPendingBodies: crashPoint === 'after-receipt' ? ['trace:two'] : ['trace:one', 'trace:two'],
     journalLength,
     segmentLength
@@ -523,6 +525,22 @@ test.each<CrashPoint>(['segment-tail', 'journal-tail', 'after-segment-sync', 'du
       const eligible = await recovered.peekEligible(Number.MAX_SAFE_INTEGER)
 
       assert.equal(eligible?.body.toString('utf8'), fixture.expectedPendingBodies[0])
+      const drained: string[] = []
+      let current = recovered
+      while (drained.length < fixture.expectedPendingIds.length) {
+        const head = await current.peekEligible(Number.MAX_SAFE_INTEGER)
+        assert.notEqual(head, undefined)
+        drained.push(head.batchId)
+        const journal = await TraceJournal.open({ fs: nodeTraceFileSystem, path: join(root, 'index.journal') })
+        await journal.append([
+          { op: 'receipt', batchId: head.batchId, outcome: 'accepted', receivedAt: 1_798_000_000_001 }
+        ])
+        await journal.sync()
+        current = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+      }
+      assert.deepEqual(drained, fixture.expectedPendingIds)
+      assert.equal(new Set(drained).size, drained.length)
+      assert.equal(await current.peekEligible(Number.MAX_SAFE_INTEGER), undefined)
       assert.equal(diagnostics.pending, fixture.expectedPendingBodies.length)
       assert.equal(diagnostics.recoveredCorruptTail, crashPoint.endsWith('tail') ? 1 : 0)
       assert.equal(new Set(fixture.expectedPendingBodies).size, fixture.expectedPendingBodies.length)
@@ -534,9 +552,6 @@ test.each<CrashPoint>(['segment-tail', 'journal-tail', 'after-segment-sync', 'du
         assert.equal((await recovered.diagnostics()).pending, 3)
       }
 
-      if (crashPoint === 'journal-tail') {
-        assert.equal((await readFile(join(root, 'index.journal'))).length, fixture.journalLength)
-      }
     } finally {
       await rm(root, { force: true, recursive: true })
     }
