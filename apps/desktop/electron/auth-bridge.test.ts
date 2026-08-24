@@ -289,6 +289,20 @@ test('Trace credentials fail closed on malformed, stale, or extra response field
   }
 })
 
+test('Trace credentials reject a bearer that expires at the injected bridge clock', async () => {
+  const { bridge, child } = bridgeFixture()
+  const pending = bridge.traceToken(traceRequest)
+  const request = await readRequest(child)
+
+  respond(child, {
+    version: 1,
+    id: request.id,
+    result: { ...traceCredential, expires_at: '2099-08-23T14:00:00+00:00' }
+  })
+  await assert.rejects(pending, error => error instanceof AuthBridgeError && error.code === 'runtime_unavailable')
+  bridge.close()
+})
+
 test('Trace credentials reject impossible, far-future, and lifetime-mismatched expiry values', async () => {
   for (const expiresAt of ['2099-02-30T14:15:00+00:00', '9999-08-23T14:15:00+00:00', '2099-08-23T14:15:30.001+00:00']) {
     const { bridge, child } = bridgeFixture()

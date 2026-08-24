@@ -131,6 +131,15 @@ test('rejects invalid credentials without including the token in its error', asy
   })
 })
 
+test('does not return a bearer that expires at the injected provider clock', async () => {
+  const provider = new RefreshingTraceCredentialProvider(
+    { load: async () => credential('expired-at-now-token-1234567890', { expires_at: '2099-08-23T14:00:00Z' }) },
+    { clock: () => now, installationId }
+  )
+
+  await assert.rejects(provider.current(), /trace_credential_unavailable/)
+})
+
 test('rejects impossible, far-future, and lifetime-mismatched credential expiries', async () => {
   for (const expiresAt of ['2099-02-30T14:15:00Z', '9999-08-23T14:15:00Z', '2099-08-23T14:15:30.001Z']) {
     const provider = new RefreshingTraceCredentialProvider(

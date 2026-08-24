@@ -520,7 +520,7 @@ export function traceCredentialExpiresAt(
   const expiresAt = parseRfc3339Epoch(value.expires_at)
   const latest = now + value.expires_in * 1_000 + TRACE_CREDENTIAL_CLOCK_SKEW_MS
 
-  if (expiresAt === null || !Number.isSafeInteger(latest) || expiresAt < now || expiresAt > latest) {
+  if (expiresAt === null || !Number.isSafeInteger(latest) || expiresAt <= now || expiresAt > latest) {
     return null
   }
 
