@@ -58,17 +58,17 @@ test('mode predicates classify what each mode removes', () => {
 test('resolveRemovableAppPath finds only the Ansatz app bundle on macOS', () => {
   assert.equal(
     resolveRemovableAppPath(
-      '/Applications/Ansatz Voice Trace Client.app/Contents/MacOS/AnsatzVoiceTraceClient',
+      '/Applications/Ansatz.app/Contents/MacOS/Ansatz',
       'darwin'
     ),
-    '/Applications/Ansatz Voice Trace Client.app'
+    '/Applications/Ansatz.app'
   )
   assert.equal(
     resolveRemovableAppPath(
-      '/Users/x/Applications/Ansatz Voice Trace Client.app/Contents/MacOS/AnsatzVoiceTraceClient',
+      '/Users/x/Applications/Ansatz.app/Contents/MacOS/Ansatz',
       'darwin'
     ),
-    '/Users/x/Applications/Ansatz Voice Trace Client.app'
+    '/Users/x/Applications/Ansatz.app'
   )
   assert.equal(resolveRemovableAppPath('/Applications/Hermes.app/Contents/MacOS/Hermes', 'darwin'), null)
 })
@@ -84,16 +84,16 @@ test('resolveRemovableAppPath rejects development and unrelated app bundles', ()
 test('resolveRemovableAppPath finds only the Ansatz install dir on Windows', () => {
   assert.equal(
     resolveRemovableAppPath(
-      'C:\\Users\\x\\AppData\\Local\\Programs\\Ansatz Voice Trace Client\\AnsatzVoiceTraceClient.exe',
+      'C:\\Users\\x\\AppData\\Local\\Programs\\Ansatz\\Ansatz.exe',
       'win32'
     ),
-    'C:\\Users\\x\\AppData\\Local\\Programs\\Ansatz Voice Trace Client'
+    'C:\\Users\\x\\AppData\\Local\\Programs\\Ansatz'
   )
   assert.equal(resolveRemovableAppPath('C:\\Users\\x\\AppData\\Local\\Programs\\Hermes\\Hermes.exe', 'win32'), null)
 })
 
 test('resolveRemovableAppPath returns null for an unrecognized Windows dir', () => {
-  assert.equal(resolveRemovableAppPath('C:\\Temp\\foo\\AnsatzVoiceTraceClient.exe', 'win32'), null)
+  assert.equal(resolveRemovableAppPath('C:\\Temp\\foo\\Ansatz.exe', 'win32'), null)
 })
 
 test('resolveRemovableAppPath uses APPIMAGE on Linux when set', () => {

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "account_server_origins": [
-    "https://c2sml.cn/agent"
+    "https://c2sml.cn/auth"
   ],
   "user_configured_endpoint_paths": [
     "hermes_cli/config_defaults.py"

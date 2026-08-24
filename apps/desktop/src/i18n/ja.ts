@@ -4,7 +4,7 @@ import { defineLocale } from './define-locale'
 
 export const ja = defineLocale({
   auth: {
-    title: 'Ansatz Voice Trace Client にサインイン',
+    title: 'Ansatz にサインイン',
     description: '完全なオフラインランタイムのインストール後にアカウントへサインインできます。',
     serverLabel: 'アカウントサーバー',
     traceNotice:
@@ -18,12 +18,12 @@ export const ja = defineLocale({
     preparingRuntime: '安全なサインインサービスを準備中…',
     preparingStage: (current, total, title) =>
       `安全なサインインサービスを準備中（${current}/${total}）：${title}…`,
-    runtimeTitle: 'Ansatz Voice Trace Client をインストール中',
+    runtimeTitle: 'Ansatz をインストール中',
     runtimeDescription: 'アカウントのサインインを表示する前に、完全なオフラインランタイムをインストールします。',
     preparingFullRuntime: '完全なオフラインランタイムをインストール中…',
     preparingFullStage: (current, total, title) =>
       `完全なオフラインランタイムをインストール中（${current}/${total}）：${title}…`,
-    runtimePreparationFailed: 'Ansatz Voice Trace Client のローカルランタイムをインストールできませんでした。再試行してください。',
+    runtimePreparationFailed: 'Ansatz のローカルランタイムをインストールできませんでした。再試行してください。',
     administratorManaged: 'アカウントの発行とパスワードの支援はサーバー管理者が行います。',
     accountMenu: 'アカウント',
     signOut: 'サインアウト',
@@ -33,9 +33,9 @@ export const ja = defineLocale({
       stagesComplete: (completed, total) => `${total} 段階中 ${completed} 段階が完了`,
       stagePosition: (current, total, title) => `${total} 段階中 ${current}：${title}`,
       elapsed: elapsed => `現在の段階 · ${elapsed}`,
-      overallProgressLabel: 'Ansatz Voice Trace Client ランタイムのインストール',
+      overallProgressLabel: 'Ansatz ランタイムのインストール',
       authPreparationFailed: '安全なサインインサービスを準備できませんでした。',
-      runtimePreparationFailed: 'Ansatz Voice Trace Client のローカルランタイムをインストールできませんでした。',
+      runtimePreparationFailed: 'Ansatz のローカルランタイムをインストールできませんでした。',
       failedAt: title => `失敗した段階：${title}`,
       runningWithElapsed: (state, elapsed) => `${state} · ${elapsed}`,
       knownProgress: (completed, total, unit, percent) =>
@@ -122,14 +122,14 @@ export const ja = defineLocale({
   },
 
   boot: {
-    ready: 'Hermes Desktop の準備ができました',
+    ready: 'Ansatz の準備ができました',
     desktopBootFailedWithMessage: message => `デスクトップの起動に失敗しました: ${message}`,
     steps: {
       connectingGateway: 'ライブデスクトップゲートウェイに接続中',
       loadingSettings: 'Hermes の設定を読み込み中',
       loadingSessions: '最近のセッションを読み込み中',
       startingDesktopConnection: 'デスクトップ接続を開始中',
-      startingHermesDesktop: 'Hermes Desktop を起動中…'
+      startingHermesDesktop: 'Ansatz を起動中…'
     },
     errors: {
       backgroundExited: 'Hermes バックグラウンドプロセスが終了しました。',
@@ -197,7 +197,7 @@ export const ja = defineLocale({
       diskFull: 'ディスク容量不足です — 空きを作ってからもう一度お試しください。',
       gatewayAuthFailed: 'ゲートウェイ認証に失敗しました — API_SERVER_KEY を確認してください。',
       methodNotAllowed:
-        'デスクトップバックエンドがそのリクエストを拒否しました (405 Method Not Allowed)。Hermes Desktop を再起動してください。',
+        'デスクトップバックエンドがそのリクエストを拒否しました (405 Method Not Allowed)。Ansatz を再起動してください。',
       microphonePermission: 'マイクのアクセス許可が拒否されました。',
       openaiRejectedApiKey: 'OpenAI が API キーを拒否しました。',
       openaiRejectedApiKeyWithStatus: status => `OpenAI が API キーを拒否しました (${status} invalid_api_key)。`,
@@ -357,7 +357,7 @@ export const ja = defineLocale({
       advanced: '詳細'
     },
     searchPlaceholder: {
-      about: 'Hermes Desktop について',
+      about: 'Ansatz について',
       config: '設定を検索…',
       gateway: 'ゲートウェイ接続…',
       keys: 'API キーを検索…',
@@ -692,7 +692,7 @@ export const ja = defineLocale({
       }
     }),
     about: {
-      heading: 'Hermes Desktop',
+      heading: 'Ansatz',
       version: value => `バージョン ${value}`,
       versionUnavailable: 'バージョンを取得できません',
       updates: '更新',
@@ -776,7 +776,7 @@ export const ja = defineLocale({
       title: 'ゲートウェイ接続',
       envOverride: 'env オーバーライド',
       intro:
-        'Hermes Desktop はデフォルトで独自のローカルゲートウェイを起動します。別のマシンや信頼できるプロキシの背後で既に動作している Hermes バックエンドをこのアプリで制御する場合は、リモートゲートウェイを使用してください。以下でプロファイルを選択して、それぞれのリモートホストを設定します。',
+        'Ansatz はデフォルトで独自のローカルゲートウェイを起動します。別のマシンや信頼できるプロキシの背後で既に動作している Hermes バックエンドをこのアプリで制御する場合は、リモートゲートウェイを使用してください。以下でプロファイルを選択して、それぞれのリモートホストを設定します。',
       appliesTo: '適用対象',
       allProfiles: 'すべてのプロファイル',
       defaultConnection: '独自のオーバーライドがないすべてのプロファイルのデフォルト接続。',
@@ -838,7 +838,7 @@ export const ja = defineLocale({
       enterUrlFirst: '最初にリモート URL を入力してください。',
       restartingTitle: 'ゲートウェイ接続を再起動中',
       savedTitle: 'ゲートウェイ設定を保存しました',
-      restartingMessage: 'Hermes Desktop は保存された設定を使用して再接続します。',
+      restartingMessage: 'Ansatz は保存された設定を使用して再接続します。',
       savedMessage: '次回起動時に保存されます。',
       connectedTo: (baseUrl, version) => `${baseUrl}${version ? ` · Hermes ${version}` : ''} に接続しました`,
       reachableTitle: 'リモートゲートウェイに到達可能',
@@ -885,7 +885,7 @@ export const ja = defineLocale({
       sshErrNotInstalled:
         'リモートホストに Hermes がインストールされていません。リモートでインストールする（curl -fsSL https://hermes-agent.nousresearch.com/install.sh | sh）か、Hermes パスを設定してください。',
       sshErrPlatform:
-        'サポートされていないリモートプラットフォームです。Hermes Desktop の SSH モードは Linux、macOS、Windows のリモートホストに対応しています。',
+        'サポートされていないリモートプラットフォームです。Ansatz の SSH モードは Linux、macOS、Windows のリモートホストに対応しています。',
       sshErrTimeout: 'SSH 接続がタイムアウトしました。ホストが到達不能、またはスリープ中の可能性があります。',
       sshErrUpdateRequired: 'Desktop SSH で接続する前に、リモートホストの Hermes を更新してください。',
       sshErrUnknown: 'SSH 接続に失敗しました。'
@@ -2184,7 +2184,7 @@ export const ja = defineLocale({
     viewDocs: 'インストールドキュメントを見る',
     installTo: 'インストール先',
     retryAfterRun: '実行しました — 再試行',
-    setupChoiceTitle: 'Hermes Desktop をセットアップ',
+    setupChoiceTitle: 'Ansatz をセットアップ',
     setupChoiceDesc:
       'すでに実行している Hermes ゲートウェイに接続するか、このコンピューターに Hermes をローカルインストールします。',
     connectExistingTitle: '既存の Hermes に接続',
@@ -2194,10 +2194,10 @@ export const ja = defineLocale({
     installLocalTitle: 'Hermes をローカルにインストール',
     installLocalDesc: 'Hermes をダウンロードし、Python 環境を作成して、このコンピューターでバックエンドを実行します。',
     localStartUnavailable:
-      'ローカルインストールを開始できません。Hermes Desktop を再起動して、もう一度お試しください。',
+      'ローカルインストールを開始できません。Ansatz を再起動して、もう一度お試しください。',
     remoteSetupTitle: '既存の Hermes に接続',
     remoteSetupDesc:
-      'ゲートウェイ URL を入力してください。Hermes Desktop がトークンとブラウザーサインインのどちらが必要かを検出します。',
+      'ゲートウェイ URL を入力してください。Ansatz がトークンとブラウザーサインインのどちらが必要かを検出します。',
     remoteUrlTitle: 'ゲートウェイ URL',
     remoteUrlDesc: 'Hermes ゲートウェイのベース URL を使用します。リモートの場合は https:// を含めてください。',
     remoteUrlPlaceholder: 'https://gateway.example.com/hermes',
@@ -2222,7 +2222,7 @@ export const ja = defineLocale({
     applyRemote: '適用して再接続',
     backToSetup: '戻る',
     failedTitle: 'インストールに失敗しました',
-    settingUpTitle: 'Hermes Agent を設定中',
+    settingUpTitle: 'Ansatz を設定中',
     finishingTitle: '仕上げ中',
     failedDesc:
       'インストール手順のいずれかが失敗しました。Windows では、別の Hermes CLI またはデスクトップインスタンスが実行中の場合に発生することがあります。実行中の Hermes インスタンスをすべて停止してから再試行してください。詳細は以下またはデスクトップログで確認できます。',
@@ -2245,7 +2245,7 @@ export const ja = defineLocale({
   },
 
   onboarding: {
-    headerTitle: 'Hermes Agent のセットアップをしましょう',
+    headerTitle: 'Ansatz のセットアップをしましょう',
     headerDesc: 'チャットを始めるにはモデルプロバイダーを接続してください。ほとんどのオプションはワンクリックです。',
     preparingInstall: 'Hermes はインストールを完了中です。初回実行では通常 1 分以内に完了します。',
     starting: 'Hermes を起動中…',
@@ -2403,7 +2403,7 @@ export const ja = defineLocale({
       update: '更新',
       updateInProgress: '更新中',
       commitsBehind: (count, branch) => `${branch} より ${count} コミット遅れています`,
-      desktopVersion: version => `Hermes Desktop v${version}`,
+      desktopVersion: version => `Ansatz v${version}`,
       backendVersion: version => `バックエンド v${version}`,
       clientLabel: version => `クライアント v${version}`,
       connectionSsh: host => `SSH: ${host}`,
@@ -2875,8 +2875,8 @@ export const ja = defineLocale({
     sessionExportFailed: 'セッションをエクスポートできませんでした',
     imageSaved: '画像を保存しました',
     downloadStarted: 'ダウンロードを開始しました',
-    restartToUseSaveImage: '画像を保存するには Hermes Desktop を再起動してください。',
-    restartToSaveImages: '画像を保存するには Hermes Desktop を再起動してください',
+    restartToUseSaveImage: '画像を保存するには Ansatz を再起動してください。',
+    restartToSaveImages: '画像を保存するには Ansatz を再起動してください',
     imageDownloadFailed: '画像のダウンロードに失敗しました',
     openImage: '画像を開く',
     downloadImage: '画像をダウンロード',

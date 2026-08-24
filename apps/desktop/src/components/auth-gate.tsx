@@ -21,7 +21,7 @@ import { useViewedInterval } from '@/hooks/use-viewed-interval'
 import { type Translations, useI18n } from '@/i18n'
 import { sanitizeAuthBootstrapText } from '@/lib/auth-bootstrap-progress'
 
-const ACCOUNT_SERVER = 'https://c2sml.cn/agent'
+const ACCOUNT_SERVER = 'https://c2sml.cn/auth'
 const AUTH_REQUEST_TIMEOUT_MS = 15_000
 const AUTH_LOGIN_TIMEOUT_MS = 90_000
 
@@ -495,7 +495,7 @@ export function AuthGate({
         className="w-full max-w-md rounded-2xl border border-(--dt-border) bg-(--ui-card-surface) p-8 shadow-2xl"
       >
         <div aria-hidden="true" className="mb-6 text-2xl font-semibold tracking-tight">
-          Ansatz Voice Trace Client
+          Ansatz
         </div>
         <h1 className="text-2xl font-semibold tracking-tight">
           {showRuntimeBootstrap ? t.auth.runtimeTitle : t.auth.title}

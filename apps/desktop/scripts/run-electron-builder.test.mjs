@@ -13,12 +13,12 @@ import {
   shouldUseRestrictedVolumeFallback,
 } from "./macos-dmg-builder.mjs"
 
-test("packaged macOS app path follows electron-builder executableName", () => {
+test("packaged macOS app uses the visible Ansatz product name", () => {
   const desktopPackage = JSON.parse(
     fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"),
   )
 
-  assert.equal(packagedMacAppName(desktopPackage), "AnsatzVoiceTraceClient.app")
+  assert.equal(packagedMacAppName(desktopPackage), "Ansatz.app")
 })
 
 test("macOS package builds use explicit ad-hoc signing when identity discovery is disabled", () => {
@@ -75,8 +75,8 @@ test("restricted-volume fallback is limited to the exact macOS DMG failure", () 
 
 test("restricted-volume fallback creates, verifies, and cleans a compressed DMG", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "ansatz-direct-dmg-test-"))
-  const packagedApp = path.join(root, "release", "mac-arm64", "Ansatz Voice Trace Client.app")
-  const dmgPath = path.join(root, "release", "Ansatz-Voice-Trace-Client-0.17.0-mac-arm64.dmg")
+  const packagedApp = path.join(root, "release", "mac-arm64", "Ansatz.app")
+  const dmgPath = path.join(root, "release", "Ansatz-0.17.0-mac-arm64.dmg")
   const temporaryRoot = path.join(root, "fallback")
   fs.mkdirSync(packagedApp, { recursive: true })
   const calls = []
@@ -97,12 +97,12 @@ test("restricted-volume fallback creates, verifies, and cleans a compressed DMG"
     })
 
     assert.deepEqual(calls, [
-      ["hdiutil", "create", "-size", "130m", "-fs", "HFS+", "-volname", "Install Ansatz Voice Trace Client", "-type", "UDIF", path.join(temporaryRoot, "Ansatz-Voice-Trace-Client-rw.dmg")],
-      ["hdiutil", "attach", "-nobrowse", "-mountpoint", path.join(temporaryRoot, "mount"), path.join(temporaryRoot, "Ansatz-Voice-Trace-Client-rw.dmg")],
-      ["/usr/bin/ditto", packagedApp, path.join(temporaryRoot, "mount", "Ansatz Voice Trace Client.app")],
+      ["hdiutil", "create", "-size", "130m", "-fs", "HFS+", "-volname", "Install Ansatz", "-type", "UDIF", path.join(temporaryRoot, "Ansatz-rw.dmg")],
+      ["hdiutil", "attach", "-nobrowse", "-mountpoint", path.join(temporaryRoot, "mount"), path.join(temporaryRoot, "Ansatz-rw.dmg")],
+      ["/usr/bin/ditto", packagedApp, path.join(temporaryRoot, "mount", "Ansatz.app")],
       ["ln", "-s", "/Applications", path.join(temporaryRoot, "mount", "Applications")],
       ["hdiutil", "detach", path.join(temporaryRoot, "mount")],
-      ["hdiutil", "convert", path.join(temporaryRoot, "Ansatz-Voice-Trace-Client-rw.dmg"), "-format", "UDZO", "-ov", "-o", dmgPath],
+      ["hdiutil", "convert", path.join(temporaryRoot, "Ansatz-rw.dmg"), "-format", "UDZO", "-ov", "-o", dmgPath],
       ["hdiutil", "verify", dmgPath],
     ])
     assert.equal(fs.existsSync(temporaryRoot), false)

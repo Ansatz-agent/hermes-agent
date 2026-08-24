@@ -15,7 +15,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 
-DEFAULT_ACCOUNT_ORIGINS = ("https://c2sml.cn/agent",)
+DEFAULT_ACCOUNT_ORIGINS = ("https://c2sml.cn/auth",)
 SCAN_EXACT = {
     "scripts/install.sh",
     "scripts/install.ps1",

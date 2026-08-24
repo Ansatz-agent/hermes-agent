@@ -61,10 +61,10 @@ function modeRemovesUserData(mode) {
  * Resolve the on-disk app bundle/dir to remove for the running desktop app,
  * given the path to the running executable (`process.execPath`) and platform.
  *
- *   macOS:   …/Ansatz Voice Trace Client.app/Contents/MacOS/AnsatzVoiceTraceClient
- *            → …/Ansatz Voice Trace Client.app
- *   Windows: …\Ansatz Voice Trace Client\AnsatzVoiceTraceClient.exe
- *            → …\Ansatz Voice Trace Client  (install dir)
+ *   macOS:   …/Ansatz.app/Contents/MacOS/Ansatz
+ *            → …/Ansatz.app
+ *   Windows: …\Ansatz\Ansatz.exe
+ *            → …\Ansatz  (install dir)
  *   Linux:   AppImage → the APPIMAGE env path; unpacked → the *-unpacked dir
  *
  * Returns null when we can't confidently identify a removable bundle (e.g.

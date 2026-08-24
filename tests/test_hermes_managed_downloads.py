@@ -76,7 +76,7 @@ def write_manifest(
         json.dumps(
             {
                 "schema_version": 1,
-                "account_server_origins": ["https://c2sml.cn/agent"],
+                "account_server_origins": ["https://c2sml.cn/auth"],
                 "user_configured_endpoint_paths": ["hermes_cli/config_defaults.py"],
                 "managed_download_scan_paths": sorted(REVIEWED_SCAN_PATHS),
                 "entries": entries,
@@ -584,7 +584,7 @@ def test_account_and_user_configured_provider_traffic_is_not_dependency_download
     write_source(
         tmp_path,
         "hermes_cli/client_auth/client.py",
-        "import httpx\nhttpx.get('https://c2sml.cn/agent/api/auth/status')\n",
+        "import httpx\nhttpx.get('https://c2sml.cn/auth/api/session/')\n",
     )
     write_source(
         tmp_path,

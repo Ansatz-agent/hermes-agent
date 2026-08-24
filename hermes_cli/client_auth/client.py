@@ -1,25 +1,36 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from html.parser import HTMLParser
 
+import httpcore
 import httpx
 
 AUTH_ORIGIN = "https://c2sml.cn"
-AUTH_PREFIX = "/agent"
-LOGIN_PATH = f"{AUTH_PREFIX}/accounts/login/"
-LOGOUT_PATH = f"{AUTH_PREFIX}/accounts/logout/"
+AUTH_HOST = "c2sml.cn"
+AUTH_FALLBACK_ADDRESS = "121.37.182.49"
+AUTH_PREFIX = "/auth"
+LOGIN_PATH = f"{AUTH_PREFIX}/login/"
+LOGOUT_PATH = f"{AUTH_PREFIX}/logout/"
 SESSION_PATH = f"{AUTH_PREFIX}/api/session/"
 TRACE_TOKEN_PATH = f"{AUTH_PREFIX}/api/trace-token/"
-SESSION_COOKIE = "agent_history_sessionid"
-CSRF_COOKIE = "agent_history_csrftoken"
+SESSION_COOKIE = "__Host-ansatz_sessionid"
+CSRF_COOKIE = "__Host-ansatz_csrftoken"
 
 _COOKIE_NAMES = frozenset({SESSION_COOKIE, CSRF_COOKIE})
 _STATUS_KEYS = frozenset(
-    {"authenticated", "username", "server_time", "session_expires_at"}
+    {
+        "authenticated",
+        "sub",
+        "username",
+        "role",
+        "server_time",
+        "session_expires_at",
+        "trace_dashboard_url",
+    }
 )
 _TRACE_CREDENTIAL_KEYS = frozenset(
     {"access_token", "expires_at", "expires_in", "installation_id"}
@@ -57,9 +68,12 @@ class CookieRecord:
 
 @dataclass(frozen=True)
 class SessionStatus:
+    sub: str
     username: str
+    role: str
     server_time: str
     session_expires_at: str
+    trace_dashboard_url: str
 
 
 @dataclass(frozen=True)
@@ -70,14 +84,84 @@ class TraceCredential:
     installation_id: str
 
 
+class _PinnedAuthNetworkBackend(httpcore.NetworkBackend):
+    def __init__(self) -> None:
+        self._backend = httpcore.SyncBackend()
+
+    def connect_tcp(
+        self,
+        host: str,
+        port: int,
+        timeout: float | None = None,
+        local_address: str | None = None,
+        socket_options: Iterable[httpcore.SOCKET_OPTION] | None = None,
+    ) -> httpcore.NetworkStream:
+        address = AUTH_FALLBACK_ADDRESS if host == AUTH_HOST else host
+        return self._backend.connect_tcp(
+            address,
+            port,
+            timeout=timeout,
+            local_address=local_address,
+            socket_options=socket_options,
+        )
+
+    def connect_unix_socket(
+        self,
+        path: str,
+        timeout: float | None = None,
+        socket_options: Iterable[httpcore.SOCKET_OPTION] | None = None,
+    ) -> httpcore.NetworkStream:
+        return self._backend.connect_unix_socket(
+            path,
+            timeout=timeout,
+            socket_options=socket_options,
+        )
+
+    def sleep(self, seconds: float) -> None:
+        self._backend.sleep(seconds)
+
+
+class _PinnedAuthTransport(httpx.HTTPTransport):
+    def __init__(self) -> None:
+        super().__init__(trust_env=False)
+        self._pool.close()
+        self._pool = httpcore.ConnectionPool(
+            ssl_context=httpx.create_ssl_context(trust_env=False),
+            max_connections=2,
+            max_keepalive_connections=1,
+            keepalive_expiry=30.0,
+            network_backend=_PinnedAuthNetworkBackend(),
+        )
+
+
 class AuthClient:
-    def __init__(self, transport: httpx.BaseTransport | None = None) -> None:
+    def __init__(
+        self,
+        transport: httpx.BaseTransport | None = None,
+        fallback_transport: httpx.BaseTransport | None = None,
+    ) -> None:
         self._http = httpx.Client(
             base_url=AUTH_ORIGIN,
             transport=transport,
             follow_redirects=False,
             timeout=15.0,
         )
+        if fallback_transport is not None:
+            self._fallback_http: httpx.Client | None = httpx.Client(
+                base_url=AUTH_ORIGIN,
+                transport=fallback_transport,
+                follow_redirects=False,
+                timeout=15.0,
+            )
+        elif transport is None:
+            self._fallback_http = httpx.Client(
+                base_url=AUTH_ORIGIN,
+                transport=_PinnedAuthTransport(),
+                follow_redirects=False,
+                timeout=15.0,
+            )
+        else:
+            self._fallback_http = None
 
     def login(self, username: str, password: bytearray) -> CookieRecord:
         if not isinstance(username, str) or not username.strip():
@@ -189,7 +273,17 @@ class AuthClient:
         try:
             response = self._http.request(method, path, **kwargs)
         except httpx.HTTPError:
-            raise AuthServiceError("server_unavailable") from None
+            fallback = self._fallback_http
+            if fallback is None:
+                raise AuthServiceError("server_unavailable") from None
+            try:
+                fallback.cookies.update(self._http.cookies)
+                response = fallback.request(method, path, **kwargs)
+            except httpx.HTTPError:
+                raise AuthServiceError("server_unavailable") from None
+            self._http.close()
+            self._http = fallback
+            self._fallback_http = None
         if response.status_code == 429:
             raise RateLimited()
         if response.status_code >= 500:
@@ -237,7 +331,10 @@ def _require_same_origin_redirect(response: httpx.Response) -> None:
         target.scheme != "https"
         or target.host != httpx.URL(AUTH_ORIGIN).host
         or target.port != httpx.URL(AUTH_ORIGIN).port
-        or not target.path.startswith(f"{AUTH_PREFIX}/")
+        or not (
+            target.path.startswith(f"{AUTH_PREFIX}/")
+            or target.path.startswith("/traces/")
+        )
     ):
         raise AuthServiceError("invalid_redirect")
 
@@ -247,7 +344,12 @@ def _require_cookie(jar: object, name: str):
     if len(matches) != 1:
         raise AuthServiceError("invalid_cookie")
     cookie = matches[0]
-    if not cookie.value or not cookie.secure or cookie.path != f"{AUTH_PREFIX}/":
+    if (
+        not cookie.value
+        or not cookie.secure
+        or cookie.path != "/"
+        or cookie.domain_specified
+    ):
         raise AuthServiceError("invalid_cookie")
     return cookie
 
@@ -296,16 +398,38 @@ def _parse_session_status(response: httpx.Response) -> SessionStatus:
     if set(body) != _STATUS_KEYS or body.get("authenticated") is not True:
         raise AuthServiceError("invalid_response")
 
+    sub = body.get("sub")
     username = body.get("username")
+    role = body.get("role")
     server_time = body.get("server_time")
     session_expires_at = body.get("session_expires_at")
-    if not all(isinstance(value, str) and value for value in (username, server_time, session_expires_at)):
+    trace_dashboard_url = body.get("trace_dashboard_url")
+    if (
+        not isinstance(sub, str)
+        or not 1 <= len(sub) <= 128
+        or any(character.isspace() or ord(character) < 32 for character in sub)
+        or not isinstance(username, str)
+        or not 1 <= len(username) <= 150
+        or role not in {"user", "admin"}
+        or trace_dashboard_url != "/traces/"
+        or not all(
+            isinstance(value, str) and value
+            for value in (server_time, session_expires_at)
+        )
+    ):
         raise AuthServiceError("invalid_response")
     server_datetime = _parse_aware_datetime(server_time)
     expiry_datetime = _parse_aware_datetime(session_expires_at)
     if expiry_datetime <= server_datetime:
         raise SessionRejected()
-    return SessionStatus(username, server_time, session_expires_at)
+    return SessionStatus(
+        sub=sub,
+        username=username,
+        role=role,
+        server_time=server_time,
+        session_expires_at=session_expires_at,
+        trace_dashboard_url=trace_dashboard_url,
+    )
 
 
 def _validate_trace_request(

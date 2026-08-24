@@ -4,7 +4,7 @@ import path from "node:path"
 import { spawnSync } from "node:child_process"
 
 export const RESTRICTED_DMG_VOLUME_ERROR =
-  "ditto: /Volumes/Install Ansatz Voice Trace Client/Ansatz Voice Trace Client.app: Operation not permitted"
+  "ditto: /Volumes/Install Ansatz/Ansatz.app: Operation not permitted"
 
 export function packagedMacAppName(desktopPackage) {
   const executableName = desktopPackage?.build?.executableName
@@ -103,14 +103,14 @@ function defaultAppSizeKib(packagedApp) {
 export function buildRestrictedVolumeDmg({
   packagedApp,
   dmgPath,
-  volumeName = "Install Ansatz Voice Trace Client",
+  volumeName = "Install Ansatz",
   runCommand = defaultRunCommand,
   appSizeKib = defaultAppSizeKib,
   makeTemporaryDirectory = () =>
     fs.mkdtempSync(path.join(os.tmpdir(), "ansatz-voice-trace-dmg-fallback-")),
 }) {
   const temporaryRoot = makeTemporaryDirectory()
-  const readWriteDmg = path.join(temporaryRoot, "Ansatz-Voice-Trace-Client-rw.dmg")
+  const readWriteDmg = path.join(temporaryRoot, "Ansatz-rw.dmg")
   const mountPoint = path.join(temporaryRoot, "mount")
   let attached = false
   let safeToRemove = true
@@ -137,7 +137,7 @@ export function buildRestrictedVolumeDmg({
     attached = true
     run(
       "/usr/bin/ditto",
-      [packagedApp, path.join(mountPoint, "Ansatz Voice Trace Client.app")],
+      [packagedApp, path.join(mountPoint, "Ansatz.app")],
       "copy app into fallback DMG",
     )
     run("ln", ["-s", "/Applications", path.join(mountPoint, "Applications")], "link Applications in fallback DMG")

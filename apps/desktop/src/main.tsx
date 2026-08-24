@@ -19,7 +19,7 @@ const ProtectedRoot = lazy(() => import('./protected-root'))
 const winParam = new URLSearchParams(window.location.search).get('win')
 
 if (winParam === 'hud') {
-  document.title = 'Hermes HUD'
+  document.title = 'Ansatz HUD'
 }
 
 if (winParam === 'overlay') {

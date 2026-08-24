@@ -30,7 +30,11 @@ import {
 import nodePty from 'node-pty'
 
 import { classifyActiveRuntime } from './active-runtime-state'
-import { ANSATZ_PRODUCT, resolveAnsatzRuntimeRoot } from './ansatz-product'
+import {
+  ANSATZ_PRODUCT,
+  resolveAnsatzRuntimeRoot,
+  resolveAnsatzUserDataRoot
+} from './ansatz-product'
 import { AuthBridgeError, DesktopAuthBridge } from './auth-bridge'
 import { AuthCoordinator } from './auth-coordinator'
 import { isAuthRuntimeUsable } from './auth-runtime-contract'
@@ -354,6 +358,10 @@ if (USER_DATA_OVERRIDE) {
   const resolvedUserData = path.resolve(USER_DATA_OVERRIDE)
   fs.mkdirSync(resolvedUserData, { recursive: true })
   app.setPath('userData', resolvedUserData)
+} else if (app.isPackaged || Boolean(process.env.HERMES_DESKTOP_IS_PACKAGED)) {
+  const preservedUserData = resolveAnsatzUserDataRoot(process.platform, app.getPath('appData'))
+  fs.mkdirSync(preservedUserData, { recursive: true })
+  app.setPath('userData', preservedUserData)
 }
 
 const DEV_SERVER = process.env.HERMES_DESKTOP_DEV_SERVER
@@ -815,7 +823,7 @@ function desktopStatusForRenderer(status, connectionId = 'local') {
 function fullRuntimeBootstrapRequest(backendArgs = []) {
   return {
     kind: 'bootstrap-needed',
-    label: 'Ansatz Voice Trace Client full runtime installation required',
+    label: 'Ansatz full runtime installation required',
     command: null,
     args: backendArgs,
     bootstrap: true,
@@ -4785,7 +4793,7 @@ function resolveHermesBackend(backendArgs, options: any = {}) {
   //    is a recoverable state the GUI can drive through.
   return {
     kind: 'bootstrap-needed',
-    label: 'Hermes Agent not installed yet; bootstrap required',
+    label: 'Ansatz runtime not installed yet; bootstrap required',
     command: null,
     args: backendArgs,
     bootstrap: true,

@@ -44,7 +44,7 @@ function bridgeFixture(overrides: Record<string, unknown> = {}) {
   const bridge = new DesktopAuthBridge({
     cwd: '/opt/hermes-agent',
     env: {
-      AGENT_HISTORY_SESSIONID: 'agent_history_sessionid=do-not-leak',
+      ANSATZ_SESSIONID: '__Host-ansatz_sessionid=do-not-leak',
       HERMES_HOME: '/home/alice/.hermes',
       PATH: '/usr/bin',
       PROVIDER_API_KEY: 'provider-secret',
@@ -228,7 +228,7 @@ test('malformed json and schema drift fail every request with a redacted runtime
 
     await Promise.all(rejections)
     assert.equal(diagnostics.join('\n').includes('password-sentinel'), false)
-    assert.equal(diagnostics.join('\n').includes('agent_history_sessionid'), false)
+    assert.equal(diagnostics.join('\n').includes('__Host-ansatz_sessionid'), false)
   }
 })
 
@@ -237,7 +237,7 @@ test('oversized response, child exit, and stderr all fail closed without leaking
     (child: FakeChild) => child.stdout.write(Buffer.alloc(64 * 1024 + 1, 120)),
     (child: FakeChild) => child.emit('exit', 1, null),
     (child: FakeChild) => {
-      child.stderr.write('agent_history_sessionid=stderr-secret')
+      child.stderr.write('__Host-ansatz_sessionid=stderr-secret')
       child.emit('close', 1, null)
     }
   ]) {
@@ -275,7 +275,7 @@ test('a request timeout rejects all pending calls and terminates the bridge', as
   await Promise.all(rejections)
   assert.deepEqual(child.kill.mock.calls, [[]])
   assert.equal(diagnostics.join('\n').includes('password-sentinel'), false)
-  assert.equal(diagnostics.join('\n').includes('agent_history_sessionid'), false)
+  assert.equal(diagnostics.join('\n').includes('__Host-ansatz_sessionid'), false)
 })
 
 test('the default bridge deadline leaves room for the Python HTTP timeout to respond', async () => {

@@ -161,7 +161,7 @@ test('authenticated Trace settings are child-only and override inherited disable
       endpoint: 'http://127.0.0.1:49152/v1/traces',
       installationId: '11111111-1111-4111-8111-111111111111',
       localAuthorization: 'Bearer local-epoch-secret',
-      pluginsToml: '/Applications/Ansatz Voice Trace Client.app/Contents/Resources/config/plugins.toml'
+      pluginsToml: '/Applications/Ansatz.app/Contents/Resources/config/plugins.toml'
     }
   })
 

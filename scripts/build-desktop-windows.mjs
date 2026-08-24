@@ -145,13 +145,13 @@ async function main(argv) {
   }
   if (argv.length !== 0) throw new Error(`unknown argument: ${argv[0]}`)
   const result = await runWindowsBuild()
-  process.stdout.write(`Ansatz Voice Trace Client Windows NSIS ready: ${result.installer}\nBuild log: ${result.buildLog}\n`)
+  process.stdout.write(`Ansatz Windows NSIS ready: ${result.installer}\nBuild log: ${result.buildLog}\n`)
 }
 
 const invoked = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : ''
 if (invoked === import.meta.url) {
   main(process.argv.slice(2)).catch(error => {
-    process.stderr.write(`Ansatz Voice Trace Client Windows NSIS build: ${error.message}\n`)
+    process.stderr.write(`Ansatz Windows NSIS build: ${error.message}\n`)
     process.exitCode = 1
   })
 }

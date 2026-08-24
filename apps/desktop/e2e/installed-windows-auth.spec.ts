@@ -643,7 +643,7 @@ test('installed Windows Hermes enforces the complete account lifecycle', async (
     protectedRendererChunkRequested = trackProtectedRendererChunk(page)
     await expect(page.locator('input[name="username"]')).toBeVisible({ timeout: 30_000 })
     await expect(page.locator('input[name="password"]')).toHaveAttribute('type', 'password')
-    await expect(page.getByText('https://c2sml.cn/agent')).toBeVisible()
+    await expect(page.getByText('https://c2sml.cn/auth')).toBeVisible()
     await expect(page.locator('textarea, [contenteditable="true"], [data-terminal-slot]')).toHaveCount(0)
     await expect(page.locator('body')).not.toContainText('Setting up Hermes Agent')
     expect(protectedRendererChunkRequested()).toBe(false)
