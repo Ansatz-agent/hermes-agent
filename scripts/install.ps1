@@ -405,6 +405,11 @@ $script:PlaywrightPrimaryMirror = "https://registry.npmmirror.com/-/binary/playw
 $script:PlaywrightSecondaryMirror = "https://npmmirror.com/mirrors/playwright/"
 $script:DesktopElectronPrimaryMirror = "https://npmmirror.com/mirrors/electron/"
 $script:DesktopElectronSecondaryMirror = "https://registry.npmmirror.com/-/binary/electron/"
+# WinGet resolves package metadata through a named source, not through the
+# npm/Python mirror URLs above.  Keep the source name in one place so a
+# machine-provisioned WinGet mirror (or enterprise source) can be used without
+# pretending that an unrelated binary mirror serves these packages.
+$script:WingetSourceName = "winget"
 
 @(
     "UV_INDEX", "UV_INDEX_URL", "UV_EXTRA_INDEX_URL", "UV_CONFIG_FILE", "UV_PYTHON",
@@ -1778,42 +1783,46 @@ function Test-Node {
     # install triggers a UAC prompt that frequently appears minimized in
     # the taskbar -- looks like a hang to users on stock Windows).
     # Kept for environments where the portable download fails (proxy,
-    # locked firewall, etc.) but the user is willing to consent to UAC.
+    # locked firewall, etc.).  The source refresh and package install are both
+    # bounded and non-interactive so an App Installer/UAC prompt cannot strand
+    # the bootstrap runner.
     if (Get-Command winget -ErrorAction SilentlyContinue) {
-        Write-Info "Falling back to winget (may prompt UAC -- check your taskbar for a flashing icon)..."
-        # Capture EAP outside the try block so the catch's restore call always
-        # has a meaningful value (see Install-Uv for the full rationale).
-        $prevEAP = $ErrorActionPreference
+        Write-Info "Falling back to winget (using the configured $($script:WingetSourceName) source)..."
         try {
-            # Relax EAP=Stop so stderr lines from winget don't get wrapped
-            # as ErrorRecords and short-circuit the 2>&1 pipe before we can
-            # check the post-condition.  See the long comment in Install-Uv
-            # for the same pattern.
-            $ErrorActionPreference = "Continue"
+            $nodeTimeoutSec = Get-OptionalPackageTimeoutSec
+            $sourceLog = "$env:TEMP\hermes-winget-node-source-$(Get-Random).log"
+            $sourceResult = Update-WingetSource -LogPath $sourceLog -TimeoutSec $nodeTimeoutSec
+            if ($sourceResult.ExitCode -ne 0) {
+                Write-Warn "WinGet source refresh did not complete; trying the cached source. Details: $sourceLog"
+            }
             # On ARM64, force winget to fetch the ARM64 installer.  Without
             # the explicit override, winget on WoW64 sometimes still resolves
             # to x64 manifests, leaving us with an emulated Node toolchain
             # even after a "successful" install.  The OpenJS manifest does
             # publish an arm64 installer, so this is safe.
             $wingetArgs = @(
-                'install','OpenJS.NodeJS','--silent',
+                'install','--exact','--id','OpenJS.NodeJS',
+                '--source',$script:WingetSourceName,'--silent',
+                '--disable-interactivity',
                 '--accept-package-agreements','--accept-source-agreements'
             )
             if ((Get-WindowsArch) -eq 'arm64') {
                 $wingetArgs += @('--architecture','arm64')
             }
-            winget @wingetArgs 2>&1 | Out-Null
-            $ErrorActionPreference = $prevEAP
+            $nodeLog = "$env:TEMP\hermes-winget-node-$(Get-Random).log"
+            $nodeResult = Invoke-OptionalPackageManager -Manager 'winget' `
+                -Arguments $wingetArgs -LogPath $nodeLog -TimeoutSec $nodeTimeoutSec
             # Refresh PATH
-            $env:Path = [Environment]::GetEnvironmentVariable("Path", "User") + ";" + [Environment]::GetEnvironmentVariable("Path", "Machine")
+            Update-ProcessPathForPackages
             if (Get-Command node -ErrorAction SilentlyContinue) {
                 $version = node --version
                 Write-Success "Node.js $version installed via winget"
                 $script:HasNode = $true
                 return $true
             }
+            Write-Warn "winget did not provide Node.js; details: $nodeLog"
         } catch {
-            if ($prevEAP) { $ErrorActionPreference = $prevEAP }
+            Write-Warn "winget Node.js fallback failed: $_"
         }
     }
 
@@ -1857,6 +1866,157 @@ function Update-ProcessPathForPackages {
         }
     }
     $env:Path = [string]::Join(';', $ordered)
+}
+
+# Run an optional package-manager command without allowing a stalled installer
+# to look like a dead bootstrap.  winget can block while App Installer creates
+# its source cache, a corporate proxy negotiates, or an implicit UAC prompt is
+# waiting in another desktop.  The desktop runner has a shorter idle watchdog
+# than this command's wall-clock budget, so drain both output streams and emit
+# a heartbeat while the process is still alive.  A timeout is deliberately
+# non-fatal: ripgrep and ffmpeg are optional capabilities and the callers below
+# already have findstr/TTS fallbacks when either binary remains unavailable.
+function Invoke-OptionalPackageManager {
+    param(
+        [Parameter(Mandatory = $true)][string]$Manager,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$LogPath,
+        [int]$TimeoutSec = 120,
+        [int]$HeartbeatSec = 10
+    )
+
+    $command = Get-Command $Manager -ErrorAction SilentlyContinue
+    if (-not $command) {
+        return [pscustomobject]@{
+            ExitCode = 127
+            TimedOut = $false
+            LogPath = $LogPath
+        }
+    }
+
+    $stdoutPath = "$LogPath.stdout"
+    $stderrPath = "$LogPath.stderr"
+    Remove-Item -LiteralPath $LogPath, $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+
+    # Start-Process can launch native executables directly.  Chocolatey and
+    # Scoop may instead resolve to a .cmd/.ps1 shim, so route those through
+    # their real host while retaining the same timeout and capture behavior.
+    $resolved = if ($command.Source) { $command.Source } elseif ($command.Definition) { $command.Definition } else { $command.Name }
+    $launcher = $resolved
+    $argLine = ($Arguments -join ' ')
+    if ($resolved -match '(?i)\.(cmd|bat)$') {
+        $launcher = $env:ComSpec
+        $argLine = "/d /s /c `"`"$resolved`" $argLine`""
+    } elseif ($resolved -match '(?i)\.ps1$' -or $command.CommandType -eq 'ExternalScript') {
+        $powershell = Get-Command powershell.exe -ErrorAction SilentlyContinue
+        if (-not $powershell) {
+            Write-Warn "$Manager is a PowerShell shim but powershell.exe is unavailable; skipping."
+            return [pscustomobject]@{
+                ExitCode = 127
+                TimedOut = $false
+                LogPath = $LogPath
+            }
+        }
+        $launcher = if ($powershell.Source) { $powershell.Source } else { 'powershell.exe' }
+        $argLine = "-NoProfile -ExecutionPolicy Bypass -File `"$resolved`" $argLine"
+    }
+
+    try {
+        $proc = Start-Process -FilePath $launcher -ArgumentList $argLine `
+            -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath `
+            -NoNewWindow -PassThru
+    } catch {
+        $_ | Out-File -FilePath $LogPath -Encoding utf8 -Append
+        return [pscustomobject]@{
+            ExitCode = 1
+            TimedOut = $false
+            LogPath = $LogPath
+        }
+    }
+
+    $deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(1, $TimeoutSec))
+    $nextHeartbeat = [DateTime]::UtcNow.AddSeconds([Math]::Max(1, $HeartbeatSec))
+    $shown = @{ $stdoutPath = 0; $stderrPath = 0 }
+
+    function Drain-OptionalPackageOutput([string]$Path, [string]$Stream) {
+        $lines = @(Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue)
+        $start = [int]$shown[$Path]
+        if ($lines.Count -gt $start) {
+            $lines[$start..($lines.Count - 1)] | ForEach-Object {
+                Write-Host "    [$Manager/$Stream] $_" -ForegroundColor DarkGray
+            }
+            $shown[$Path] = $lines.Count
+        }
+    }
+
+    $timedOut = $false
+    while (-not $proc.WaitForExit(750)) {
+        $now = [DateTime]::UtcNow
+        Drain-OptionalPackageOutput $stdoutPath 'stdout'
+        Drain-OptionalPackageOutput $stderrPath 'stderr'
+        if ($now -ge $nextHeartbeat) {
+            Write-Info "$Manager package installation still running..."
+            $nextHeartbeat = $now.AddSeconds([Math]::Max(1, $HeartbeatSec))
+        }
+        if ($now -ge $deadline) {
+            $timedOut = $true
+            Write-Warn "$Manager package installation timed out after $TimeoutSec seconds; continuing without optional packages."
+            try {
+                & taskkill /T /F /PID $proc.Id 2>&1 | Out-Null
+            } catch {
+                try { $proc.Kill() } catch { }
+            }
+            $proc.WaitForExit()
+            break
+        }
+    }
+
+    $proc.WaitForExit()
+    $proc.Refresh()
+    Drain-OptionalPackageOutput $stdoutPath 'stdout'
+    Drain-OptionalPackageOutput $stderrPath 'stderr'
+    try {
+        foreach ($path in @($stdoutPath, $stderrPath)) {
+            if (Test-Path -LiteralPath $path) {
+                Get-Content -LiteralPath $path -ErrorAction SilentlyContinue | Out-File -FilePath $LogPath -Encoding utf8 -Append
+            }
+        }
+        "package manager exit: $([int]$proc.ExitCode)" | Out-File -FilePath $LogPath -Encoding utf8 -Append
+    } catch {
+        # Diagnostics must never turn an optional dependency into a hard error.
+    }
+    Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+
+    return [pscustomobject]@{
+        ExitCode = if ($timedOut) { 124 } else { [int]$proc.ExitCode }
+        TimedOut = $timedOut
+        LogPath = $LogPath
+    }
+}
+
+function Get-OptionalPackageTimeoutSec {
+    $timeout = 120
+    if ($env:HERMES_SYSTEM_PACKAGE_TIMEOUT -match '^\d+$') {
+        $timeout = [int]$env:HERMES_SYSTEM_PACKAGE_TIMEOUT
+    }
+    return [Math]::Max(1, $timeout)
+}
+
+function Update-WingetSource {
+    param(
+        [Parameter(Mandatory = $true)][string]$LogPath,
+        [int]$TimeoutSec = 120
+    )
+
+    # WinGet's source name is resolved by App Installer.  Refreshing it lets a
+    # machine or enterprise image use its configured mirror, while the fixed
+    # --source argument below prevents an unrelated msstore source from being
+    # selected.  A source refresh is advisory: optional packages must not make
+    # the runtime bootstrap fail when the source is unavailable.
+    return Invoke-OptionalPackageManager -Manager 'winget' -Arguments @(
+        'source','update','--name',$script:WingetSourceName,'--disable-interactivity',
+        '--accept-source-agreements'
+    ) -LogPath $LogPath -TimeoutSec $TimeoutSec
 }
 
 function Install-SystemPackages {
@@ -1907,9 +2067,20 @@ function Install-SystemPackages {
     $hasWinget = Get-Command winget -ErrorAction SilentlyContinue
     $hasChoco = Get-Command choco -ErrorAction SilentlyContinue
     $hasScoop = Get-Command scoop -ErrorAction SilentlyContinue
+    $packageTimeoutSec = Get-OptionalPackageTimeoutSec
 
     # Try winget first (most common on modern Windows)
     if ($hasWinget) {
+        Write-Info "Refreshing the configured $($script:WingetSourceName) source..."
+        $sourceLog = "$env:TEMP\hermes-winget-source-$(Get-Random).log"
+        try {
+            $sourceResult = Update-WingetSource -LogPath $sourceLog -TimeoutSec $packageTimeoutSec
+            if ($sourceResult.ExitCode -ne 0) {
+                Write-Warn "WinGet source refresh did not complete; continuing with the cached source. Details: $sourceLog"
+            }
+        } catch {
+            Write-Warn "WinGet source refresh failed; continuing with the cached source: $_"
+        }
         Write-Info "Installing $description via winget..."
         # Per-package log paths -- key the lookup by package id so we can
         # decide AFTER the post-install Get-Command check whether to keep
@@ -1926,11 +2097,12 @@ function Install-SystemPackages {
             # install -- and it exits 0, so the surrounding try/catch never fires.
             # We don't ship anything from msstore, so pinning is safe.
             try {
-                $output = winget install --exact --id $pkg --source winget --silent `
-                    --accept-package-agreements --accept-source-agreements 2>&1
-                $code = $LASTEXITCODE
-                $output | Out-File -FilePath $log -Encoding utf8
-                "winget exit: $code" | Out-File -FilePath $log -Encoding utf8 -Append
+                $result = Invoke-OptionalPackageManager -Manager 'winget' -Arguments @(
+                    'install','--exact','--id',$pkg,'--source',$script:WingetSourceName,'--silent',
+                    '--disable-interactivity',
+                    '--accept-package-agreements','--accept-source-agreements'
+                ) -LogPath $log -TimeoutSec $packageTimeoutSec
+                $code = $result.ExitCode
                 # 0x8A15002B (-1978335189) = APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE.
                 # winget treats `install` on a package it already has registered as
                 # an *upgrade*, finds no newer version, and bails with this code --
@@ -1939,12 +2111,14 @@ function Install-SystemPackages {
                 # command was missing (that's why we're here), so a plain install
                 # dead-ends forever. Force a reinstall to repair the registration so
                 # the shim reappears.
-                if ($code -eq -1978335189) {
+                if (-not $result.TimedOut -and $code -eq -1978335189) {
                     "-> already-installed/no-upgrade; retrying with --force" | Out-File -FilePath $log -Encoding utf8 -Append
-                    $output = winget install --exact --id $pkg --source winget --silent --force `
-                        --accept-package-agreements --accept-source-agreements 2>&1
-                    $output | Out-File -FilePath $log -Encoding utf8 -Append
-                    "winget exit (force): $LASTEXITCODE" | Out-File -FilePath $log -Encoding utf8 -Append
+                    $forceResult = Invoke-OptionalPackageManager -Manager 'winget' -Arguments @(
+                        'install','--exact','--id',$pkg,'--source',$script:WingetSourceName,'--silent','--force',
+                        '--disable-interactivity',
+                        '--accept-package-agreements','--accept-source-agreements'
+                    ) -LogPath $log -TimeoutSec $packageTimeoutSec
+                    "winget exit (force): $($forceResult.ExitCode)" | Out-File -FilePath $log -Encoding utf8 -Append
                 }
             } catch {
                 $_ | Out-File -FilePath $log -Encoding utf8 -Append
@@ -1978,7 +2152,11 @@ function Install-SystemPackages {
     if ($hasChoco -and ($needRipgrep -or $needFfmpeg)) {
         Write-Info "Trying Chocolatey..."
         foreach ($pkg in $chocoPkgs) {
-            try { choco install $pkg -y 2>&1 | Out-Null } catch { }
+            $log = "$env:TEMP\hermes-choco-$($pkg -replace '[^A-Za-z0-9]','_')-$(Get-Random).log"
+            try {
+                Invoke-OptionalPackageManager -Manager 'choco' -Arguments @('install', $pkg, '-y') `
+                    -LogPath $log -TimeoutSec $packageTimeoutSec | Out-Null
+            } catch { }
         }
         Update-ProcessPathForPackages
         if ($needRipgrep -and (Get-Command rg -ErrorAction SilentlyContinue)) {
@@ -1997,7 +2175,11 @@ function Install-SystemPackages {
     if ($hasScoop -and ($needRipgrep -or $needFfmpeg)) {
         Write-Info "Trying Scoop..."
         foreach ($pkg in $scoopPkgs) {
-            try { scoop install $pkg 2>&1 | Out-Null } catch { }
+            $log = "$env:TEMP\hermes-scoop-$($pkg -replace '[^A-Za-z0-9]','_')-$(Get-Random).log"
+            try {
+                Invoke-OptionalPackageManager -Manager 'scoop' -Arguments @('install', $pkg) `
+                    -LogPath $log -TimeoutSec $packageTimeoutSec | Out-Null
+            } catch { }
         }
         Update-ProcessPathForPackages
         if ($needRipgrep -and (Get-Command rg -ErrorAction SilentlyContinue)) {
