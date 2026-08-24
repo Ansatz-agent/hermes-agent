@@ -118,8 +118,9 @@ function redactSecrets(text) {
 // per-user `/var/folders/xx/yyyy…/T/` (~49 bytes), and OpenSSH binds a
 // TEMPORARY listener at `<ControlPath>.<16 random chars>` while establishing
 // the master — so a path that itself fits 104 still overflows at bind time. We
-// root under a short per-user base (`~/.hermes/desktop-ssh`) so even worst case
-// (~72 bytes on macOS) stays clear. Windows has no AF_UNIX sun_path limit.
+// root under the product's short per-user base
+// (`~/.ansatz-voice-trace-client/desktop-ssh`) so even the worst case stays
+// clear. Windows has no AF_UNIX sun_path limit.
 function controlSocketPath(user, host, port, baseDir?, identity: any = {}) {
   const dir = baseDir || defaultControlDir()
   const keyPathIdentity = path.normalize(String(identity.keyPath || ''))
@@ -146,7 +147,7 @@ function defaultControlDir() {
     return path.join(os.tmpdir(), 'hermes-desktop-ssh')
   }
 
-  return path.join(os.homedir(), '.hermes', 'desktop-ssh')
+  return path.join(os.homedir(), '.ansatz-voice-trace-client', 'desktop-ssh')
 }
 
 // Command construction (pure — the unit tests exercise these directly)

@@ -7,8 +7,6 @@ export const en: Translations = {
     title: 'Sign in to Ansatz',
     description: 'Sign in after the complete offline runtime has been installed.',
     serverLabel: 'Account server',
-    traceNotice:
-      'Complete conversation Traces—including prompts, model replies, and tool arguments/results—are uploaded automatically for platform administrators only. Upload cannot be disabled. Raw audio and credentials are excluded.',
     username: 'Username',
     password: 'Password',
     signIn: 'Sign in',
@@ -20,7 +18,8 @@ export const en: Translations = {
     runtimeTitle: 'Installing Ansatz',
     runtimeDescription: 'The complete offline runtime is installed before account sign-in becomes available.',
     preparingFullRuntime: 'Installing the complete offline runtime…',
-    preparingFullStage: (current, total, title) => `Installing the complete offline runtime (${current}/${total}): ${title}…`,
+    preparingFullStage: (current, total, title) =>
+      `Installing the complete offline runtime (${current}/${total}): ${title}…`,
     runtimePreparationFailed: 'Ansatz could not install its local runtime. Retry installation.',
     administratorManaged: 'Accounts and password assistance are managed by the server administrator.',
     accountMenu: 'Account',
@@ -32,7 +31,7 @@ export const en: Translations = {
       stagePosition: (current, total, title) => `Stage ${current} of ${total}: ${title}`,
       elapsed: elapsed => `Current stage · ${elapsed}`,
       overallProgressLabel: 'Ansatz runtime installation',
-      authPreparationFailed: 'Hermes could not prepare the secure sign-in service.',
+      authPreparationFailed: 'Ansatz could not prepare the secure sign-in service.',
       runtimePreparationFailed: 'Ansatz could not install its local runtime.',
       failedAt: title => `Failed at: ${title}`,
       runningWithElapsed: (state, elapsed) => `${state} · ${elapsed}`,
@@ -124,14 +123,14 @@ export const en: Translations = {
     desktopBootFailedWithMessage: message => `Desktop boot failed: ${message}`,
     steps: {
       connectingGateway: 'Connecting live desktop gateway',
-      loadingSettings: 'Loading Hermes settings',
+      loadingSettings: 'Loading Ansatz settings',
       loadingSessions: 'Loading recent sessions',
       startingDesktopConnection: 'Starting desktop connection',
       startingHermesDesktop: 'Starting Ansatz…'
     },
     errors: {
-      backgroundExited: 'Hermes background process exited.',
-      backgroundExitedDuringStartup: 'Hermes background process exited during startup.',
+      backgroundExited: 'Ansatz background process exited.',
+      backgroundExitedDuringStartup: 'Ansatz background process exited during startup.',
       backendStopped: 'Backend stopped',
       desktopBootFailed: 'Desktop boot failed',
       gatewayConnectionLost: 'Lost connection to the gateway',
@@ -139,7 +138,7 @@ export const en: Translations = {
       ipcBridgeUnavailable: 'Desktop IPC bridge is unavailable.'
     },
     failure: {
-      title: "Hermes couldn't start",
+      title: "Ansatz couldn't start",
       description:
         "The background gateway didn't come up. Try one of the recovery steps below. Nothing here deletes your chats or settings.",
       remoteTitle: 'Remote gateway sign-in required',
@@ -447,7 +446,7 @@ export const en: Translations = {
       intro: 'OS notifications (not in-app toasts). Per device.',
       enableAll: 'Enable notifications',
       enableAllDesc: 'Off silences every notification below.',
-      focusedHint: 'Completion alerts only fire while Hermes is in the background.',
+      focusedHint: 'Completion alerts only fire while the app is in the background.',
       kinds: {
         approval: {
           label: 'Approval needed',
@@ -459,7 +458,7 @@ export const en: Translations = {
         },
         turnDone: {
           label: 'Response ready',
-          description: 'A turn finished while Hermes was in the background.'
+          description: 'A turn finished while the app was in the background.'
         },
         turnError: {
           label: 'Turn failed',
@@ -475,11 +474,11 @@ export const en: Translations = {
         },
         plugin: {
           label: 'Plugin notifications',
-          description: 'A desktop plugin sent a notification while Hermes was in the background.'
+          description: 'A desktop plugin sent a notification while the app was in the background.'
         }
       },
       test: 'Send test notification',
-      testTitle: 'Hermes',
+      testTitle: 'Ansatz',
       testBody: 'Notifications are working.',
       testSent: 'Test sent. If nothing appears, check your OS notification permissions and Focus/Do Not Disturb.',
       testUnsupported: 'This system does not support native notifications.',
@@ -514,7 +513,7 @@ export const en: Translations = {
       title: 'Appearance',
       intro: 'Desktop-only. Mode is brightness; theme is palette and chat chrome.',
       colorMode: 'Color Mode',
-      colorModeDesc: 'Pick a fixed mode or let Hermes follow your system setting.',
+      colorModeDesc: 'Pick a fixed mode or let the app follow your system setting.',
       toolViewTitle: 'Tool Call Display',
       toolViewDesc: 'Product hides raw tool payloads; Technical shows full input/output.',
       reasoningCollapsedTitle: 'Collapse thinking by default',
@@ -570,7 +569,7 @@ export const en: Translations = {
         intro:
           'Adopt an animated petdex mascot that floats over the app and reacts to what Hermes is doing — running while tools execute, celebrating on success, sulking on errors.',
         restartHint:
-          'Pets need a quick restart — the running app started before this feature was added. Quit and reopen Hermes, then come back here.',
+          'Pets need a quick restart — the running app started before this feature was added. Quit and reopen the app, then come back here.',
         on: 'On',
         off: 'Off',
         scaleTitle: 'Size',
@@ -628,7 +627,7 @@ export const en: Translations = {
       justNowSuffix: ' · just now',
       automaticUpdates: 'Automatic updates',
       automaticUpdatesDesc:
-        'Hermes checks for updates automatically in the background and lets you know when one is ready.',
+        'The app checks for updates automatically in the background and lets you know when one is ready.',
       branchCommit: (branch, commit) => `Branch ${branch} · Commit ${commit}`,
       never: 'never',
       justNow: 'just now',
@@ -667,7 +666,7 @@ export const en: Translations = {
     quickEntry: {
       enabledTitle: 'Quick Entry',
       enabledDesc:
-        'Summon a small composer from anywhere with a global shortcut and fire a prompt without opening Hermes.',
+        'Summon a small composer from anywhere with a global shortcut and fire a prompt without opening the app.',
       shortcutTitle: 'Quick Entry shortcut',
       shortcutDesc: 'Needs at least one modifier, e.g. CommandOrControl+Shift+Space.',
       active: 'Shortcut is active.',
@@ -1383,7 +1382,7 @@ export const en: Translations = {
     },
     nav: {
       newChat: { title: 'New session', detail: 'Start a fresh session' },
-      settings: { title: 'Settings', detail: 'Configure Hermes desktop' },
+      settings: { title: 'Settings', detail: 'Configure Ansatz' },
       skills: { title: 'Capabilities', detail: 'Skills, tools, and MCP servers' },
       messaging: { title: 'Messaging', detail: 'Set up Telegram, Slack, Discord, and more' },
       artifacts: { title: 'Artifacts', detail: 'Browse generated outputs' }
@@ -2415,7 +2414,7 @@ export const en: Translations = {
     latestBodyBackend: 'The backend is running the latest version.',
     allSetTitle: 'You’re all set',
     availableTitle: 'New update available',
-    availableBody: 'A new version of Hermes is ready to install.',
+    availableBody: 'A new version of Ansatz is ready to install.',
     availableTitleBackend: 'Backend update available',
     availableBodyBackend: 'A newer version of the connected Hermes backend is ready to install.',
     availableBodyNoChangelog: 'A newer version is ready. Release notes aren’t available for this install type.',
@@ -2427,15 +2426,15 @@ export const en: Translations = {
     manualPickedUp: 'Hermes will pick up the new version next time you launch it.',
     guiSkewTitle: 'Update the desktop app',
     guiSkewBody:
-      'The backend was updated, but this desktop app package wasn’t changed. Update or reinstall the Hermes desktop app (your AppImage / .deb / .rpm) to match.',
+      'The backend was updated, but this desktop app package wasn’t changed. Update or reinstall Ansatz (your AppImage / .deb / .rpm) to match.',
     copy: 'Copy',
     copied: 'Copied',
     done: 'Done',
     applyingBody:
-      'The Hermes updater takes over in its own window and reopens Hermes automatically when it’s done. Please don’t reopen Hermes yourself while it’s updating.',
+      'The app updater takes over in its own window and reopens the app automatically when it’s done. Please don’t reopen the app yourself while it’s updating.',
     applyingBodyBackend:
-      'The remote backend is applying the update and will restart. Hermes reconnects automatically when it’s back.',
-    applyingClose: 'This window will close while the update runs, then Hermes reopens on its own.',
+      'The remote backend is applying the update and will restart. The app reconnects automatically when it’s back.',
+    applyingClose: 'This window will close while the update runs, then the app reopens on its own.',
     errorTitle: 'Update didn’t finish',
     errorBody: 'No worries — nothing was lost. You can try again now.',
     notNow: 'Not now',
@@ -2475,7 +2474,8 @@ export const en: Translations = {
     installLocalDesc: 'Download Hermes, create its Python environment, and run the backend on this computer.',
     localStartUnavailable: 'Local installation could not start. Restart Ansatz and try again.',
     remoteSetupTitle: 'Connect to existing Hermes',
-    remoteSetupDesc: 'Enter your gateway URL. Ansatz will detect whether it needs a token or browser sign-in.',
+    remoteSetupDesc:
+      'Enter your gateway URL. Ansatz will detect whether it needs a token or browser sign-in.',
     remoteUrlTitle: 'Gateway URL',
     remoteUrlDesc: 'Use the base URL of the Hermes gateway, including https:// when remote.',
     remoteUrlPlaceholder: 'https://gateway.example.com/hermes',
@@ -2523,7 +2523,7 @@ export const en: Translations = {
   },
 
   onboarding: {
-    headerTitle: "Let's get you setup with Ansatz",
+    headerTitle: "Let's set up Ansatz",
     headerDesc: 'Connect a model provider to start chatting. Most options take one click.',
     preparingInstall: 'Hermes is finishing install. This usually takes under a minute on first run.',
     starting: 'Starting Hermes…',
@@ -2872,7 +2872,7 @@ export const en: Translations = {
       restartedTitle: 'Preview server restarted',
       reloadingNow: 'Reloading the preview now.',
       restartFailedTitle: 'Preview restart failed',
-      restartFailedMessage: 'Hermes could not restart the server.',
+      restartFailedMessage: 'Ansatz could not restart the server.',
       stillWorking:
         'Hermes is still working, but no restart result has arrived yet. The server command may be running in the foreground.',
       workspaceReloading: 'Workspace changed, reloading preview',

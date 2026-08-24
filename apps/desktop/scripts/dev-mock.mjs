@@ -211,6 +211,7 @@ async function main() {
   const env = {
     ...process.env,
     HERMES_HOME: sandbox.hermesHome,
+    ANSATZ_VOICE_TRACE_CLIENT_HOME: sandbox.hermesHome,
     HERMES_DESKTOP_USER_DATA_DIR: sandbox.userDataDir,
     HERMES_DESKTOP_IGNORE_EXISTING: '1',
     HERMES_DESKTOP_HERMES_ROOT: REPO_ROOT,

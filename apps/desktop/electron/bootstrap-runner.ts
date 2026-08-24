@@ -38,6 +38,7 @@ import fsp from 'node:fs/promises'
 import https from 'node:https'
 import path from 'node:path'
 
+import { ANSATZ_PRODUCT, buildBundledRuntimeValidationEnvironment } from './ansatz-product'
 import { prepareBundledSource, type PreparedBundledSource, resolveBundledPayload } from './bootstrap-payload'
 import { buildBootstrapEnvironment, runBootstrapProcess } from './bootstrap-process'
 import { resolveBundledAuthToolchain } from './bootstrap-toolchain'
@@ -653,7 +654,14 @@ function buildPosixPinArgs({
   bundledToolchainRoot = null,
   bootstrapScope = null
 }) {
-  const args = ['--dir', activeRoot, '--hermes-home', hermesHome]
+  const args = [
+    '--dir',
+    activeRoot,
+    '--hermes-home',
+    hermesHome,
+    '--desktop-product',
+    ANSATZ_PRODUCT.desktopProduct
+  ]
 
   if (installStamp && installStamp.branch) {
     args.push('--branch', installStamp.branch)
@@ -949,7 +957,7 @@ function bundledRuntimePython(activeRoot) {
     : path.join(activeRoot, 'venv', 'bin', 'python')
 }
 
-function validateBundledRuntime(activeRoot, bootstrapScope = 'runtime') {
+function validateBundledRuntime(activeRoot, hermesHome, bootstrapScope = 'runtime') {
   const python = bundledRuntimePython(activeRoot)
 
   try {
@@ -968,10 +976,7 @@ function validateBundledRuntime(activeRoot, bootstrapScope = 'runtime') {
 
     const child = spawn(python, ['-c', importProbe], {
       stdio: ['ignore', 'ignore', 'pipe'],
-      env: {
-        ...process.env,
-        PYTHONPATH: [activeRoot, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter)
-      }
+      env: buildBundledRuntimeValidationEnvironment(activeRoot, hermesHome)
     })
 
     let stderr = ''
@@ -1285,7 +1290,7 @@ async function runBootstrap(opts) {
     }
 
     if (bundledSource) {
-      await validateBundledRuntime(activeRoot, bootstrapScope)
+      await validateBundledRuntime(activeRoot, hermesHome, bootstrapScope)
     }
 
     // 4. Write the bootstrap-complete marker. Fallback (all-zero) stamps are

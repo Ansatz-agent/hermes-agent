@@ -4,6 +4,8 @@ import { $connection } from '@/store/session'
 
 export type MediaKind = 'audio' | 'image' | 'video' | 'file'
 
+export const MEDIA_PROTOCOL = 'ansatz-media'
+
 interface MediaInfo {
   kind: MediaKind
   mime: string
@@ -133,7 +135,7 @@ export function mediaGatewayStreamUrl(path: string): string {
     const file = encodeURIComponent(filePathFromMediaPath(path))
     const profile = conn?.profile ? `?profile=${encodeURIComponent(conn.profile)}` : ''
 
-    return `hermes-media://remote/${file}${profile}`
+    return `${MEDIA_PROTOCOL}://remote/${file}${profile}`
   }
 
   return mediaExternalUrl(path)
@@ -143,7 +145,7 @@ export function mediaGatewayStreamUrl(path: string): string {
 // file with Range support. Used for audio/video so playback bypasses the data
 // URL size cap and supports seeking. `path` may be a plain path or `file://…`.
 export function mediaStreamUrl(path: string): string {
-  return `hermes-media://stream/${encodeURIComponent(filePathFromMediaPath(path))}`
+  return `${MEDIA_PROTOCOL}://stream/${encodeURIComponent(filePathFromMediaPath(path))}`
 }
 
 export function mediaPathFromMarkdownHref(href?: string): string | null {

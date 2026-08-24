@@ -174,6 +174,7 @@ function canImportHermesCli(pythonPath: string, opts: { env?: Record<string, str
  *
  * @param {string} hermesCommand - Resolved absolute path to a hermes
  *   executable (or an interpreter+script wrapper).
+ * @param {NodeJS.ProcessEnv} [opts.env] - Additional environment for the probe.
  * @param {boolean} [opts.shell] - Whether to run through a shell. For
  *   .cmd/.bat shims on Windows execFileSync needs shell:true to find
  *   the cmd interpreter; mirrors the same flag isCommandScript() drives
@@ -190,16 +191,20 @@ function shouldTrustHermesOverride(hermesOverride?: string) {
   return typeof hermesOverride === 'string' && hermesOverride.trim().length > 0
 }
 
-function verifyHermesCli(hermesCommand: string, opts?: { shell?: boolean }) {
+function verifyHermesCli(
+  hermesCommand: string,
+  opts: { env?: NodeJS.ProcessEnv; shell?: boolean } = {}
+) {
   if (!hermesCommand) {
     return false
   }
 
   try {
     execProbeSync(hermesCommand, ['--version'], {
+      env: { ...process.env, ...(opts.env || {}) },
       stdio: 'ignore',
       timeout: PROBE_TIMEOUT_MS,
-      shell: Boolean(opts?.shell),
+      shell: Boolean(opts.shell),
       windowsHide: true
     })
 

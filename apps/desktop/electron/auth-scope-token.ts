@@ -1,6 +1,7 @@
 import { randomBytes as nodeRandomBytes } from 'node:crypto'
 import { uptime } from 'node:os'
 
+import { ansatzAuthEnvironment } from './ansatz-product'
 import { type ConnectionScope, requireAuthenticatedConnectionScope } from './auth-bridge'
 
 export const AUTH_SCOPE_TOKEN_TTL_SECONDS = 60
@@ -30,6 +31,13 @@ export function sanitizeAuthChildEnvironment(
   }
 
   return sanitized
+}
+
+export function sanitizeAnsatzAuthChildEnvironment(
+  source: NodeJS.ProcessEnv,
+  hermesHome: string
+): NodeJS.ProcessEnv {
+  return sanitizeAuthChildEnvironment(ansatzAuthEnvironment(hermesHome, source))
 }
 
 type IssueAuthScopeTokenOptions = {

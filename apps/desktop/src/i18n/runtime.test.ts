@@ -24,6 +24,26 @@ describe('desktop i18n runtime translator', () => {
     expect(translateNow('assistant.tool.statusRecovered')).toBe('已恢复')
   })
 
+  it('uses the Ansatz product identity for app-owned boot and setup copy in every locale', () => {
+    for (const translations of Object.values(TRANSLATIONS)) {
+      const values = [
+        translations.boot.ready,
+        translations.boot.steps.loadingSettings,
+        translations.boot.steps.startingHermesDesktop,
+        translations.boot.errors.backgroundExited,
+        translations.boot.errors.backgroundExitedDuringStartup,
+        translations.boot.failure.title,
+        translations.install.settingUpTitle,
+        translations.onboarding.headerTitle
+      ]
+
+      for (const value of values) {
+        expect(value).toContain('Ansatz')
+        expect(value).not.toContain('Hermes')
+      }
+    }
+  })
+
   it('passes arguments to function translations', () => {
     expect(translateNow('notifications.updateReadyMessage', 2)).toBe('2 new changes available.')
   })
@@ -77,11 +97,5 @@ describe('desktop i18n runtime translator', () => {
     setRuntimeI18nLocale('zh')
 
     expect(translateNow('missing.path')).toBe('missing.path')
-  })
-
-  it('uses the Ansatz desktop brand throughout user-facing locale copy', () => {
-    expect(JSON.stringify(TRANSLATIONS)).not.toContain('Hermes Desktop')
-    expect(translateNow('install.setupChoiceTitle')).toBe('Set up Ansatz')
-    expect(translateNow('install.settingUpTitle')).toBe('Setting up Ansatz')
   })
 })

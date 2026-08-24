@@ -10,8 +10,12 @@ const OTHER_COMMIT = 'b'.repeat(40)
 
 test('packaged macOS resolves the bundled bootstrap resource and other targets do not', () => {
   assert.equal(
-    resolveBundledBootstrapRoot({ packaged: true, platform: 'darwin', resourcesPath: '/Applications/Hermes.app/Contents/Resources' }),
-    path.join('/Applications/Hermes.app/Contents/Resources', 'bootstrap')
+    resolveBundledBootstrapRoot({
+      packaged: true,
+      platform: 'darwin',
+      resourcesPath: '/Applications/Ansatz.app/Contents/Resources'
+    }),
+    path.join('/Applications/Ansatz.app/Contents/Resources', 'bootstrap')
   )
   assert.equal(resolveBundledBootstrapRoot({ packaged: false, platform: 'darwin', resourcesPath: '/tmp/resources' }), null)
   assert.equal(resolveBundledBootstrapRoot({ packaged: true, platform: 'win32', resourcesPath: 'C:\\resources' }), null)

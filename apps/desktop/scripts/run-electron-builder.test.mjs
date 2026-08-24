@@ -13,7 +13,7 @@ import {
   shouldUseRestrictedVolumeFallback,
 } from "./macos-dmg-builder.mjs"
 
-test("packaged macOS app uses the visible Ansatz product name", () => {
+test("packaged macOS app path follows electron-builder executableName", () => {
   const desktopPackage = JSON.parse(
     fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"),
   )

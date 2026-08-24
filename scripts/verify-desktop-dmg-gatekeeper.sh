@@ -17,8 +17,8 @@ EXPECTED_SHA256="$2"
 EXPECTED_BYTES="$3"
 EXPECTED_VERSION="$4"
 EVIDENCE_DIR="$5"
-INSTALL_APP="/Applications/Hermes.app"
-EXPECTED_BUNDLE_ID="com.nousresearch.hermes"
+INSTALL_APP="/Applications/Ansatz.app"
+EXPECTED_BUNDLE_ID="cn.c2sml.ansatz.voice-trace-client"
 
 if [[ ! -f "$DMG_INPUT" ]]; then
   printf 'DMG not found: %s\n' "$DMG_INPUT" >&2
@@ -43,7 +43,7 @@ LAUNCH_FILE="$EVIDENCE_DIR/launch.txt"
 : >"$LAUNCH_FILE"
 
 cat >"$SUMMARY_FILE" <<'EOF'
-# Hermes Desktop fresh macOS DMG acceptance
+# Ansatz fresh macOS DMG acceptance
 
 | Check | Result | Detail |
 |---|---|---|
@@ -52,7 +52,7 @@ EOF
 FAILURES=0
 MOUNTED=0
 INSTALLED=0
-MOUNT_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/hermes-dmg-mount.XXXXXX")"
+MOUNT_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/ansatz-voice-trace-dmg-mount.XXXXXX")"
 
 sanitize_detail() {
   printf '%s' "$1" | tr '\n|' '  '
@@ -82,7 +82,7 @@ log_command() {
 
 cleanup() {
   local cleanup_bundle=""
-  pkill -f "^${INSTALL_APP}/Contents/MacOS/Hermes" >/dev/null 2>&1 || true
+  pkill -f "^${INSTALL_APP}/Contents/MacOS/Ansatz" >/dev/null 2>&1 || true
   if [[ "$INSTALLED" -eq 1 && -d "$INSTALL_APP" ]]; then
     cleanup_bundle="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' \
       "$INSTALL_APP/Contents/Info.plist" 2>/dev/null || true)"
@@ -154,7 +154,7 @@ else
 fi
 
 if [[ -e "$INSTALL_APP" ]]; then
-  record 'Real Applications target' 'FAIL' '/Applications/Hermes.app unexpectedly exists on fresh runner'
+  record 'Real Applications target' 'FAIL' '/Applications/Ansatz.app unexpectedly exists on fresh runner'
   record 'DMG mount and install' 'NOT_RUN' 'existing target was not overwritten'
   printf '\n**Overall: FAIL** — the fresh runner install target was not empty.\n' >>"$SUMMARY_FILE"
   exit 1
@@ -173,11 +173,11 @@ else
 fi
 
 APP_COUNT="$(find "$MOUNT_DIR" -maxdepth 1 -type d -name '*.app' | wc -l | tr -d ' ')"
-SOURCE_APP="$MOUNT_DIR/Hermes.app"
+SOURCE_APP="$MOUNT_DIR/Ansatz.app"
 if [[ "$APP_COUNT" == "1" && -d "$SOURCE_APP" ]]; then
-  record 'DMG app payload' 'PASS' 'exactly one Hermes.app is present'
+  record 'DMG app payload' 'PASS' 'exactly one Ansatz.app is present'
 else
-  record 'DMG app payload' 'FAIL' "expected one Hermes.app, found $APP_COUNT app bundles"
+  record 'DMG app payload' 'FAIL' "expected one Ansatz.app, found $APP_COUNT app bundles"
 fi
 
 if [[ -L "$MOUNT_DIR/Applications" && "$(readlink "$MOUNT_DIR/Applications")" == "/Applications" ]]; then
@@ -187,7 +187,7 @@ else
 fi
 
 if [[ ! -d "$SOURCE_APP" ]]; then
-  record 'Real Applications install' 'NOT_RUN' 'Hermes.app payload is unavailable'
+  record 'Real Applications install' 'NOT_RUN' 'Ansatz.app payload is unavailable'
   printf '\n**Overall: FAIL** — required app payload is absent.\n' >>"$SUMMARY_FILE"
   exit 1
 fi
@@ -195,7 +195,7 @@ fi
 log_command 'install-app' sudo ditto "$SOURCE_APP" "$INSTALL_APP"
 if sudo ditto "$SOURCE_APP" "$INSTALL_APP" >>"$COMMANDS_FILE" 2>&1; then
   INSTALLED=1
-  record 'Real Applications install' 'PASS' 'copied to /Applications/Hermes.app'
+  record 'Real Applications install' 'PASS' 'copied to /Applications/Ansatz.app'
 else
   record 'Real Applications install' 'FAIL' 'ditto failed without overwriting an existing app'
   printf '\n**Overall: FAIL** — installation to /Applications failed.\n' >>"$SUMMARY_FILE"
@@ -211,7 +211,7 @@ else
 fi
 
 INFO_PLIST="$INSTALL_APP/Contents/Info.plist"
-MAIN_EXECUTABLE="$INSTALL_APP/Contents/MacOS/Hermes"
+MAIN_EXECUTABLE="$INSTALL_APP/Contents/MacOS/Ansatz"
 RESOURCES="$INSTALL_APP/Contents/Resources"
 BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INFO_PLIST" 2>/dev/null || true)"
 APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO_PLIST" 2>/dev/null || true)"
@@ -306,7 +306,7 @@ else
   else
     APP_PID=""
     for _ in {1..15}; do
-      APP_PID="$(pgrep -f "^${INSTALL_APP}/Contents/MacOS/Hermes" | head -n 1 || true)"
+      APP_PID="$(pgrep -f "^${INSTALL_APP}/Contents/MacOS/Ansatz" | head -n 1 || true)"
       [[ -n "$APP_PID" ]] && break
       sleep 1
     done
@@ -323,11 +323,11 @@ else
     PROTECTED_PATTERN='[h]ermes serve|[h]ermes gateway|[h]ermes_cli\.web_server|[r]un_agent\.py'
     PROTECTED_COUNT="$(pgrep -fal "$PROTECTED_PATTERN" | wc -l | tr -d ' ')"
     LISTENER_COUNT="$(lsof -nP -iTCP -sTCP:LISTEN -a \
-      \( -c Hermes -o -c Python -o -c Python3 \) 2>/dev/null | tail -n +2 | wc -l | tr -d ' ')"
+      \( -c AnsatzVoiceTrac -o -c Python -o -c Python3 \) 2>/dev/null | tail -n +2 | wc -l | tr -d ' ')"
     printf 'protected_backend_process_count=%s\n' "$PROTECTED_COUNT" >>"$LAUNCH_FILE"
     printf 'hermes_or_python_listener_count=%s\n' "$LISTENER_COUNT" >>"$LAUNCH_FILE"
     if [[ "$PROTECTED_COUNT" == "0" && "$LISTENER_COUNT" == "0" ]]; then
-      record 'Signed-out protected backend check' 'PASS' 'no protected backend process or Hermes/Python listener appeared before login'
+      record 'Signed-out protected backend check' 'PASS' 'no protected backend process or Ansatz/Python listener appeared before login'
     else
       record 'Signed-out protected backend check' 'FAIL' "protected_processes=$PROTECTED_COUNT listeners=$LISTENER_COUNT"
     fi

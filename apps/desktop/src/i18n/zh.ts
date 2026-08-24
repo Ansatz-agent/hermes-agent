@@ -7,8 +7,6 @@ export const zh: Translations = {
     title: '登录 Ansatz',
     description: '完整离线运行时安装完成后方可登录账户。',
     serverLabel: '账户服务器',
-    traceNotice:
-      '完整对话 Trace（包括输入、模型回复、工具参数与结果）会自动上传，且仅平台管理员可查看。上传无法关闭；原始音频和凭证不会上传。',
     username: '用户名',
     password: '密码',
     signIn: '登录',
@@ -124,14 +122,14 @@ export const zh: Translations = {
     desktopBootFailedWithMessage: message => `桌面启动失败：${message}`,
     steps: {
       connectingGateway: '正在连接桌面网关',
-      loadingSettings: '正在加载 Hermes 设置',
+      loadingSettings: '正在加载 Ansatz 设置',
       loadingSessions: '正在加载最近会话',
       startingDesktopConnection: '正在启动桌面连接',
       startingHermesDesktop: '正在启动 Ansatz…'
     },
     errors: {
-      backgroundExited: 'Hermes 后台进程已退出。',
-      backgroundExitedDuringStartup: 'Hermes 后台进程在启动期间退出。',
+      backgroundExited: 'Ansatz 后台进程已退出。',
+      backgroundExitedDuringStartup: 'Ansatz 后台进程在启动期间退出。',
       backendStopped: '后端已停止',
       desktopBootFailed: '桌面启动失败',
       gatewayConnectionLost: '与网关的连接已断开',
@@ -139,7 +137,7 @@ export const zh: Translations = {
       ipcBridgeUnavailable: '桌面 IPC 桥不可用。'
     },
     failure: {
-      title: 'Hermes 无法启动',
+      title: 'Ansatz 无法启动',
       description: '后台网关没有启动。请尝试下面的恢复步骤；这里不会删除你的对话或设置。',
       remoteTitle: '需要重新登录远程网关',
       remoteDescription: '你的远程网关会话已过期。请重新登录以恢复连接。这些操作不会删除你的对话或设置。',
@@ -437,7 +435,7 @@ export const zh: Translations = {
       intro: '原生桌面通知，区别于应用内提示。设置按设备保存，每台电脑各自独立。',
       enableAll: '启用通知',
       enableAllDesc: '关闭后静音下方所有通知。',
-      focusedHint: '完成提醒仅在 Hermes 处于后台时触发。',
+      focusedHint: '完成提醒仅在应用处于后台时触发。',
       kinds: {
         approval: {
           label: '需要批准',
@@ -449,7 +447,7 @@ export const zh: Translations = {
         },
         turnDone: {
           label: '回复就绪',
-          description: 'Hermes 在后台时完成了一轮对话。'
+          description: '应用在后台时完成了一轮对话。'
         },
         turnError: {
           label: '本轮失败',
@@ -465,11 +463,11 @@ export const zh: Translations = {
         },
         plugin: {
           label: '插件通知',
-          description: 'Hermes 在后台时，桌面插件发送了通知。'
+          description: '应用在后台时，桌面插件发送了通知。'
         }
       },
       test: '发送测试通知',
-      testTitle: 'Hermes',
+      testTitle: 'Ansatz',
       testBody: '通知工作正常。',
       testSent: '测试已发送。如果没有出现，请检查系统通知权限和专注模式／勿扰模式。',
       testUnsupported: '此系统不支持原生通知。',
@@ -504,7 +502,7 @@ export const zh: Translations = {
       title: '外观',
       intro: '这些是仅桌面端的显示偏好。模式控制明暗；主题控制强调色与对话界面样式。',
       colorMode: '颜色模式',
-      colorModeDesc: '选择固定模式，或让 Hermes 跟随系统设置。',
+      colorModeDesc: '选择固定模式，或让应用跟随系统设置。',
       toolViewTitle: '工具调用显示',
       toolViewDesc: '产品模式隐藏原始工具数据；技术模式显示完整输入/输出。',
       reasoningCollapsedTitle: '默认折叠推理过程',
@@ -558,7 +556,7 @@ export const zh: Translations = {
         title: '宠物',
         intro:
           '领养一只悬浮在应用上的 petdex 动画宠物，它会根据 Hermes 的状态做出反应——工具执行时奔跑、成功时欢呼、出错时沮丧。',
-        restartHint: '宠物功能需要重启——当前运行的应用在此功能加入前启动。请退出并重新打开 Hermes，然后回到此处。',
+        restartHint: '宠物功能需要重启——当前运行的应用在此功能加入前启动。请退出并重新打开应用，然后回到此处。',
         scaleTitle: '大小',
         scaleDesc: '调整悬浮宠物的大小，所有界面即时生效。',
         roamTitle: '漫游',
@@ -836,7 +834,7 @@ export const zh: Translations = {
       lastChecked: age => `上次检查:${age}`,
       justNowSuffix: ' · 刚刚',
       automaticUpdates: '自动更新',
-      automaticUpdatesDesc: 'Hermes 会在后台自动检查更新，并在有可用更新时通知你。',
+      automaticUpdatesDesc: '应用会在后台自动检查更新，并在有可用更新时通知你。',
       branchCommit: (branch, commit) => `分支 ${branch} · 提交 ${commit}`,
       never: '从未',
       justNow: '刚刚',
@@ -874,7 +872,7 @@ export const zh: Translations = {
     },
     quickEntry: {
       enabledTitle: '快速输入',
-      enabledDesc: '用全局快捷键在任何地方唤出一个小输入框，无需打开 Hermes 即可发送提示。',
+      enabledDesc: '用全局快捷键在任何地方唤出一个小输入框，无需打开应用即可发送提示。',
       shortcutTitle: '快速输入快捷键',
       shortcutDesc: '至少需要一个修饰键，例如 CommandOrControl+Shift+Space。',
       active: '快捷键已生效。',
@@ -1574,7 +1572,7 @@ export const zh: Translations = {
     },
     nav: {
       newChat: { title: '新建会话', detail: '开始一个新会话' },
-      settings: { title: '设置', detail: '配置 Hermes 桌面端' },
+      settings: { title: '设置', detail: '配置 Ansatz' },
       skills: { title: '技能与工具', detail: '启用技能、工具集与提供方' },
       messaging: { title: '消息平台', detail: '配置 Telegram、Slack、Discord 等' },
       artifacts: { title: '产物', detail: '浏览生成的输出' }
@@ -2616,10 +2614,9 @@ export const zh: Translations = {
     copy: '复制',
     copied: '已复制',
     done: '完成',
-    applyingBody:
-      'Hermes 更新器会在自己的窗口中接管，并在完成后自动重新打开 Hermes。更新期间请不要自行重新打开 Hermes。',
-    applyingBodyBackend: '远程后端正在应用更新并将重启。恢复后 Hermes 会自动重新连接。',
-    applyingClose: '此窗口会在更新期间关闭，随后 Hermes 会自动重新打开。',
+    applyingBody: '应用更新器会在自己的窗口中接管，并在完成后自动重新打开应用。更新期间请不要自行重新打开应用。',
+    applyingBodyBackend: '远程后端正在应用更新并将重启。恢复后应用会自动重新连接。',
+    applyingClose: '此窗口会在更新期间关闭，随后应用会自动重新打开。',
     errorTitle: '更新未完成',
     errorBody: '没有数据丢失。你可以现在重试。',
     notNow: '暂不',
@@ -3327,8 +3324,8 @@ export const zh: Translations = {
     sessionExportFailed: '无法导出会话',
     imageSaved: '图片已保存',
     downloadStarted: '下载已开始',
-    restartToUseSaveImage: '重启 Hermes 桌面版后可使用保存图片。',
-    restartToSaveImages: '重启 Hermes 桌面版以保存图片',
+    restartToUseSaveImage: '重启 Ansatz 后可使用保存图片。',
+    restartToSaveImages: '重启 Ansatz 以保存图片',
     imageDownloadFailed: '图片下载失败',
     openImage: '打开图片',
     downloadImage: '下载图片',

@@ -1274,6 +1274,7 @@ async function executeRunInSandboxAttempt(target, index, warmup, mock, output, s
         HERMES_DESKTOP_IGNORE_EXISTING: '1',
         HERMES_DESKTOP_USER_DATA_DIR: userData,
         HERMES_HOME: hermesHome,
+        ANSATZ_VOICE_TRACE_CLIENT_HOME: hermesHome,
         SHORT_SESSION_API_KEY: 'local-diagnostic-only'
       }),
       stdio: ['ignore', 'pipe', 'pipe']

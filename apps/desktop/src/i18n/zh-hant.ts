@@ -7,8 +7,6 @@ export const zhHant = defineLocale({
     title: '登入 Ansatz',
     description: '完整離線執行環境安裝完成後方可登入帳戶。',
     serverLabel: '帳戶伺服器',
-    traceNotice:
-      '完整對話 Trace（包括輸入、模型回覆、工具參數與結果）會自動上傳，且僅平台管理員可查看。上傳無法關閉；原始音訊和憑證不會上傳。',
     username: '使用者名稱',
     password: '密碼',
     signIn: '登入',
@@ -124,14 +122,14 @@ export const zhHant = defineLocale({
     desktopBootFailedWithMessage: message => `桌面啟動失敗：${message}`,
     steps: {
       connectingGateway: '正在連線桌面閘道',
-      loadingSettings: '正在載入 Hermes 設定',
+      loadingSettings: '正在載入 Ansatz 設定',
       loadingSessions: '正在載入最近工作階段',
       startingDesktopConnection: '正在啟動桌面連線',
       startingHermesDesktop: '正在啟動 Ansatz…'
     },
     errors: {
-      backgroundExited: 'Hermes 背景程序已結束。',
-      backgroundExitedDuringStartup: 'Hermes 背景程序在啟動期間結束。',
+      backgroundExited: 'Ansatz 背景程序已結束。',
+      backgroundExitedDuringStartup: 'Ansatz 背景程序在啟動期間結束。',
       backendStopped: '後端已停止',
       desktopBootFailed: '桌面啟動失敗',
       gatewayConnectionLost: '與閘道的連線已中斷',
@@ -139,7 +137,7 @@ export const zhHant = defineLocale({
       ipcBridgeUnavailable: '桌面 IPC 橋接器不可用。'
     },
     failure: {
-      title: 'Hermes 無法啟動',
+      title: 'Ansatz 無法啟動',
       description: '背景閘道未啟動。請嘗試下面的復原步驟。這裡的操作不會刪除您的聊天或設定。',
       remoteTitle: '需要重新登入遠端閘道',
       remoteDescription: '您的遠端閘道工作階段已過期。請重新登入以重新連線。這裡的操作不會刪除您的聊天或設定。',
@@ -297,7 +295,7 @@ export const zhHant = defineLocale({
       intro: '原生桌面通知，與應用程式內提示不同。設定會依裝置保存，每台電腦各自獨立。',
       enableAll: '啟用通知',
       enableAllDesc: '關閉後靜音下方所有通知。',
-      focusedHint: '完成提醒僅在 Hermes 位於背景時觸發。',
+      focusedHint: '完成提醒僅在應用程式位於背景時觸發。',
       kinds: {
         approval: {
           label: '需要核准',
@@ -309,7 +307,7 @@ export const zhHant = defineLocale({
         },
         turnDone: {
           label: '回覆就緒',
-          description: 'Hermes 在背景時完成了一輪對話。'
+          description: '應用程式在背景時完成了一輪對話。'
         },
         turnError: {
           label: '本輪失敗',
@@ -325,11 +323,11 @@ export const zhHant = defineLocale({
         },
         plugin: {
           label: '外掛通知',
-          description: 'Hermes 在背景時，桌面外掛傳送了通知。'
+          description: '應用程式在背景時，桌面外掛傳送了通知。'
         }
       },
       test: '傳送測試通知',
-      testTitle: 'Hermes',
+      testTitle: 'Ansatz',
       testBody: '通知運作正常。',
       testSent: '測試已傳送。若沒有出現，請檢查系統通知權限與專注模式／勿擾模式。',
       testUnsupported: '此系統不支援原生通知。',
@@ -364,7 +362,7 @@ export const zhHant = defineLocale({
       title: '外觀',
       intro: '這些是僅限桌面端的顯示偏好。模式控制亮度；主題控制強調色與聊天介面樣式。',
       colorMode: '色彩模式',
-      colorModeDesc: '選擇固定模式，或讓 Hermes 跟隨系統設定。',
+      colorModeDesc: '選擇固定模式，或讓應用程式跟隨系統設定。',
       toolViewTitle: '工具呼叫顯示',
       toolViewDesc: '產品模式會隱藏原始工具 payload；技術模式會顯示完整輸入/輸出。',
       reasoningCollapsedTitle: '預設摺疊推理過程',
@@ -418,7 +416,7 @@ export const zhHant = defineLocale({
         title: '寵物',
         intro:
           '領養一隻懸浮在應用上的 petdex 動畫寵物，它會根據 Hermes 的狀態做出反應——工具執行時奔跑、成功時歡呼、出錯時沮喪。',
-        restartHint: '寵物功能需要重新啟動——目前執行的應用在此功能加入前啟動。請結束並重新開啟 Hermes，然後回到此處。',
+        restartHint: '寵物功能需要重新啟動——目前執行的應用在此功能加入前啟動。請結束並重新開啟應用程式，然後回到此處。',
         scaleTitle: '大小',
         scaleDesc: '調整懸浮寵物的大小，所有介面即時生效。',
         roamTitle: '漫遊',
@@ -696,7 +694,7 @@ export const zhHant = defineLocale({
       lastChecked: age => `上次檢查：${age}`,
       justNowSuffix: ' · 剛剛',
       automaticUpdates: '自動更新',
-      automaticUpdatesDesc: 'Hermes 會在背景自動檢查更新，並在有可用更新時通知你。',
+      automaticUpdatesDesc: '應用程式會在背景自動檢查更新，並在有可用更新時通知你。',
       branchCommit: (branch, commit) => `分支 ${branch} · 提交 ${commit}`,
       never: '從未',
       justNow: '剛剛',
@@ -725,7 +723,7 @@ export const zhHant = defineLocale({
     },
     quickEntry: {
       enabledTitle: '快速輸入',
-      enabledDesc: '用全域快速鍵在任何地方喚出一個小輸入框，無需開啟 Hermes 即可送出提示。',
+      enabledDesc: '用全域快速鍵在任何地方喚出一個小輸入框，無需開啟應用程式即可送出提示。',
       shortcutTitle: '快速輸入快速鍵',
       shortcutDesc: '至少需要一個修飾鍵，例如 CommandOrControl+Shift+Space。',
       active: '快速鍵已生效。',
@@ -1240,7 +1238,7 @@ export const zhHant = defineLocale({
     },
     nav: {
       newChat: { title: '新工作階段', detail: '開始新的工作階段' },
-      settings: { title: '設定', detail: '設定 Hermes 桌面端' },
+      settings: { title: '設定', detail: '設定 Ansatz' },
       skills: { title: '技能與工具', detail: '啟用技能、工具集和提供方' },
       messaging: { title: '訊息平台', detail: '設定 Telegram、Slack、Discord 等' },
       artifacts: { title: '成品', detail: '瀏覽產生的輸出' }
@@ -2087,9 +2085,9 @@ export const zhHant = defineLocale({
     copied: '已複製',
     done: '完成',
     applyingBody:
-      'Hermes 更新程式會在自己的視窗中接管，並在完成後自動重新開啟 Hermes。更新期間請勿自行重新開啟 Hermes。',
-    applyingBodyBackend: '遠端後端正在套用更新並將重新啟動。恢復後 Hermes 會自動重新連線。',
-    applyingClose: '此視窗會在更新期間關閉，隨後 Hermes 會自動重新開啟。',
+      '應用程式更新程式會在自己的視窗中接管，並在完成後自動重新開啟應用程式。更新期間請勿自行重新開啟應用程式。',
+    applyingBodyBackend: '遠端後端正在套用更新並將重新啟動。恢復後應用程式會自動重新連線。',
+    applyingClose: '此視窗會在更新期間關閉，隨後應用程式會自動重新開啟。',
     errorTitle: '更新未完成',
     errorBody: '沒有資料遺失。您可以現在重試。',
     notNow: '暫不',

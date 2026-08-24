@@ -84,6 +84,31 @@ afterEach(() => {
 })
 
 describe('AuthGate', () => {
+  it('omits the Trace notice while retaining the administrator footer', async () => {
+    renderGate()
+
+    expect(
+      await screen.findByText('Accounts and password assistance are managed by the server administrator.')
+    ).not.toBeNull()
+    expect(
+      screen.queryByText(/Complete conversation Traces—including prompts, model replies, and tool arguments\/results/i)
+    ).toBeNull()
+  })
+
+  it('keeps the approved centered grid layout', async () => {
+    renderGate()
+
+    const main = await screen.findByRole('main')
+    const card = screen.getByRole('heading', { name: 'Sign in to Ansatz' }).closest('section')
+
+    expect(main.className.split(/\s+/)).toContain('grid')
+    expect(main.className.split(/\s+/)).toContain('min-h-screen')
+    expect(main.className.split(/\s+/)).toContain('place-items-center')
+    expect(main.className.split(/\s+/)).toContain('p-6')
+    expect(main.className.split(/\s+/)).not.toContain('overflow-y-auto')
+    expect(card?.className.split(/\s+/)).not.toContain('m-auto')
+  })
+
   it('exports the authenticated Desktop auth context hook', async () => {
     const module = await import('./auth-gate')
 
@@ -760,7 +785,9 @@ describe('AuthGate', () => {
       emitBootstrap?.({ type: 'failed', error: 'sessionid=secret Traceback private detail' })
     })
 
-    expect(screen.getByText('Hermes could not prepare the secure sign-in service.')).not.toBeNull()
+    expect(
+      screen.getByText('Ansatz could not prepare the secure sign-in service.')
+    ).not.toBeNull()
     expect(globalThis.document.body.textContent).not.toContain('sessionid')
     expect(globalThis.document.body.textContent).not.toContain('Traceback')
 

@@ -6,6 +6,7 @@ import { test, vi } from 'vitest'
 import {
   encodeScopeTokenRegistration,
   issueAuthScopeToken,
+  sanitizeAnsatzAuthChildEnvironment,
   sanitizeAuthChildEnvironment
 } from './auth-scope-token'
 
@@ -75,6 +76,27 @@ test('strips inherited auth credentials from backend and PTY child environments'
 
   assert.deepEqual(sanitized, {
     HERMES_HOME: '/tmp/hermes',
+    PATH: '/usr/bin'
+  })
+})
+
+test('pins local backend children to the same non-legacy Ansatz auth owner as the bridge', () => {
+  const sanitized = sanitizeAnsatzAuthChildEnvironment(
+    {
+      HERMES_AUTH_SCOPE_TOKEN: 'scope-secret',
+      HERMES_DASHBOARD_SESSION_TOKEN: 'legacy-secret',
+      HERMES_AUTH_RUNTIME_NAMESPACE: 'stale-owner',
+      HERMES_AUTH_KEYRING_SERVICE: 'stale-service',
+      HERMES_AUTH_LEGACY_KEYRING_SERVICE: 'must-not-be-read-automatically',
+      PATH: '/usr/bin'
+    },
+    '/Users/a/.ansatz-voice-trace-client'
+  )
+
+  assert.deepEqual(sanitized, {
+    HERMES_AUTH_RUNTIME_NAMESPACE: 'ansatz-voice-trace-client-auth-v1',
+    HERMES_AUTH_KEYRING_SERVICE: 'cn.c2sml.ansatz.voice-trace-client.remote-auth',
+    HERMES_HOME: '/Users/a/.ansatz-voice-trace-client',
     PATH: '/usr/bin'
   })
 })

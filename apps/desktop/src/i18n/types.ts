@@ -53,7 +53,6 @@ export interface Translations {
     title: string
     description: string
     serverLabel: string
-    traceNotice: string
     username: string
     password: string
     signIn: string

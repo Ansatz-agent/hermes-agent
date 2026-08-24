@@ -148,6 +148,7 @@ function buildDesktopBackendEnv({
       }
 
   const result: NodeJS.ProcessEnv = {
+    HERMES_HOME: hermesHome,
     PYTHONPATH: appendUniquePathEntries([...pythonPathEntries, currentPythonPath], { delimiter }),
     // Force PEP 540 UTF-8 mode in the spawned Python backend so its stdio and
     // subprocess defaults are UTF-8 even on non-UTF-8 Windows locales (GBK,

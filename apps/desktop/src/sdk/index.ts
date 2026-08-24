@@ -135,7 +135,9 @@ export const host = {
     const roster = window.hermesDesktop?.getAgentRoster
 
     if (!roster) {
-      throw new Error('This Desktop build cannot enumerate multi-source agents. Update Ansatz.')
+      throw new Error(
+        'This Desktop build cannot enumerate multi-source agents. Update Ansatz.'
+      )
     }
 
     return roster()

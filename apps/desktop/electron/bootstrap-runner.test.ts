@@ -95,7 +95,18 @@ test('fresh bootstrap args include the packaged commit pin', () => {
       activeRoot: '/tmp/hermes-agent',
       hermesHome: '/tmp/hermes'
     }),
-    ['--dir', '/tmp/hermes-agent', '--hermes-home', '/tmp/hermes', '--branch', 'main', '--commit', installStamp.commit]
+    [
+      '--dir',
+      '/tmp/hermes-agent',
+      '--hermes-home',
+      '/tmp/hermes',
+      '--desktop-product',
+      'ansatz-voice-trace',
+      '--branch',
+      'main',
+      '--commit',
+      installStamp.commit
+    ]
   )
 })
 
@@ -138,6 +149,8 @@ test('auth bootstrap args select only the installer auth scope', () => {
       '/tmp/hermes-agent',
       '--hermes-home',
       '/tmp/hermes',
+      '--desktop-product',
+      'ansatz-voice-trace',
       '--branch',
       'main',
       '--commit',
@@ -176,7 +189,8 @@ test('bundled Desktop bootstrap args include the verified authentication toolcha
       activeRoot: '/managed/hermes-agent',
       hermesHome: '/managed/home',
       bundledSource: true,
-      bundledToolchainRoot: '/Applications/Hermes.app/Contents/Resources/bootstrap/auth-toolchain',
+      bundledToolchainRoot:
+        '/Applications/Ansatz.app/Contents/Resources/bootstrap/auth-toolchain',
       bootstrapScope: 'auth'
     }),
     [
@@ -184,10 +198,12 @@ test('bundled Desktop bootstrap args include the verified authentication toolcha
       '/managed/hermes-agent',
       '--hermes-home',
       '/managed/home',
+      '--desktop-product',
+      'ansatz-voice-trace',
       '--bundled-source',
       '--skip-computer-use',
       '--bundled-toolchain',
-      '/Applications/Hermes.app/Contents/Resources/bootstrap/auth-toolchain',
+      '/Applications/Ansatz.app/Contents/Resources/bootstrap/auth-toolchain',
       '--bootstrap-scope',
       'auth'
     ]
@@ -251,7 +267,16 @@ test('existing-checkout bootstrap args keep branch but skip the packaged commit 
       hermesHome: '/tmp/hermes',
       pinCommit: false
     }),
-    ['--dir', '/tmp/hermes-agent', '--hermes-home', '/tmp/hermes', '--branch', 'main']
+    [
+      '--dir',
+      '/tmp/hermes-agent',
+      '--hermes-home',
+      '/tmp/hermes',
+      '--desktop-product',
+      'ansatz-voice-trace',
+      '--branch',
+      'main'
+    ]
   )
 })
 
@@ -272,7 +297,16 @@ test('fallback install stamps use an unpinned branch ref', () => {
       activeRoot: '/tmp/hermes',
       hermesHome: '/tmp/home'
     }),
-    ['--dir', '/tmp/hermes', '--hermes-home', '/tmp/home', '--branch', 'main']
+    [
+      '--dir',
+      '/tmp/hermes',
+      '--hermes-home',
+      '/tmp/home',
+      '--desktop-product',
+      'ansatz-voice-trace',
+      '--branch',
+      'main'
+    ]
   )
 })
 

@@ -79,7 +79,8 @@ test('unauthenticated startup exposes only account login and rejects every capab
   // The signed-out reason is intentionally rendered as an accessible alert.
   allowErrorBanners()
 
-  await expect(page!.locator('main section h1')).toContainText('Hermes')
+  await expect(page!).toHaveTitle('Ansatz')
+  await expect(page!.locator('main section h1')).toContainText('Ansatz')
   await expect(page!.getByText('https://c2sml.cn/auth')).toBeVisible()
   // Initial online verification has its own 5s deadline. Give the UI enough
   // room to transition from "checking" to the signed-out form on a cold CI

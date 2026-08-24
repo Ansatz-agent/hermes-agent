@@ -23,7 +23,10 @@ test('workflow builds and exercises the current fresh arm64 DMG without Gatekeep
   assert.match(workflow, /timeout-minutes: 180/)
   assert.match(workflow, new RegExp(expected.buildCommand.replaceAll('.', '\\.')))
   assert.match(workflow, /Credentialed installed-app login/)
-  assert.match(workflow, /ditto "\$mount\/Hermes\.app" \/Applications\/Hermes\.app/)
+  assert.match(
+    workflow,
+    /ditto "\$mount\/Ansatz\.app" "\/Applications\/Ansatz\.app"/
+  )
   assert.match(workflow, /desktop-credential-login\.mjs/)
   assert.match(workflow, /actions\/upload-artifact@[0-9a-f]{40}/)
   assert.match(workflow, /apps\/desktop\/release\/\*-mac-arm64\.dmg/)
@@ -47,9 +50,12 @@ test('verifier rejects identity drift and never bypasses Gatekeeper', () => {
   assert.match(verifier, /hdiutil verify/)
   assert.match(verifier, /hdiutil attach -readonly -nobrowse/)
   assert.match(verifier, /Applications -> \/Applications/)
-  assert.match(verifier, /INSTALL_APP="\/Applications\/Hermes\.app"/)
+  assert.match(verifier, /INSTALL_APP="\/Applications\/Ansatz\.app"/)
+  assert.match(verifier, /Contents\/MacOS\/Ansatz/)
+  assert.doesNotMatch(verifier, /Contents\/MacOS\/Hermes/)
   assert.match(verifier, /com\.apple\.quarantine/)
-  assert.match(verifier, /com\.nousresearch\.hermes/)
+  assert.match(verifier, /cn\.c2sml\.ansatz\.voice-trace-client/)
+  assert.doesNotMatch(verifier, /com\.nousresearch\.hermes/)
   assert.match(verifier, /CFBundleShortVersionString/)
   assert.match(verifier, /hermes-backend\.tar\.gz/)
   assert.match(verifier, /bootstrap\/install\.sh/)

@@ -172,7 +172,7 @@ test('an owner epoch change locks the old scope before protected work', async ()
 
 test('bridge failures publish only a redacted locked status', async () => {
   const { bridge, coordinator } = fixture(authenticated)
-  bridge.status.mockRejectedValue(new Error('__Host-ansatz_sessionid=do-not-leak'))
+  bridge.status.mockRejectedValue(new Error('agent_history_sessionid=do-not-leak'))
   const events: unknown[] = []
   coordinator.subscribe(status => events.push(status))
 

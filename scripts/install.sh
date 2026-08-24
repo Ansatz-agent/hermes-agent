@@ -80,6 +80,7 @@ INCLUDE_DESKTOP=false
 BUNDLED_SOURCE=false
 BUNDLED_TOOLCHAIN_ROOT=""
 BOOTSTRAP_SCOPE="runtime"
+DESKTOP_PRODUCT=""
 
 DESKTOP_PYTHON_PRIMARY_MIRROR="https://mirrors.ustc.edu.cn/pypi/simple"
 DESKTOP_PYTHON_FALLBACK_MIRROR="https://pypi.tuna.tsinghua.edu.cn/simple"
@@ -204,6 +205,14 @@ while [[ $# -gt 0 ]]; do
             esac
             shift 2
             ;;
+        --desktop-product)
+            DESKTOP_PRODUCT="${2:-}"
+            case "$DESKTOP_PRODUCT" in
+                ansatz-voice-trace) ;;
+                *) echo "Unknown desktop product: ${DESKTOP_PRODUCT:-<empty>}" >&2; exit 1 ;;
+            esac
+            shift 2
+            ;;
         --dir)
             INSTALL_DIR="$2"
             INSTALL_DIR_EXPLICIT=true
@@ -244,6 +253,7 @@ while [[ $# -gt 0 ]]; do
             echo "                    never clone, fetch, pull, or check out repository data"
             echo "  --bundled-toolchain PATH  Verified Desktop authentication toolchain"
             echo "  --bootstrap-scope SCOPE  Desktop bootstrap scope: auth or runtime"
+            echo "  --desktop-product PRODUCT  Desktop launcher profile (ansatz-voice-trace)"
             echo "  --dir PATH     Installation directory"
             echo "                   default (non-root):  ~/.hermes/hermes-agent"
             echo "                   default (root, Linux): /usr/local/lib/hermes-agent"
@@ -1602,7 +1612,7 @@ clone_repo() {
     if [ "$BUNDLED_SOURCE" = true ]; then
         validate_bundled_source || return 1
         cd "$INSTALL_DIR"
-        log_success "Using verified backend source bundled with Hermes Desktop"
+        log_success "Using verified backend source bundled with Ansatz"
         return 0
     fi
 
@@ -2055,8 +2065,127 @@ write_auth_bootstrap_marker() {
     log_success "Authentication runtime ready"
 }
 
+normalize_absolute_path_lexically() {
+    local remaining=""
+    local component=""
+    local normalized=""
+
+    case "$1" in
+        /*) remaining="${1#/}" ;;
+        *) return 1 ;;
+    esac
+
+    while :; do
+        case "$remaining" in
+            */*)
+                component="${remaining%%/*}"
+                remaining="${remaining#*/}"
+                ;;
+            *)
+                component="$remaining"
+                remaining=""
+                ;;
+        esac
+
+        case "$component" in
+            ""|.) ;;
+            ..)
+                case "$normalized" in
+                    */*) normalized="${normalized%/*}" ;;
+                    *) normalized="" ;;
+                esac
+                ;;
+            *)
+                if [ -n "$normalized" ]; then
+                    normalized="$normalized/$component"
+                else
+                    normalized="$component"
+                fi
+                ;;
+        esac
+
+        [ -n "$remaining" ] || break
+    done
+
+    if [ -n "$normalized" ]; then
+        printf '/%s\n' "$normalized"
+    else
+        printf '/\n'
+    fi
+}
+
+canonicalize_path_allow_missing_suffix() {
+    local target_path="$1"
+    local target_parent=""
+    local target_suffix=""
+    local parent_component=""
+    local physical_parent=""
+
+    case "$target_path" in
+        /*) ;;
+        *) return 1 ;;
+    esac
+
+    target_parent="$(dirname "$target_path")"
+    target_suffix="$(basename "$target_path")"
+    while [ ! -d "$target_parent" ]; do
+        # A dangling symlink, symlink loop, or non-directory prefix cannot be
+        # resolved safely. Preserve the launcher instead of guessing ownership.
+        if [ -e "$target_parent" ] || [ -L "$target_parent" ]; then
+            return 1
+        fi
+        [ "$target_parent" != "/" ] || return 1
+        parent_component="$(basename "$target_parent")"
+        target_suffix="$parent_component/$target_suffix"
+        target_parent="$(dirname "$target_parent")"
+    done
+
+    physical_parent="$(cd -P "$target_parent" 2>/dev/null && pwd)" || return 1
+    normalize_absolute_path_lexically "$physical_parent/$target_suffix"
+}
+
+remove_legacy_desktop_launcher_if_owned() {
+    local launcher_path="$1"
+    local install_root="$2"
+    local link_target=""
+    local launcher_dir=""
+    local target_path=""
+    local canonical_target=""
+
+    if [ -L "$launcher_path" ]; then
+        link_target="$(readlink "$launcher_path" 2>/dev/null || true)"
+        [ -n "$link_target" ] || return 0
+        launcher_dir="$(cd -P "$(dirname "$launcher_path")" 2>/dev/null && pwd)" || return 0
+        case "$link_target" in
+            /*) target_path="$link_target" ;;
+            *) target_path="$launcher_dir/$link_target" ;;
+        esac
+        canonical_target="$(canonicalize_path_allow_missing_suffix "$target_path")" || return 0
+        install_root="$(cd -P "$install_root" 2>/dev/null && pwd)" || return 0
+        case "$canonical_target" in
+            "$install_root"|"$install_root"/*)
+                rm -f "$launcher_path"
+                log_info "Removed legacy launcher owned by Ansatz: $launcher_path"
+                ;;
+        esac
+        return 0
+    fi
+
+    if [ -f "$launcher_path" ] && grep -F -q -- "$install_root" "$launcher_path" 2>/dev/null; then
+        rm -f "$launcher_path"
+        log_info "Removed legacy launcher owned by Ansatz: $launcher_path"
+    fi
+}
+
 setup_path() {
-    log_info "Setting up hermes command..."
+    local primary_launcher="hermes"
+
+    if [ "$DESKTOP_PRODUCT" = "ansatz-voice-trace" ]; then
+        primary_launcher="ansatz-voice-trace"
+        log_info "Setting up Ansatz commands..."
+    else
+        log_info "Setting up hermes command..."
+    fi
 
     if [ "$USE_VENV" = true ]; then
         HERMES_BIN="$INSTALL_DIR/venv/bin/python"
@@ -2093,6 +2222,85 @@ setup_path() {
     # Older installs created this path as a symlink to $HERMES_BIN. Without
     # the rm, `cat >` follows the symlink and overwrites the venv pip entry
     # point with this shim — making `exec "$HERMES_BIN"` self-recurse. (#21454)
+    if [ "$DESKTOP_PRODUCT" = "ansatz-voice-trace" ]; then
+        local ansatz_hermes_home
+        local ansatz_hermes_bin
+        local ansatz_hermes_entrypoint
+        local ansatz_agent_entrypoint
+        printf -v ansatz_hermes_home '%q' "$HERMES_HOME"
+        printf -v ansatz_hermes_bin '%q' "$HERMES_BIN"
+        printf -v ansatz_hermes_entrypoint '%q' "${HERMES_ENTRYPOINT:-}"
+        printf -v ansatz_agent_entrypoint '%q' "$INSTALL_DIR/run_agent.py"
+
+        rm -f "$command_link_dir/ansatz-voice-trace"
+        if [ "$USE_VENV" = true ]; then
+            cat > "$command_link_dir/ansatz-voice-trace" <<EOF
+#!/usr/bin/env bash
+unset PYTHONPATH
+unset PYTHONHOME
+export HERMES_HOME=$ansatz_hermes_home
+exec $ansatz_hermes_bin $ansatz_hermes_entrypoint "\$@"
+EOF
+        else
+            cat > "$command_link_dir/ansatz-voice-trace" <<EOF
+#!/usr/bin/env bash
+unset PYTHONPATH
+unset PYTHONHOME
+export HERMES_HOME=$ansatz_hermes_home
+exec $ansatz_hermes_bin "\$@"
+EOF
+        fi
+        chmod +x "$command_link_dir/ansatz-voice-trace"
+        log_success "Installed ansatz-voice-trace launcher → $command_link_display_dir/ansatz-voice-trace"
+
+        rm -f "$command_link_dir/ansatz-voice-trace-agent"
+        if [ "$USE_VENV" = true ]; then
+            cat > "$command_link_dir/ansatz-voice-trace-agent" <<EOF
+#!/usr/bin/env bash
+unset PYTHONPATH
+unset PYTHONHOME
+export HERMES_HOME=$ansatz_hermes_home
+exec $ansatz_hermes_bin $ansatz_agent_entrypoint "\$@"
+EOF
+        else
+            cat > "$command_link_dir/ansatz-voice-trace-agent" <<EOF
+#!/usr/bin/env bash
+unset PYTHONPATH
+unset PYTHONHOME
+export HERMES_HOME=$ansatz_hermes_home
+exec $ansatz_hermes_bin run_agent.py "\$@"
+EOF
+        fi
+        chmod +x "$command_link_dir/ansatz-voice-trace-agent"
+        log_success "Installed ansatz-voice-trace-agent launcher → $command_link_display_dir/ansatz-voice-trace-agent"
+
+        rm -f "$command_link_dir/ansatz-voice-trace-acp"
+        if [ "$USE_VENV" = true ]; then
+            cat > "$command_link_dir/ansatz-voice-trace-acp" <<EOF
+#!/usr/bin/env bash
+unset PYTHONPATH
+unset PYTHONHOME
+export HERMES_HOME=$ansatz_hermes_home
+exec $ansatz_hermes_bin $ansatz_hermes_entrypoint acp "\$@"
+EOF
+        else
+            cat > "$command_link_dir/ansatz-voice-trace-acp" <<EOF
+#!/usr/bin/env bash
+unset PYTHONPATH
+unset PYTHONHOME
+export HERMES_HOME=$ansatz_hermes_home
+exec $ansatz_hermes_bin acp "\$@"
+EOF
+        fi
+        chmod +x "$command_link_dir/ansatz-voice-trace-acp"
+        log_success "Installed ansatz-voice-trace-acp launcher → $command_link_display_dir/ansatz-voice-trace-acp"
+
+        local install_root
+        install_root="$(cd "$INSTALL_DIR" && pwd -P)"
+        remove_legacy_desktop_launcher_if_owned "$command_link_dir/hermes" "$install_root"
+        remove_legacy_desktop_launcher_if_owned "$command_link_dir/hermes-agent" "$install_root"
+        remove_legacy_desktop_launcher_if_owned "$command_link_dir/hermes-acp" "$install_root"
+    else
     rm -f "$command_link_dir/hermes"
     if [ "$USE_VENV" = true ]; then
         # uv-generated console scripts resolve themselves through `realpath`,
@@ -2163,11 +2371,12 @@ EOF
     fi
     chmod +x "$command_link_dir/hermes-acp"
     log_success "Installed hermes-acp launcher → $command_link_display_dir/hermes-acp"
+    fi
 
     if [ "$DISTRO" = "termux" ]; then
         export PATH="$command_link_dir:$PATH"
         log_info "$command_link_display_dir is the native Termux command path"
-        log_success "hermes command ready"
+        log_success "$primary_launcher command ready"
         return 0
     fi
 
@@ -2182,14 +2391,14 @@ EOF
         # Probe a fresh non-login interactive bash the way the user will use it.
         # `bash -i -c` sources ~/.bashrc but NOT ~/.bash_profile or /etc/profile,
         # which is the exact scenario where RHEL root loses /usr/local/bin.
-        if env -i HOME="$HOME" TERM="${TERM:-dumb}" bash -i -c 'command -v hermes' \
+        if env -i HOME="$HOME" TERM="${TERM:-dumb}" bash -i -c "command -v '$primary_launcher'" \
                 >/dev/null 2>&1; then
             log_info "/usr/local/bin is already on PATH for all shells"
-            log_success "hermes command ready"
+            log_success "$primary_launcher command ready"
             return 0
         fi
 
-        log_info "hermes not on PATH in non-login shells (common on RHEL-family)"
+        log_info "$primary_launcher not on PATH in non-login shells (common on RHEL-family)"
         PATH_LINE='export PATH="/usr/local/bin:$PATH"'
         PATH_COMMENT='# Hermes Agent — ensure /usr/local/bin is on PATH (RHEL non-login shells)'
         for SHELL_CONFIG in "$HOME/.bashrc" "$HOME/.bash_profile"; do
@@ -2202,7 +2411,7 @@ EOF
                 log_success "Added /usr/local/bin to PATH in $SHELL_CONFIG"
             fi
         done
-        log_success "hermes command ready"
+        log_success "$primary_launcher command ready"
         return 0
     fi
 
@@ -2272,10 +2481,10 @@ EOF
         log_info "~/.local/bin already on PATH"
     fi
 
-    # Export for current session so hermes works immediately
+    # Export for the current session so the selected launcher works immediately.
     export PATH="$command_link_dir:$PATH"
 
-    log_success "hermes command ready"
+    log_success "$primary_launcher command ready"
 }
 
 copy_config_templates() {
@@ -2310,7 +2519,7 @@ copy_config_templates() {
             log_success "Created ~/.hermes/config.yaml from template"
             if [ "$install_scope" = "desktop" ]; then
                 local provider_anchor='  # provider: "local"          # auto-detected if omitted'
-                local desktop_provider='  provider: "sensevoice"       # fresh Hermes Desktop default'
+                local desktop_provider='  provider: "sensevoice"       # fresh Ansatz default'
                 local anchor_count
                 local config_tmp
                 anchor_count="$(grep -Fxc "$provider_anchor" "$HERMES_HOME/config.yaml" || true)"

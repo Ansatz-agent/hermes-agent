@@ -115,7 +115,7 @@ def test_bridge_translates_runtime_lease_to_unix_epoch(monkeypatch):
 
 def test_bridge_redacts_runtime_exception_text(monkeypatch):
     def fail():
-        raise RuntimeError("__Host-ansatz_sessionid=do-not-leak")
+        raise RuntimeError("agent_history_sessionid=do-not-leak")
 
     monkeypatch.setattr("hermes_cli.client_auth.bridge.account_status", fail)
 

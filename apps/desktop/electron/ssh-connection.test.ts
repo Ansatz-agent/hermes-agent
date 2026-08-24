@@ -73,6 +73,8 @@ test('controlSocketPath default base stays under sun_path even with the temp-lis
   // 17-byte suffix) while opening the master. The macOS regression was the
   // default base under os.tmpdir() (/var/folders/.../T/) pushing it over 104.
   const p = controlSocketPath('hermes', 'remote-build-server', 22) // no baseDir → default
+  assert.ok(p.includes(`${path.sep}.ansatz-voice-trace-client${path.sep}desktop-ssh${path.sep}`))
+  assert.ok(!p.includes(`${path.sep}.hermes${path.sep}`))
   const worstCase = `${p}.0123456789abcdef` // mimic the .<16-char> temp suffix
   assert.ok(
     worstCase.length <= 104,

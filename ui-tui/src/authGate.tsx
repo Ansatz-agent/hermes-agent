@@ -7,7 +7,7 @@ import type { TuiAuthStatus as AuthStatus, GatewayEvent } from './gatewayTypes.j
 
 export type TuiAuthStatus = AuthStatus
 
-const FIXED_SERVER = 'https://c2sml.cn/auth'
+const FIXED_SERVER = 'https://c2sml.cn/agent'
 
 const checkingStatus: TuiAuthStatus = {
   epoch: 0,

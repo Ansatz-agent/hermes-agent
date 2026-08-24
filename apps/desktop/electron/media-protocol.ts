@@ -14,7 +14,7 @@ const STREAMABLE_MEDIA_EXTENSIONS = [
 
 const FORWARDED_MEDIA_REQUEST_HEADERS = ['accept', 'if-modified-since', 'if-none-match', 'if-range', 'range'] as const
 
-export const MEDIA_PROTOCOL = 'hermes-media'
+export const MEDIA_PROTOCOL = ANSATZ_PRODUCT.mediaProtocol
 
 type MediaProtocolMode = 'remote' | 'stream'
 
@@ -165,3 +165,4 @@ export function createMediaProtocolHandler(dependencies: MediaProtocolDependenci
     }
   }
 }
+import { ANSATZ_PRODUCT } from './ansatz-product'
