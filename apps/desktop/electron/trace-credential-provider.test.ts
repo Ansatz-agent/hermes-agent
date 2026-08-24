@@ -130,3 +130,23 @@ test('rejects invalid credentials without including the token in its error', asy
     return true
   })
 })
+
+test('rejects impossible, far-future, and lifetime-mismatched credential expiries', async () => {
+  for (const expiresAt of ['2099-02-30T14:15:00Z', '9999-08-23T14:15:00Z', '2099-08-23T14:15:30.001Z']) {
+    const provider = new RefreshingTraceCredentialProvider(
+      { load: async () => credential('invalid-expiry-token-1234567890', { expires_at: expiresAt }) },
+      { clock: () => now, installationId }
+    )
+
+    await assert.rejects(provider.current(), /trace_credential_unavailable/)
+  }
+})
+
+test('accepts expiry at the documented 30-second clock-skew boundary', async () => {
+  const provider = new RefreshingTraceCredentialProvider(
+    { load: async () => credential('boundary-expiry-token-1234567890', { expires_at: '2099-08-23T14:15:30Z' }) },
+    { clock: () => now, installationId }
+  )
+
+  assert.equal((await provider.current()).expires_at, '2099-08-23T14:15:30Z')
+})

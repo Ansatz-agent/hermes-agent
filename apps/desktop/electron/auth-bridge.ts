@@ -11,6 +11,9 @@ const MAX_REQUEST_ID_LENGTH = 64
 const DEFAULT_TIMEOUT_MS = 20_000
 const DEFAULT_LOGIN_TIMEOUT_MS = 85_000
 const DEFAULT_LOGOUT_TIMEOUT_MS = 45_000
+// Permit small host-clock disagreement while still bounding credentials to the
+// server-declared maximum short-lived token lifetime.
+export const TRACE_CREDENTIAL_CLOCK_SKEW_MS = 30_000
 
 const SAFE_ENV_KEYS = new Set([
   'APPDATA',
@@ -122,6 +125,7 @@ type SpawnChild = (
 ) => ChildLike
 
 type DesktopAuthBridgeOptions = {
+  clock?: () => number
   cwd: string
   env?: NodeJS.ProcessEnv
   onDiagnostic?: (message: string) => void
@@ -205,6 +209,7 @@ export function requireAuthenticatedConnectionScope(value: unknown): ConnectionS
 
 export class DesktopAuthBridge {
   private readonly child: ChildLike
+  private readonly clock: () => number
   private readonly onDiagnostic: (message: string) => void
   private readonly pending = new Map<string, PendingRequest>()
   private readonly loginTimeoutMs: number
@@ -216,6 +221,7 @@ export class DesktopAuthBridge {
   private unavailable = false
 
   constructor(options: DesktopAuthBridgeOptions) {
+    this.clock = options.clock ?? Date.now
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
     this.loginTimeoutMs = options.loginTimeoutMs ?? options.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS
     this.logoutTimeoutMs = options.logoutTimeoutMs ?? options.timeoutMs ?? DEFAULT_LOGOUT_TIMEOUT_MS
@@ -384,7 +390,7 @@ export class DesktopAuthBridge {
     if (Object.hasOwn(response, 'result')) {
       const validResult =
         pending.request.method === 'trace_token'
-          ? isTraceCredential(response.result, pending.request.params.installation_id)
+          ? isTraceCredential(response.result, pending.request.params.installation_id, this.clock())
           : isBridgeStatus(response.result)
 
       if (Object.keys(response).length !== 3 || !validResult) {
@@ -481,28 +487,110 @@ function isValidRequest(value: unknown): value is AuthRequest {
   )
 }
 
-function isTraceCredential(value: unknown, expectedInstallationId: string): value is TraceCredential {
+export function traceCredentialExpiresAt(
+  value: unknown,
+  expectedInstallationId: string | undefined,
+  now: number = Date.now()
+): number | null {
   if (
+    !Number.isSafeInteger(now) ||
     !isPlainObject(value) ||
-    !sameKeys(value, ['access_token', 'expires_at', 'expires_in', 'installation_id']) ||
+    !sameKeys(value, ['access_token', 'expires_at', 'expires_in', 'installation_id'])
+  ) {
+    return null
+  }
+
+  if (
     typeof value.access_token !== 'string' ||
     value.access_token.length < 20 ||
     value.access_token.length > 4096 ||
     /[\r\n]/.test(value.access_token) ||
     typeof value.expires_at !== 'string' ||
     value.expires_at.length > 128 ||
-    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value.expires_at) ||
-    !Number.isFinite(Date.parse(value.expires_at)) ||
-    Date.parse(value.expires_at) <= Date.now() - 30_000 ||
     !Number.isSafeInteger(value.expires_in) ||
     value.expires_in < 1 ||
     value.expires_in > 900 ||
-    value.installation_id !== expectedInstallationId
+    typeof value.installation_id !== 'string' ||
+    !isUuidV4(value.installation_id) ||
+    (expectedInstallationId !== undefined && value.installation_id !== expectedInstallationId)
   ) {
-    return false
+    return null
   }
 
-  return isUuidV4(value.installation_id)
+  const expiresAt = parseRfc3339Epoch(value.expires_at)
+  const latest = now + value.expires_in * 1_000 + TRACE_CREDENTIAL_CLOCK_SKEW_MS
+
+  if (expiresAt === null || !Number.isSafeInteger(latest) || expiresAt < now || expiresAt > latest) {
+    return null
+  }
+
+  return expiresAt
+}
+
+function isTraceCredential(value: unknown, expectedInstallationId: string, now: number): value is TraceCredential {
+  return traceCredentialExpiresAt(value, expectedInstallationId, now) !== null
+}
+
+function parseRfc3339Epoch(value: string): number | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|([+-])(\d{2}):(\d{2}))$/.exec(value)
+
+  if (!match) {
+    return null
+  }
+
+  const year = Number(match[1])
+  const month = Number(match[2]) - 1
+  const day = Number(match[3])
+  const hour = Number(match[4])
+  const minute = Number(match[5])
+  const second = Number(match[6])
+  const fraction = match[7] ?? ''
+  // Round fractional seconds up to the next millisecond so an unrepresentable
+  // sub-millisecond remainder can never make an overlong token look valid.
+  const millisecond = Number(fraction.slice(0, 3).padEnd(3, '0')) + (/[1-9]/.test(fraction.slice(3)) ? 1 : 0)
+  const offsetSign = match[9]
+  const offsetHours = match[10] === undefined ? 0 : Number(match[10])
+  const offsetMinutes = match[11] === undefined ? 0 : Number(match[11])
+
+  if (
+    year < 100 ||
+    month < 0 ||
+    month > 11 ||
+    day < 1 ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    offsetHours > 23 ||
+    offsetMinutes > 59
+  ) {
+    return null
+  }
+
+  const localBase = Date.UTC(year, month, day, hour, minute, second)
+  const localDate = new Date(localBase)
+
+  if (
+    !Number.isSafeInteger(localBase) ||
+    localDate.getUTCFullYear() !== year ||
+    localDate.getUTCMonth() !== month ||
+    localDate.getUTCDate() !== day ||
+    localDate.getUTCHours() !== hour ||
+    localDate.getUTCMinutes() !== minute ||
+    localDate.getUTCSeconds() !== second
+  ) {
+    return null
+  }
+
+  const local = localBase + millisecond
+
+  if (!Number.isSafeInteger(local)) {
+    return null
+  }
+
+  const offset = (offsetHours * 60 + offsetMinutes) * 60 * 1_000
+  const epoch = match[8] === 'Z' ? local : local - (offsetSign === '+' ? offset : -offset)
+
+  return Number.isSafeInteger(epoch) ? epoch : null
 }
 
 function isUuidV4(value: unknown): value is string {

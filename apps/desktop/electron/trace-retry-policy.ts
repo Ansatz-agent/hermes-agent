@@ -1,14 +1,10 @@
 const POLICY = {
-  httpDate: {
-    asctime:
-      /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2} \d{4}$/,
-    imfFixdate:
-      /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT$/,
-    rfc850:
-      /^(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} \d{2}:\d{2}:\d{2} GMT$/
-  },
+  months: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
   retry: { baseMs: 1_000, capMs: 5 * 60 * 1_000 }
 }
+
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+const OBSOLETE_WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
 export type TraceRetryOptions = {
   attempt: number
@@ -50,17 +46,9 @@ export function parseRetryAfterMs(value: string | null | undefined, now: number)
     return seconds * 1_000
   }
 
-  if (
-    !POLICY.httpDate.imfFixdate.test(header) &&
-    !POLICY.httpDate.rfc850.test(header) &&
-    !POLICY.httpDate.asctime.test(header)
-  ) {
-    return null
-  }
+  const date = parseHttpDate(header, now)
 
-  const date = Date.parse(header)
-
-  if (!Number.isSafeInteger(date) || date > Number.MAX_SAFE_INTEGER || date - now > Number.MAX_SAFE_INTEGER) {
+  if (date === null || date - now > Number.MAX_SAFE_INTEGER) {
     return null
   }
 
@@ -84,4 +72,114 @@ function validDelay(value: number | null | undefined, now: number): number | nul
   }
 
   return value
+}
+
+function parseHttpDate(value: string, now: number): number | null {
+  const imf =
+    /^(Sun|Mon|Tue|Wed|Thu|Fri|Sat), (\d{2}) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) (\d{4}) (\d{2}):(\d{2}):(\d{2}) GMT$/.exec(
+      value
+    )
+
+  const obsolete =
+    /^(Sunday|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday), (\d{2})-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-(\d{2}) (\d{2}):(\d{2}):(\d{2}) GMT$/.exec(
+      value
+    )
+
+  const asctime =
+    /^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) ( {1,2}\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/.exec(
+      value
+    )
+
+  if (imf) {
+    return checkedHttpDate(
+      imf[1],
+      Number(imf[4]),
+      imf[3],
+      Number(imf[2]),
+      Number(imf[5]),
+      Number(imf[6]),
+      Number(imf[7])
+    )
+  }
+
+  if (obsolete) {
+    const currentYear = new Date(now).getUTCFullYear()
+
+    if (!Number.isSafeInteger(currentYear)) {
+      return null
+    }
+
+    let year = Math.floor(currentYear / 100) * 100 + Number(obsolete[4])
+
+    if (year - currentYear > 50) {
+      year -= 100
+    }
+
+    return checkedHttpDate(
+      obsolete[1],
+      year,
+      obsolete[3],
+      Number(obsolete[2]),
+      Number(obsolete[5]),
+      Number(obsolete[6]),
+      Number(obsolete[7])
+    )
+  }
+
+  if (asctime) {
+    return checkedHttpDate(
+      asctime[1],
+      Number(asctime[7]),
+      asctime[2],
+      Number(asctime[3].trim()),
+      Number(asctime[4]),
+      Number(asctime[5]),
+      Number(asctime[6])
+    )
+  }
+
+  return null
+}
+
+function checkedHttpDate(
+  weekday: string,
+  year: number,
+  monthName: string,
+  day: number,
+  hour: number,
+  minute: number,
+  second: number
+): number | null {
+  const month = POLICY.months.indexOf(monthName)
+  const expectedWeekday = WEEKDAYS.includes(weekday) ? weekday : WEEKDAYS[OBSOLETE_WEEKDAYS.indexOf(weekday)]
+
+  if (
+    month < 0 ||
+    !Number.isSafeInteger(year) ||
+    year < 100 ||
+    day < 1 ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    hour < 0 ||
+    minute < 0 ||
+    second < 0
+  ) {
+    return null
+  }
+
+  const timestamp = Date.UTC(year, month, day, hour, minute, second)
+  const date = new Date(timestamp)
+
+  if (
+    !Number.isSafeInteger(timestamp) ||
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month ||
+    date.getUTCDate() !== day ||
+    WEEKDAYS[date.getUTCDay()] !== expectedWeekday
+  ) {
+    return null
+  }
+
+  return timestamp
 }

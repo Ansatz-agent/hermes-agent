@@ -1,8 +1,6 @@
-import type { TraceCredential } from './auth-bridge'
+import { type TraceCredential, traceCredentialExpiresAt } from './auth-bridge'
 
 const EXPIRY_SKEW_MS = 60_000
-const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
-const RFC3339 = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
 
 export type TraceCredentialSource = {
   load(forceRefresh: boolean): Promise<TraceCredential>
@@ -155,29 +153,9 @@ export class RefreshingTraceCredentialProvider implements TraceCredentialProvide
 }
 
 function validateCredential(credential: TraceCredential, now: number, installationId: string | undefined): number {
-  if (typeof credential !== 'object' || credential === null) {
-    throw unavailable()
-  }
+  const expiresAt = traceCredentialExpiresAt(credential, installationId, now)
 
-  const expiresAt = Date.parse(credential.expires_at)
-
-  if (
-    typeof credential.access_token !== 'string' ||
-    credential.access_token.length < 20 ||
-    credential.access_token.length > 4_096 ||
-    /[\r\n]/.test(credential.access_token) ||
-    typeof credential.expires_at !== 'string' ||
-    credential.expires_at.length > 128 ||
-    !RFC3339.test(credential.expires_at) ||
-    !Number.isSafeInteger(expiresAt) ||
-    expiresAt <= now ||
-    !Number.isSafeInteger(credential.expires_in) ||
-    credential.expires_in < 1 ||
-    credential.expires_in > 900 ||
-    typeof credential.installation_id !== 'string' ||
-    !UUID_V4.test(credential.installation_id) ||
-    (installationId !== undefined && credential.installation_id !== installationId)
-  ) {
+  if (expiresAt === null) {
     throw unavailable()
   }
 

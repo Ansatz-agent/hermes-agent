@@ -36,6 +36,8 @@ const traceCredential = {
   installation_id: traceRequest.installation_id
 }
 
+const traceCredentialNow = Date.parse('2099-08-23T14:00:00Z')
+
 class FakeChild extends EventEmitter {
   readonly stdin = new PassThrough()
   readonly stdout = new PassThrough()
@@ -68,6 +70,7 @@ function bridgeFixture(overrides: Record<string, unknown> = {}) {
     },
     pythonExecutable: '/opt/hermes-agent/venv/bin/python',
     spawnChild,
+    clock: () => traceCredentialNow,
     ...overrides
   })
 
@@ -284,6 +287,28 @@ test('Trace credentials fail closed on malformed, stale, or extra response field
     await rejected
     assert.equal(diagnostics.join('\n').includes(traceCredential.access_token), false)
   }
+})
+
+test('Trace credentials reject impossible, far-future, and lifetime-mismatched expiry values', async () => {
+  for (const expiresAt of ['2099-02-30T14:15:00+00:00', '9999-08-23T14:15:00+00:00', '2099-08-23T14:15:30.001+00:00']) {
+    const { bridge, child } = bridgeFixture()
+    const pending = bridge.traceToken(traceRequest)
+    const request = await readRequest(child)
+
+    respond(child, { version: 2, id: request.id, result: { ...traceCredential, expires_at: expiresAt } })
+    await assert.rejects(pending, error => error instanceof AuthBridgeError && error.code === 'runtime_unavailable')
+  }
+})
+
+test('Trace credential expiry accepts the documented positive clock-skew boundary', async () => {
+  const { bridge, child } = bridgeFixture()
+  const pending = bridge.traceToken(traceRequest)
+  const request = await readRequest(child)
+  const boundary = { ...traceCredential, expires_at: '2099-08-23T14:15:30+00:00' }
+
+  respond(child, { version: 2, id: request.id, result: boundary })
+  assert.deepEqual(await pending, boundary)
+  bridge.close()
 })
 
 test('rejects invalid Trace requests before writing to the auth child', async () => {

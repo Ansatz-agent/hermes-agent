@@ -26,8 +26,31 @@ test('parses non-negative Retry-After seconds without accepting overflow or junk
 test('parses RFC 7231 HTTP dates and leaves expired dates shorter than jitter', () => {
   const now = Date.parse('2026-08-25T00:00:00Z')
 
-  assert.equal(parseRetryAfterMs('Mon, 25 Aug 2026 00:02:00 GMT', now), 120_000)
-  assert.equal(parseRetryAfterMs('Sun, 24 Aug 2026 23:59:59 GMT', now), 0)
+  assert.equal(parseRetryAfterMs('Tue, 25 Aug 2026 00:02:00 GMT', now), 120_000)
+  assert.equal(parseRetryAfterMs('Mon, 24 Aug 2026 23:59:59 GMT', now), 0)
   assert.equal(parseRetryAfterMs('not a date', now), null)
-  assert.equal(parseRetryAfterMs('Mon, 25 Aug 2026 00:02:00 PST', now), null)
+  assert.equal(parseRetryAfterMs('Tue, 25 Aug 2026 00:02:00 PST', now), null)
+})
+
+test('parses every RFC 7231 HTTP-date form with the RFC850 century pivot', () => {
+  const imfNow = Date.UTC(1994, 10, 6, 8, 49, 37)
+
+  assert.equal(parseRetryAfterMs('Sun, 06 Nov 1994 08:50:37 GMT', imfNow), 60_000)
+  assert.equal(parseRetryAfterMs('Sun Nov  6 08:50:37 1994', imfNow), 60_000)
+  assert.equal(
+    parseRetryAfterMs('Tuesday, 01-Jan-75 00:00:00 GMT', Date.UTC(2025, 0, 1)),
+    Date.UTC(2075, 0, 1) - Date.UTC(2025, 0, 1)
+  )
+  assert.equal(
+    parseRetryAfterMs('Wednesday, 01-Jan-75 00:00:00 GMT', Date.UTC(2024, 0, 1)),
+    Math.max(0, Date.UTC(1975, 0, 1) - Date.UTC(2024, 0, 1))
+  )
+})
+
+test('rejects HTTP dates with invalid calendar values, weekday, or timezone', () => {
+  const now = Date.UTC(2026, 0, 1)
+
+  assert.equal(parseRetryAfterMs('Tue, 31 Feb 2026 00:00:00 GMT', now), null)
+  assert.equal(parseRetryAfterMs('Mon, 01 Jan 2026 00:00:00 GMT', now), null)
+  assert.equal(parseRetryAfterMs('Thu Jan  1 00:00:00 2026 GMT', now), null)
 })

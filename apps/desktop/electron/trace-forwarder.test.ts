@@ -14,6 +14,7 @@ import {
 
 const installationId = '11111111-1111-4111-8111-111111111111'
 const protobuf = Buffer.from([0x0a, 0x03, 0x01, 0x02, 0x03])
+const traceCredentialNow = Date.parse('2099-08-23T14:00:00+00:00')
 
 test('product Trace uploads use the public same-origin Gateway API by default', () => {
   assert.equal(DEFAULT_TRACE_UPSTREAM_URL, 'https://c2sml.cn/trace-ingest/v1/traces')
@@ -165,7 +166,7 @@ test('loopback forwarder accepts exact protobuf and adds only the public bearer 
   const calls: Array<{ body: Buffer; headers: Headers }> = []
 
   const forwarder = new TraceForwarder({
-    credentialProvider: new RefreshingTraceCredentialProvider(source),
+    credentialProvider: new RefreshingTraceCredentialProvider(source, { clock: () => traceCredentialNow }),
     fetchImpl: async (_input, init) => {
       calls.push({ body: Buffer.from(init?.body as Buffer), headers: new Headers(init?.headers) })
 
@@ -198,7 +199,7 @@ test('real Relay OTLP without custom correlation headers is canonicalized for th
   const traceId = '00112233445566778899aabbccddeeff'
 
   const forwarder = new TraceForwarder({
-    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource()),
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
     fetchImpl: async (_input, init) => {
       calls.push(new Headers(init?.headers))
 
@@ -231,7 +232,7 @@ test('one upstream 401 forces one credential refresh and resends identical bytes
   const bodies: Buffer[] = []
   const authorizations: string[] = []
 
-  const provider = new RefreshingTraceCredentialProvider(source)
+  const provider = new RefreshingTraceCredentialProvider(source, { clock: () => traceCredentialNow })
   const invalidate = provider.invalidate.bind(provider)
 
   let invalidations = 0
@@ -274,7 +275,7 @@ test('HTTP boundary rejects remote peers, bad local auth, media drift, encoding,
   let upstreamCalls = 0
 
   const forwarder = new TraceForwarder({
-    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource()),
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
     fetchImpl: async () => {
       upstreamCalls += 1
 
