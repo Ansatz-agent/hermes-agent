@@ -109,8 +109,24 @@ function windowsPowerShellPath(env = process.env) {
   return path.win32.join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
 }
 
-const EXPAND_ARCHIVE_COMMAND =
-  'Expand-Archive -LiteralPath $env:HERMES_ARCHIVE_PATH -DestinationPath $env:HERMES_ARCHIVE_DESTINATION -Force'
+// PowerShell 5.1's Expand-Archive validates the filename extension before it
+// opens the file. Python wheels are ZIP archives but intentionally use the
+// `.whl` extension, so copy the verified input to a temporary `.zip` sibling
+// before extraction and leave the original wheel untouched. This keeps the
+// Windows path behavior equivalent to unzip on POSIX hosts.
+const EXPAND_ARCHIVE_COMMAND = [
+  '$archivePath = $env:HERMES_ARCHIVE_PATH',
+  '$expandPath = $archivePath',
+  'if ([IO.Path]::GetExtension($archivePath) -ine ".zip") {',
+  '  $expandPath = "$archivePath.extract-$PID.zip"',
+  '  Copy-Item -LiteralPath $archivePath -Destination $expandPath -Force',
+  '}',
+  'try {',
+  '  Expand-Archive -LiteralPath $expandPath -DestinationPath $env:HERMES_ARCHIVE_DESTINATION -Force',
+  '} finally {',
+  '  if ($expandPath -ne $archivePath) { Remove-Item -LiteralPath $expandPath -Force -ErrorAction SilentlyContinue }',
+  '}'
+].join('; ')
 
 export function extractWindowsUvExecutable({
   archivePath,
