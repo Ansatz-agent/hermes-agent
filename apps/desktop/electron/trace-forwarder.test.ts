@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
+import { mkdtemp, rm } from 'node:fs/promises'
 import http from 'node:http'
+import { join } from 'node:path'
 
 import { test } from 'vitest'
 
@@ -11,13 +13,199 @@ import {
   type TraceCredentialSource,
   TraceForwarder
 } from './trace-forwarder'
+import { createSafeStorageTraceKeyProtector } from './trace-outbox-crypto'
+import { TraceOutboxStore } from './trace-outbox-store'
+import type { TraceEnvelopeInput, TraceOwner } from './trace-outbox-types'
 
 const installationId = '11111111-1111-4111-8111-111111111111'
 const protobuf = Buffer.from([0x0a, 0x03, 0x01, 0x02, 0x03])
 const traceCredentialNow = Date.parse('2099-08-23T14:00:00+00:00')
 
+function validOwner(): TraceOwner {
+  return {
+    accountId: '11111111-1111-4111-8111-111111111111',
+    accountKey: 'account-11111111-1111-4111-8111-111111111111',
+    installationId,
+    sessionId: '22222222-2222-4222-8222-222222222222'
+  }
+}
+
+function keyProtector() {
+  return createSafeStorageTraceKeyProtector({
+    decryptString: ciphertext => ciphertext.toString('utf8'),
+    encryptString: plaintext => Buffer.from(plaintext, 'utf8'),
+    isEncryptionAvailable: () => true
+  })
+}
+
+async function temporaryStore() {
+  const root = await mkdtemp(join(process.cwd(), 'tmp', 'trace-forwarder-'))
+  const store = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: keyProtector(), root })
+
+  return { root, store }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+
+  const promise = new Promise<T>(currentResolve => {
+    resolve = currentResolve
+  })
+
+  return { promise, resolve }
+}
+
+function envelope(label: string): TraceEnvelopeInput {
+  return {
+    body: Buffer.from(`trace:${label}`),
+    contentType: 'application/x-protobuf',
+    entrypoint: 'desktop',
+    hermesSessionId: `session-${label}`,
+    owner: validOwner(),
+    runId: `run-${label}`,
+    telemetrySchemaVersion: '1'
+  }
+}
+
 test('product Trace uploads use the public same-origin Gateway API by default', () => {
   assert.equal(DEFAULT_TRACE_UPSTREAM_URL, 'https://c2sml.cn/trace-ingest/v1/traces')
+})
+
+test('a matching Gateway receipt owns a trace before local fsync without retaining payload bytes', async () => {
+  const root = await mkdtemp(join(process.cwd(), 'tmp', 'trace-forwarder-gateway-first-'))
+  const store = await TraceOutboxStore.open({ groupCommitMs: 50, keyProtector: keyProtector(), root })
+  const source = credentialSource()
+  const upstream: Array<{ body: Buffer; headers: Headers }> = []
+
+  const forwarder = new TraceForwarder({
+    credentialProvider: new RefreshingTraceCredentialProvider(source, { clock: () => traceCredentialNow }),
+    fetchImpl: async (_input, init) => {
+      const headers = new Headers(init?.headers)
+      upstream.push({ body: Buffer.from(init?.body as Buffer), headers })
+
+      return new Response(Buffer.alloc(0), {
+        status: 200,
+        headers: {
+          'x-trace-batch-id': headers.get('idempotency-key') ?? '',
+          'x-trace-receipt': 'accepted'
+        }
+      })
+    },
+    installationId,
+    store
+  })
+
+  const started = await forwarder.start(validOwner())
+
+  try {
+    assert.deepEqual(source.calls, [])
+    assert.equal((await post(started.endpoint, started.localBearer)).status, 200)
+    await waitFor(() => upstream.length === 1)
+    assert.equal(upstream[0].headers.get('idempotency-key')?.length, 36)
+    assert.match(upstream[0].headers.get('x-trace-payload-sha256') ?? '', /^[a-f0-9]{64}$/)
+    assert.deepEqual(upstream[0].body, protobuf)
+    assert.equal((await store.diagnostics()).payloadBytes, 0)
+  } finally {
+    await forwarder.stop({ flushMs: 0 })
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('an existing durable backlog disables direct Gateway upload until recovery drains it', async () => {
+  const { root, store } = await temporaryStore()
+  await store.enqueue(envelope('older'))
+  let upstreamCalls = 0
+
+  const forwarder = new TraceForwarder({
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
+    fetchImpl: async () => {
+      upstreamCalls += 1
+
+      return new Response(Buffer.alloc(0), { status: 200 })
+    },
+    installationId,
+    store
+  })
+
+  const started = await forwarder.start(validOwner())
+
+  try {
+    assert.equal((await post(started.endpoint, started.localBearer)).status, 200)
+    assert.equal(upstreamCalls, 0)
+    assert.equal((await store.diagnostics()).pending, 2)
+  } finally {
+    await forwarder.stop({ flushMs: 0 })
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('a concurrent Trace cannot bypass the first direct durability contender', async () => {
+  const { root, store } = await temporaryStore()
+  const gateway = deferred<Response>()
+  let upstreamCalls = 0
+
+  const forwarder = new TraceForwarder({
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
+    fetchImpl: async (_input, init) => {
+      upstreamCalls += 1
+      const headers = new Headers(init?.headers)
+
+      return gateway.promise.then(
+        () =>
+          new Response(Buffer.alloc(0), {
+            status: 200,
+            headers: {
+              'x-trace-batch-id': headers.get('idempotency-key') ?? '',
+              'x-trace-receipt': 'accepted'
+            }
+          })
+      )
+    },
+    installationId,
+    store
+  })
+
+  const started = await forwarder.start(validOwner())
+
+  try {
+    const first = post(started.endpoint, started.localBearer)
+    await waitFor(() => upstreamCalls === 1)
+
+    const second = post(started.endpoint, started.localBearer, {
+      headers: { 'x-trace-run-id': 'run-2', 'x-hermes-session-id': 'session-2' }
+    })
+
+    gateway.resolve(new Response())
+    assert.equal((await first).status, 200)
+    assert.equal((await second).status, 200)
+    assert.equal(upstreamCalls, 1)
+    assert.equal((await store.diagnostics()).pending, 1)
+  } finally {
+    await forwarder.stop({ flushMs: 0 })
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('a permanent Gateway rejection quarantines the locally durable batch once', async () => {
+  const { root, store } = await temporaryStore()
+
+  const forwarder = new TraceForwarder({
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
+    fetchImpl: async () => new Response(Buffer.alloc(0), { status: 409 }),
+    installationId,
+    store
+  })
+
+  const started = await forwarder.start(validOwner())
+
+  try {
+    assert.equal((await post(started.endpoint, started.localBearer)).status, 200)
+    await waitFor(async () => (await store.diagnostics()).quarantined === 1)
+    assert.equal((await store.diagnostics()).pending, 1)
+  } finally {
+    await forwarder.stop({ flushMs: 0 })
+    await rm(root, { force: true, recursive: true })
+  }
 })
 
 async function post(
@@ -117,10 +305,10 @@ function relayOtlpPayload(sessionId: string, traceIdHex: string): Buffer {
   return lengthDelimited(1, resourceSpans)
 }
 
-async function waitFor(predicate: () => boolean) {
+async function waitFor(predicate: () => boolean | Promise<boolean>) {
   const deadline = Date.now() + 2_000
 
-  while (!predicate()) {
+  while (!(await predicate())) {
     if (Date.now() >= deadline) {
       assert.fail('timed out waiting for forwarder')
     }
@@ -164,21 +352,20 @@ test('credential provider caches until 60 seconds before expiry and supports for
 test('loopback forwarder accepts exact protobuf and adds only the public bearer upstream', async () => {
   const source = credentialSource()
   const calls: Array<{ body: Buffer; headers: Headers }> = []
+  const { root, store } = await temporaryStore()
 
   const forwarder = new TraceForwarder({
     credentialProvider: new RefreshingTraceCredentialProvider(source, { clock: () => traceCredentialNow }),
     fetchImpl: async (_input, init) => {
       calls.push({ body: Buffer.from(init?.body as Buffer), headers: new Headers(init?.headers) })
 
-      return new Response(Buffer.alloc(0), {
-        status: 200,
-        headers: { 'content-type': 'application/x-protobuf' }
-      })
+      return new Response(Buffer.alloc(0), { status: 200 })
     },
-    installationId
+    installationId,
+    store
   })
 
-  const started = await forwarder.start(7)
+  const started = await forwarder.start(validOwner())
 
   try {
     const response = await post(started.endpoint, started.localBearer)
@@ -191,12 +378,14 @@ test('loopback forwarder accepts exact protobuf and adds only the public bearer 
     assert.equal(calls[0].headers.has('x-local-authorization'), false)
   } finally {
     await forwarder.stop({ flushMs: 3_000 })
+    await rm(root, { force: true, recursive: true })
   }
 })
 
 test('real Relay OTLP without custom correlation headers is canonicalized for the Gateway', async () => {
   const calls: Headers[] = []
   const traceId = '00112233445566778899aabbccddeeff'
+  const { root, store } = await temporaryStore()
 
   const forwarder = new TraceForwarder({
     credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
@@ -205,10 +394,11 @@ test('real Relay OTLP without custom correlation headers is canonicalized for th
 
       return new Response(Buffer.alloc(0), { status: 200 })
     },
-    installationId
+    installationId,
+    store
   })
 
-  const started = await forwarder.start(7)
+  const started = await forwarder.start(validOwner())
 
   try {
     const response = await post(started.endpoint, started.localBearer, {
@@ -224,6 +414,7 @@ test('real Relay OTLP without custom correlation headers is canonicalized for th
     assert.equal(calls[0].get('x-telemetry-schema-version'), '1')
   } finally {
     await forwarder.stop({ flushMs: 3_000 })
+    await rm(root, { force: true, recursive: true })
   }
 })
 
@@ -231,8 +422,10 @@ test('one upstream 401 forces one credential refresh and resends identical bytes
   const source = credentialSource()
   const bodies: Buffer[] = []
   const authorizations: string[] = []
+  const recoveryReasons: string[] = []
 
   const provider = new RefreshingTraceCredentialProvider(source, { clock: () => traceCredentialNow })
+  const { root, store } = await temporaryStore()
   const invalidate = provider.invalidate.bind(provider)
 
   let invalidations = 0
@@ -248,12 +441,25 @@ test('one upstream 401 forces one credential refresh and resends identical bytes
       bodies.push(Buffer.from(init?.body as Buffer))
       authorizations.push(new Headers(init?.headers).get('authorization') ?? '')
 
-      return new Response(Buffer.alloc(0), { status: bodies.length === 1 ? 401 : 200 })
+      const headers = new Headers(init?.headers)
+
+      return new Response(Buffer.alloc(0), {
+        status: bodies.length === 1 ? 401 : 200,
+        headers:
+          bodies.length === 1
+            ? {}
+            : {
+                'x-trace-batch-id': headers.get('idempotency-key') ?? '',
+                'x-trace-receipt': 'accepted'
+              }
+      })
     },
-    installationId
+    installationId,
+    recovery: { trigger: reason => recoveryReasons.push(reason) },
+    store
   })
 
-  const started = await forwarder.start(7)
+  const started = await forwarder.start(validOwner())
 
   try {
     assert.equal((await post(started.endpoint, started.localBearer)).status, 200)
@@ -265,14 +471,17 @@ test('one upstream 401 forces one credential refresh and resends identical bytes
     ])
     assert.deepEqual(source.calls, [false, true])
     assert.equal(invalidations, 2)
+    assert.deepEqual(recoveryReasons, ['upload-401'])
   } finally {
     await forwarder.stop({ flushMs: 3_000 })
+    await rm(root, { force: true, recursive: true })
   }
 })
 
 test('HTTP boundary rejects remote peers, bad local auth, media drift, encoding, oversize, and stale epoch', async () => {
   let remoteAddress = '127.0.0.1'
   let upstreamCalls = 0
+  const { root, store } = await temporaryStore()
 
   const forwarder = new TraceForwarder({
     credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
@@ -282,10 +491,11 @@ test('HTTP boundary rejects remote peers, bad local auth, media drift, encoding,
       return new Response(Buffer.alloc(0), { status: 200 })
     },
     installationId,
-    remoteAddressForRequest: () => remoteAddress
+    remoteAddressForRequest: () => remoteAddress,
+    store
   })
 
-  const first = await forwarder.start(7)
+  const first = await forwarder.start(validOwner())
 
   remoteAddress = '192.0.2.10'
   assert.equal((await post(first.endpoint, first.localBearer)).status, 403)
@@ -299,22 +509,25 @@ test('HTTP boundary rejects remote peers, bad local auth, media drift, encoding,
   assert.equal((await post(first.endpoint, first.localBearer, { body: Buffer.alloc(8 * 1024 * 1024 + 1) })).status, 413)
   await forwarder.stop({ flushMs: 0 })
 
-  const second = await forwarder.start(8)
+  const second = await forwarder.start(validOwner())
 
   try {
     assert.equal((await post(second.endpoint, first.localBearer)).status, 401)
     assert.equal(upstreamCalls, 0)
   } finally {
     await forwarder.stop({ flushMs: 0 })
+    await rm(root, { force: true, recursive: true })
   }
 })
 
 test('stop remains bounded when a local OTLP client holds an incomplete request open', async () => {
+  const { root, store } = await temporaryStore()
   const forwarder = new TraceForwarder({
     credentialProvider: new RefreshingTraceCredentialProvider(credentialSource()),
-    installationId
+    installationId,
+    store
   })
-  const started = await forwarder.start(7)
+  const started = await forwarder.start(validOwner())
   const target = new URL(started.endpoint)
   const request = http.request({
     hostname: target.hostname,
@@ -351,6 +564,7 @@ test('stop remains bounded when a local OTLP client holds an incomplete request 
   } finally {
     request.destroy()
     await stopping
+    await rm(root, { force: true, recursive: true })
   }
 })
 
@@ -360,12 +574,14 @@ test('stop consumes only expected socket errors with oversized and held requests
   assert.equal(isExpectedTraceShutdownError(Object.assign(new Error('reset'), { code: 'ECONNRESET' }), false), false)
   assert.equal(isExpectedTraceShutdownError(Object.assign(new Error('other'), { code: 'ENOSPC' }), true), false)
 
+  const { root, store } = await temporaryStore()
   const forwarder = new TraceForwarder({
     credentialProvider: new RefreshingTraceCredentialProvider(credentialSource()),
     installationId,
-    maxBodyBytes: 4
+    maxBodyBytes: 4,
+    store
   })
-  const started = await forwarder.start(7)
+  const started = await forwarder.start(validOwner())
   const target = new URL(started.endpoint)
   const requests = [Buffer.alloc(5), Buffer.from([0x0a])].map((body, index) => {
     const request = http.request({
@@ -408,6 +624,7 @@ test('stop consumes only expected socket errors with oversized and held requests
       request.destroy()
     }
     await stopping
+    await rm(root, { force: true, recursive: true })
   }
 })
 

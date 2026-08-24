@@ -1,18 +1,17 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 
 import type { TraceCredential } from './auth-bridge'
 import { deriveOtlpCorrelation } from './otlp-correlation'
+import { splitOtlpExportTraceRequest } from './otlp-split'
 import type { TraceCredentialProvider } from './trace-credential-provider'
-import {
-  TraceForwarderQueue,
-  type TraceForwarderQueueSummary,
-  type TraceQueueBatch,
-  type TraceQueueSendResult
-} from './trace-forwarder-queue'
+import type { PendingLocalCommit, TraceOutboxStoreDiagnostics } from './trace-outbox-store'
+import type { DurableReceipt, DurableTraceBatch, TraceEnvelopeInput, TraceOwner } from './trace-outbox-types'
+import { validateTraceOwner } from './trace-outbox-types'
 
 export const DEFAULT_TRACE_UPSTREAM_URL = 'https://c2sml.cn/trace-ingest/v1/traces'
-const MAX_BODY_BYTES = 8 * 1024 * 1024
+const MAX_LOOPBACK_BODY_BYTES = 64 * 1024 * 1024
+const MAX_LOGICAL_BATCH_BYTES = 8 * 1024 * 1024
 const UPSTREAM_TIMEOUT_MS = 15_000
 const CORRELATION_ID = /^[0-9A-Za-z][0-9A-Za-z._:-]{0,127}$/
 const ENTRYPOINTS = new Set(['desktop', 'voice', 'cli', 'dashboard'])
@@ -23,6 +22,28 @@ export {
   type TraceCredentialSource
 } from './trace-credential-provider'
 
+export type TraceRecoveryReason =
+  | 'enqueue'
+  | 'startup'
+  | 'timer'
+  | 'renderer-online'
+  | 'resume'
+  | 'focus'
+  | 'token-ready'
+  | 'token-near-expiry'
+  | 'upload-401'
+  | 'upload-403'
+
+export type RecoveryTrigger = { trigger(reason: TraceRecoveryReason): void }
+
+type TraceOutbox = {
+  acknowledge(batchId: string, receipt: DurableReceipt): Promise<void>
+  beginEnqueue(input: TraceEnvelopeInput): PendingLocalCommit
+  diagnostics(): Promise<TraceOutboxStoreDiagnostics>
+  quarantine(batchId: string, errorClass: string): Promise<void>
+  quarantineInput(input: TraceEnvelopeInput, errorClass: string): Promise<DurableTraceBatch>
+}
+
 type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>
 
 type TraceForwarderOptions = {
@@ -30,13 +51,22 @@ type TraceForwarderOptions = {
   fetchImpl?: FetchLike
   installationId: string
   maxBodyBytes?: number
-  queue?: TraceForwarderQueue
+  recovery?: RecoveryTrigger
   remoteAddressForRequest?: (request: IncomingMessage) => string | undefined
+  store?: TraceOutbox
   upstreamUrl?: string
 }
 
-export type TraceForwarderSummary = TraceForwarderQueueSummary & {
-  reason: 'stopped'
+export type TraceForwarderSummary = TraceOutboxStoreDiagnostics & { reason: 'stopped' }
+
+type TraceMetadata = Omit<TraceEnvelopeInput, 'body' | 'contentType' | 'owner'>
+type DurableOwner = { kind: 'gateway'; receipt: DurableReceipt } | { batch: DurableTraceBatch; kind: 'local' }
+
+class UpstreamFailure extends Error {
+  constructor(readonly status: number | null) {
+    super(status === null ? 'trace_gateway_unavailable' : `trace_gateway_${status}`)
+    this.name = 'UpstreamFailure'
+  }
 }
 
 export function isExpectedTraceShutdownError(error: unknown, stopping: boolean): boolean {
@@ -50,14 +80,16 @@ export class TraceForwarder {
   private readonly fetchImpl: FetchLike
   private readonly installationId: string
   private readonly maxBodyBytes: number
-  private readonly queue: TraceForwarderQueue
+  private readonly recovery: RecoveryTrigger
   private readonly remoteAddressForRequest: (request: IncomingMessage) => string | undefined
+  private readonly store: TraceOutbox | null
   private readonly upstreamUrl: string
-  private activeEpoch: number | null = null
+  private readonly upstreamControllers = new Set<AbortController>()
+  private admissionRequests = 0
+  private admissionTail: Promise<void> = Promise.resolve()
   private admissionOpen = false
-  private inFlightController: AbortController | null = null
   private localBearer = ''
-  private retryTimer: ReturnType<typeof setTimeout> | null = null
+  private owner: TraceOwner | null = null
   private server: http.Server | null = null
   private stopping = false
 
@@ -65,19 +97,27 @@ export class TraceForwarder {
     this.credentialProvider = options.credentialProvider
     this.fetchImpl = options.fetchImpl ?? fetch
     this.installationId = options.installationId
-    this.maxBodyBytes = options.maxBodyBytes ?? MAX_BODY_BYTES
-    this.queue = options.queue ?? new TraceForwarderQueue()
+    this.maxBodyBytes = Math.min(options.maxBodyBytes ?? MAX_LOOPBACK_BODY_BYTES, MAX_LOOPBACK_BODY_BYTES)
+    this.recovery = options.recovery ?? { trigger: () => {} }
     this.remoteAddressForRequest = options.remoteAddressForRequest ?? (request => request.socket.remoteAddress)
+    this.store = options.store ?? null
     this.upstreamUrl = options.upstreamUrl ?? DEFAULT_TRACE_UPSTREAM_URL
   }
 
-  async start(epoch: number): Promise<{ endpoint: string; localBearer: string }> {
+  async start(owner: TraceOwner | number): Promise<{ endpoint: string; localBearer: string }> {
     if (this.server) {
       throw new Error('trace_forwarder_already_started')
     }
 
-    this.queue.activateEpoch(epoch)
-    this.activeEpoch = epoch
+    if (this.store === null) {
+      throw new Error('trace_outbox_required')
+    }
+
+    if (typeof owner === 'number') {
+      throw new TypeError('invalid_trace_owner')
+    }
+
+    this.owner = validateTraceOwner(owner).owner
     this.localBearer = randomBytes(32).toString('base64url')
     this.admissionOpen = true
     this.stopping = false
@@ -93,9 +133,8 @@ export class TraceForwarder {
           throw error
         }
       })
-      void this.handle(request, response, epoch)
+      void this.handle(request, response)
     })
-
     this.server = server
     await new Promise<void>((resolve, reject) => {
       const onError = (error: Error) => {
@@ -119,21 +158,16 @@ export class TraceForwarder {
       throw new Error('trace_forwarder_unavailable')
     }
 
-    return {
-      endpoint: `http://127.0.0.1:${address.port}/v1/traces`,
-      localBearer: this.localBearer
-    }
+    return { endpoint: `http://127.0.0.1:${address.port}/v1/traces`, localBearer: this.localBearer }
   }
 
-  async stop({ flushMs }: { flushMs: number }): Promise<TraceForwarderSummary> {
+  async stop({ flushMs: _flushMs }: { flushMs: number }): Promise<TraceForwarderSummary> {
     this.stopping = true
     this.admissionOpen = false
-    this.clearRetryTimer()
     const server = this.server
-
     this.server = null
+    const closed = server ? new Promise<void>(resolve => server.close(() => resolve())) : Promise.resolve()
 
-    const closePromise = server ? new Promise<void>(resolve => server.close(() => resolve())) : Promise.resolve()
     // `server.close()` waits for active requests. A crashed or suspended OTLP
     // producer can leave an incomplete loopback request open forever, which
     // would otherwise block terminal auth cleanup before the backend is
@@ -142,33 +176,20 @@ export class TraceForwarder {
     // below.
     server?.closeAllConnections()
 
-    const deadline = Date.now() + Math.max(0, flushMs)
-
-    while (this.queue.summary().queued > 0 && Date.now() < deadline) {
-      await this.queue.pump(batch => this.sendBatch(batch), { ignoreBackoff: true })
-
-      if (this.queue.summary().queued > 0) {
-        await new Promise(resolve => setTimeout(resolve, Math.min(10, Math.max(0, deadline - Date.now()))))
-      }
+    for (const controller of this.upstreamControllers) {
+      controller.abort()
     }
-
-    if (this.inFlightController) {
-      this.inFlightController.abort()
-      this.inFlightController = null
-    }
-
-    this.queue.clear()
+    await closed
     this.credentialProvider.clear()
     this.localBearer = ''
-    this.activeEpoch = null
-    await closePromise
+    this.owner = null
 
-    return { ...this.queue.summary(), reason: 'stopped' }
+    return { ...(this.store ? await this.store.diagnostics() : emptyDiagnostics()), reason: 'stopped' }
   }
 
-  private async handle(request: IncomingMessage, response: ServerResponse, epoch: number): Promise<void> {
+  private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     try {
-      if (!this.admissionOpen || epoch !== this.activeEpoch) {
+      if (!this.admissionOpen || this.owner === null || this.store === null) {
         return respond(response, 503)
       }
 
@@ -188,9 +209,7 @@ export class TraceForwarder {
         return respond(response, 415)
       }
 
-      const contentEncoding = request.headers['content-encoding']
-
-      if (contentEncoding !== undefined && contentEncoding !== 'identity') {
+      if (request.headers['content-encoding'] !== undefined && request.headers['content-encoding'] !== 'identity') {
         return respond(response, 415)
       }
 
@@ -207,103 +226,129 @@ export class TraceForwarder {
       if (!body) {
         return respond(response, 413)
       }
-
       const metadata = traceMetadata(request, body)
 
       if (!metadata) {
         return respond(response, 400)
       }
 
-      const accepted = this.queue.enqueue({
-        ...metadata,
-        body,
-        contentType: 'application/x-protobuf',
-        epoch
-      })
+      const split =
+        body.length <= MAX_LOGICAL_BATCH_BYTES
+          ? { batches: [body], oversizedSpans: [] }
+          : splitOtlpExportTraceRequest(body, MAX_LOGICAL_BATCH_BYTES)
 
-      if (!accepted.accepted) {
-        return respond(response, 503)
+      let rejectedOversize = false
+
+      for (const oversized of split.oversizedSpans) {
+        await this.store.quarantineInput(this.envelope(metadata, oversized), 'payload_too_large')
+        rejectedOversize = true
       }
 
-      respond(response, 200, true)
-      this.kick()
-    } catch {
+      for (const batch of split.batches) {
+        await this.admitBatch(this.envelope(metadata, batch))
+      }
+      respond(response, rejectedOversize ? 413 : 200, !rejectedOversize)
+    } catch (error) {
       if (!response.headersSent) {
-        respond(response, 503)
+        respond(response, isStorageFailure(error) ? 507 : 503)
       } else {
         response.end()
       }
     }
   }
 
-  private kick(): void {
-    void this.queue
-      .pump(batch => this.sendBatch(batch))
-      .catch(() => {})
-      .finally(() => this.scheduleRetry())
+  private envelope(metadata: TraceMetadata, body: Buffer): TraceEnvelopeInput {
+    if (this.owner === null) {
+      throw new Error('trace_forwarder_unavailable')
+    }
+
+    return { ...metadata, body, contentType: 'application/x-protobuf', owner: this.owner }
   }
 
-  private scheduleRetry(): void {
-    this.clearRetryTimer()
+  private admitBatch(input: TraceEnvelopeInput): Promise<void> {
+    const directCandidate = this.admissionRequests === 0
+    this.admissionRequests += 1
 
-    if (!this.admissionOpen) {
+    return this.withAdmission(async () => {
+      if (this.store === null || this.owner === null) {
+        throw new Error('trace_forwarder_unavailable')
+      }
+      const backlog = (await this.store.diagnostics()).pending > 0
+      const pending = this.store.beginEnqueue(input)
+
+      const cloud =
+        directCandidate && !backlog && validateTraceOwner(this.owner).uploadable
+          ? this.sendForReceipt({ ...input, batchId: pending.batchId })
+          : null
+
+      const winner = await firstDurableOwner(pending.durable, cloud)
+
+      if (winner.kind === 'gateway') {
+        void pending.durable.catch(() => undefined)
+        await pending.cancelForGatewayReceipt(winner.receipt).catch(() => undefined)
+
+        return
+      }
+
+      this.recovery.trigger('enqueue')
+
+      if (cloud !== null) {
+        void cloud
+          .then(receipt => this.store?.acknowledge(winner.batch.batchId, receipt))
+          .catch(error => this.handleCloudFailure(winner.batch, error))
+      }
+    }).finally(() => {
+      this.admissionRequests -= 1
+    })
+  }
+
+  private async handleCloudFailure(batch: DurableTraceBatch, error: unknown): Promise<void> {
+    if (!(error instanceof UpstreamFailure) || this.store === null) {
       return
     }
 
-    const retryAt = this.queue.nextRetryAt()
-
-    if (retryAt === null) {
-      return
+    if (error.status === 403) {
+      this.recovery.trigger('upload-403')
     }
 
-    this.retryTimer = setTimeout(
-      () => {
-        this.retryTimer = null
-        this.kick()
-      },
-      Math.max(0, retryAt - Date.now())
-    )
-  }
-
-  private clearRetryTimer(): void {
-    if (this.retryTimer) {
-      clearTimeout(this.retryTimer)
-      this.retryTimer = null
+    if (error.status === 400 || error.status === 409 || error.status === 413 || error.status === 415) {
+      await this.store.quarantine(batch.batchId, `gateway_${error.status}`).catch(() => undefined)
     }
   }
 
-  private async sendBatch(batch: TraceQueueBatch): Promise<TraceQueueSendResult> {
-    if (!this.admissionOpen || batch.epoch !== this.activeEpoch) {
-      return 'drop'
-    }
-
+  private async sendForReceipt(batch: TraceEnvelopeInput & { batchId: string }): Promise<DurableReceipt> {
     try {
       const initial = await this.credentialProvider.current()
       const response = await this.fetchUpstream(batch, initial)
 
-      if (response.status === 401) {
-        this.credentialProvider.invalidate()
-        const rotated = await this.credentialProvider.current({ forceRefresh: true })
-        const retried = await this.fetchUpstream(batch, rotated)
-
-        return classifyUpstream(retried.status)
+      if (response.status !== 401) {
+        return requireGatewayReceipt(response, batch.batchId)
       }
+      this.credentialProvider.invalidate()
+      this.recovery.trigger('upload-401')
 
-      return classifyUpstream(response.status)
-    } catch {
-      return 'retry'
+      return requireGatewayReceipt(
+        await this.fetchUpstream(batch, await this.credentialProvider.current({ forceRefresh: true })),
+        batch.batchId
+      )
+    } catch (error) {
+      if (error instanceof UpstreamFailure) {
+        throw error
+      }
+      throw new UpstreamFailure(null)
     }
   }
 
-  private async fetchUpstream(batch: TraceQueueBatch, credential: TraceCredential): Promise<Response> {
+  private async fetchUpstream(
+    batch: TraceEnvelopeInput & { batchId: string },
+    credential: TraceCredential
+  ): Promise<Response> {
     if (credential.installation_id !== this.installationId) {
       throw new Error('trace_credential_unavailable')
     }
-
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS)
-
-    this.inFlightController = controller
+    this.upstreamControllers.add(controller)
 
     try {
       return await this.fetchImpl(this.upstreamUrl, {
@@ -312,40 +357,52 @@ export class TraceForwarder {
         headers: {
           authorization: `Bearer ${credential.access_token}`,
           'content-type': batch.contentType,
-          'x-hermes-session-id': batch.sessionId,
+          'idempotency-key': batch.batchId,
+          'x-hermes-session-id': batch.hermesSessionId,
           'x-telemetry-schema-version': batch.telemetrySchemaVersion,
           'x-trace-entrypoint': batch.entrypoint,
+          'x-trace-payload-sha256': createHash('sha256').update(batch.body).digest('hex'),
           'x-trace-run-id': batch.runId
         },
         signal: controller.signal
       })
     } finally {
       clearTimeout(timeout)
+      this.upstreamControllers.delete(controller)
+    }
+  }
 
-      if (this.inFlightController === controller) {
-        this.inFlightController = null
-      }
+  private async withAdmission<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.admissionTail
+    let release!: () => void
+    this.admissionTail = new Promise<void>(resolve => {
+      release = resolve
+    })
+    await previous
+
+    try {
+      return await operation()
+    } finally {
+      release()
     }
   }
 }
 
-function traceMetadata(
-  request: IncomingMessage,
-  body: Buffer
-): Omit<TraceQueueBatch, 'body' | 'contentType' | 'epoch'> | null {
-  const sessionId = singleHeader(request.headers['x-hermes-session-id'])
+function traceMetadata(request: IncomingMessage, body: Buffer): TraceMetadata | null {
+  const hermesSessionId = singleHeader(request.headers['x-hermes-session-id'])
   const entrypoint = singleHeader(request.headers['x-trace-entrypoint'])
   const runId = singleHeader(request.headers['x-trace-run-id'])
   const telemetrySchemaVersion = singleHeader(request.headers['x-telemetry-schema-version'])
-  const supplied = [sessionId, entrypoint, runId, telemetrySchemaVersion].filter(Boolean).length
+  const supplied = [hermesSessionId, entrypoint, runId, telemetrySchemaVersion].filter(Boolean).length
 
   if (supplied === 0) {
     const derived = deriveOtlpCorrelation(body)
 
     return derived
       ? {
-          ...derived,
           entrypoint: 'desktop',
+          hermesSessionId: derived.sessionId,
+          runId: derived.runId,
           telemetrySchemaVersion: '1'
         }
       : null
@@ -353,8 +410,8 @@ function traceMetadata(
 
   if (
     supplied !== 4 ||
-    !sessionId ||
-    !CORRELATION_ID.test(sessionId) ||
+    !hermesSessionId ||
+    !CORRELATION_ID.test(hermesSessionId) ||
     !entrypoint ||
     !ENTRYPOINTS.has(entrypoint) ||
     !runId ||
@@ -364,12 +421,55 @@ function traceMetadata(
     return null
   }
 
-  return {
-    entrypoint: entrypoint as TraceQueueBatch['entrypoint'],
-    runId,
-    sessionId,
-    telemetrySchemaVersion
+  return { entrypoint: entrypoint as TraceMetadata['entrypoint'], hermesSessionId, runId, telemetrySchemaVersion }
+}
+
+async function firstDurableOwner(
+  local: Promise<DurableTraceBatch>,
+  cloud: Promise<DurableReceipt> | null
+): Promise<DurableOwner> {
+  if (cloud === null) {
+    return { batch: await local, kind: 'local' }
   }
+
+  return new Promise<DurableOwner>((resolve, reject) => {
+    let localFailed = false
+    let cloudFailed = false
+
+    const failed = () => {
+      if (localFailed && cloudFailed) {
+        reject(new Error('trace_durability_unavailable'))
+      }
+    }
+
+    void local.then(
+      batch => resolve({ batch, kind: 'local' }),
+      () => {
+        localFailed = true
+        failed()
+      }
+    )
+    void cloud.then(
+      receipt => resolve({ kind: 'gateway', receipt }),
+      () => {
+        cloudFailed = true
+        failed()
+      }
+    )
+  })
+}
+
+function requireGatewayReceipt(response: Response, batchId: string): DurableReceipt {
+  if (response.status < 200 || response.status >= 300) {
+    throw new UpstreamFailure(response.status)
+  }
+  const outcome = response.headers.get('x-trace-receipt')
+
+  if (response.headers.get('x-trace-batch-id') !== batchId || (outcome !== 'accepted' && outcome !== 'duplicate')) {
+    throw new UpstreamFailure(null)
+  }
+
+  return { batchId, outcome, receivedAt: Date.now() }
 }
 
 function singleHeader(value: string | string[] | undefined): string | null {
@@ -384,7 +484,6 @@ function matchesBearer(authorization: string | undefined, bearer: string): boole
   if (!authorization || !bearer) {
     return false
   }
-
   const expected = Buffer.from(`Bearer ${bearer}`)
   const actual = Buffer.from(authorization)
 
@@ -397,7 +496,6 @@ async function readBoundedBody(request: IncomingMessage, maxBytes: number): Prom
 
   for await (const chunk of request) {
     const bytes = Buffer.from(chunk)
-
     size += bytes.length
 
     if (size > maxBytes) {
@@ -412,16 +510,29 @@ async function readBoundedBody(request: IncomingMessage, maxBytes: number): Prom
   return Buffer.concat(chunks, size)
 }
 
-function classifyUpstream(status: number): TraceQueueSendResult {
-  if (status >= 200 && status < 300) {
-    return 'sent'
-  }
+function isStorageFailure(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.message === 'storage_unavailable' || error.message === 'trace_durability_unavailable')
+  )
+}
 
-  if (status === 400 || status === 413 || status === 415) {
-    return 'drop'
+function emptyDiagnostics(): TraceOutboxStoreDiagnostics {
+  return {
+    accepted: 0,
+    deduplicated: 0,
+    duplicate: 0,
+    evictedCapacity: 0,
+    expired: 0,
+    keyLost: 0,
+    payloadBytes: 0,
+    pending: 0,
+    pendingBytes: 0,
+    quarantined: 0,
+    recoveredCorruptTail: 0,
+    tombstoneBytes: 0,
+    tombstones: 0
   }
-
-  return 'retry'
 }
 
 function respond(response: ServerResponse, status: number, protobuf = false): void {
