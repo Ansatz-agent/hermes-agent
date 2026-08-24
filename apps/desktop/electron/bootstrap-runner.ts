@@ -626,6 +626,7 @@ function buildPowerShellBootstrapArgs({
   hermesHome,
   pinCommit = true,
   bundledSource = false,
+  bundledToolchainRoot = null,
   bootstrapScope = 'runtime'
 }) {
   const args = [
@@ -640,6 +641,10 @@ function buildPowerShellBootstrapArgs({
 
   if (bundledSource) {
     args.push('-BundledSource', '-SkipComputerUse')
+
+    if (bundledToolchainRoot) {
+      args.push('-BundledToolchain', bundledToolchainRoot)
+    }
   }
 
   return args
@@ -729,6 +734,7 @@ async function fetchManifest({
           hermesHome,
           pinCommit,
           bundledSource,
+          bundledToolchainRoot,
           bootstrapScope
         })
       ]
@@ -858,6 +864,7 @@ async function runStage({
           hermesHome,
           pinCommit,
           bundledSource,
+          bundledToolchainRoot,
           bootstrapScope
         })
       ]

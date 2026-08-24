@@ -8,7 +8,7 @@ import { classifyBundledRuntime, resolveBundledBootstrapRoot } from './bundled-r
 const PAYLOAD_COMMIT = 'a'.repeat(40)
 const OTHER_COMMIT = 'b'.repeat(40)
 
-test('packaged macOS resolves the bundled bootstrap resource and other targets do not', () => {
+test('packaged macOS and Windows resolve the bundled bootstrap resource', () => {
   assert.equal(
     resolveBundledBootstrapRoot({
       packaged: true,
@@ -18,7 +18,11 @@ test('packaged macOS resolves the bundled bootstrap resource and other targets d
     path.join('/Applications/Ansatz.app/Contents/Resources', 'bootstrap')
   )
   assert.equal(resolveBundledBootstrapRoot({ packaged: false, platform: 'darwin', resourcesPath: '/tmp/resources' }), null)
-  assert.equal(resolveBundledBootstrapRoot({ packaged: true, platform: 'win32', resourcesPath: 'C:\\resources' }), null)
+  assert.equal(
+    resolveBundledBootstrapRoot({ packaged: true, platform: 'win32', resourcesPath: 'C:\\resources' }),
+    path.join('C:\\resources', 'bootstrap')
+  )
+  assert.equal(resolveBundledBootstrapRoot({ packaged: true, platform: 'linux', resourcesPath: '/tmp/resources' }), null)
 })
 
 test('bundled runtime installs, reuses, and refreshes only verified desktop payloads', () => {

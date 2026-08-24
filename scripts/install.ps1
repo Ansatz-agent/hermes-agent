@@ -14,6 +14,9 @@ param(
     [switch]$SkipSetup,
     [switch]$SkipComputerUse,
     [switch]$BundledSource,
+    # Packaged Desktop passes the hash-verified authentication toolchain here
+    # so runtime stages can adopt its local uv.exe without network access.
+    [string]$BundledToolchain = "",
     [string]$Branch = "main",
     # -Commit and -Tag are higher-precedence variants of -Branch for users
     # who need reproducible installs (desktop installer pinning, CI, release
@@ -344,6 +347,9 @@ if ($PSBoundParameters.ContainsKey('InstallDir')) {
     $InstallDir = ConvertTo-LongPath $(
         if ($env:HERMES_HOME) { "$env:HERMES_HOME\hermes-agent" } else { "$env:LOCALAPPDATA\hermes\hermes-agent" }
     )
+}
+if ($PSBoundParameters.ContainsKey('BundledToolchain') -and $BundledToolchain) {
+    $BundledToolchain = ConvertTo-LongPath $BundledToolchain
 }
 if ($script:NormalizedProfilePaths) {
     # Which paths the install actually settled on. Absent from every report of
@@ -786,13 +792,39 @@ function Install-Uv {
     Write-Info "Preparing managed uv in $HermesHome\bin ..."
     New-Item -ItemType Directory -Path (Join-Path $HermesHome "bin") -Force | Out-Null
 
-    # Packaged Desktop supplies a hash-verified uv.exe. A source install may
-    # adopt an existing local executable, but never executes downloaded code.
+    # Packaged Desktop supplies a hash-verified uv.exe through the bundled
+    # authentication toolchain. Prefer that exact file and never fall back to
+    # a network installer on a bundled-source run.
     try {
+        if ($BundledToolchain) {
+            $bundledUv = Join-Path $BundledToolchain "uv.exe"
+            $bundledUvItem = Get-Item -LiteralPath $bundledUv -ErrorAction Stop
+            if (($bundledUvItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "bundled uv.exe must be a regular non-link file"
+            }
+
+            # Keep the executable suffix on the transactional copy. Windows
+            # PowerShell refuses to launch a PE file whose temporary path does
+            # not end in .exe, even when invoked with the call operator.
+            $pending = "$managedUv.pending.exe"
+            Copy-Item -LiteralPath $bundledUv -Destination $pending -Force
+            $null = & $pending --version
+            if ($LASTEXITCODE -ne 0) {
+                throw "bundled uv.exe failed its version check (exit $LASTEXITCODE)"
+            }
+            Move-Item -LiteralPath $pending -Destination $managedUv -Force
+            $script:UvCmd = $managedUv
+            $version = & $managedUv --version
+            Write-Success "Managed uv adopted from the bundled toolchain ($version)"
+            return $true
+        }
+
+        # A source install may adopt an existing local executable, but never
+        # executes downloaded code.
         $uvOnPath = Get-Command uv -CommandType Application -ErrorAction SilentlyContinue |
             Select-Object -First 1
         if ($uvOnPath -and $uvOnPath.Source -and (Test-Path $uvOnPath.Source)) {
-            $pending = "$managedUv.pending"
+            $pending = "$managedUv.pending.exe"
             Copy-Item $uvOnPath.Source $pending -Force
             $null = & $pending --version
             Move-Item $pending $managedUv -Force
@@ -805,7 +837,7 @@ function Install-Uv {
         Write-Info "Use the packaged Desktop installer or ask an administrator to place a reviewed uv.exe at $managedUv."
         return $false
     } catch {
-        Remove-Item "$managedUv.pending" -Force -ErrorAction SilentlyContinue
+        Remove-Item "$managedUv.pending.exe" -Force -ErrorAction SilentlyContinue
         Write-Err "Could not adopt the local uv executable: $_"
         return $false
     }

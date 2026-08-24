@@ -255,6 +255,9 @@ test('Windows installer receives managed uv from the packaged toolchain', () => 
   const installUv = installer.slice(installUvStart, installUvEnd)
   assert.ok(installUvStart >= 0 && installUvEnd > installUvStart, 'missing managed uv installer')
   assert.match(installUv, /Hermes owns its own uv/)
+  assert.match(installUv, /BundledToolchain/)
+  assert.match(installUv, /bundledUv = Join-Path \$BundledToolchain "uv\.exe"/)
+  assert.match(installUv, /Managed uv adopted from the bundled toolchain/)
   assert.match(installUv, /Get-Command uv/)
   assert.doesNotMatch(installUv, /Invoke-WebRequest|irm\b|iex\b|github\.com\/astral-sh/)
 

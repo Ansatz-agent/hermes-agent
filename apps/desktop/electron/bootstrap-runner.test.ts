@@ -117,6 +117,7 @@ test('Windows bundled runtime args keep the verified source and Git runtime loca
       activeRoot: 'C:\\Users\\tester\\AppData\\Local\\hermes\\hermes-agent',
       hermesHome: 'C:\\Users\\tester\\AppData\\Local\\hermes',
       bundledSource: true,
+      bundledToolchainRoot: 'C:\\Program Files\\Ansatz Voice Trace Client\\resources\\bootstrap\\auth-toolchain',
       bootstrapScope: 'runtime'
     }),
     [
@@ -131,7 +132,9 @@ test('Windows bundled runtime args keep the verified source and Git runtime loca
       '-Branch',
       'main',
       '-BundledSource',
-      '-SkipComputerUse'
+      '-SkipComputerUse',
+      '-BundledToolchain',
+      'C:\\Program Files\\Ansatz Voice Trace Client\\resources\\bootstrap\\auth-toolchain'
     ]
   )
 })
