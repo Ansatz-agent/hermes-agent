@@ -1878,14 +1878,15 @@ class _OwnerCore:
                 ):
                     raise AuthServiceError("invalid_response")
                 updated = NativeCredentialRecord(record.credential, status.server_time)
-                self._replace_record_atomically(updated)
                 with self._lock:
-                    if self._record is record or self._record == updated:
-                        self._record = updated
-                        snapshot = self._snapshot.online(last_validated_at=status.server_time)
-                        self._validation_failures = 0
-                        self._publish_locked(snapshot)
-                        self._schedule_validation_locked(self._clock())
+                    if self._record is not record:
+                        return self._snapshot
+                    self._replace_record_atomically(updated)
+                    self._record = updated
+                    snapshot = self._snapshot.online(last_validated_at=status.server_time)
+                    self._validation_failures = 0
+                    self._publish_locked(snapshot)
+                    self._schedule_validation_locked(self._clock())
                     return self._snapshot
 
             status = self._client.legacy_status(record.cookie_record.cookies)
@@ -1898,18 +1899,19 @@ class _OwnerCore:
                 client_version="0.17.0",
             )
             updated = NativeCredentialRecord(credential, status.server_time)
-            self._replace_record_atomically(updated)
             with self._lock:
-                if self._record is record:
-                    self._record = updated
-                    snapshot = RuntimeSnapshot.from_native_credential(
-                        updated,
-                        runtime_instance_id=self._snapshot.runtime_instance_id,
-                        epoch=self._snapshot.epoch,
-                    ).online(last_validated_at=status.server_time)
-                    self._validation_failures = 0
-                    self._publish_locked(snapshot)
-                    self._schedule_validation_locked(self._clock())
+                if self._record is not record:
+                    return self._snapshot
+                self._replace_record_atomically(updated)
+                self._record = updated
+                snapshot = RuntimeSnapshot.from_native_credential(
+                    updated,
+                    runtime_instance_id=self._snapshot.runtime_instance_id,
+                    epoch=self._snapshot.epoch,
+                ).online(last_validated_at=status.server_time)
+                self._validation_failures = 0
+                self._publish_locked(snapshot)
+                self._schedule_validation_locked(self._clock())
                 return self._snapshot
         except ExplicitSessionRevocation as error:
             return self._handle_explicit_revocation(record, error)
@@ -1939,9 +1941,6 @@ class _OwnerCore:
                 or current.account_id != error.account_id
                 or current.session_id != error.session_id
             ):
-                self._validation_failures += 1
-                self._publish_locked(current.degraded(error.reason))
-                self._schedule_validation_locked(self._clock())
                 return self._snapshot
             tombstone = RevocationTombstone(
                 account_id=error.account_id,

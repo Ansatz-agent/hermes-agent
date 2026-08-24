@@ -114,7 +114,7 @@ class ExplicitSessionRevocation(AuthServiceError):
 
 @dataclass(frozen=True)
 class CookieRecord:
-    cookies: dict[str, str]
+    cookies: dict[str, str] = field(repr=False)
     username: str
     session_expires_at: str
 

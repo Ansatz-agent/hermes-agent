@@ -788,6 +788,21 @@ def test_native_and_trace_credentials_do_not_render_tokens():
         assert secret not in str(value)
 
 
+def test_cookie_record_does_not_render_session_or_csrf_secrets():
+    record = CookieRecord(
+        cookies={
+            SESSION_COOKIE: "cookie-session-secret-sentinel",
+            CSRF_COOKIE: "cookie-csrf-secret-sentinel",
+        },
+        username="alice",
+        session_expires_at="2026-09-01T12:00:00+00:00",
+    )
+
+    for rendered in (repr(record), str(record)):
+        assert "cookie-session-secret-sentinel" not in rendered
+        assert "cookie-csrf-secret-sentinel" not in rendered
+
+
 @pytest.mark.parametrize(
     "expires_at",
     [

@@ -67,6 +67,8 @@ from hermes_cli.client_auth.runtime import (
 INSTALLATION_ID = "11111111-1111-4111-8111-111111111111"
 ACCOUNT_ID = "22222222-2222-4222-8222-222222222222"
 NATIVE_SESSION_ID = "33333333-3333-4333-8333-333333333333"
+BOB_ACCOUNT_ID = "44444444-4444-4444-8444-444444444444"
+BOB_SESSION_ID = "55555555-5555-4555-8555-555555555555"
 
 
 def _scope_bearer(seed: bytes = b"A") -> str:
@@ -515,6 +517,76 @@ class FakeAuthClient:
         )
 
 
+class BlockingNativeAuthClient(FakeAuthClient):
+    """Deterministically holds Alice validation while a mutation proceeds."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.validation_started = threading.Event()
+        self.release_validation = threading.Event()
+        self._last_username = "alice"
+
+    def login(self, username: str, password: bytearray) -> CookieRecord:
+        assert username in {"alice", "bob"}
+        assert password == bytearray(b"secret")
+        self._last_username = username
+        return CookieRecord(
+            cookies={
+                "__Host-ansatz_sessionid": f"session-{username}",
+                "__Host-ansatz_csrftoken": f"csrf-{username}",
+            },
+            username=username,
+            session_expires_at=status_at().session_expires_at,
+        )
+
+    def issue_client_session(
+        self, _cookies: dict[str, str], *, installation_id: str, client_version: str
+    ) -> NativeSessionCredential:
+        assert client_version == "0.17.0"
+        account_id, session_id = (
+            (ACCOUNT_ID, NATIVE_SESSION_ID)
+            if self._last_username == "alice"
+            else (BOB_ACCOUNT_ID, BOB_SESSION_ID)
+        )
+        return NativeSessionCredential(
+            account_id=account_id,
+            session_id=session_id,
+            session_token=f"session-token-{self._last_username}-sentinel-1234567890",
+            installation_id=installation_id,
+            username=self._last_username,
+            issued_at="2026-08-24T12:00:00+00:00",
+        )
+
+    def client_session_status(
+        self, credential: NativeSessionCredential
+    ) -> NativeSessionStatus:
+        if credential.account_id == ACCOUNT_ID:
+            self.validation_started.set()
+            assert self.release_validation.wait(timeout=2)
+        if self.native_status_error is not None:
+            raise self.native_status_error
+        return NativeSessionStatus(
+            account_id=credential.account_id,
+            session_id=credential.session_id,
+            installation_id=credential.installation_id,
+            username=credential.username,
+            server_time="2026-08-24T12:00:00+00:00",
+        )
+
+
+def blocking_native_owner_factory():
+    clock = FakeClock()
+    backend = FakeSecretBackend()
+    client = BlockingNativeAuthClient()
+    owner = VaultOwner(
+        client,
+        secret_backend=backend,
+        clock=clock,
+        jitter=lambda *_: 1.0,
+    )
+    return owner, backend, client, clock
+
+
 def native_owner_factory(**backend_options):
     clock = FakeClock()
     backend = FakeSecretBackend(**backend_options)
@@ -589,6 +661,76 @@ def test_native_cache_restores_before_network_after_process_restart():
     )
     assert restored.runtime_instance_id != logged_in.runtime_instance_id
     assert client.native_status_calls == 0
+
+
+def test_stale_native_validation_cannot_replace_newer_login_record():
+    owner, backend, client, clock = blocking_native_owner_factory()
+    owner.login(
+        "alice", bytearray(b"secret"), installation_id=INSTALLATION_ID, client_version="0.17.0"
+    )
+    outcomes: list[RuntimeSnapshot] = []
+    validation = threading.Thread(target=lambda: outcomes.append(owner.validate_now()))
+    validation.start()
+    assert client.validation_started.wait(timeout=2)
+
+    bob = owner.login(
+        "bob", bytearray(b"secret"), installation_id=INSTALLATION_ID, client_version="0.17.0"
+    )
+    client.release_validation.set()
+    validation.join(timeout=2)
+
+    assert outcomes == [bob]
+    assert owner.snapshot() == bob
+    assert json.loads(backend.raw)["account_id"] == BOB_ACCOUNT_ID
+    restarted = VaultOwner(client, secret_backend=backend, clock=clock, jitter=lambda *_: 1.0)
+    assert restarted.refresh().account_id == BOB_ACCOUNT_ID
+
+
+def test_stale_native_validation_cannot_restore_credentials_after_logout():
+    owner, backend, client, _ = blocking_native_owner_factory()
+    owner.login(
+        "alice", bytearray(b"secret"), installation_id=INSTALLATION_ID, client_version="0.17.0"
+    )
+    outcomes: list[RuntimeSnapshot] = []
+    validation = threading.Thread(target=lambda: outcomes.append(owner.validate_now()))
+    validation.start()
+    assert client.validation_started.wait(timeout=2)
+
+    signed_out = owner.logout()
+    client.release_validation.set()
+    validation.join(timeout=2)
+
+    assert outcomes == [signed_out]
+    assert backend.raw is None
+    restarted = VaultOwner(client, secret_backend=backend, clock=FakeClock(), jitter=lambda *_: 1.0)
+    assert restarted.refresh().state is AuthState.SIGNED_OUT
+
+
+def test_stale_explicit_revoke_cannot_tombstone_newer_identity():
+    owner, backend, client, _ = blocking_native_owner_factory()
+    alice = owner.login(
+        "alice", bytearray(b"secret"), installation_id=INSTALLATION_ID, client_version="0.17.0"
+    )
+    client.native_status_error = ExplicitSessionRevocation(
+        code="session_revoked",
+        account_id=alice.account_id,
+        session_id=alice.session_id,
+        revoked_at="2026-08-24T12:00:00+00:00",
+    )
+    outcomes: list[RuntimeSnapshot] = []
+    validation = threading.Thread(target=lambda: outcomes.append(owner.validate_now()))
+    validation.start()
+    assert client.validation_started.wait(timeout=2)
+
+    bob = owner.login(
+        "bob", bytearray(b"secret"), installation_id=INSTALLATION_ID, client_version="0.17.0"
+    )
+    client.release_validation.set()
+    validation.join(timeout=2)
+
+    assert outcomes == [bob]
+    assert owner.snapshot() == bob
+    assert json.loads(backend.raw)["account_id"] == BOB_ACCOUNT_ID
 
 
 def test_matching_explicit_revoke_writes_secret_free_tombstone_once():
