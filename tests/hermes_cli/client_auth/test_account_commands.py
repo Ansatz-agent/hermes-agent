@@ -57,11 +57,15 @@ def test_provider_commands_retain_old_provider_handlers(parser):
 
 
 class _Tty:
+    def __init__(self, value: bool = True) -> None:
+        self.value = value
+
     def isatty(self) -> bool:
-        return True
+        return self.value
 
 
-def test_valid_login_is_idempotent_without_prompt(monkeypatch, capsys):
+@pytest.mark.parametrize("is_tty", [True, False])
+def test_valid_login_is_idempotent_without_prompt(monkeypatch, capsys, is_tty):
     from hermes_cli import main
 
     snapshot = SimpleNamespace(state=AuthState.AUTHENTICATED, username="alice")
@@ -77,8 +81,8 @@ def test_valid_login_is_idempotent_without_prompt(monkeypatch, capsys):
         "getpass.getpass",
         lambda _prompt: pytest.fail("authenticated login must not prompt"),
     )
-    monkeypatch.setattr(sys, "stdin", _Tty())
-    monkeypatch.setattr(sys, "stderr", _Tty())
+    monkeypatch.setattr(sys, "stdin", _Tty(is_tty))
+    monkeypatch.setattr(sys, "stderr", _Tty(is_tty))
 
     main.cmd_login(SimpleNamespace())
 
