@@ -38,6 +38,7 @@ const SAFE_ENV_KEYS = new Set([
   'LOCALAPPDATA',
   'LOGNAME',
   'PATH',
+  'PATHEXT',
   'SHELL',
   'SYSTEMROOT',
   'TEMP',

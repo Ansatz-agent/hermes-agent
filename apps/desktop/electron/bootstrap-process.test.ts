@@ -13,6 +13,7 @@ test('buildBootstrapEnvironment drops inherited package-manager redirects and Py
     {
       HOME: '/Users/example',
       PATH: '/usr/bin:/bin',
+      PATHEXT: '.COM;.EXE;.BAT;.CMD',
       LANG: 'en_US.UTF-8',
       UV_INDEX_URL: 'https://attacker.invalid/simple',
       UV_PYTHON: '/tmp/attacker-python',
@@ -29,9 +30,10 @@ test('buildBootstrapEnvironment drops inherited package-manager redirects and Py
 
   assert.equal(env.HOME, '/Users/example')
   assert.equal(env.PATH, '/usr/bin:/bin')
+  assert.equal(env.PATHEXT, '.COM;.EXE;.BAT;.CMD')
   assert.equal(env.HERMES_HOME, '/Users/example/.hermes')
   assert.equal(env.UV_NO_CONFIG, '1')
-  assert.equal(env.PIP_CONFIG_FILE, '/dev/null')
+  assert.equal(env.PIP_CONFIG_FILE, process.platform === 'win32' ? 'NUL' : '/dev/null')
   assert.equal(env.NPM_CONFIG_USERCONFIG, '/signed/empty.npmrc')
   assert.equal(env.PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD, '1')
   assert.equal(env.UV_INDEX_URL, undefined)

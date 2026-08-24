@@ -7,6 +7,7 @@ import { buildManagedDownloadEnvironment } from './runtime-download-policy'
 const HOSTILE = {
   HOME: '/Users/example',
   PATH: '/usr/bin:/bin',
+  PATHEXT: '.COM;.EXE;.BAT;.CMD',
   SYSTEMROOT: 'C:\\Windows',
   PIP_INDEX_URL: 'https://attacker.invalid/pypi',
   PIP_EXTRA_INDEX_URL: 'https://attacker.invalid/extra',
@@ -32,6 +33,7 @@ test('managed download phases use registered domestic mirrors and strip hostile 
 
     assert.equal(env.HOME, HOSTILE.HOME)
     assert.equal(env.PATH, HOSTILE.PATH)
+    assert.equal(env.PATHEXT, HOSTILE.PATHEXT)
     assert.equal(env.SYSTEMROOT, HOSTILE.SYSTEMROOT)
     assert.equal(env.UV_DEFAULT_INDEX, 'https://mirrors.ustc.edu.cn/pypi/simple')
     assert.equal(env.UV_INDEX, 'https://mirrors.ustc.edu.cn/pypi/simple')

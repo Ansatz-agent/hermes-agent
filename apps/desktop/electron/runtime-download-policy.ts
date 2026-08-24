@@ -29,6 +29,7 @@ const SAFE_ENV_KEYS = Object.freeze([
   'LOCALAPPDATA',
   'LOGNAME',
   'PATH',
+  'PATHEXT',
   'SHELL',
   'SYSTEMROOT',
   'TEMP',
