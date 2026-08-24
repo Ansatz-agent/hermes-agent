@@ -130,6 +130,7 @@ import { DESKTOP_WINDOW_TITLE } from './desktop-branding'
 import { loadOrCreateInstallationId, sshOwnershipId } from './desktop-installation'
 import { formatDesktopLogLine } from './desktop-log-line'
 import { DesktopRuntimeGate } from './desktop-runtime-gate'
+import { prepareLocalTraceCapture } from './desktop-trace-startup'
 import {
   buildPosixCleanupScript,
   buildWindowsCleanupScript,
@@ -8840,6 +8841,12 @@ let desktopTraceContext = null
 let desktopTraceForwarder = null
 let desktopTraceGeneration = 0
 let desktopTraceStartupPromise = null
+let desktopTraceStartupScope = null
+let desktopTraceRetryTimer = null
+let desktopTraceRetryScope = null
+
+const TRACE_CAPTURE_RETRY_MS = 15_000
+const TRACE_CAPTURE_SETUP_TIMEOUT_MS = 5_000
 
 function traceContextForBackendRoot(root) {
   if (!desktopTraceContext) {
@@ -8858,7 +8865,15 @@ async function ensureDesktopTraceForwarder(scope) {
   }
 
   if (desktopTraceStartupPromise) {
-    await desktopTraceStartupPromise
+    const pendingScope = desktopTraceStartupScope
+
+    try {
+      await desktopTraceStartupPromise
+    } catch (error) {
+      if (sameConnectionScope(pendingScope, scope)) {
+        throw error
+      }
+    }
 
     if (desktopTraceContext && sameConnectionScope(desktopTraceContext.scope, scope)) {
       return desktopTraceContext
@@ -8903,14 +8918,6 @@ async function ensureDesktopTraceForwarder(scope) {
       }
     })
 
-    // Authentication is not backend-ready until a current upload credential
-    // exists. The public token remains owned by Electron main.
-    await provider.current()
-
-    if (generation !== desktopTraceGeneration || !sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope)) {
-      throw new AuthBridgeError('auth_required', 'session_rejected')
-    }
-
     const forwarder = new TraceForwarder({
       credentialProvider: provider,
       installationId: desktopInstallationId
@@ -8935,18 +8942,89 @@ async function ensureDesktopTraceForwarder(scope) {
   })()
 
   desktopTraceStartupPromise = startup
+  desktopTraceStartupScope = { ...scope }
 
   try {
     return await startup
   } finally {
     if (desktopTraceStartupPromise === startup) {
       desktopTraceStartupPromise = null
+      desktopTraceStartupScope = null
     }
   }
 }
 
+function cancelDesktopTraceCaptureRetry() {
+  if (desktopTraceRetryTimer) {
+    clearTimeout(desktopTraceRetryTimer)
+    desktopTraceRetryTimer = null
+  }
+
+  desktopTraceRetryScope = null
+}
+
+async function startDesktopTraceForwarderWithDeadline(scope) {
+  let timeout = null
+
+  const deadline = new Promise((_, reject) => {
+    timeout = setTimeout(() => reject(new Error('trace_capture_setup_timeout')), TRACE_CAPTURE_SETUP_TIMEOUT_MS)
+    timeout.unref?.()
+  })
+
+  try {
+    return await Promise.race([ensureDesktopTraceForwarder(scope), deadline])
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout)
+    }
+  }
+}
+
+function scheduleDesktopTraceCaptureRetry(scope) {
+  const currentScope = desktopAuthCoordinator?.scope('local')
+
+  if (!sameConnectionScope(currentScope, scope)) {
+    return
+  }
+
+  if (desktopTraceRetryTimer && sameConnectionScope(desktopTraceRetryScope, scope)) {
+    return
+  }
+
+  cancelDesktopTraceCaptureRetry()
+  desktopTraceRetryScope = { ...scope }
+  desktopTraceRetryTimer = setTimeout(() => {
+    const retryScope = desktopTraceRetryScope
+
+    desktopTraceRetryTimer = null
+    desktopTraceRetryScope = null
+
+    if (!sameConnectionScope(desktopAuthCoordinator?.scope('local'), retryScope)) {
+      return
+    }
+
+    void prepareTraceCaptureForLocalScope(retryScope).catch(() => {})
+  }, TRACE_CAPTURE_RETRY_MS)
+  desktopTraceRetryTimer.unref?.()
+}
+
+async function prepareTraceCaptureForLocalScope(scope) {
+  const context = await prepareLocalTraceCapture({
+    startListener: () => startDesktopTraceForwarderWithDeadline(scope),
+    onDiagnostic: () => rememberLog('[trace] trace capture unavailable'),
+    scheduleRetry: () => scheduleDesktopTraceCaptureRetry(scope)
+  })
+
+  if (context) {
+    cancelDesktopTraceCaptureRetry()
+  }
+
+  return context
+}
+
 async function stopDesktopTraceForwarder(flushMs = 3_000) {
   desktopTraceGeneration += 1
+  cancelDesktopTraceCaptureRetry()
   const forwarder = desktopTraceForwarder
 
   desktopTraceForwarder = null
@@ -10246,7 +10324,7 @@ async function spawnPoolBackend(profile, entry) {
 
   const connectionScope = await requireDesktopConnectionScope()
   const scopeToken = issueAuthScopeToken(connectionScope)
-  await ensureDesktopTraceForwarder(connectionScope)
+  await prepareTraceCaptureForLocalScope(connectionScope)
 
   // Same update mutual exclusion as the primary window's waitForLocalStart
   // (#73822): pool backends spawn from the same venv, so an ungated respawn
@@ -10584,7 +10662,7 @@ async function startHermes() {
       ensureLocalRuntime: ensureRuntime,
       prepareLocalBackend: async () => {
         await advanceBootProgress('backend.runtime', 'Resolving Hermes runtime', 28)
-        await ensureDesktopTraceForwarder(connectionScope)
+        await prepareTraceCaptureForLocalScope(connectionScope)
 
         return resolveHermesBackend(backendArgs)
       },

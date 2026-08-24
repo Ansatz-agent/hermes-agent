@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
 
 import { test } from 'vitest'
 
@@ -76,4 +77,43 @@ test('failed preparation remains terminal and retryable', async () => {
 
   await gate.prepare(async () => {})
   assert.equal(gate.state, 'ready')
+})
+
+test('local backend startup waits for capture setup but never a cloud Trace credential', () => {
+  const source = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
+
+  const traceStart = source.slice(
+    source.indexOf('async function ensureDesktopTraceForwarder(scope) {'),
+    source.indexOf(
+      'async function stopDesktopTraceForwarder',
+      source.indexOf('async function ensureDesktopTraceForwarder(scope) {')
+    )
+  )
+
+  const primaryPreparation = source.slice(
+    source.indexOf('prepareLocalBackend: async () => {'),
+    source.indexOf('resolveRemote:', source.indexOf('prepareLocalBackend: async () => {'))
+  )
+
+  const poolPreparation = source.slice(
+    source.indexOf('async function spawnPoolBackend(profile, entry) {'),
+    source.indexOf(
+      '// Same update mutual exclusion',
+      source.indexOf('async function spawnPoolBackend(profile, entry) {')
+    )
+  )
+
+  const authSubscription = source.slice(
+    source.indexOf('coordinator.subscribe((status, connectionId) => {'),
+    source.indexOf('\n      try {', source.indexOf('coordinator.subscribe((status, connectionId) => {'))
+  )
+
+  assert.doesNotMatch(traceStart, /await provider\.current\(\)/)
+  assert.match(traceStart, /startDesktopTraceForwarderWithDeadline\(scope\)/)
+  assert.match(source, /const TRACE_CAPTURE_SETUP_TIMEOUT_MS = \d+/)
+  assert.match(primaryPreparation, /await prepareTraceCaptureForLocalScope\(connectionScope\)/)
+  assert.match(poolPreparation, /await prepareTraceCaptureForLocalScope\(connectionScope\)/)
+  assert.doesNotMatch(primaryPreparation, /await ensureDesktopTraceForwarder\(connectionScope\)/)
+  assert.doesNotMatch(poolPreparation, /await ensureDesktopTraceForwarder\(connectionScope\)/)
+  assert.doesNotMatch(authSubscription, /cleanupDesktopCapabilities|desktopRuntimeGate\.invalidate/)
 })
