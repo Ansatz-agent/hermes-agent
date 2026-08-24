@@ -147,13 +147,13 @@ def test_login_falls_back_to_the_tls_verified_direct_route_after_a_network_failu
         [
             html_response(
                 cookie=(
-                    "agent_history_csrftoken=csrf-1; Secure; Path=/agent/; SameSite=Lax"
+                    "__Host-ansatz_csrftoken=csrf-1; Secure; Path=/; SameSite=Lax"
                 )
             ),
             redirect_response(
                 cookies=(
-                    "agent_history_sessionid=session-1; Secure; HttpOnly; "
-                    "Path=/agent/; SameSite=Lax",
+                    "__Host-ansatz_sessionid=session-1; Secure; HttpOnly; "
+                    "Path=/; SameSite=Lax",
                 )
             ),
             json_response(200, valid_status_body()),
@@ -180,9 +180,9 @@ def test_login_falls_back_to_the_tls_verified_direct_route_after_a_network_failu
     assert result.username == "alice"
     assert len(primary_requests) == 1
     assert [request.url.path for request in fallback_requests] == [
-        "/agent/accounts/login/",
-        "/agent/accounts/login/",
-        "/agent/api/session/",
+        "/auth/login/",
+        "/auth/login/",
+        "/auth/api/session/",
     ]
     assert {request.url.copy_with(path="/") for request in fallback_requests} == {
         httpx.URL(f"{AUTH_ORIGIN}/")
