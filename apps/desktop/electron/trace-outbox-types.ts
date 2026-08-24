@@ -58,11 +58,24 @@ export function validateTraceOwner(owner: TraceOwner): TraceOwnerState {
     throw new TypeError('invalid_account_key')
   }
 
-  const uploadable = owner.accountId !== null && owner.sessionId !== null
+  if (owner.accountKey.startsWith('legacy-')) {
+    if (owner.accountId !== null || owner.sessionId !== null) {
+      throw new TypeError('invalid_trace_owner')
+    }
 
-  if (uploadable && (!UUID_V4.test(owner.accountId!) || !UUID_V4.test(owner.sessionId!))) {
+    return { owner: { ...owner }, uploadable: false }
+  }
+
+  if (
+    owner.accountId === null ||
+    owner.sessionId === null ||
+    !UUID_V4.test(owner.accountKey.slice('account-'.length)) ||
+    !UUID_V4.test(owner.accountId) ||
+    !UUID_V4.test(owner.sessionId) ||
+    owner.accountKey !== `account-${owner.accountId}`
+  ) {
     throw new TypeError('invalid_trace_owner')
   }
 
-  return { owner: { ...owner }, uploadable }
+  return { owner: { ...owner }, uploadable: true }
 }
