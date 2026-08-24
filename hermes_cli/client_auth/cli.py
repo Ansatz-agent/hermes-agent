@@ -16,12 +16,12 @@ def login() -> None:
         account_status,
     )
 
-    if not (sys.stdin.isatty() and sys.stderr.isatty()):
-        raise AuthRequired("interactive_login_required")
     current = account_status()
     if current.state is AuthState.AUTHENTICATED:
         print(f"Authenticated as {current.username}")
         return
+    if not (sys.stdin.isatty() and sys.stderr.isatty()):
+        raise AuthRequired("interactive_login_required")
     username = input("Hermes account: ").strip()
     password = bytearray(getpass("Password: ").encode("utf-8"))
     try:
