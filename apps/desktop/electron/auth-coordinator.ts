@@ -16,11 +16,15 @@ const SAFE_REASONS = new Set([
   'rate_limited',
   'runtime_unavailable',
   'server_unavailable',
+  'invalid_response',
+  'invalid_session_credential',
   'session_expired',
   'session_rejected',
   'signed_out',
   'vault_unavailable'
 ])
+
+const EXPLICIT_TERMINAL_REASONS = new Set(['account_disabled', 'account_revoked', 'session_revoked'])
 
 type AuthBridgeLike = {
   status: () => Promise<BridgeStatus>
@@ -59,6 +63,7 @@ export class AuthCoordinator {
   private readonly bridges = new Map<string, AuthBridgeLike>()
   private readonly clock: () => number
   private readonly cleanup: (connectionId: string, status: BridgeStatus) => Promise<void> | void
+  private readonly generations = new Map<string, number>()
   private readonly listeners = new Set<StatusListener>()
   private readonly pollIntervalMs: number
   private readonly recoverBridge: AuthBridgeRecovery | null
@@ -78,6 +83,7 @@ export class AuthCoordinator {
     this.cleanup = options.cleanup ?? (() => {})
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
     this.recoverBridge = options.recoverBridge ?? null
+    this.generations.set(LOCAL_CONNECTION_ID, 0)
     this.statuses.set(LOCAL_CONNECTION_ID, checkingStatus())
   }
 
@@ -109,6 +115,10 @@ export class AuthCoordinator {
   isAuthenticated(connectionId = LOCAL_CONNECTION_ID): boolean {
     const status = this.status(connectionId)
 
+    if (connectionId === LOCAL_CONNECTION_ID) {
+      return isLocallyAuthorized(status) && this.scopes.has(connectionId)
+    }
+
     return status.state === 'authenticated' && status.valid_until > this.clock() && this.scopes.has(connectionId)
   }
 
@@ -123,6 +133,8 @@ export class AuthCoordinator {
   }
 
   async refresh(connectionId = LOCAL_CONNECTION_ID, options: AuthRefreshOptions = {}): Promise<BridgeStatus> {
+    const generation = this.generation(connectionId)
+
     return this.runExclusive(async () => {
       const bridge = this.bridges.get(connectionId)
 
@@ -131,14 +143,15 @@ export class AuthCoordinator {
       }
 
       try {
-        return await this.applyStatus(await bridge.status(), connectionId)
+        return await this.applyStatus(await bridge.status(), connectionId, generation)
       } catch (error) {
-        const failed = await this.applyFailure(error, connectionId)
+        const reason = safeReason(error)
+        const failed = await this.applyFailure(error, connectionId, generation)
 
         if (
           connectionId !== LOCAL_CONNECTION_ID ||
           !options.recoverRuntime ||
-          failed.reason !== 'runtime_unavailable' ||
+          reason !== 'runtime_unavailable' ||
           !this.recoverBridge
         ) {
           return failed
@@ -152,13 +165,18 @@ export class AuthCoordinator {
           }
 
           this.bridges.set(connectionId, replacement)
-          const checking = checkingStatus()
+
+          const checking =
+            connectionId === LOCAL_CONNECTION_ID && this.scopes.has(connectionId) && isLocallyAuthorized(failed)
+              ? { ...failed, validation_state: 'validating' as const, validation_reason: null }
+              : checkingStatus()
+
           this.statuses.set(connectionId, checking)
           this.emit(checking, connectionId)
 
-          return await this.applyStatus(await replacement.status(), connectionId)
+          return await this.applyStatus(await replacement.status(), connectionId, generation)
         } catch (recoveryError) {
-          return this.applyFailure(recoveryError, connectionId)
+          return this.applyFailure(recoveryError, connectionId, generation)
         }
       }
     })
@@ -187,6 +205,7 @@ export class AuthCoordinator {
       if (previousScope) {
         const locked = lockFrom(this.status(connectionId), 'signed_out')
         this.scopes.delete(connectionId)
+        this.advanceGeneration(connectionId)
         this.statuses.set(connectionId, locked)
         this.emit(locked, connectionId)
         await this.cleanup(connectionId, locked)
@@ -219,6 +238,7 @@ export class AuthCoordinator {
       if (previousScope) {
         const locked = lockFrom(this.status(connectionId), 'session_rejected')
         this.scopes.delete(connectionId)
+        this.advanceGeneration(connectionId)
         this.statuses.set(connectionId, locked)
         this.emit(locked, connectionId)
         await this.cleanup(connectionId, locked)
@@ -246,6 +266,7 @@ export class AuthCoordinator {
       const previousScope = this.scopes.get(connectionId)
       const locked = lockFrom(this.status(connectionId), 'signed_out')
       this.scopes.delete(connectionId)
+      this.advanceGeneration(connectionId)
       this.bridges.delete(connectionId)
       this.statuses.set(connectionId, locked)
       this.emit(locked, connectionId)
@@ -303,13 +324,17 @@ export class AuthCoordinator {
     const current = this.scopes.get(connectionId)
     const status = this.status(connectionId)
 
-    if (!current || status.state !== 'authenticated') {
+    if (
+      !current ||
+      (connectionId === LOCAL_CONNECTION_ID ? !isLocallyAuthorized(status) : status.state !== 'authenticated')
+    ) {
       throw new CoordinatorAuthRequiredError()
     }
 
-    if (status.valid_until <= this.clock()) {
+    if (connectionId !== LOCAL_CONNECTION_ID && status.valid_until <= this.clock()) {
       const locked = lockFrom(status, 'session_expired')
       this.scopes.delete(connectionId)
+      this.advanceGeneration(connectionId)
       this.statuses.set(connectionId, locked)
       this.emit(locked, connectionId)
       await this.cleanup(connectionId, locked)
@@ -317,7 +342,15 @@ export class AuthCoordinator {
     }
   }
 
-  private async applyStatus(status: BridgeStatus, connectionId: string): Promise<BridgeStatus> {
+  private async applyStatus(status: BridgeStatus, connectionId: string, generation?: number): Promise<BridgeStatus> {
+    if (generation !== undefined && generation !== this.generation(connectionId)) {
+      return this.status(connectionId)
+    }
+
+    if (connectionId === LOCAL_CONNECTION_ID) {
+      return this.applyLocalStatus(status)
+    }
+
     const nextStatus =
       status.state === 'authenticated' && status.valid_until <= this.clock()
         ? lockFrom(status, 'session_expired')
@@ -334,6 +367,7 @@ export class AuthCoordinator {
       ) {
         const locked = lockFrom(this.status(connectionId), 'session_rejected')
         this.scopes.delete(connectionId)
+        this.advanceGeneration(connectionId)
         this.statuses.set(connectionId, locked)
         this.emit(locked, connectionId)
         await this.cleanup(connectionId, locked)
@@ -347,6 +381,11 @@ export class AuthCoordinator {
     }
 
     this.scopes.delete(connectionId)
+
+    if (previousScope) {
+      this.advanceGeneration(connectionId)
+    }
+
     this.statuses.set(connectionId, nextStatus)
     this.emit(nextStatus, connectionId)
 
@@ -357,10 +396,32 @@ export class AuthCoordinator {
     return nextStatus
   }
 
-  private async applyFailure(error: unknown, connectionId: string): Promise<BridgeStatus> {
+  private async applyFailure(error: unknown, connectionId: string, generation?: number): Promise<BridgeStatus> {
+    if (generation !== undefined && generation !== this.generation(connectionId)) {
+      return this.status(connectionId)
+    }
+
     const reason = safeReason(error)
+
+    if (connectionId === LOCAL_CONNECTION_ID) {
+      const previous = this.status(connectionId)
+
+      if (this.scopes.has(connectionId) && isLocallyAuthorized(previous)) {
+        const degraded = degradedFrom(previous, reason)
+        this.statuses.set(connectionId, degraded)
+        this.emit(degraded, connectionId)
+
+        return degraded
+      }
+    }
+
     const status = lockFrom(this.status(connectionId), reason)
     const hadScope = this.scopes.delete(connectionId)
+
+    if (hadScope) {
+      this.advanceGeneration(connectionId)
+    }
+
     this.statuses.set(connectionId, status)
     this.emit(status, connectionId)
 
@@ -369,6 +430,84 @@ export class AuthCoordinator {
     }
 
     return status
+  }
+
+  private async applyLocalStatus(status: BridgeStatus): Promise<BridgeStatus> {
+    const connectionId = LOCAL_CONNECTION_ID
+    const previousScope = this.scopes.get(connectionId)
+    const previousStatus = this.status(connectionId)
+
+    if (isLocallyAuthorized(status)) {
+      const nextScope = connectionScopeFromStatus(status, connectionId)
+
+      if (previousScope && isLocallyAuthorized(previousStatus) && !sameAccount(previousStatus, status)) {
+        const locked = lockFrom(previousStatus, 'session_rejected')
+        this.scopes.delete(connectionId)
+        this.advanceGeneration(connectionId)
+        this.statuses.set(connectionId, locked)
+        this.emit(locked, connectionId)
+        await this.cleanup(connectionId, locked)
+      }
+
+      const currentScope = this.scopes.get(connectionId)
+      const published = currentScope && sameAccount(previousStatus, status) ? withScope(status, currentScope) : status
+
+      if (!currentScope) {
+        this.advanceGeneration(connectionId)
+      }
+
+      this.scopes.set(connectionId, currentScope ?? nextScope)
+      this.statuses.set(connectionId, published)
+      this.emit(published, connectionId)
+
+      return published
+    }
+
+    const reason = status.reason ?? status.validation_reason ?? 'runtime_unavailable'
+
+    const matchingTerminal =
+      EXPLICIT_TERMINAL_REASONS.has(reason) &&
+      previousScope &&
+      isLocallyAuthorized(previousStatus) &&
+      sameCurrentSession(previousStatus, status)
+
+    if (status.state === 'signed_out' || matchingTerminal) {
+      this.scopes.delete(connectionId)
+
+      if (previousScope) {
+        this.advanceGeneration(connectionId)
+      }
+
+      this.statuses.set(connectionId, status)
+      this.emit(status, connectionId)
+
+      if (previousScope) {
+        await this.cleanup(connectionId, status)
+      }
+
+      return status
+    }
+
+    if (previousScope && isLocallyAuthorized(previousStatus)) {
+      const degraded = degradedFrom(previousStatus, reason)
+      this.statuses.set(connectionId, degraded)
+      this.emit(degraded, connectionId)
+
+      return degraded
+    }
+
+    this.statuses.set(connectionId, status)
+    this.emit(status, connectionId)
+
+    return status
+  }
+
+  private generation(connectionId: string): number {
+    return this.generations.get(connectionId) ?? 0
+  }
+
+  private advanceGeneration(connectionId: string): void {
+    this.generations.set(connectionId, this.generation(connectionId) + 1)
   }
 
   private emit(status: BridgeStatus, connectionId: string): void {
@@ -421,6 +560,38 @@ function safeReason(error: unknown): string {
   const reason = error instanceof AuthBridgeError ? error.reason : null
 
   return reason && SAFE_REASONS.has(reason) ? reason : 'runtime_unavailable'
+}
+
+export function isLocallyAuthorized(status: BridgeStatus): boolean {
+  return status.state === 'authenticated' && Boolean(status.principal_key)
+}
+
+function sameAccount(left: BridgeStatus, right: BridgeStatus): boolean {
+  return (
+    Boolean(left.principal_key) && left.principal_key === right.principal_key && left.account_id === right.account_id
+  )
+}
+
+function sameCurrentSession(left: BridgeStatus, right: BridgeStatus): boolean {
+  return sameAccount(left, right) && Boolean(left.session_id) && left.session_id === right.session_id
+}
+
+function withScope(status: BridgeStatus, scope: ConnectionScope): BridgeStatus {
+  return {
+    ...status,
+    runtime_instance_id: scope.runtime_instance_id,
+    epoch: scope.epoch
+  }
+}
+
+function degradedFrom(status: BridgeStatus, reason: string): BridgeStatus {
+  return {
+    ...status,
+    state: 'authenticated',
+    validation_state: 'degraded',
+    validation_reason: reason,
+    reason: null
+  }
 }
 
 function checkingStatus(): BridgeStatus {
