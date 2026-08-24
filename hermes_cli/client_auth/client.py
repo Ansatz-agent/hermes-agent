@@ -17,6 +17,9 @@ LOGIN_PATH = f"{AUTH_PREFIX}/login/"
 LOGOUT_PATH = f"{AUTH_PREFIX}/logout/"
 SESSION_PATH = f"{AUTH_PREFIX}/api/session/"
 TRACE_TOKEN_PATH = f"{AUTH_PREFIX}/api/trace-token/"
+NATIVE_SESSION_PATH = f"{AUTH_PREFIX}/api/client-session/"
+NATIVE_CURRENT_SESSION_PATH = f"{NATIVE_SESSION_PATH}current/"
+NATIVE_TRACE_TOKEN_PATH = f"{NATIVE_SESSION_PATH}trace-token/"
 SESSION_COOKIE = "__Host-ansatz_sessionid"
 CSRF_COOKIE = "__Host-ansatz_csrftoken"
 
@@ -35,12 +38,46 @@ _STATUS_KEYS = frozenset(
 _TRACE_CREDENTIAL_KEYS = frozenset(
     {"access_token", "expires_at", "expires_in", "installation_id"}
 )
+_NATIVE_CREDENTIAL_KEYS = frozenset(
+    {
+        "account_id",
+        "session_id",
+        "session_token",
+        "installation_id",
+        "username",
+        "issued_at",
+    }
+)
+_NATIVE_STATUS_KEYS = frozenset(
+    {
+        "state",
+        "account_id",
+        "session_id",
+        "installation_id",
+        "username",
+        "server_time",
+    }
+)
+_NATIVE_UNAVAILABLE_KEYS = frozenset({"state", "code", "retryable"})
+_NATIVE_REVOCATION_KEYS = frozenset(
+    {"state", "code", "account_id", "session_id", "revoked_at", "retryable"}
+)
+_EXPLICIT_REVOCATION_CODES = frozenset(
+    {"account_disabled", "account_revoked", "session_revoked"}
+)
 _UUID_V4 = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
     re.IGNORECASE,
 )
 _CLIENT_VERSION = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$")
 _SCHEMA_VERSION = re.compile(r"^[1-9][0-9]{0,15}$")
+_NATIVE_UUID_V4 = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
+_NATIVE_SESSION_TOKEN = re.compile(r"^[A-Za-z0-9_-]{32,128}$")
+_RFC3339 = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$"
+)
 
 
 class AuthServiceError(RuntimeError):
@@ -57,6 +94,22 @@ class SessionRejected(AuthServiceError):
 class RateLimited(AuthServiceError):
     def __init__(self) -> None:
         super().__init__("rate_limited")
+
+
+class ExplicitSessionRevocation(AuthServiceError):
+    def __init__(
+        self,
+        *,
+        code: str,
+        account_id: str,
+        session_id: str,
+        revoked_at: str,
+    ) -> None:
+        super().__init__(code)
+        self.code = code
+        self.account_id = account_id
+        self.session_id = session_id
+        self.revoked_at = revoked_at
 
 
 @dataclass(frozen=True)
@@ -82,6 +135,25 @@ class TraceCredential:
     expires_at: str
     expires_in: int
     installation_id: str
+
+
+@dataclass(frozen=True)
+class NativeSessionCredential:
+    account_id: str
+    session_id: str
+    session_token: str
+    installation_id: str
+    username: str
+    issued_at: str
+
+
+@dataclass(frozen=True)
+class NativeSessionStatus:
+    account_id: str
+    session_id: str
+    installation_id: str
+    username: str
+    server_time: str
 
 
 class _PinnedAuthNetworkBackend(httpcore.NetworkBackend):
@@ -212,6 +284,9 @@ class AuthClient:
         )
         return _parse_session_status(response)
 
+    def legacy_status(self, cookies: Mapping[str, str]) -> SessionStatus:
+        return self.status(cookies)
+
     def logout(self, cookies: Mapping[str, str]) -> None:
         normalized = _validate_cookie_mapping(cookies)
         csrf = normalized[CSRF_COOKIE]
@@ -233,7 +308,10 @@ class AuthClient:
         finally:
             self._http.cookies.clear()
 
-    def trace_token(
+    def legacy_logout(self, cookies: Mapping[str, str]) -> None:
+        self.logout(cookies)
+
+    def legacy_trace_token(
         self,
         cookies: Mapping[str, str],
         *,
@@ -267,18 +345,102 @@ class AuthClient:
             expected_installation_id=installation_id,
         )
 
-    def _request(self, method: str, path: str, **kwargs: object) -> httpx.Response:
-        if path not in {LOGIN_PATH, LOGOUT_PATH, SESSION_PATH, TRACE_TOKEN_PATH}:
+    def issue_client_session(
+        self,
+        cookies: Mapping[str, str],
+        *,
+        installation_id: str,
+        client_version: str,
+    ) -> NativeSessionCredential:
+        normalized = _validate_cookie_mapping(cookies)
+        _validate_native_issue_request(
+            installation_id=installation_id,
+            client_version=client_version,
+        )
+        csrf = normalized[CSRF_COOKIE]
+        response = self._request(
+            "POST",
+            NATIVE_SESSION_PATH,
+            json={
+                "installation_id": installation_id,
+                "client_version": client_version,
+            },
+            headers={
+                "Cookie": _cookie_header(normalized),
+                "Referer": f"{AUTH_ORIGIN}{AUTH_PREFIX}/",
+                "X-CSRFToken": csrf,
+            },
+        )
+        return _parse_native_credential(
+            response,
+            expected_installation_id=installation_id,
+        )
+
+    def client_session_status(
+        self, credential: NativeSessionCredential
+    ) -> NativeSessionStatus:
+        headers = _native_headers(credential)
+        response = self._request(
+            "GET", NATIVE_SESSION_PATH, headers=headers, native=True
+        )
+        return _parse_native_session_status(response, credential)
+
+    def logout_client_session(self, credential: NativeSessionCredential) -> None:
+        headers = _native_headers(credential)
+        response = self._request(
+            "DELETE", NATIVE_CURRENT_SESSION_PATH, headers=headers, native=True
+        )
+        _parse_native_logout(response, credential)
+
+    def trace_token(
+        self,
+        credential: NativeSessionCredential,
+    ) -> TraceCredential:
+        headers = _native_headers(credential)
+        response = self._request(
+            "POST", NATIVE_TRACE_TOKEN_PATH, headers=headers, native=True
+        )
+        return _parse_native_trace_credential(response, credential)
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        native: bool = False,
+        **kwargs: object,
+    ) -> httpx.Response:
+        if path not in {
+            LOGIN_PATH,
+            LOGOUT_PATH,
+            SESSION_PATH,
+            TRACE_TOKEN_PATH,
+            NATIVE_SESSION_PATH,
+            NATIVE_CURRENT_SESSION_PATH,
+            NATIVE_TRACE_TOKEN_PATH,
+        }:
             raise AuthServiceError("invalid_request")
+
+        def request_with(client: httpx.Client) -> httpx.Response:
+            if not native:
+                return client.request(method, path, **kwargs)
+            request = httpx.Request(
+                method,
+                httpx.URL(AUTH_ORIGIN).join(path),
+                **kwargs,
+            )
+            return client.send(request)
+
         try:
-            response = self._http.request(method, path, **kwargs)
+            response = request_with(self._http)
         except httpx.HTTPError:
             fallback = self._fallback_http
             if fallback is None:
                 raise AuthServiceError("server_unavailable") from None
             try:
-                fallback.cookies.update(self._http.cookies)
-                response = fallback.request(method, path, **kwargs)
+                if not native:
+                    fallback.cookies.update(self._http.cookies)
+                response = request_with(fallback)
             except httpx.HTTPError:
                 raise AuthServiceError("server_unavailable") from None
             self._http.close()
@@ -447,6 +609,202 @@ def _validate_trace_request(
         or _SCHEMA_VERSION.fullmatch(telemetry_schema_version) is None
     ):
         raise AuthServiceError("invalid_request")
+
+
+def _validate_native_issue_request(
+    *, installation_id: str, client_version: str
+) -> None:
+    if (
+        not _is_native_uuid_v4(installation_id)
+        or not isinstance(client_version, str)
+        or _CLIENT_VERSION.fullmatch(client_version) is None
+    ):
+        raise AuthServiceError("invalid_request")
+
+
+def _is_native_uuid_v4(value: object) -> bool:
+    return isinstance(value, str) and _NATIVE_UUID_V4.fullmatch(value) is not None
+
+
+def _native_headers(credential: NativeSessionCredential) -> dict[str, str]:
+    if not isinstance(credential, NativeSessionCredential):
+        raise AuthServiceError("invalid_request")
+    if (
+        not _is_native_uuid_v4(credential.account_id)
+        or not _is_native_uuid_v4(credential.session_id)
+        or not _is_native_uuid_v4(credential.installation_id)
+        or not isinstance(credential.session_token, str)
+        or _NATIVE_SESSION_TOKEN.fullmatch(credential.session_token) is None
+        or not _valid_native_username(credential.username)
+        or not _is_rfc3339(credential.issued_at)
+    ):
+        raise AuthServiceError("invalid_request")
+    return {
+        "Authorization": f"Bearer {credential.session_token}",
+        "X-Ansatz-Installation-ID": credential.installation_id,
+    }
+
+
+def _valid_native_username(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and 1 <= len(value) <= 150
+        and all(not character.isspace() and ord(character) >= 32 for character in value)
+    )
+
+
+def _is_rfc3339(value: object) -> bool:
+    if (
+        not isinstance(value, str)
+        or len(value) > 128
+        or _RFC3339.fullmatch(value) is None
+    ):
+        return False
+    try:
+        _parse_aware_datetime(value)
+    except AuthServiceError:
+        return False
+    return True
+
+
+def _require_native_json(response: httpx.Response) -> dict[str, object]:
+    if not _is_content_type(response, "application/json") or not _has_no_store(
+        response
+    ):
+        raise AuthServiceError("invalid_response")
+    try:
+        body = response.json()
+    except (ValueError, UnicodeError):
+        raise AuthServiceError("invalid_response") from None
+    if not isinstance(body, dict):
+        raise AuthServiceError("invalid_response")
+    return body
+
+
+def _has_no_store(response: httpx.Response) -> bool:
+    return "no-store" in {
+        directive.partition("=")[0].strip().casefold()
+        for directive in response.headers.get("cache-control", "").split(",")
+    }
+
+
+def _raise_native_terminal_if_explicit(
+    response: httpx.Response, credential: NativeSessionCredential
+) -> None:
+    if response.status_code == 403:
+        body = _require_native_json(response)
+        code = body.get("code")
+        account_id = body.get("account_id")
+        session_id = body.get("session_id")
+        revoked_at = body.get("revoked_at")
+        if (
+            set(body) != _NATIVE_REVOCATION_KEYS
+            or body.get("state") != "revoked"
+            or not isinstance(code, str)
+            or code not in _EXPLICIT_REVOCATION_CODES
+            or body.get("retryable") is not False
+            or not _is_native_uuid_v4(account_id)
+            or not _is_native_uuid_v4(session_id)
+            or not _is_rfc3339(revoked_at)
+            or account_id != credential.account_id
+            or session_id != credential.session_id
+        ):
+            raise AuthServiceError("invalid_response")
+        raise ExplicitSessionRevocation(
+            code=code,
+            account_id=account_id,
+            session_id=session_id,
+            revoked_at=revoked_at,
+        )
+    if response.status_code == 401:
+        body = _require_native_json(response)
+        if (
+            set(body) != _NATIVE_UNAVAILABLE_KEYS
+            or body.get("state") != "unavailable"
+            or body.get("code") != "invalid_session_credential"
+            or body.get("retryable") is not True
+        ):
+            raise AuthServiceError("invalid_response")
+        raise AuthServiceError("server_unavailable")
+
+
+def _parse_native_credential(
+    response: httpx.Response, *, expected_installation_id: str
+) -> NativeSessionCredential:
+    if response.status_code != 201:
+        raise AuthServiceError("invalid_response")
+    body = _require_native_json(response)
+    if set(body) != _NATIVE_CREDENTIAL_KEYS:
+        raise AuthServiceError("invalid_response")
+    account_id = body.get("account_id")
+    session_id = body.get("session_id")
+    session_token = body.get("session_token")
+    installation_id = body.get("installation_id")
+    username = body.get("username")
+    issued_at = body.get("issued_at")
+    if (
+        not _is_native_uuid_v4(account_id)
+        or not _is_native_uuid_v4(session_id)
+        or installation_id != expected_installation_id
+        or not _is_native_uuid_v4(installation_id)
+        or not isinstance(session_token, str)
+        or _NATIVE_SESSION_TOKEN.fullmatch(session_token) is None
+        or not _valid_native_username(username)
+        or not _is_rfc3339(issued_at)
+    ):
+        raise AuthServiceError("invalid_response")
+    return NativeSessionCredential(
+        account_id=account_id,
+        session_id=session_id,
+        session_token=session_token,
+        installation_id=installation_id,
+        username=username,
+        issued_at=issued_at,
+    )
+
+
+def _parse_native_session_status(
+    response: httpx.Response, credential: NativeSessionCredential
+) -> NativeSessionStatus:
+    _raise_native_terminal_if_explicit(response, credential)
+    if response.status_code != 200:
+        raise AuthServiceError("invalid_response")
+    body = _require_native_json(response)
+    if (
+        set(body) != _NATIVE_STATUS_KEYS
+        or body.get("state") != "active"
+        or body.get("account_id") != credential.account_id
+        or body.get("session_id") != credential.session_id
+        or body.get("installation_id") != credential.installation_id
+        or body.get("username") != credential.username
+        or not _is_rfc3339(body.get("server_time"))
+    ):
+        raise AuthServiceError("invalid_response")
+    return NativeSessionStatus(
+        account_id=credential.account_id,
+        session_id=credential.session_id,
+        installation_id=credential.installation_id,
+        username=credential.username,
+        server_time=body["server_time"],
+    )
+
+
+def _parse_native_logout(
+    response: httpx.Response, credential: NativeSessionCredential
+) -> None:
+    _raise_native_terminal_if_explicit(response, credential)
+    if response.status_code != 204 or not _has_no_store(response) or response.content:
+        raise AuthServiceError("invalid_response")
+
+
+def _parse_native_trace_credential(
+    response: httpx.Response, credential: NativeSessionCredential
+) -> TraceCredential:
+    _raise_native_terminal_if_explicit(response, credential)
+    return _parse_trace_credential(
+        response,
+        expected_installation_id=credential.installation_id,
+    )
 
 
 def _parse_trace_credential(
