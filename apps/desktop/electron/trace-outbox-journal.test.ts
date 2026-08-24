@@ -37,6 +37,10 @@ class MemoryFileSystem implements TraceFileSystem {
     this.files.delete(from)
   }
 
+  async replaceFile(from: string, to: string): Promise<void> {
+    await this.rename(from, to)
+  }
+
   async stat(path: string): Promise<number | null> {
     return this.files.get(path)?.length ?? null
   }
@@ -102,4 +106,24 @@ test('rejects a checksum mismatch before replaying a complete journal line', asy
   const journal = await TraceJournal.open({ fs, path })
 
   await assert.rejects(journal.recover(), /invalid_journal_checksum/)
+})
+
+test('replays typed terminal quarantine and eviction operations without treating them as receipts', async () => {
+  const fs = new MemoryFileSystem()
+  const path = '/outbox/index.journal'
+  const journal = await TraceJournal.open({ fs, path })
+
+  await journal.append([
+    { op: 'terminal', batchId: 'batch-quarantine', errorClass: 'payload_too_large', terminal: 'quarantined' },
+    { op: 'terminal', batchId: 'batch-evicted', terminal: 'evicted' }
+  ])
+  await journal.sync()
+
+  assert.deepEqual(await journal.recover(), {
+    operations: [
+      { op: 'terminal', batchId: 'batch-quarantine', errorClass: 'payload_too_large', terminal: 'quarantined' },
+      { op: 'terminal', batchId: 'batch-evicted', terminal: 'evicted' }
+    ],
+    recoveredTornTail: false
+  })
 })

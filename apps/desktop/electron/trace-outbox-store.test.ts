@@ -69,6 +69,18 @@ class FakeTraceFileSystem implements TraceFileSystem {
     this.files.delete(from)
   }
 
+  async replaceFile(from: string, to: string): Promise<void> {
+    this.allEvents.push(`replace:${from}:${to}`)
+    const value = this.files.get(from)
+
+    if (value === undefined) {
+      throw new Error('missing_file')
+    }
+
+    this.files.set(to, value)
+    this.files.delete(from)
+  }
+
   async stat(path: string): Promise<number | null> {
     return this.files.get(path)?.length ?? null
   }
@@ -551,7 +563,6 @@ test.each<CrashPoint>(['segment-tail', 'journal-tail', 'after-segment-sync', 'du
         assert.equal(third.sequence, 2)
         assert.equal((await recovered.diagnostics()).pending, 3)
       }
-
     } finally {
       await rm(root, { force: true, recursive: true })
     }
@@ -632,4 +643,177 @@ test('does not truncate a corrupt oversize prefix or scan past it', async () => 
   } finally {
     await rm(root, { force: true, recursive: true })
   }
+})
+
+test('evicts oldest telemetry at hard limits, dedupes locally, and never touches SessionDB', async () => {
+  const root = await temporaryOutboxDirectory()
+  const sessionDb = join(root, '..', 'hermes-state.db')
+  await writeFile(sessionDb, 'conversation-truth', 'utf8')
+
+  try {
+    const store = await TraceOutboxStore.open(
+      options({
+        capacityBytes: 900,
+        freeSpace: () => ({ available: 5 * 1024 ** 3, total: 20 * 1024 ** 3 }),
+        root
+      })
+    )
+    const one = await store.enqueue(envelope('one'))
+    const two = await store.enqueue(envelope('two'))
+
+    assert.equal((await store.diagnostics()).evictedCapacity, 1)
+    const duplicate = await store.enqueue(envelope('two'))
+    assert.equal(duplicate.batchId, two.batchId)
+    assert.equal((await store.peekEligible(Number.MAX_SAFE_INTEGER))?.batchId, two.batchId)
+    await store.quarantine(duplicate.batchId, 'payload_too_large')
+    assert.equal((await store.diagnostics()).quarantined, 1)
+    assert.equal(await readFile(sessionDb, 'utf8'), 'conversation-truth')
+    assert.notEqual(one.batchId, duplicate.batchId)
+  } finally {
+    await rm(root, { force: true, recursive: true })
+    await rm(sessionDb, { force: true })
+  }
+})
+
+test('refreshes free space after deleting a fully terminal segment before admitting telemetry', async () => {
+  const fs = new FakeTraceFileSystem()
+  const originalUnlink = fs.unlink.bind(fs)
+  let available = 5 * 1024 ** 3
+  let freeSpaceCalls = 0
+
+  fs.unlink = async path => {
+    await originalUnlink(path)
+    available = 5 * 1024 ** 3
+  }
+
+  const store = await TraceOutboxStore.open(
+    options({
+      capacityBytes: 900,
+      freeSpace: () => {
+        freeSpaceCalls += 1
+        return { available, total: 20 * 1024 ** 3 }
+      },
+      fs
+    })
+  )
+  await store.enqueue(envelope('first'))
+  available = 1024 ** 3
+  await store.enqueue(envelope('second'))
+
+  assert.ok(freeSpaceCalls >= 3)
+  assert.equal((await store.peekEligible(Number.MAX_SAFE_INTEGER))?.runId, 'run-second')
+})
+
+test('durably quarantines an oversize diagnostic input while normal admission rejects it', async () => {
+  const oversized = { ...envelope('oversize'), body: Buffer.alloc(8 * 1024 * 1024 + 1, 0x61) }
+  const store = await TraceOutboxStore.open(options())
+
+  await assert.rejects(store.enqueue(oversized), /payload_too_large/)
+  const quarantined = await store.quarantineInput(oversized, 'payload_too_large')
+
+  assert.equal(await store.peekEligible(Number.MAX_SAFE_INTEGER), undefined)
+  assert.equal((await store.diagnostics()).quarantined, 1)
+  assert.ok((await store.diagnostics()).payloadBytes > 0)
+  assert.equal(quarantined.batchId.length, 36)
+})
+
+test('makes a receipt terminal only after its journal sync and bounds expired tombstones', async () => {
+  const gate = deferred<void>()
+  let blockReceiptSync = false
+  const fs = new FakeTraceFileSystem({
+    'journal.sync': async () => {
+      if (blockReceiptSync) {
+        await gate.promise
+      }
+    }
+  })
+  let now = 1_798_000_000_000
+  const store = await TraceOutboxStore.open(options({ fs, now: () => now, retentionMs: 10 }))
+  const batch = await store.enqueue(envelope('receipt-boundary'))
+  blockReceiptSync = true
+  const acknowledged = store.acknowledge(batch.batchId, receipt(batch.batchId, 'accepted'))
+
+  await fs.waitFor('journal.sync')
+  assert.equal((await store.peekEligible(Number.MAX_SAFE_INTEGER))?.batchId, batch.batchId)
+  gate.resolve()
+  await acknowledged
+  assert.equal(await store.peekEligible(Number.MAX_SAFE_INTEGER), undefined)
+  now += 11
+  assert.equal(await store.lookupReceipt(batch.batchId), undefined)
+  assert.equal((await store.diagnostics()).tombstones, 0)
+})
+
+test('quarantines encrypted records and reports diagnostics when the persisted key is lost', async () => {
+  const fs = new FakeTraceFileSystem()
+  const first = await TraceOutboxStore.open(options({ fs }))
+  await first.enqueue(envelope('key-loss'))
+  const lostProtector = createSafeStorageTraceKeyProtector({
+    decryptString: () => {
+      throw new Error('lost_key')
+    },
+    encryptString: plaintext => Buffer.from(plaintext, 'utf8'),
+    isEncryptionAvailable: () => true
+  })
+
+  const recovered = await TraceOutboxStore.open(options({ fs, keyProtector: lostProtector }))
+
+  assert.equal((await recovered.diagnostics()).keyLost, 1)
+  assert.equal((await recovered.diagnostics()).quarantined, 1)
+  assert.equal(await recovered.peekEligible(Number.MAX_SAFE_INTEGER), undefined)
+})
+
+test('replays durable quarantine and eviction terminal states after restart', async () => {
+  const root = await temporaryOutboxDirectory()
+  const evictionRoot = await temporaryOutboxDirectory()
+
+  try {
+    const store = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+    const quarantined = await store.enqueue(envelope('restart-quarantine'))
+    await store.quarantine(quarantined.batchId, 'payload_too_large')
+    const recoveredQuarantine = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+
+    assert.equal(await recoveredQuarantine.peekEligible(Number.MAX_SAFE_INTEGER), undefined)
+    assert.equal((await recoveredQuarantine.diagnostics()).quarantined, 1)
+
+    const evicting = await TraceOutboxStore.open({
+      capacityBytes: 900,
+      freeSpace: () => ({ available: 5 * 1024 ** 3, total: 20 * 1024 ** 3 }),
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root: evictionRoot
+    })
+    await evicting.enqueue(envelope('restart-evicted-one'))
+    const live = await evicting.enqueue(envelope('restart-evicted-two'))
+    const reopened = await TraceOutboxStore.open({
+      capacityBytes: 900,
+      freeSpace: () => ({ available: 5 * 1024 ** 3, total: 20 * 1024 ** 3 }),
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root: evictionRoot
+    })
+
+    assert.equal((await reopened.peekEligible(Number.MAX_SAFE_INTEGER))?.batchId, live.batchId)
+    assert.equal((await reopened.diagnostics()).evictedCapacity, 1)
+  } finally {
+    await rm(root, { force: true, recursive: true })
+    await rm(evictionRoot, { force: true, recursive: true })
+  }
+})
+
+test('compacts mixed segments only when conversation streaming is idle', async () => {
+  const fs = new FakeTraceFileSystem()
+  let streaming = true
+  const store = await TraceOutboxStore.open(options({ fs, isConversationStreaming: () => streaming }))
+  const first = await store.enqueue(envelope('compact-first'))
+  const second = await store.enqueue(envelope('compact-second'))
+  const path = '/outbox/segments/active.segment'
+  const before = fs.files.get(path)!.length
+
+  await store.acknowledge(first.batchId, receipt(first.batchId, 'accepted'))
+  assert.equal(await store.compactIfIdle(), false)
+  assert.equal(fs.files.get(path)!.length, before)
+  streaming = false
+  assert.equal(await store.compactIfIdle(), true)
+  assert.ok(fs.files.get(path)!.length < before)
+  assert.equal((await store.peekEligible(Number.MAX_SAFE_INTEGER))?.batchId, second.batchId)
 })

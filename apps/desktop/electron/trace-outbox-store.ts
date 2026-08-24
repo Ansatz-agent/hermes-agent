@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 import { decryptTraceRecord, encryptTraceRecord, type TraceKeyProtector } from './trace-outbox-crypto'
 import {
@@ -8,7 +8,8 @@ import {
   TraceJournal,
   type TraceJournalOperation,
   type TraceJournalPendingOperation,
-  type TraceJournalReceiptOperation
+  type TraceJournalReceiptOperation,
+  type TraceJournalTerminalOperation
 } from './trace-outbox-journal'
 import {
   decodeSegmentRecord,
@@ -27,6 +28,11 @@ import {
 const DEFAULT_GROUP_COMMIT_BYTES = 8 * 1024 * 1024
 const DEFAULT_GROUP_COMMIT_MS = 50
 const DEFAULT_CAPACITY_BYTES = 2 * 1024 * 1024 * 1024
+const DEFAULT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
+const MAX_NORMAL_PAYLOAD_BYTES = 8 * 1024 * 1024
+const ONE_GIB = 1024 * 1024 * 1024
+const MAX_RECEIPT_BYTES = 64 * 1024 * 1024
+const MAX_RECEIPT_ENTRIES = 100_000
 const RECORD_PREFIX_BYTES = 25
 const MAX_RECORD_BYTES = RECORD_PREFIX_BYTES + 64 * 1024 + 12 + 16 + 64 * 1024 * 1024 + 32
 const KEY_FILE_NAME = 'key.json'
@@ -61,17 +67,26 @@ interface StoredRecord {
   batch: Omit<DurableTraceBatch, 'body'>
   encodedBytes: number
   offset: number
-  state: 'pending' | 'quarantined' | 'receipt'
+  state: 'pending' | 'quarantined' | 'receipt' | 'terminal'
+}
+
+export interface TraceFreeSpace {
+  available: number
+  total: number
 }
 
 export interface TraceOutboxStoreOptions {
   capacityBytes?: number
+  freeSpace?: () => TraceFreeSpace | Promise<TraceFreeSpace>
   fs?: TraceFileSystem
   groupCommitBytes?: number
   groupCommitMs?: number
+  isConversationStreaming?: () => boolean
   keyProtector: TraceKeyProtector
+  maxBytes?: number
   monotonicNow?: () => number
   now?: () => number
+  retentionMs?: number
   root: string
 }
 
@@ -126,7 +141,8 @@ export class TraceOutboxStore {
     const fs = options.fs ?? nodeTraceFileSystem
     const groupCommitBytes = options.groupCommitBytes ?? DEFAULT_GROUP_COMMIT_BYTES
     const groupCommitMs = options.groupCommitMs ?? DEFAULT_GROUP_COMMIT_MS
-    const capacityBytes = options.capacityBytes ?? DEFAULT_CAPACITY_BYTES
+    const capacityBytes = options.maxBytes ?? options.capacityBytes ?? DEFAULT_CAPACITY_BYTES
+    const retentionMs = options.retentionMs ?? DEFAULT_RETENTION_MS
 
     if (!Number.isSafeInteger(groupCommitBytes) || groupCommitBytes <= 0) {
       throw new RangeError('invalid_group_commit_bytes')
@@ -140,26 +156,50 @@ export class TraceOutboxStore {
       throw new RangeError('invalid_trace_outbox_capacity')
     }
 
+    if (!Number.isSafeInteger(retentionMs) || retentionMs < 0) {
+      throw new RangeError('invalid_trace_outbox_retention')
+    }
+
     await fs.mkdir(options.root)
     const segmentDirectory = join(options.root, 'segments')
     await fs.mkdir(segmentDirectory)
     const keyPath = join(options.root, KEY_FILE_NAME)
-    const dataKey = await TraceOutboxStore.loadOrCreateKey(fs, keyPath, options.root, options.keyProtector)
+    let dataKey: Buffer
+    let keyLost = false
+
+    try {
+      dataKey = await TraceOutboxStore.loadOrCreateKey(fs, keyPath, options.root, options.keyProtector)
+    } catch (error) {
+      if ((await fs.readFile(keyPath)) === null) {
+        throw error
+      }
+
+      dataKey = randomBytes(32)
+      keyLost = true
+    }
     const journal = await TraceJournal.open({ fs, path: join(options.root, JOURNAL_FILE_NAME) })
 
     const store = new TraceOutboxStore({
       dataKey,
       capacityBytes,
+      freeSpace: options.freeSpace ?? (() => ({ available: Number.MAX_SAFE_INTEGER, total: Number.MAX_SAFE_INTEGER })),
       fs,
       groupCommitBytes,
       groupCommitMs,
+      isConversationStreaming: options.isConversationStreaming ?? (() => false),
       journal,
+      keyLost,
       monotonicNow: options.monotonicNow ?? performance.now.bind(performance),
       now: options.now ?? Date.now,
+      retentionMs,
       segmentPath: join(segmentDirectory, SEGMENT_FILE_NAME)
     })
 
     await store.recover()
+
+    if (keyLost) {
+      store.quarantineForKeyLoss()
+    }
 
     return store
   }
@@ -191,6 +231,7 @@ export class TraceOutboxStore {
   }
 
   private readonly pending: PendingCommit[] = []
+  private readonly dedupe = new Map<string, string>()
   private readonly receipts = new Map<string, DurableReceipt>()
   private readonly records = new Map<string, StoredRecord>()
   private flushPromise: Promise<void> | null = null
@@ -203,26 +244,65 @@ export class TraceOutboxStore {
   private segmentWritable = true
   private quarantinedSegments = 0
   private recoveredCorruptTail = 0
+  private accepted = 0
+  private deduplicated = 0
+  private evictedCapacity = 0
+  private expired = 0
 
   private constructor(
     private readonly config: {
       dataKey: Buffer
       capacityBytes: number
+      freeSpace: () => TraceFreeSpace | Promise<TraceFreeSpace>
       fs: TraceFileSystem
       groupCommitBytes: number
       groupCommitMs: number
+      isConversationStreaming: () => boolean
       journal: TraceJournal
+      keyLost: boolean
       monotonicNow: () => number
       now: () => number
+      retentionMs: number
       segmentPath: string
     }
   ) {}
 
   beginEnqueue(input: TraceEnvelopeInput): PendingLocalCommit {
+    return this.beginEnqueueInternal(input, false)
+  }
+
+  private beginEnqueueInternal(input: TraceEnvelopeInput, bypassNormalAdmission: boolean): PendingLocalCommit {
     validateTraceOwner(input.owner)
 
     if (!Buffer.isBuffer(input.body)) {
       throw new TypeError('invalid_trace_payload')
+    }
+
+    if (!bypassNormalAdmission && input.body.length > MAX_NORMAL_PAYLOAD_BYTES) {
+      throw new RangeError('payload_too_large')
+    }
+
+    const dedupeKey = this.dedupeKey(input)
+    const existingBatchId = this.dedupe.get(dedupeKey)
+
+    if (existingBatchId !== undefined) {
+      const existingPending = this.pending.find(item => item.batchId === existingBatchId)
+
+      this.deduplicated += 1
+
+      if (existingPending !== undefined) {
+        return {
+          batchId: existingBatchId,
+          cancelForGatewayReceipt: receipt => this.cancelForGatewayReceipt(existingPending, receipt),
+          durable: existingPending.durable
+        }
+      }
+
+      return {
+        batchId: existingBatchId,
+        cancelForGatewayReceipt: receipt => this.acknowledge(existingBatchId, receipt),
+        durable: this.readStoredBatch(existingBatchId)
+      }
     }
 
     const batchId = randomUUID()
@@ -248,6 +328,7 @@ export class TraceOutboxStore {
     }
 
     this.pending.push(item)
+    this.dedupe.set(dedupeKey, batchId)
     this.pendingInputBytes += input.body.length
 
     if (this.pendingDeadline === null) {
@@ -267,12 +348,26 @@ export class TraceOutboxStore {
     return this.beginEnqueue(input).durable
   }
 
+  async quarantineInput(input: TraceEnvelopeInput, errorClass: string): Promise<DurableTraceBatch> {
+    const pending = this.beginEnqueueInternal(input, true)
+    const batch = await pending.durable
+    await this.quarantine(batch.batchId, errorClass)
+
+    return batch
+  }
+
   async diagnostics(): Promise<TraceOutboxStoreDiagnostics> {
+    this.pruneReceipts(this.config.now())
     let payloadBytes = 0
     let pending = 0
+    let quarantined = this.quarantinedSegments
 
     for (const record of this.records.values()) {
-      if (record.state !== 'pending') {
+      if (record.state === 'quarantined') {
+        quarantined += 1
+      }
+
+      if (record.state !== 'pending' && record.state !== 'quarantined') {
         continue
       }
 
@@ -281,20 +376,24 @@ export class TraceOutboxStore {
     }
 
     return {
-      accepted: 0,
-      deduplicated: 0,
-      duplicate: 0,
-      evictedCapacity: 0,
-      expired: 0,
+      accepted: this.accepted,
+      deduplicated: this.deduplicated,
+      duplicate: this.deduplicated,
+      evictedCapacity: this.evictedCapacity,
+      expired: this.expired,
+      keyLost: Number(this.config.keyLost),
       payloadBytes,
       pending,
       pendingBytes: payloadBytes,
-      quarantined: this.quarantinedSegments,
-      recoveredCorruptTail: this.recoveredCorruptTail
+      quarantined,
+      recoveredCorruptTail: this.recoveredCorruptTail,
+      tombstoneBytes: this.receiptBytes(),
+      tombstones: this.receipts.size
     }
   }
 
   async lookupReceipt(batchId: string): Promise<DurableReceipt | undefined> {
+    this.pruneReceipts(this.config.now())
     const receipt = this.receipts.get(batchId)
 
     return receipt === undefined ? undefined : { ...receipt }
@@ -356,32 +455,100 @@ export class TraceOutboxStore {
     }
   }
 
+  async acknowledge(batchId: string, receipt: DurableReceipt): Promise<void> {
+    if (receipt.batchId !== batchId) {
+      throw new TypeError('receipt_batch_mismatch')
+    }
+
+    await this.persistReceipt(receipt)
+    await this.compactIfIdle()
+  }
+
+  async quarantine(batchId: string, errorClass: string): Promise<void> {
+    if (!/^[0-9A-Za-z][0-9A-Za-z._:-]{0,127}$/.test(errorClass)) {
+      throw new TypeError('invalid_trace_error_class')
+    }
+
+    const record = this.records.get(batchId)
+
+    if (record === undefined) {
+      throw new Error('unknown_trace_batch')
+    }
+
+    if (record.state === 'receipt' || record.state === 'terminal') {
+      return
+    }
+
+    await this.recordTerminal(record, { errorClass, terminal: 'quarantined' })
+  }
+
+  async compactIfIdle(): Promise<boolean> {
+    if (this.config.isConversationStreaming() || this.flushPromise !== null || this.pending.length !== 0) {
+      return false
+    }
+
+    return this.compactForCapacity()
+  }
+
+  private async compactForCapacity(): Promise<boolean> {
+    if (this.config.isConversationStreaming()) {
+      return false
+    }
+
+    const reclaimed = await this.reclaimFullyTerminalSegments()
+    const compacted = reclaimed || (await this.compactSegmentIfNeeded())
+    await this.compactJournal()
+
+    return compacted
+  }
+
   private async recover(): Promise<void> {
     const scanned = await this.scanActiveSegment()
     const recovered = await this.config.journal.recover()
     const pendingOperations = new Set<string>()
+    const terminalStates = new Map<string, TraceJournalTerminalOperation>()
 
     for (const operation of recovered.operations) {
       if (operation.op === 'receipt') {
         this.receipts.set(operation.batchId, { ...operation })
+        terminalStates.delete(operation.batchId)
       }
 
       if (operation.op === 'pending') {
         pendingOperations.add(operation.batchId)
         this.nextSequence = Math.max(this.nextSequence, operation.sequence + 1)
       }
+
+      if (operation.op === 'terminal') {
+        terminalStates.set(operation.batchId, operation)
+        this.receipts.delete(operation.batchId)
+      }
     }
+
+    this.evictedCapacity = [...terminalStates.values()].filter(operation => operation.terminal === 'evicted').length
 
     for (const record of scanned.records) {
       this.nextSequence = Math.max(this.nextSequence, record.header.sequence + 1)
       const receipt = this.receipts.get(record.header.batchId)
+      const terminal = terminalStates.get(record.header.batchId)
 
       this.records.set(record.header.batchId, {
-        batch: record.header,
+        batch: {
+          ...record.header,
+          lastErrorClass: terminal?.terminal === 'quarantined' ? terminal.errorClass : record.header.lastErrorClass
+        },
         encodedBytes: record.encodedBytes,
         offset: record.offset,
-        state: receipt === undefined ? 'pending' : 'receipt'
+        state:
+          terminal?.terminal === 'quarantined'
+            ? 'quarantined'
+            : terminal?.terminal === 'evicted'
+              ? 'terminal'
+              : receipt === undefined
+                ? 'pending'
+                : 'receipt'
       })
+      this.dedupe.set(this.dedupeKey(record.header), record.header.batchId)
     }
 
     this.segmentOffset = scanned.nextOffset
@@ -406,6 +573,8 @@ export class TraceOutboxStore {
     if (reconstructed.length > 0) {
       await this.appendAndSyncJournal(reconstructed)
     }
+
+    this.pruneReceipts(this.config.now())
   }
 
   private async scanActiveSegment(): Promise<{
@@ -624,6 +793,10 @@ export class TraceOutboxStore {
       }
 
       const records = await Promise.all(group.map(item => this.prepareRecord(item)))
+      await this.ensureCapacity(
+        records.reduce((total, record) => total + record.encoded.length, 0),
+        this.config.now()
+      )
       let offset = this.segmentOffset
       const pendingOperations: TraceJournalPendingOperation[] = []
 
@@ -670,6 +843,7 @@ export class TraceOutboxStore {
           this.receipts.set(receipt.batchId, { ...receipt })
         }
 
+        this.accepted += 1
         item.resolve(record.batch)
       }
     } catch (error) {
@@ -759,6 +933,7 @@ export class TraceOutboxStore {
 
       try {
         await this.persistReceipt(receipt)
+        await this.compactIfIdle()
         item.reject(new Error('local_commit_cancelled'))
       } catch (error) {
         item.reject(error)
@@ -778,16 +953,296 @@ export class TraceOutboxStore {
 
     if (item.state === 'committed' || item.state === 'flushing') {
       await this.persistReceipt(receipt)
+      await this.compactForCapacity()
     }
   }
 
   private async persistReceipt(receipt: DurableReceipt): Promise<void> {
+    const existing = this.receipts.get(receipt.batchId)
+
+    if (existing !== undefined) {
+      if (existing.outcome !== receipt.outcome || existing.receivedAt !== receipt.receivedAt) {
+        throw new Error('conflicting_gateway_receipt')
+      }
+
+      return
+    }
+
     await this.appendAndSyncJournal([{ op: 'receipt', ...receipt }])
     this.receipts.set(receipt.batchId, { ...receipt })
     const record = this.records.get(receipt.batchId)
 
     if (record !== undefined) {
       record.state = 'receipt'
+    }
+    this.pruneReceipts(this.config.now())
+  }
+
+  private dedupeKey(
+    input: Pick<TraceEnvelopeInput, 'entrypoint' | 'hermesSessionId' | 'owner' | 'runId'> & {
+      payloadSha256?: string
+      body?: Buffer
+    }
+  ): string {
+    const payloadSha256 = input.payloadSha256 ?? sha256(input.body ?? Buffer.alloc(0))
+
+    return sha256(
+      Buffer.from(
+        `${input.owner.accountKey}\u0000${input.entrypoint}\u0000${input.hermesSessionId}\u0000${input.runId}\u0000${payloadSha256}`,
+        'utf8'
+      )
+    )
+  }
+
+  private async readStoredBatch(batchId: string): Promise<DurableTraceBatch> {
+    const record = this.records.get(batchId)
+
+    if (record === undefined) {
+      throw new Error('unknown_trace_batch')
+    }
+
+    const encoded = await this.config.fs.readRange(this.config.segmentPath, record.offset, record.encodedBytes)
+
+    if (encoded === null) {
+      throw new Error('missing_trace_outbox_segment')
+    }
+
+    const decoded = decodeSegmentRecord(encoded, 0)
+
+    if (decoded === null || decoded.header.batchId !== batchId) {
+      throw new Error('invalid_trace_outbox_segment_index')
+    }
+
+    const body = await decryptTraceRecord(
+      decoded.encrypted,
+      this.config.dataKey,
+      Buffer.from(`${decoded.header.owner.accountKey}/${decoded.header.batchId}`, 'utf8')
+    )
+
+    return { ...decoded.header, body }
+  }
+
+  private async ensureCapacity(incomingBytes: number, now: number): Promise<void> {
+    if (!Number.isSafeInteger(incomingBytes) || incomingBytes < 0) {
+      throw new RangeError('invalid_trace_outbox_capacity')
+    }
+
+    await this.expireBefore(now - this.config.retentionMs)
+
+    while (true) {
+      const disk = await this.readFreeSpace()
+      const reserve = Math.max(ONE_GIB, Math.ceil(disk.total * 0.05))
+
+      if (
+        this.payloadBytes() + incomingBytes <= this.config.capacityBytes &&
+        disk.available - incomingBytes >= reserve
+      ) {
+        return
+      }
+
+      const oldest = this.oldestUnsentOrQuarantined()
+
+      if (oldest === undefined) {
+        throw new Error('storage_unavailable')
+      }
+
+      await this.recordTerminal(oldest, { terminal: 'evicted' })
+      this.evictedCapacity += 1
+      await this.compactForCapacity()
+    }
+  }
+
+  private async expireBefore(cutoff: number): Promise<void> {
+    if (!Number.isSafeInteger(cutoff)) {
+      throw new RangeError('invalid_trace_outbox_expiry')
+    }
+
+    for (const record of this.records.values()) {
+      if ((record.state === 'pending' || record.state === 'quarantined') && record.batch.createdAt < cutoff) {
+        await this.recordTerminal(record, { terminal: 'evicted' })
+        this.expired += 1
+      }
+    }
+
+    await this.compactIfIdle()
+  }
+
+  private oldestUnsentOrQuarantined(): StoredRecord | undefined {
+    return [...this.records.values()]
+      .filter(record => record.state === 'pending' || record.state === 'quarantined')
+      .sort(
+        (left, right) =>
+          left.batch.createdAt - right.batch.createdAt ||
+          left.batch.sequence - right.batch.sequence ||
+          left.batch.batchId.localeCompare(right.batch.batchId)
+      )[0]
+  }
+
+  private async reclaimFullyTerminalSegments(): Promise<boolean> {
+    if (
+      this.records.size === 0 ||
+      [...this.records.values()].some(record => record.state !== 'receipt' && record.state !== 'terminal')
+    ) {
+      return false
+    }
+
+    await this.config.fs.unlink(this.config.segmentPath)
+    await this.config.fs.syncDirectory(join(this.config.segmentPath, '..'))
+    this.records.clear()
+    this.segmentOffset = 0
+
+    return true
+  }
+
+  private async compactSegmentIfNeeded(): Promise<boolean> {
+    const live = [...this.records.values()]
+      .filter(record => record.state === 'pending' || record.state === 'quarantined')
+      .sort((left, right) => left.offset - right.offset)
+
+    if (live.length === this.records.size || live.length === 0) {
+      return false
+    }
+
+    const rewritten: Array<{ encoded: Buffer; record: StoredRecord }> = []
+
+    for (const record of live) {
+      const encoded = await this.config.fs.readRange(this.config.segmentPath, record.offset, record.encodedBytes)
+
+      if (encoded === null || encoded.length !== record.encodedBytes || decodeSegmentRecord(encoded, 0) === null) {
+        throw new Error('invalid_trace_outbox_segment_index')
+      }
+
+      rewritten.push({ encoded, record })
+    }
+
+    const temporaryPath = `${this.config.segmentPath}.compact-${randomUUID()}`
+    await this.config.fs.writeFile(temporaryPath, Buffer.concat(rewritten.map(item => item.encoded)), {
+      exclusive: true
+    })
+    await this.config.fs.syncFile(temporaryPath)
+    await this.config.fs.replaceFile(temporaryPath, this.config.segmentPath)
+    await this.config.fs.syncDirectory(dirname(this.config.segmentPath))
+
+    let offset = 0
+
+    for (const item of rewritten) {
+      item.record.offset = offset
+      offset += item.encoded.length
+    }
+
+    for (const [batchId, record] of this.records) {
+      if (record.state === 'receipt' || record.state === 'terminal') {
+        this.records.delete(batchId)
+      }
+    }
+
+    this.segmentOffset = offset
+
+    return true
+  }
+
+  private async compactJournal(): Promise<void> {
+    const rewrite = this.journalTail.then(async () => {
+      const recovered = await this.config.journal.recover()
+      const retained = recovered.operations.filter(operation => {
+        if (operation.op === 'receipt') {
+          return this.receipts.has(operation.batchId)
+        }
+
+        if (operation.op === 'terminal') {
+          const record = this.records.get(operation.batchId)
+
+          return operation.terminal === 'evicted' || record?.state === 'quarantined'
+        }
+
+        const record = this.records.get(operation.batchId)
+
+        return record?.state === 'pending' || record?.state === 'quarantined'
+      })
+
+      await this.config.journal.replace(retained)
+    })
+
+    this.journalTail = rewrite.catch(() => undefined)
+    await rewrite
+  }
+
+  private async recordTerminal(
+    record: StoredRecord,
+    terminal: Omit<TraceJournalTerminalOperation, 'batchId' | 'op'>
+  ): Promise<void> {
+    await this.appendAndSyncJournal([{ batchId: record.batch.batchId, op: 'terminal', ...terminal }])
+    record.state = terminal.terminal === 'quarantined' ? 'quarantined' : 'terminal'
+    record.batch.lastErrorClass =
+      terminal.terminal === 'quarantined' ? terminal.errorClass : record.batch.lastErrorClass
+
+    if (terminal.terminal === 'evicted') {
+      this.dedupe.delete(this.dedupeKey(record.batch))
+    }
+  }
+
+  private payloadBytes(): number {
+    return [...this.records.values()]
+      .filter(record => record.state === 'pending' || record.state === 'quarantined')
+      .reduce((total, record) => total + record.encodedBytes, 0)
+  }
+
+  private receiptBytes(): number {
+    return [...this.receipts.values()].reduce(
+      (total, receipt) => total + Buffer.byteLength(JSON.stringify(receipt), 'utf8'),
+      0
+    )
+  }
+
+  private pruneReceipts(now: number): void {
+    const ordered = [...this.receipts.values()].sort(
+      (left, right) => left.receivedAt - right.receivedAt || left.batchId.localeCompare(right.batchId)
+    )
+
+    for (const receipt of ordered) {
+      if (now - receipt.receivedAt > this.config.retentionMs) {
+        this.receipts.delete(receipt.batchId)
+      }
+    }
+
+    let bytes = this.receiptBytes()
+
+    for (const receipt of ordered) {
+      if (this.receipts.size <= MAX_RECEIPT_ENTRIES && bytes <= MAX_RECEIPT_BYTES) {
+        break
+      }
+
+      if (this.receipts.delete(receipt.batchId)) {
+        bytes -= Buffer.byteLength(JSON.stringify(receipt), 'utf8')
+      }
+    }
+  }
+
+  private async readFreeSpace(): Promise<TraceFreeSpace> {
+    const disk = await this.config.freeSpace()
+
+    if (
+      disk === null ||
+      typeof disk !== 'object' ||
+      !Number.isSafeInteger(disk.available) ||
+      !Number.isSafeInteger(disk.total) ||
+      disk.available < 0 ||
+      disk.total < 0
+    ) {
+      throw new Error('invalid_trace_outbox_free_space')
+    }
+
+    return disk
+  }
+
+  private quarantineForKeyLoss(): void {
+    this.segmentWritable = false
+
+    for (const record of this.records.values()) {
+      if (record.state === 'pending') {
+        record.state = 'quarantined'
+        record.batch.lastErrorClass = 'key_loss'
+      }
     }
   }
 

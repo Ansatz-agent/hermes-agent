@@ -49,10 +49,13 @@ export interface TraceOutboxDiagnostics {
   duplicate: number
   evictedCapacity: number
   expired: number
+  keyLost: number
   pending: number
   pendingBytes: number
   quarantined: number
   recoveredCorruptTail: number
+  tombstoneBytes: number
+  tombstones: number
 }
 
 export type OutboxSendResult = { kind: 'accepted' | 'duplicate' } | { kind: 'quarantined' } | { kind: 'retry' }

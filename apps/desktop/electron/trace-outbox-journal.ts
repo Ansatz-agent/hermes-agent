@@ -1,7 +1,8 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { constants, type Stats } from 'node:fs'
 import { lstat, mkdir, open, rename, unlink } from 'node:fs/promises'
 import { type FileHandle } from 'node:fs/promises'
+import { dirname } from 'node:path'
 
 export interface TraceFileSystem {
   appendFile(path: string, data: Buffer): Promise<void>
@@ -9,6 +10,7 @@ export interface TraceFileSystem {
   readFile(path: string): Promise<Buffer | null>
   readRange(path: string, offset: number, length: number): Promise<Buffer | null>
   rename(from: string, to: string): Promise<void>
+  replaceFile(from: string, to: string): Promise<void>
   stat(path: string): Promise<number | null>
   syncDirectory(path: string): Promise<void>
   syncFile(path: string): Promise<void>
@@ -170,6 +172,12 @@ export const nodeTraceFileSystem: TraceFileSystem = {
     await rename(from, to)
     await assertSafePath(to, 'file')
   },
+  async replaceFile(from: string, to: string): Promise<void> {
+    await assertSafePath(from, 'file')
+    await assertSafePath(to, 'file')
+    await rename(from, to)
+    await assertSafePath(to, 'file')
+  },
   async stat(path: string): Promise<number | null> {
     try {
       await assertSafePath(path, 'file')
@@ -229,7 +237,8 @@ export const nodeTraceFileSystem: TraceFileSystem = {
   }
 }
 
-export type TraceJournalOperation = TraceJournalPendingOperation | TraceJournalReceiptOperation
+export type TraceJournalOperation =
+  TraceJournalPendingOperation | TraceJournalReceiptOperation | TraceJournalTerminalOperation
 
 export interface TraceJournalPendingOperation {
   op: 'pending'
@@ -246,6 +255,13 @@ export interface TraceJournalReceiptOperation {
   batchId: string
   outcome: 'accepted' | 'duplicate'
   receivedAt: number
+}
+
+export interface TraceJournalTerminalOperation {
+  op: 'terminal'
+  batchId: string
+  errorClass?: string
+  terminal: 'evicted' | 'quarantined'
 }
 
 export interface TraceJournalRecovery {
@@ -335,8 +351,36 @@ function isReceiptOperation(value: unknown): value is TraceJournalReceiptOperati
   )
 }
 
+function isTerminalOperation(value: unknown): value is TraceJournalTerminalOperation {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+
+  const operation = value as Record<string, unknown>
+
+  if (
+    operation.op !== 'terminal' ||
+    typeof operation.batchId !== 'string' ||
+    operation.batchId.length === 0 ||
+    operation.batchId.length > 128 ||
+    (operation.terminal !== 'evicted' && operation.terminal !== 'quarantined')
+  ) {
+    return false
+  }
+
+  if (operation.terminal === 'evicted') {
+    return Object.keys(operation).length === 3
+  }
+
+  return (
+    Object.keys(operation).length === 4 &&
+    typeof operation.errorClass === 'string' &&
+    /^[0-9A-Za-z][0-9A-Za-z._:-]{0,127}$/.test(operation.errorClass)
+  )
+}
+
 function isOperation(value: unknown): value is TraceJournalOperation {
-  return isPendingOperation(value) || isReceiptOperation(value)
+  return isPendingOperation(value) || isReceiptOperation(value) || isTerminalOperation(value)
 }
 
 function parseLine(line: Buffer): TraceJournalOperation {
@@ -392,6 +436,22 @@ export class TraceJournal {
     )
 
     await this.options.fs.appendFile(this.options.path, encoded)
+  }
+
+  async replace(operations: readonly TraceJournalOperation[]): Promise<void> {
+    const temporary = `${this.options.path}.compact-${randomUUID()}`
+    const encoded = Buffer.from(
+      operations
+        .map(operation => canonicalJson({ checksum: operationChecksum(operation), operation }))
+        .map(line => `${line}\n`)
+        .join(''),
+      'utf8'
+    )
+
+    await this.options.fs.writeFile(temporary, encoded, { exclusive: true })
+    await this.options.fs.syncFile(temporary)
+    await this.options.fs.replaceFile(temporary, this.options.path)
+    await this.options.fs.syncDirectory(dirname(this.options.path))
   }
 
   async recover(): Promise<TraceJournalRecovery> {
