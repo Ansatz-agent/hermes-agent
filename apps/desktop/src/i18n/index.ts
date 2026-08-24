@@ -1,3 +1,5 @@
+import type { Translations } from './types'
+
 export { TRANSLATIONS } from './catalog'
 export {
   getConfigDisplayLanguage,
@@ -29,3 +31,7 @@ export {
 } from './plugin-i18n'
 export { setRuntimeI18nLocale, translateNow } from './runtime'
 export type { Locale, ToolTitleKey, Translations } from './types'
+
+export function validationHealthText(auth: Translations['auth']): string {
+  return auth.reasons.serverUnavailable
+}
