@@ -131,3 +131,44 @@ test('replays typed terminal quarantine and eviction operations without treating
     recoveredTornTail: false
   })
 })
+
+test('accepts legacy receipts but requires canonical identity fields on extended receipts', async () => {
+  const fs = new MemoryFileSystem()
+  const path = '/outbox/index.journal'
+  const journal = await TraceJournal.open({ fs, path })
+  const legacy = { op: 'receipt', batchId: 'legacy-batch', outcome: 'accepted', receivedAt: 2 } as const
+  const extended = {
+    op: 'receipt',
+    accountKey: 'account-11111111-1111-4111-8111-111111111111',
+    batchId: 'batch-extended',
+    dedupeKey: 'a'.repeat(64),
+    outcome: 'duplicate',
+    receivedAt: 3
+  } as const
+
+  await journal.append([legacy, extended])
+  assert.deepEqual((await journal.recover()).operations, [legacy, extended])
+
+  for (const malformed of [
+    { ...extended, accountKey: 'account-11111111-1111-1111-111111111111' },
+    { ...extended, dedupeKey: `${'a'.repeat(64)}suffix` },
+    { ...extended, extra: true }
+  ]) {
+    const checksum = createHash('sha256').update(canonicalJson(malformed)).digest('hex')
+    fs.files.set(path, Buffer.from(`${canonicalJson({ checksum, operation: malformed })}\n`, 'utf8'))
+    await assert.rejects(journal.recover(), /invalid_journal_line/)
+  }
+})
+
+test('replays a strict persistent owner binding operation', async () => {
+  const fs = new MemoryFileSystem()
+  const path = '/outbox/index.journal'
+  const journal = await TraceJournal.open({ fs, path })
+  const owner = { op: 'owner', accountKey: `legacy-${'b'.repeat(64)}` } as const
+
+  await journal.append([owner])
+  assert.deepEqual((await journal.recover()).operations, [owner])
+
+  await journal.replace([{ op: 'owner', accountKey: null }])
+  assert.deepEqual((await journal.recover()).operations, [{ op: 'owner', accountKey: null }])
+})

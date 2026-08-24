@@ -4,6 +4,8 @@ import { lstat, mkdir, open, rename, statfs, unlink } from 'node:fs/promises'
 import { type FileHandle } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
+import { isCanonicalTraceAccountKey } from './trace-outbox-types'
+
 export interface TraceFileSystem {
   appendFile(path: string, data: Buffer): Promise<void>
   freeSpace(path: string): Promise<{ available: number; total: number }>
@@ -261,7 +263,15 @@ export const nodeTraceFileSystem: TraceFileSystem = {
 }
 
 export type TraceJournalOperation =
-  TraceJournalPendingOperation | TraceJournalReceiptOperation | TraceJournalTerminalOperation
+  | TraceJournalOwnerOperation
+  | TraceJournalPendingOperation
+  | TraceJournalReceiptOperation
+  | TraceJournalTerminalOperation
+
+export interface TraceJournalOwnerOperation {
+  op: 'owner'
+  accountKey: string | null
+}
 
 export interface TraceJournalPendingOperation {
   op: 'pending'
@@ -276,6 +286,8 @@ export interface TraceJournalPendingOperation {
 export interface TraceJournalReceiptOperation {
   op: 'receipt'
   batchId: string
+  accountKey?: string
+  dedupeKey?: string
   outcome: 'accepted' | 'duplicate'
   receivedAt: number
 }
@@ -364,13 +376,43 @@ function isReceiptOperation(value: unknown): value is TraceJournalReceiptOperati
 
   const operation = value as Record<string, unknown>
 
-  return (
+  const legacy =
     operation.op === 'receipt' &&
     typeof operation.batchId === 'string' &&
     (operation.outcome === 'accepted' || operation.outcome === 'duplicate') &&
     typeof operation.receivedAt === 'number' &&
     Number.isSafeInteger(operation.receivedAt) &&
     operation.receivedAt >= 0
+
+  if (!legacy) {
+    return false
+  }
+
+  const keys = Object.keys(operation)
+
+  if (keys.length === 4) {
+    return true
+  }
+
+  return (
+    keys.length === 6 &&
+    isCanonicalTraceAccountKey(operation.accountKey) &&
+    typeof operation.dedupeKey === 'string' &&
+    /^[0-9a-f]{64}$/.test(operation.dedupeKey)
+  )
+}
+
+function isOwnerOperation(value: unknown): value is TraceJournalOwnerOperation {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return false
+  }
+
+  const operation = value as Record<string, unknown>
+
+  return (
+    operation.op === 'owner' &&
+    Object.keys(operation).length === 2 &&
+    (operation.accountKey === null || isCanonicalTraceAccountKey(operation.accountKey))
   )
 }
 
@@ -403,7 +445,7 @@ function isTerminalOperation(value: unknown): value is TraceJournalTerminalOpera
 }
 
 function isOperation(value: unknown): value is TraceJournalOperation {
-  return isPendingOperation(value) || isReceiptOperation(value) || isTerminalOperation(value)
+  return isOwnerOperation(value) || isPendingOperation(value) || isReceiptOperation(value) || isTerminalOperation(value)
 }
 
 function parseLine(line: Buffer): TraceJournalOperation {

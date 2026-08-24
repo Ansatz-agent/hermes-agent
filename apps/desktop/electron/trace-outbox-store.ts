@@ -7,6 +7,7 @@ import {
   type TraceFileSystem,
   TraceJournal,
   type TraceJournalOperation,
+  type TraceJournalOwnerOperation,
   type TraceJournalPendingOperation,
   type TraceJournalReceiptOperation,
   type TraceJournalTerminalOperation
@@ -68,6 +69,11 @@ interface StoredRecord {
   encodedBytes: number
   offset: number
   state: 'pending' | 'quarantined' | 'receipt' | 'terminal'
+}
+
+interface ReceiptTombstone extends DurableReceipt {
+  accountKey: string | null
+  dedupeKey: string | null
 }
 
 export interface TraceFreeSpace {
@@ -232,7 +238,7 @@ export class TraceOutboxStore {
 
   private readonly pending: PendingCommit[] = []
   private readonly dedupe = new Map<string, string>()
-  private readonly receipts = new Map<string, DurableReceipt>()
+  private readonly receipts = new Map<string, ReceiptTombstone>()
   private readonly records = new Map<string, StoredRecord>()
   private flushPromise: Promise<void> | null = null
   private flushTimer: ReturnType<typeof setTimeout> | null = null
@@ -250,6 +256,8 @@ export class TraceOutboxStore {
   private evictedCapacity = 0
   private expired = 0
   private accountKey: string | null = null
+  private ownerJournaled = false
+  private legacyOwnerUnknown = false
 
   private constructor(
     private readonly config: {
@@ -275,6 +283,10 @@ export class TraceOutboxStore {
 
   private beginEnqueueInternal(input: TraceEnvelopeInput, bypassNormalAdmission: boolean): PendingLocalCommit {
     validateTraceOwner(input.owner)
+
+    if (this.legacyOwnerUnknown) {
+      throw new Error('trace_outbox_account_unknown')
+    }
 
     if (this.accountKey === null) {
       this.accountKey = input.owner.accountKey
@@ -303,6 +315,16 @@ export class TraceOutboxStore {
           batchId: existingBatchId,
           cancelForGatewayReceipt: receipt => this.cancelForGatewayReceipt(existingPending, receipt),
           durable: existingPending.durable
+        }
+      }
+
+      const existingReceipt = this.receipts.get(existingBatchId)
+
+      if (existingReceipt !== undefined && existingReceipt.dedupeKey === dedupeKey) {
+        return {
+          batchId: existingBatchId,
+          cancelForGatewayReceipt: receipt => this.validateDuplicateReceipt(existingReceipt, receipt),
+          durable: Promise.resolve(this.receiptSafeBatch(input, existingReceipt))
         }
       }
 
@@ -404,7 +426,15 @@ export class TraceOutboxStore {
     this.pruneReceipts(this.config.now())
     const receipt = this.receipts.get(batchId)
 
-    return receipt === undefined ? undefined : { ...receipt }
+    if (receipt === undefined) {
+      return undefined
+    }
+
+    return {
+      batchId: receipt.batchId,
+      outcome: receipt.outcome,
+      receivedAt: receipt.receivedAt
+    }
   }
 
   async peekEligible(now: number): Promise<DurableTraceBatch | undefined> {
@@ -465,8 +495,19 @@ export class TraceOutboxStore {
 
   async acknowledge(batchId: string, receipt: DurableReceipt): Promise<void> {
     this.validateReceipt(batchId, receipt)
+    const record = this.records.get(batchId)
+    const existing = this.receipts.get(batchId)
 
-    await this.persistReceipt(receipt)
+    if (record === undefined && existing === undefined) {
+      throw new Error('unknown_trace_batch')
+    }
+
+    await this.persistReceipt(
+      receipt,
+      record === undefined
+        ? existing!
+        : { accountKey: record.batch.owner.accountKey, dedupeKey: this.dedupeKey(record.batch) }
+    )
     await this.compactIfIdle()
   }
 
@@ -515,8 +556,50 @@ export class TraceOutboxStore {
     const terminalStates = new Map<string, TraceJournalTerminalOperation>()
 
     for (const operation of recovered.operations) {
+      if (operation.op === 'owner') {
+        if (operation.accountKey === null) {
+          if (this.accountKey !== null) {
+            throw new Error('trace_outbox_account_mismatch')
+          }
+          this.legacyOwnerUnknown = true
+        } else {
+          if (this.legacyOwnerUnknown) {
+            throw new Error('trace_outbox_account_mismatch')
+          }
+          this.bindRecoveredAccount(operation.accountKey)
+        }
+        this.ownerJournaled = true
+      }
+
       if (operation.op === 'receipt') {
-        this.receipts.set(operation.batchId, { ...operation })
+        const tombstone: ReceiptTombstone = {
+          accountKey: operation.accountKey ?? null,
+          batchId: operation.batchId,
+          dedupeKey: operation.dedupeKey ?? null,
+          outcome: operation.outcome,
+          receivedAt: operation.receivedAt
+        }
+        const prior = this.receipts.get(operation.batchId)
+        if (
+          prior !== undefined &&
+          (prior.outcome !== tombstone.outcome ||
+            prior.receivedAt !== tombstone.receivedAt ||
+            (prior.accountKey !== null && tombstone.accountKey !== null && prior.accountKey !== tombstone.accountKey) ||
+            (prior.dedupeKey !== null && tombstone.dedupeKey !== null && prior.dedupeKey !== tombstone.dedupeKey))
+        ) {
+          throw new Error('conflicting_gateway_receipt')
+        }
+        if (prior !== undefined) {
+          tombstone.accountKey ??= prior.accountKey
+          tombstone.dedupeKey ??= prior.dedupeKey
+        }
+        if (tombstone.accountKey !== null) {
+          this.bindRecoveredAccount(tombstone.accountKey)
+        }
+        this.receipts.set(operation.batchId, tombstone)
+        if (tombstone.dedupeKey !== null) {
+          this.dedupe.set(tombstone.dedupeKey, tombstone.batchId)
+        }
         terminalStates.delete(operation.batchId)
       }
 
@@ -527,7 +610,15 @@ export class TraceOutboxStore {
 
       if (operation.op === 'terminal') {
         terminalStates.set(operation.batchId, operation)
+        const supersededReceipt = this.receipts.get(operation.batchId)
         this.receipts.delete(operation.batchId)
+        if (
+          supersededReceipt?.dedupeKey !== null &&
+          supersededReceipt?.dedupeKey !== undefined &&
+          this.dedupe.get(supersededReceipt.dedupeKey) === operation.batchId
+        ) {
+          this.dedupe.delete(supersededReceipt.dedupeKey)
+        }
       }
     }
 
@@ -542,6 +633,18 @@ export class TraceOutboxStore {
       this.nextSequence = Math.max(this.nextSequence, record.header.sequence + 1)
       const receipt = this.receipts.get(record.header.batchId)
       const terminal = terminalStates.get(record.header.batchId)
+      const dedupeKey = this.dedupeKey(record.header)
+
+      if (receipt !== undefined) {
+        if (receipt.accountKey !== null && receipt.accountKey !== record.header.owner.accountKey) {
+          throw new Error('trace_outbox_account_mismatch')
+        }
+        if (receipt.dedupeKey !== null && receipt.dedupeKey !== dedupeKey) {
+          throw new Error('invalid_trace_receipt_dedupe')
+        }
+        receipt.accountKey = record.header.owner.accountKey
+        receipt.dedupeKey = dedupeKey
+      }
 
       this.records.set(record.header.batchId, {
         batch: {
@@ -559,7 +662,7 @@ export class TraceOutboxStore {
                 ? 'pending'
                 : 'receipt'
       })
-      this.dedupe.set(this.dedupeKey(record.header), record.header.batchId)
+      this.dedupe.set(dedupeKey, record.header.batchId)
     }
 
     this.segmentOffset = scanned.nextOffset
@@ -582,8 +685,13 @@ export class TraceOutboxStore {
       .map(record => this.pendingOperationFrom(record))
 
     if (reconstructed.length > 0) {
-      await this.appendAndSyncJournal(reconstructed)
+      await this.appendAndSyncJournal(this.withOwnerOperation(reconstructed))
+      this.ownerJournaled = this.accountKey !== null
     }
+
+    this.legacyOwnerUnknown ||=
+      this.accountKey === null &&
+      [...this.receipts.values()].some(receipt => receipt.accountKey === null || receipt.dedupeKey === null)
 
     this.pruneReceipts(this.config.now())
   }
@@ -828,11 +936,25 @@ export class TraceOutboxStore {
       await this.config.fs.syncFile(this.config.segmentPath)
       this.segmentOffset = offset
 
-      const receiptOperations: TraceJournalReceiptOperation[] = group
-        .filter(item => item.cancellation !== null)
-        .map(item => ({ op: 'receipt', ...item.cancellation! }))
+      const receiptOperations: TraceJournalReceiptOperation[] = group.flatMap((item, index) => {
+        if (item.cancellation === null) {
+          return []
+        }
 
-      await this.appendAndSyncJournal([...pendingOperations, ...receiptOperations])
+        const batch = records[index].batch
+
+        return [
+          {
+            op: 'receipt',
+            ...item.cancellation,
+            accountKey: batch.owner.accountKey,
+            dedupeKey: this.dedupeKey(batch)
+          }
+        ]
+      })
+
+      await this.appendAndSyncJournal(this.withOwnerOperation([...pendingOperations, ...receiptOperations]))
+      this.ownerJournaled = this.accountKey !== null
 
       for (let index = 0; index < records.length; index += 1) {
         const record = records[index]
@@ -851,7 +973,13 @@ export class TraceOutboxStore {
         })
 
         if (receipt !== null) {
-          this.receipts.set(receipt.batchId, { ...receipt })
+          const dedupeKey = this.dedupeKey(record.batch)
+          this.receipts.set(receipt.batchId, {
+            ...receipt,
+            accountKey: record.batch.owner.accountKey,
+            dedupeKey
+          })
+          this.dedupe.set(dedupeKey, receipt.batchId)
         }
 
         this.accepted += 1
@@ -940,12 +1068,19 @@ export class TraceOutboxStore {
         this.pending.splice(index, 1)
       }
 
-      this.pendingInputBytes -= item.input?.body.length ?? 0
+      const input = item.input
+      this.pendingInputBytes -= input?.body.length ?? 0
       item.input = null
       item.state = 'cancelled'
 
       try {
-        await this.persistReceipt(receipt)
+        if (input === null) {
+          throw new Error('local_commit_cancelled')
+        }
+        await this.persistReceipt(receipt, {
+          accountKey: input.owner.accountKey,
+          dedupeKey: this.dedupeKey(input)
+        })
         await this.compactIfIdle()
         item.reject(new Error('local_commit_cancelled'))
       } catch (error) {
@@ -965,12 +1100,22 @@ export class TraceOutboxStore {
     }
 
     if (item.state === 'committed' || item.state === 'flushing') {
-      await this.persistReceipt(receipt)
+      const record = this.records.get(item.batchId)
+      if (record === undefined) {
+        throw new Error('unknown_trace_batch')
+      }
+      await this.persistReceipt(receipt, {
+        accountKey: record.batch.owner.accountKey,
+        dedupeKey: this.dedupeKey(record.batch)
+      })
       await this.compactIfIdle()
     }
   }
 
-  private async persistReceipt(receipt: DurableReceipt): Promise<void> {
+  private async persistReceipt(
+    receipt: DurableReceipt,
+    identity: { accountKey: string | null; dedupeKey: string | null }
+  ): Promise<void> {
     const existing = this.receipts.get(receipt.batchId)
 
     if (existing !== undefined) {
@@ -978,18 +1123,45 @@ export class TraceOutboxStore {
         throw new Error('conflicting_gateway_receipt')
       }
 
+      if (
+        (existing.accountKey !== null && identity.accountKey !== null && existing.accountKey !== identity.accountKey) ||
+        (existing.dedupeKey !== null && identity.dedupeKey !== null && existing.dedupeKey !== identity.dedupeKey)
+      ) {
+        throw new Error('conflicting_trace_receipt_identity')
+      }
+
+      if (
+        identity.accountKey !== null &&
+        identity.dedupeKey !== null &&
+        (existing.accountKey === null || existing.dedupeKey === null)
+      ) {
+        await this.appendExtendedReceipt(receipt, identity.accountKey, identity.dedupeKey)
+        existing.accountKey = identity.accountKey
+        existing.dedupeKey = identity.dedupeKey
+        this.dedupe.set(identity.dedupeKey, receipt.batchId)
+      }
+
       return
     }
 
-    await this.appendAndSyncJournal([{ op: 'receipt', ...receipt }])
-    this.receipts.set(receipt.batchId, { ...receipt })
+    if (identity.accountKey === null || identity.dedupeKey === null) {
+      throw new Error('invalid_trace_receipt_identity')
+    }
+
+    await this.appendExtendedReceipt(receipt, identity.accountKey, identity.dedupeKey)
+    this.receipts.set(receipt.batchId, { ...receipt, ...identity })
+    this.dedupe.set(identity.dedupeKey, receipt.batchId)
     const record = this.records.get(receipt.batchId)
 
     if (record !== undefined) {
       record.state = 'receipt'
-      this.dedupe.delete(this.dedupeKey(record.batch))
     }
     this.pruneReceipts(this.config.now())
+  }
+
+  private async appendExtendedReceipt(receipt: DurableReceipt, accountKey: string, dedupeKey: string): Promise<void> {
+    await this.appendAndSyncJournal(this.withOwnerOperation([{ op: 'receipt', ...receipt, accountKey, dedupeKey }]))
+    this.ownerJournaled = true
   }
 
   private validateReceipt(batchId: string, receipt: DurableReceipt): void {
@@ -1001,6 +1173,52 @@ export class TraceOutboxStore {
     ) {
       throw new TypeError('invalid_trace_receipt')
     }
+  }
+
+  private validateDuplicateReceipt(existing: ReceiptTombstone, receipt: DurableReceipt): Promise<void> {
+    try {
+      this.validateReceipt(existing.batchId, receipt)
+      return Promise.resolve()
+    } catch (error) {
+      return Promise.reject(error)
+    }
+  }
+
+  private receiptSafeBatch(input: TraceEnvelopeInput, receipt: ReceiptTombstone): DurableTraceBatch {
+    return {
+      ...input,
+      attempt: 0,
+      batchId: receipt.batchId,
+      body: Buffer.from(input.body),
+      createdAt: receipt.receivedAt,
+      lastErrorClass: null,
+      nextRetryAt: 0,
+      owner: { ...input.owner },
+      payloadSha256: sha256(input.body),
+      sequence: 0
+    }
+  }
+
+  private bindRecoveredAccount(accountKey: string): void {
+    if (this.legacyOwnerUnknown) {
+      throw new Error('trace_outbox_account_mismatch')
+    }
+
+    if (this.accountKey === null) {
+      this.accountKey = accountKey
+    } else if (this.accountKey !== accountKey) {
+      throw new Error('trace_outbox_account_mismatch')
+    }
+  }
+
+  private withOwnerOperation(operations: TraceJournalOperation[]): TraceJournalOperation[] {
+    if (this.ownerJournaled || (this.accountKey === null && !this.legacyOwnerUnknown)) {
+      return operations
+    }
+
+    const owner: TraceJournalOwnerOperation = { op: 'owner', accountKey: this.accountKey }
+
+    return [owner, ...operations]
   }
 
   private dedupeKey(
@@ -1170,8 +1388,8 @@ export class TraceOutboxStore {
     const rewrite = this.journalTail.then(async () => {
       const recovered = await this.config.journal.recover()
       const retained = recovered.operations.filter(operation => {
-        if (operation.op === 'receipt') {
-          return this.receipts.has(operation.batchId)
+        if (operation.op === 'owner' || operation.op === 'receipt') {
+          return false
         }
 
         if (operation.op === 'terminal') {
@@ -1185,7 +1403,33 @@ export class TraceOutboxStore {
         return record?.state === 'pending' || record?.state === 'quarantined'
       })
 
+      if (this.accountKey !== null || this.legacyOwnerUnknown) {
+        retained.unshift({ op: 'owner', accountKey: this.accountKey })
+      }
+
+      const receipts = [...this.receipts.values()]
+        .sort((left, right) => left.receivedAt - right.receivedAt || left.batchId.localeCompare(right.batchId))
+        .map<TraceJournalReceiptOperation>(receipt =>
+          receipt.accountKey === null || receipt.dedupeKey === null
+            ? {
+                op: 'receipt',
+                batchId: receipt.batchId,
+                outcome: receipt.outcome,
+                receivedAt: receipt.receivedAt
+              }
+            : {
+                op: 'receipt',
+                accountKey: receipt.accountKey,
+                batchId: receipt.batchId,
+                dedupeKey: receipt.dedupeKey,
+                outcome: receipt.outcome,
+                receivedAt: receipt.receivedAt
+              }
+        )
+      retained.push(...receipts)
+
       await this.config.journal.replace(retained)
+      this.ownerJournaled = this.accountKey !== null || this.legacyOwnerUnknown
     })
 
     this.journalTail = rewrite.catch(() => undefined)
@@ -1226,7 +1470,7 @@ export class TraceOutboxStore {
 
     for (const receipt of ordered) {
       if (now - receipt.receivedAt > this.config.retentionMs) {
-        this.receipts.delete(receipt.batchId)
+        this.deleteReceipt(receipt)
       }
     }
 
@@ -1237,10 +1481,25 @@ export class TraceOutboxStore {
         break
       }
 
-      if (this.receipts.delete(receipt.batchId)) {
+      if (this.deleteReceipt(receipt)) {
         bytes -= Buffer.byteLength(JSON.stringify(receipt), 'utf8')
       }
     }
+  }
+
+  private deleteReceipt(receipt: ReceiptTombstone): boolean {
+    if (!this.receipts.delete(receipt.batchId)) {
+      return false
+    }
+
+    if (receipt.dedupeKey !== null && this.dedupe.get(receipt.dedupeKey) === receipt.batchId) {
+      const record = this.records.get(receipt.batchId)
+      if (record === undefined || record.state === 'receipt' || record.state === 'terminal') {
+        this.dedupe.delete(receipt.dedupeKey)
+      }
+    }
+
+    return true
   }
 
   private async readFreeSpace(): Promise<TraceFreeSpace> {

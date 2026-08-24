@@ -1,8 +1,17 @@
 const CANONICAL_UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
-const ACCOUNT_KEY = /^(?:account-[0-9a-f-]{36}|legacy-[0-9a-f]{64})$/
+const LEGACY_ACCOUNT_KEY = /^legacy-[0-9a-f]{64}$/
+const ACCOUNT_KEY_SHAPE = /^(?:account-[0-9a-f-]{36}|legacy-[0-9a-f]{64})$/
 
 export function isCanonicalUuidV4(value: unknown): value is string {
   return typeof value === 'string' && CANONICAL_UUID_V4.test(value)
+}
+
+export function isCanonicalTraceAccountKey(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    (LEGACY_ACCOUNT_KEY.test(value) ||
+      (value.startsWith('account-') && isCanonicalUuidV4(value.slice('account-'.length))))
+  )
 }
 
 export interface TraceOwner {
@@ -61,7 +70,7 @@ export interface TraceOutboxDiagnostics {
 export type OutboxSendResult = { kind: 'accepted' | 'duplicate' } | { kind: 'quarantined' } | { kind: 'retry' }
 
 export function validateTraceOwner(owner: TraceOwner): TraceOwnerState {
-  if (!ACCOUNT_KEY.test(owner.accountKey) || !isCanonicalUuidV4(owner.installationId)) {
+  if (!ACCOUNT_KEY_SHAPE.test(owner.accountKey) || !isCanonicalUuidV4(owner.installationId)) {
     throw new TypeError('invalid_account_key')
   }
 

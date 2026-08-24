@@ -859,18 +859,137 @@ test('uses the filesystem free-space seam by default and enforces its reserve', 
   assert.ok(calls > 0)
 })
 
-test('creates a new durable batch for an acknowledged reclaimed duplicate across restart', async () => {
+test('reuses a reclaimed receipt batch without rewriting payload bytes across restart', async () => {
   const root = await temporaryOutboxDirectory()
   try {
     const first = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
     const batch = await first.enqueue(envelope('receipt-safe'))
     await first.acknowledge(batch.batchId, receipt(batch.batchId, 'accepted'))
     const reopened = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
-    const next = await reopened.enqueue(envelope('receipt-safe'))
+    const duplicate = reopened.beginEnqueue(envelope('receipt-safe'))
+    await duplicate.cancelForGatewayReceipt(receipt(batch.batchId, 'duplicate'))
+    const next = await duplicate.durable
 
-    assert.notEqual(next.batchId, batch.batchId)
-    assert.equal((await reopened.peekEligible(Number.MAX_SAFE_INTEGER))?.batchId, next.batchId)
+    assert.equal(next.batchId, batch.batchId)
+    assert.equal(next.body.toString(), 'trace:receipt-safe')
+    assert.equal(await reopened.peekEligible(Number.MAX_SAFE_INTEGER), undefined)
+    assert.equal((await reopened.diagnostics()).payloadBytes, 0)
     assert.equal((await reopened.lookupReceipt(batch.batchId))?.outcome, 'accepted')
+  } finally {
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('persists root ownership after every payload and receipt tombstone is reclaimed or expired', async () => {
+  const root = await temporaryOutboxDirectory()
+  let now = 1_798_000_000_000
+  try {
+    const first = await TraceOutboxStore.open({
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      now: () => now,
+      retentionMs: 10,
+      root
+    })
+    const batch = await first.enqueue(envelope('owner-only'))
+    await first.acknowledge(batch.batchId, receipt(batch.batchId, 'accepted'))
+    now += 11
+    assert.equal(await first.lookupReceipt(batch.batchId), undefined)
+    await first.compactIfIdle()
+
+    const reopened = await TraceOutboxStore.open({
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      now: () => now,
+      retentionMs: 10,
+      root
+    })
+    const other = envelope('other-owner-after-reclaim')
+    other.owner = {
+      ...other.owner,
+      accountId: '44444444-4444-4444-8444-444444444444',
+      accountKey: 'account-44444444-4444-4444-8444-444444444444'
+    }
+
+    await assert.rejects(reopened.enqueue(other), /trace_outbox_account_mismatch/)
+  } finally {
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('deduplicates a Gateway-first receipt after restart without creating a segment', async () => {
+  const root = await temporaryOutboxDirectory()
+  try {
+    const first = await TraceOutboxStore.open({ groupCommitMs: 50, keyProtector: protector(), root })
+    const pending = first.beginEnqueue(envelope('gateway-first-restart'))
+    await pending.cancelForGatewayReceipt(receipt(pending.batchId, 'accepted'))
+    await assert.rejects(pending.durable, /local_commit_cancelled/)
+
+    const reopened = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+    const duplicate = await reopened.enqueue(envelope('gateway-first-restart'))
+
+    assert.equal(duplicate.batchId, pending.batchId)
+    assert.equal((await reopened.diagnostics()).payloadBytes, 0)
+    assert.equal(await reopened.peekEligible(Number.MAX_SAFE_INTEGER), undefined)
+  } finally {
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('upgrades a legacy receipt by recovering its identity from the retained encrypted record', async () => {
+  const root = await temporaryOutboxDirectory()
+  try {
+    const first = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+    const batch = await first.enqueue(envelope('legacy-receipt'))
+    const journal = await TraceJournal.open({ fs: nodeTraceFileSystem, path: join(root, 'index.journal') })
+    const recovered = await journal.recover()
+    await journal.replace([
+      ...recovered.operations.filter(operation => operation.op === 'pending'),
+      { op: 'receipt', batchId: batch.batchId, outcome: 'accepted', receivedAt: 1_798_000_000_001 }
+    ])
+
+    const upgraded = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+    assert.equal((await upgraded.lookupReceipt(batch.batchId))?.outcome, 'accepted')
+    await upgraded.compactIfIdle()
+    const reopened = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+    const duplicate = await reopened.enqueue(envelope('legacy-receipt'))
+
+    assert.equal(duplicate.batchId, batch.batchId)
+    assert.equal((await reopened.diagnostics()).payloadBytes, 0)
+  } finally {
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('reads an ownerless legacy receipt but fails closed for new account admission', async () => {
+  const root = await temporaryOutboxDirectory()
+  let now = 1_798_000_000_000
+  try {
+    await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), now: () => now, retentionMs: 10, root })
+    const journal = await TraceJournal.open({ fs: nodeTraceFileSystem, path: join(root, 'index.journal') })
+    await journal.append([{ op: 'receipt', batchId: 'legacy-ownerless', outcome: 'accepted', receivedAt: now }])
+    await journal.sync()
+
+    const reopened = await TraceOutboxStore.open({
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      now: () => now,
+      retentionMs: 10,
+      root
+    })
+    assert.equal((await reopened.lookupReceipt('legacy-ownerless'))?.outcome, 'accepted')
+    await assert.rejects(reopened.enqueue(envelope('unsafe-owner-guess')), /trace_outbox_account_unknown/)
+    now += 11
+    assert.equal(await reopened.lookupReceipt('legacy-ownerless'), undefined)
+    await reopened.compactIfIdle()
+    const afterGc = await TraceOutboxStore.open({
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      now: () => now,
+      retentionMs: 10,
+      root
+    })
+    await assert.rejects(afterGc.enqueue(envelope('unsafe-after-gc')), /trace_outbox_account_unknown/)
   } finally {
     await rm(root, { force: true, recursive: true })
   }
