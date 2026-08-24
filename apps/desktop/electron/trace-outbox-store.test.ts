@@ -845,3 +845,84 @@ test('rejects malformed acknowledgements without writing a receipt and binds a r
     /trace_outbox_account_mismatch/
   )
 })
+
+test('uses the filesystem free-space seam by default and enforces its reserve', async () => {
+  const fs = new FakeTraceFileSystem()
+  let calls = 0
+  fs.freeSpace = async () => {
+    calls += 1
+    return { available: 1024 ** 3, total: 20 * 1024 ** 3 }
+  }
+  const store = await TraceOutboxStore.open(options({ fs }))
+
+  await assert.rejects(store.enqueue(envelope('reserve')), /storage_unavailable/)
+  assert.ok(calls > 0)
+})
+
+test('creates a new durable batch for an acknowledged reclaimed duplicate across restart', async () => {
+  const root = await temporaryOutboxDirectory()
+  try {
+    const first = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+    const batch = await first.enqueue(envelope('receipt-safe'))
+    await first.acknowledge(batch.batchId, receipt(batch.batchId, 'accepted'))
+    const reopened = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+    const next = await reopened.enqueue(envelope('receipt-safe'))
+
+    assert.notEqual(next.batchId, batch.batchId)
+    assert.equal((await reopened.peekEligible(Number.MAX_SAFE_INTEGER))?.batchId, next.batchId)
+    assert.equal((await reopened.lookupReceipt(batch.batchId))?.outcome, 'accepted')
+  } finally {
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('keeps repeated eviction journal state bounded across reopen', async () => {
+  const root = await temporaryOutboxDirectory()
+  try {
+    const optionsForRoot = {
+      capacityBytes: 900,
+      freeSpace: () => ({ available: 5 * 1024 ** 3, total: 20 * 1024 ** 3 }),
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    }
+    let store = await TraceOutboxStore.open(optionsForRoot)
+    for (let index = 0; index < 5; index += 1) {
+      await store.enqueue(envelope(`evict-bound-${index}`))
+      store = await TraceOutboxStore.open(optionsForRoot)
+    }
+    const journal = await readFile(join(root, 'index.journal'), 'utf8')
+    assert.ok(journal.length < 4_096)
+    assert.notEqual(await store.peekEligible(Number.MAX_SAFE_INTEGER), undefined)
+  } finally {
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('serializes a gated compaction before a concurrent enqueue and preserves both records after reopen', async () => {
+  const fs = new FakeTraceFileSystem()
+  let streaming = true
+  const gate = deferred<void>()
+  const entered = deferred<void>()
+  const originalReplace = fs.replaceFile.bind(fs)
+  fs.replaceFile = async (from, to) => {
+    entered.resolve()
+    await gate.promise
+    await originalReplace(from, to)
+  }
+  const store = await TraceOutboxStore.open(options({ fs, isConversationStreaming: () => streaming }))
+  const first = await store.enqueue(envelope('lock-first'))
+  const second = await store.enqueue(envelope('lock-second'))
+  await store.acknowledge(first.batchId, receipt(first.batchId, 'accepted'))
+  streaming = false
+  const compacting = store.compactIfIdle()
+  await entered.promise
+  const third = store.enqueue(envelope('lock-third'))
+  gate.resolve()
+  await compacting
+  await third
+  const recovered = await TraceOutboxStore.open(options({ fs }))
+  assert.equal((await recovered.peekEligible(Number.MAX_SAFE_INTEGER))?.batchId, second.batchId)
+  await recovered.acknowledge(second.batchId, receipt(second.batchId, 'accepted'))
+  assert.equal((await recovered.peekEligible(Number.MAX_SAFE_INTEGER))?.runId, 'run-lock-third')
+})
