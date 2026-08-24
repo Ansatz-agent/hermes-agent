@@ -454,6 +454,48 @@ describe('AuthGate', () => {
     }
   )
 
+  it.each(['account_disabled', 'account_revoked'] as const)(
+    'unmounts the protected tree when matching %s carries an older Session id',
+    async reason => {
+      const { emit } = renderGate({ status: vi.fn(async () => authenticated) })
+      expect(await screen.findByText('Protected Hermes application')).not.toBeNull()
+
+      act(() => emit({ ...authenticated, state: 'locked', reason, session_id: 'old-session', epoch: 3 }))
+
+      expect(screen.queryByText('Protected Hermes application')).toBeNull()
+      expect(await screen.findByRole('heading', { name: 'Sign in to Ansatz' })).not.toBeNull()
+    }
+  )
+
+  it('keeps the protected tree for a stale session_revoked event from the same account', async () => {
+    const { emit } = renderGate({ status: vi.fn(async () => authenticated) })
+    expect(await screen.findByText('Protected Hermes application')).not.toBeNull()
+
+    act(() =>
+      emit({ ...authenticated, state: 'locked', reason: 'session_revoked', session_id: 'old-session', epoch: 3 })
+    )
+
+    expect(screen.getByText('Protected Hermes application')).not.toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Sign in to Ansatz' })).toBeNull()
+  })
+
+  it.each([
+    { state: 'locked' as const, reason: 'session_expired' },
+    { state: 'locked' as const, reason: 'runtime_unavailable' },
+    { state: 'signed_out' as const, reason: 'signed_out' }
+  ])(
+    'does not retain local authorization after the renderer switches to a remote $state/$reason status',
+    async remote => {
+      const { emit } = renderGate({ status: vi.fn(async () => authenticated) })
+      expect(await screen.findByText('Protected Hermes application')).not.toBeNull()
+
+      act(() => emit({ ...signedOut, ...remote, epoch: 3 }, 'remote-a'))
+
+      expect(screen.queryByText('Protected Hermes application')).toBeNull()
+      expect(await screen.findByRole('heading', { name: 'Sign in to Ansatz' })).not.toBeNull()
+    }
+  )
+
   it('unmounts the protected tree when main emits signed out', async () => {
     const { emit } = renderGate({ status: vi.fn(async () => authenticated) })
     expect(await screen.findByText('Protected Hermes application')).not.toBeNull()

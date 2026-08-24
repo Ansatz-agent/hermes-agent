@@ -106,13 +106,33 @@ function sameCurrentSession(left: DesktopAccountStatus, right: DesktopAccountSta
   return sameAccount(left, right) && Boolean(left.session_id) && left.session_id === right.session_id
 }
 
+function isMatchingExplicitTerminal(
+  current: DesktopAccountStatus,
+  next: DesktopAccountStatus,
+  reason: string
+): boolean {
+  if (!hasCachedLocalAuthorization(current)) {
+    return false
+  }
+
+  return reason === 'session_revoked' ? sameCurrentSession(current, next) : sameAccount(current, next)
+}
+
 function degradedFrom(current: DesktopAccountStatus, reason: string): DesktopAccountStatus {
   return hasCachedLocalAuthorization(current)
     ? { ...current, validation_state: 'degraded', validation_reason: reason, reason: null }
     : unavailableStatus()
 }
 
-function reconcileStatus(current: DesktopAccountStatus, next: DesktopAccountStatus): DesktopAccountStatus {
+function reconcileStatus(
+  current: DesktopAccountStatus,
+  next: DesktopAccountStatus,
+  sourceConnectionId: string
+): DesktopAccountStatus {
+  if (sourceConnectionId !== 'local') {
+    return next
+  }
+
   if (hasCachedLocalAuthorization(next)) {
     return hasCachedLocalAuthorization(current) &&
       sameAccount(current, next) &&
@@ -129,7 +149,7 @@ function reconcileStatus(current: DesktopAccountStatus, next: DesktopAccountStat
   const reason = next.reason ?? next.validation_reason ?? 'runtime_unavailable'
 
   const matchingExplicitTerminal =
-    EXPLICIT_TERMINAL_REASONS.has(reason) && hasCachedLocalAuthorization(current) && sameCurrentSession(current, next)
+    EXPLICIT_TERMINAL_REASONS.has(reason) && isMatchingExplicitTerminal(current, next, reason)
 
   if (matchingExplicitTerminal) {
     return next
@@ -319,7 +339,7 @@ export function AuthGate({
       return withAuthDeadline(auth.status(connectionId === 'local' ? undefined : connectionId))
         .then(next => {
           if (request === requestRevision.current && observedEvent === eventRevision.current) {
-            setStatus(current => reconcileStatus(current, next))
+            setStatus(current => reconcileStatus(current, next, connectionId))
           }
 
           return next
@@ -329,7 +349,7 @@ export function AuthGate({
             // Bootstrap owns readiness while it is active. Its idle/total
             // deadlines, not this short auth deadline, decide terminal failure.
             if (!bootstrapStateRef.current?.active) {
-              setStatus(current => reconcileStatus(current, unavailableStatus()))
+              setStatus(current => reconcileStatus(current, unavailableStatus(), connectionId))
             }
           }
 
@@ -374,7 +394,7 @@ export function AuthGate({
         eventRevision.current += 1
         requestRevision.current += 1
         setConnectionId(nextConnectionId)
-        setStatus(current => reconcileStatus(current, next))
+        setStatus(current => reconcileStatus(current, next, nextConnectionId))
       }
     })
 
@@ -436,7 +456,7 @@ export function AuthGate({
 
     return auth.logout(connectionId === 'local' ? undefined : connectionId).then(next => {
       requestRevision.current += 1
-      setStatus(current => reconcileStatus(current, next))
+      setStatus(current => reconcileStatus(current, next, connectionId))
 
       return next
     })
@@ -503,12 +523,12 @@ export function AuthGate({
     void withAuthDeadline(loginRequest, AUTH_LOGIN_TIMEOUT_MS)
       .then(next => {
         if (request === requestRevision.current && observedEvent === eventRevision.current) {
-          setStatus(current => reconcileStatus(current, next))
+          setStatus(current => reconcileStatus(current, next, connectionId))
         }
       })
       .catch(() => {
         if (request === requestRevision.current && observedEvent === eventRevision.current) {
-          setStatus(current => reconcileStatus(current, unavailableStatus()))
+          setStatus(current => reconcileStatus(current, unavailableStatus(), connectionId))
         }
       })
       .finally(() => {

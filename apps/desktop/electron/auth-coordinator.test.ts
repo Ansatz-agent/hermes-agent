@@ -433,6 +433,36 @@ test.each(['account_disabled', 'account_revoked', 'session_revoked'] as const)(
   }
 )
 
+test.each(['account_disabled', 'account_revoked'] as const)(
+  'matching current %s removes local scope even when its status carries an older Session id',
+  async reason => {
+    const { cleanup, coordinator, setStatus } = fixture(authenticated)
+    await coordinator.start()
+    setStatus({ ...terminalStatus(reason), session_id: 'old-session' })
+
+    await coordinator.refresh()
+
+    assert.equal(coordinator.scope('local'), null)
+    assert.equal(cleanup.mock.calls.length, 1)
+    await assert.rejects(coordinator.require('local', 'local'), /AUTH_REQUIRED/)
+  }
+)
+
+test('a stale session_revoked event from the same account does not clean the newer local Session', async () => {
+  const { cleanup, coordinator, setStatus } = fixture(authenticated)
+  await coordinator.start()
+  setStatus({ ...authenticated, session_id: 'new-session' })
+  await coordinator.refresh()
+  setStatus({ ...terminalStatus('session_revoked'), session_id: 'old-session' })
+
+  const result = await coordinator.refresh()
+
+  assert.equal(result.state, 'authenticated')
+  assert.equal(result.session_id, 'new-session')
+  assert.equal(coordinator.scope('local')?.runtime_instance_id, 'runtime-1')
+  assert.equal(cleanup.mock.calls.length, 0)
+})
+
 test('a mismatched terminal identity degrades without replacing or cleaning the current account', async () => {
   const { cleanup, coordinator, setStatus } = fixture(authenticated)
   await coordinator.start()
