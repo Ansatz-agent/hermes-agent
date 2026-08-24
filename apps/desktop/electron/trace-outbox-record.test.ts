@@ -108,3 +108,49 @@ test('rejects invalid nonce, tag, header, and ciphertext lengths', async () => {
   assert.throws(() => decodeSegmentRecord(invalidNonceLength, 0), /invalid_nonce_length/)
   assert.throws(() => decodeSegmentRecord(invalidTagLength, 0), /invalid_tag_length/)
 })
+
+test('rejects checksummed headers with missing or malformed owner, batch, and sequence fields', async () => {
+  const input = await validRecord()
+
+  const invalidHeaders: unknown[] = [
+    {},
+    { ...input.header, owner: null },
+    { ...input.header, owner: { ...input.header.owner, accountKey: '../escape' } },
+    { ...input.header, owner: { ...input.header.owner, unexpected: 'secret' } },
+    { ...input.header, body: 'plaintext-must-not-enter-the-header' },
+    { ...input.header, batchId: undefined },
+    { ...input.header, batchId: 'not-a-uuid' },
+    { ...input.header, sequence: undefined },
+    { ...input.header, sequence: -1 },
+    { ...input.header, sequence: 1.5 }
+  ]
+
+  for (const header of invalidHeaders) {
+    const encoded = encodeSegmentRecord({ ...input, header: header as TraceSegmentHeader })
+
+    assert.throws(() => decodeSegmentRecord(encoded, 0), /invalid_record_header/)
+  }
+})
+
+test('rejects checksummed headers with invalid durable metadata formats and bounds', async () => {
+  const input = await validRecord()
+
+  const invalidHeaders: TraceSegmentHeader[] = [
+    { ...input.header, attempt: -1 },
+    { ...input.header, createdAt: -1 },
+    { ...input.header, nextRetryAt: -1 },
+    { ...input.header, payloadSha256: 'A'.repeat(64) },
+    { ...input.header, contentType: 'text/plain' as TraceSegmentHeader['contentType'] },
+    { ...input.header, entrypoint: 'unknown' as TraceSegmentHeader['entrypoint'] },
+    { ...input.header, hermesSessionId: '../escape' },
+    { ...input.header, runId: 'x'.repeat(129) },
+    { ...input.header, telemetrySchemaVersion: '2' },
+    { ...input.header, lastErrorClass: 'x'.repeat(129) }
+  ]
+
+  for (const header of invalidHeaders) {
+    const encoded = encodeSegmentRecord({ ...input, header })
+
+    assert.throws(() => decodeSegmentRecord(encoded, 0), /invalid_record_header/)
+  }
+})
