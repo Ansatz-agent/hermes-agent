@@ -7,6 +7,7 @@ import {
   type TraceFileSystem,
   TraceJournal,
   type TraceJournalOperation,
+  traceJournalOperationBytes,
   type TraceJournalOwnerOperation,
   type TraceJournalPendingOperation,
   type TraceJournalReceiptOperation,
@@ -92,6 +93,8 @@ export interface TraceOutboxStoreOptions {
   maxBytes?: number
   monotonicNow?: () => number
   now?: () => number
+  receiptCapacityBytes?: number
+  receiptCapacityEntries?: number
   retentionMs?: number
   root: string
 }
@@ -148,6 +151,8 @@ export class TraceOutboxStore {
     const groupCommitBytes = options.groupCommitBytes ?? DEFAULT_GROUP_COMMIT_BYTES
     const groupCommitMs = options.groupCommitMs ?? DEFAULT_GROUP_COMMIT_MS
     const capacityBytes = options.maxBytes ?? options.capacityBytes ?? DEFAULT_CAPACITY_BYTES
+    const receiptCapacityBytes = options.receiptCapacityBytes ?? MAX_RECEIPT_BYTES
+    const receiptCapacityEntries = options.receiptCapacityEntries ?? MAX_RECEIPT_ENTRIES
     const retentionMs = options.retentionMs ?? DEFAULT_RETENTION_MS
 
     if (!Number.isSafeInteger(groupCommitBytes) || groupCommitBytes <= 0) {
@@ -164,6 +169,14 @@ export class TraceOutboxStore {
 
     if (!Number.isSafeInteger(retentionMs) || retentionMs < 0) {
       throw new RangeError('invalid_trace_outbox_retention')
+    }
+
+    if (!Number.isSafeInteger(receiptCapacityBytes) || receiptCapacityBytes <= 0) {
+      throw new RangeError('invalid_trace_receipt_capacity_bytes')
+    }
+
+    if (!Number.isSafeInteger(receiptCapacityEntries) || receiptCapacityEntries <= 0) {
+      throw new RangeError('invalid_trace_receipt_capacity_entries')
     }
 
     await fs.mkdir(options.root)
@@ -197,6 +210,8 @@ export class TraceOutboxStore {
       keyLost,
       monotonicNow: options.monotonicNow ?? performance.now.bind(performance),
       now: options.now ?? Date.now,
+      receiptCapacityBytes,
+      receiptCapacityEntries,
       retentionMs,
       segmentPath: join(segmentDirectory, SEGMENT_FILE_NAME)
     })
@@ -272,6 +287,8 @@ export class TraceOutboxStore {
       keyLost: boolean
       monotonicNow: () => number
       now: () => number
+      receiptCapacityBytes: number
+      receiptCapacityEntries: number
       retentionMs: number
       segmentPath: string
     }
@@ -387,7 +404,9 @@ export class TraceOutboxStore {
   }
 
   async diagnostics(): Promise<TraceOutboxStoreDiagnostics> {
-    this.pruneReceipts(this.config.now())
+    if (this.pruneReceipts(this.config.now())) {
+      await this.compactIfIdle()
+    }
     let payloadBytes = 0
     let pending = 0
     let quarantined = this.quarantinedSegments
@@ -423,7 +442,9 @@ export class TraceOutboxStore {
   }
 
   async lookupReceipt(batchId: string): Promise<DurableReceipt | undefined> {
-    this.pruneReceipts(this.config.now())
+    if (this.pruneReceipts(this.config.now())) {
+      await this.compactIfIdle()
+    }
     const receipt = this.receipts.get(batchId)
 
     if (receipt === undefined) {
@@ -530,7 +551,7 @@ export class TraceOutboxStore {
   }
 
   async compactIfIdle(): Promise<boolean> {
-    if (this.config.isConversationStreaming() || this.flushPromise !== null || this.pending.length !== 0) {
+    if (this.flushPromise !== null || this.pending.length !== 0) {
       return false
     }
 
@@ -538,12 +559,8 @@ export class TraceOutboxStore {
   }
 
   private async compactForCapacity(): Promise<boolean> {
-    if (this.config.isConversationStreaming()) {
-      return false
-    }
-
     const reclaimed = await this.reclaimFullyTerminalSegments()
-    const compacted = reclaimed || (await this.compactSegmentIfNeeded())
+    const compacted = reclaimed || (!this.config.isConversationStreaming() && (await this.compactSegmentIfNeeded()))
     await this.compactJournal()
 
     return compacted
@@ -693,7 +710,9 @@ export class TraceOutboxStore {
       this.accountKey === null &&
       [...this.receipts.values()].some(receipt => receipt.accountKey === null || receipt.dedupeKey === null)
 
-    this.pruneReceipts(this.config.now())
+    if (this.pruneReceipts(this.config.now())) {
+      await this.compactJournal()
+    }
   }
 
   private async scanActiveSegment(): Promise<{
@@ -985,6 +1004,7 @@ export class TraceOutboxStore {
         this.accepted += 1
         item.resolve(record.batch)
       }
+      this.pruneReceipts(this.config.now())
     } catch (error) {
       for (const item of group) {
         item.input = null
@@ -1095,6 +1115,7 @@ export class TraceOutboxStore {
       await this.flushPromise
 
       if (item.receiptJournaled) {
+        await this.compactIfIdle()
         return
       }
     }
@@ -1409,23 +1430,7 @@ export class TraceOutboxStore {
 
       const receipts = [...this.receipts.values()]
         .sort((left, right) => left.receivedAt - right.receivedAt || left.batchId.localeCompare(right.batchId))
-        .map<TraceJournalReceiptOperation>(receipt =>
-          receipt.accountKey === null || receipt.dedupeKey === null
-            ? {
-                op: 'receipt',
-                batchId: receipt.batchId,
-                outcome: receipt.outcome,
-                receivedAt: receipt.receivedAt
-              }
-            : {
-                op: 'receipt',
-                accountKey: receipt.accountKey,
-                batchId: receipt.batchId,
-                dedupeKey: receipt.dedupeKey,
-                outcome: receipt.outcome,
-                receivedAt: receipt.receivedAt
-              }
-        )
+        .map(receipt => this.receiptOperation(receipt))
       retained.push(...receipts)
 
       await this.config.journal.replace(retained)
@@ -1457,34 +1462,57 @@ export class TraceOutboxStore {
   }
 
   private receiptBytes(): number {
-    return [...this.receipts.values()].reduce(
-      (total, receipt) => total + Buffer.byteLength(JSON.stringify(receipt), 'utf8'),
-      0
-    )
+    return [...this.receipts.values()].reduce((total, receipt) => total + this.receiptBytesFor(receipt), 0)
   }
 
-  private pruneReceipts(now: number): void {
+  private receiptBytesFor(receipt: ReceiptTombstone): number {
+    return traceJournalOperationBytes(this.receiptOperation(receipt))
+  }
+
+  private receiptOperation(receipt: ReceiptTombstone): TraceJournalReceiptOperation {
+    return receipt.accountKey === null || receipt.dedupeKey === null
+      ? {
+          op: 'receipt',
+          batchId: receipt.batchId,
+          outcome: receipt.outcome,
+          receivedAt: receipt.receivedAt
+        }
+      : {
+          op: 'receipt',
+          accountKey: receipt.accountKey,
+          batchId: receipt.batchId,
+          dedupeKey: receipt.dedupeKey,
+          outcome: receipt.outcome,
+          receivedAt: receipt.receivedAt
+        }
+  }
+
+  private pruneReceipts(now: number): boolean {
     const ordered = [...this.receipts.values()].sort(
       (left, right) => left.receivedAt - right.receivedAt || left.batchId.localeCompare(right.batchId)
     )
+    let pruned = false
 
     for (const receipt of ordered) {
       if (now - receipt.receivedAt > this.config.retentionMs) {
-        this.deleteReceipt(receipt)
+        pruned = this.deleteReceipt(receipt) || pruned
       }
     }
 
     let bytes = this.receiptBytes()
 
     for (const receipt of ordered) {
-      if (this.receipts.size <= MAX_RECEIPT_ENTRIES && bytes <= MAX_RECEIPT_BYTES) {
+      if (this.receipts.size <= this.config.receiptCapacityEntries && bytes <= this.config.receiptCapacityBytes) {
         break
       }
 
       if (this.deleteReceipt(receipt)) {
-        bytes -= Buffer.byteLength(JSON.stringify(receipt), 'utf8')
+        pruned = true
+        bytes -= this.receiptBytesFor(receipt)
       }
     }
+
+    return pruned
   }
 
   private deleteReceipt(receipt: ReceiptTombstone): boolean {

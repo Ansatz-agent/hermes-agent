@@ -343,6 +343,14 @@ function operationChecksum(operation: TraceJournalOperation): string {
   return createHash('sha256').update(canonicalJson(operation)).digest('hex')
 }
 
+function encodeOperationLine(operation: TraceJournalOperation): string {
+  return `${canonicalJson({ checksum: operationChecksum(operation), operation })}\n`
+}
+
+export function traceJournalOperationBytes(operation: TraceJournalOperation): number {
+  return Buffer.byteLength(encodeOperationLine(operation), 'utf8')
+}
+
 function isPendingOperation(value: unknown): value is TraceJournalPendingOperation {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
     return false
@@ -492,26 +500,14 @@ export class TraceJournal {
       return
     }
 
-    const encoded = Buffer.from(
-      operations
-        .map(operation => canonicalJson({ checksum: operationChecksum(operation), operation }))
-        .map(line => `${line}\n`)
-        .join(''),
-      'utf8'
-    )
+    const encoded = Buffer.from(operations.map(operation => encodeOperationLine(operation)).join(''), 'utf8')
 
     await this.options.fs.appendFile(this.options.path, encoded)
   }
 
   async replace(operations: readonly TraceJournalOperation[]): Promise<void> {
     const temporary = `${this.options.path}.compact-${randomUUID()}`
-    const encoded = Buffer.from(
-      operations
-        .map(operation => canonicalJson({ checksum: operationChecksum(operation), operation }))
-        .map(line => `${line}\n`)
-        .join(''),
-      'utf8'
-    )
+    const encoded = Buffer.from(operations.map(operation => encodeOperationLine(operation)).join(''), 'utf8')
 
     await this.options.fs.writeFile(temporary, encoded, { exclusive: true })
     await this.options.fs.syncFile(temporary)

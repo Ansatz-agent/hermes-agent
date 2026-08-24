@@ -5,7 +5,12 @@ import { join, resolve } from 'node:path'
 import { test } from 'vitest'
 
 import { createSafeStorageTraceKeyProtector } from './trace-outbox-crypto'
-import { nodeTraceFileSystem, type TraceFileSystem, TraceJournal } from './trace-outbox-journal'
+import {
+  nodeTraceFileSystem,
+  type TraceFileSystem,
+  TraceJournal,
+  traceJournalOperationBytes
+} from './trace-outbox-journal'
 import { decodeSegmentRecord } from './trace-outbox-record'
 import { TraceOutboxStore } from './trace-outbox-store'
 import { type DurableReceipt, type TraceEnvelopeInput } from './trace-outbox-types'
@@ -747,6 +752,102 @@ test('makes a receipt terminal only after its journal sync and bounds expired to
   assert.equal((await store.diagnostics()).tombstones, 0)
 })
 
+test('physically bounds tombstones and reclaims fully-terminal payloads during a long stream', async () => {
+  const root = await temporaryOutboxDirectory()
+  let now = 1_798_000_000_000
+  const receiptCapacityBytes = 2_048
+  const streamingOptions = {
+    groupCommitMs: 1,
+    isConversationStreaming: () => true,
+    keyProtector: protector(),
+    now: () => now,
+    receiptCapacityBytes,
+    receiptCapacityEntries: 3,
+    retentionMs: 5,
+    root
+  }
+
+  try {
+    const store = await TraceOutboxStore.open(streamingOptions)
+    const acknowledged: string[] = []
+
+    for (let index = 0; index < 20; index += 1) {
+      const batch = await store.enqueue(envelope(`stream-receipt-${index}`))
+      acknowledged.push(batch.batchId)
+      await store.acknowledge(batch.batchId, {
+        batchId: batch.batchId,
+        outcome: 'accepted',
+        receivedAt: now
+      })
+      now += 1
+    }
+
+    const journal = await TraceJournal.open({ fs: nodeTraceFileSystem, path: join(root, 'index.journal') })
+    const durable = await journal.recover()
+    const durableReceipts = durable.operations.filter(operation => operation.op === 'receipt')
+    const journalBytes = (await readFile(join(root, 'index.journal'))).length
+
+    assert.ok(durableReceipts.length <= 3)
+    assert.ok(journalBytes <= receiptCapacityBytes)
+    assert.equal(durable.operations.filter(operation => operation.op === 'owner').length, 1)
+    assert.equal(await nodeTraceFileSystem.stat(join(root, 'segments', 'active.segment')), null)
+
+    const reopened = await TraceOutboxStore.open(streamingOptions)
+    assert.equal(await reopened.lookupReceipt(acknowledged[0]), undefined)
+    assert.equal((await reopened.lookupReceipt(acknowledged.at(-1)!))?.outcome, 'accepted')
+    assert.ok((await reopened.diagnostics()).tombstones <= 3)
+
+    const other = envelope('other-account-after-stream')
+    other.owner = {
+      ...other.owner,
+      accountId: '44444444-4444-4444-8444-444444444444',
+      accountKey: 'account-44444444-4444-4444-8444-444444444444'
+    }
+    await assert.rejects(reopened.enqueue(other), /trace_outbox_account_mismatch/)
+  } finally {
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('caps the durable encoded receipt lines by bytes independently of the entry limit', async () => {
+  const root = await temporaryOutboxDirectory()
+  const receiptCapacityBytes = 700
+  const optionsForRoot = {
+    groupCommitMs: 1,
+    isConversationStreaming: () => true,
+    keyProtector: protector(),
+    receiptCapacityBytes,
+    receiptCapacityEntries: 100,
+    root
+  }
+
+  try {
+    const store = await TraceOutboxStore.open(optionsForRoot)
+    for (let index = 0; index < 8; index += 1) {
+      const batch = await store.enqueue(envelope(`byte-capped-receipt-${index}`))
+      await store.acknowledge(batch.batchId, receipt(batch.batchId, 'accepted'))
+    }
+
+    const journal = await TraceJournal.open({ fs: nodeTraceFileSystem, path: join(root, 'index.journal') })
+    const operations = (await journal.recover()).operations
+    const receipts = operations.filter(operation => operation.op === 'receipt')
+    const receiptBytes = receipts.reduce((total, operation) => total + traceJournalOperationBytes(operation), 0)
+    const nonReceiptBytes = operations
+      .filter(operation => operation.op !== 'receipt')
+      .reduce((total, operation) => total + traceJournalOperationBytes(operation), 0)
+    const journalBytes = (await readFile(join(root, 'index.journal'))).length
+
+    assert.ok(receipts.length < 8)
+    assert.ok(receiptBytes <= receiptCapacityBytes)
+    assert.equal(journalBytes, receiptBytes + nonReceiptBytes)
+    assert.equal(await nodeTraceFileSystem.stat(join(root, 'segments', 'active.segment')), null)
+    const reopened = await TraceOutboxStore.open(optionsForRoot)
+    assert.equal((await reopened.diagnostics()).tombstoneBytes, receiptBytes)
+  } finally {
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
 test('quarantines encrypted records and reports diagnostics when the persisted key is lost', async () => {
   const fs = new FakeTraceFileSystem()
   const first = await TraceOutboxStore.open(options({ fs }))
@@ -1025,8 +1126,10 @@ test('serializes a gated compaction before a concurrent enqueue and preserves bo
   const entered = deferred<void>()
   const originalReplace = fs.replaceFile.bind(fs)
   fs.replaceFile = async (from, to) => {
-    entered.resolve()
-    await gate.promise
+    if (to.endsWith('active.segment')) {
+      entered.resolve()
+      await gate.promise
+    }
     await originalReplace(from, to)
   }
   const store = await TraceOutboxStore.open(options({ fs, isConversationStreaming: () => streaming }))
