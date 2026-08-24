@@ -40,6 +40,7 @@ export type RecoveryTrigger = { trigger(reason: TraceRecoveryReason): void }
 type TraceOutbox = {
   acknowledge(batchId: string, receipt: DurableReceipt): Promise<void>
   beginEnqueue(input: TraceEnvelopeInput): PendingLocalCommit
+  close?(): Promise<void>
   diagnostics(): Promise<TraceOutboxStoreDiagnostics>
   peekEligible(now: number): Promise<DurableTraceBatch | undefined>
   quarantine(batchId: string, errorClass: string): Promise<void>
@@ -194,6 +195,8 @@ export class TraceForwarder {
     }
 
     await closed
+    await this.admissionTail
+    await this.store?.close?.()
     this.credentialProvider.clear()
     this.localBearer = ''
     this.owner = null

@@ -255,6 +255,8 @@ export class TraceOutboxStore {
   private readonly dedupe = new Map<string, string>()
   private readonly receipts = new Map<string, ReceiptTombstone>()
   private readonly records = new Map<string, StoredRecord>()
+  private admissionClosed = false
+  private closePromise: Promise<void> | null = null
   private flushPromise: Promise<void> | null = null
   private flushTimer: ReturnType<typeof setTimeout> | null = null
   private journalTail: Promise<void> = Promise.resolve()
@@ -299,6 +301,10 @@ export class TraceOutboxStore {
   }
 
   private beginEnqueueInternal(input: TraceEnvelopeInput, bypassNormalAdmission: boolean): PendingLocalCommit {
+    if (this.admissionClosed) {
+      throw new Error('trace_outbox_closed')
+    }
+
     validateTraceOwner(input.owner)
 
     if (this.legacyOwnerUnknown) {
@@ -393,6 +399,18 @@ export class TraceOutboxStore {
 
   async enqueue(input: TraceEnvelopeInput): Promise<DurableTraceBatch> {
     return this.beginEnqueue(input).durable
+  }
+
+  close(): Promise<void> {
+    if (this.closePromise !== null) {
+      return this.closePromise
+    }
+
+    this.admissionClosed = true
+    const closing = this.drainForClose()
+    this.closePromise = closing
+
+    return closing
   }
 
   async quarantineInput(input: TraceEnvelopeInput, errorClass: string): Promise<DurableTraceBatch> {
@@ -868,7 +886,7 @@ export class TraceOutboxStore {
   }
 
   private scheduleFlush(): void {
-    if (this.pending.length === 0 || this.flushPromise !== null) {
+    if (this.admissionClosed || this.pending.length === 0 || this.flushPromise !== null) {
       return
     }
 
@@ -922,6 +940,24 @@ export class TraceOutboxStore {
 
       this.scheduleFlush()
     }
+  }
+
+  private async drainForClose(): Promise<void> {
+    if (this.flushTimer !== null) {
+      clearTimeout(this.flushTimer)
+      this.flushTimer = null
+    }
+
+    while (this.flushPromise !== null || this.pending.length > 0) {
+      if (this.flushPromise !== null) {
+        await this.flushPromise
+      } else {
+        await this.flush()
+      }
+    }
+
+    await this.writerTail
+    await this.journalTail
   }
 
   private async flushGroup(group: PendingCommit[]): Promise<void> {
