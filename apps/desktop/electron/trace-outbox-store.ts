@@ -464,14 +464,7 @@ export class TraceOutboxStore {
   }
 
   async acknowledge(batchId: string, receipt: DurableReceipt): Promise<void> {
-    if (
-      receipt.batchId !== batchId ||
-      (receipt.outcome !== 'accepted' && receipt.outcome !== 'duplicate') ||
-      !Number.isSafeInteger(receipt.receivedAt) ||
-      receipt.receivedAt < 0
-    ) {
-      throw new TypeError('invalid_trace_receipt')
-    }
+    this.validateReceipt(batchId, receipt)
 
     await this.persistReceipt(receipt)
     await this.compactIfIdle()
@@ -918,8 +911,10 @@ export class TraceOutboxStore {
   }
 
   private cancelForGatewayReceipt(item: PendingCommit, receipt: DurableReceipt): Promise<void> {
-    if (receipt.batchId !== item.batchId) {
-      return Promise.reject(new TypeError('receipt_batch_mismatch'))
+    try {
+      this.validateReceipt(item.batchId, receipt)
+    } catch (error) {
+      return Promise.reject(error)
     }
 
     if (item.cancellation !== null) {
@@ -971,7 +966,7 @@ export class TraceOutboxStore {
 
     if (item.state === 'committed' || item.state === 'flushing') {
       await this.persistReceipt(receipt)
-      await this.compactForCapacity()
+      await this.compactIfIdle()
     }
   }
 
@@ -995,6 +990,17 @@ export class TraceOutboxStore {
       this.dedupe.delete(this.dedupeKey(record.batch))
     }
     this.pruneReceipts(this.config.now())
+  }
+
+  private validateReceipt(batchId: string, receipt: DurableReceipt): void {
+    if (
+      receipt.batchId !== batchId ||
+      (receipt.outcome !== 'accepted' && receipt.outcome !== 'duplicate') ||
+      !Number.isSafeInteger(receipt.receivedAt) ||
+      receipt.receivedAt < 0
+    ) {
+      throw new TypeError('invalid_trace_receipt')
+    }
   }
 
   private dedupeKey(
