@@ -5,10 +5,11 @@ import { test } from 'vitest'
 import { ANSATZ_PRODUCT, resolveAnsatzRuntimeRoot } from './ansatz-product'
 
 test('Ansatz desktop identity cannot collide with an existing Hermes installation', () => {
-  assert.equal(ANSATZ_PRODUCT.productName, 'Ansatz Voice Trace Client')
-  assert.equal(ANSATZ_PRODUCT.appId, 'cn.c2sml.ansatz.voice-trace-client')
-  assert.equal(ANSATZ_PRODUCT.executableName, 'AnsatzVoiceTraceClient')
-  assert.equal(ANSATZ_PRODUCT.protocolScheme, 'ansatz-voice-trace')
+	assert.equal(ANSATZ_PRODUCT.productName, 'Ansatz')
+	assert.equal(ANSATZ_PRODUCT.appId, 'cn.c2sml.ansatz.voice-trace-client')
+	assert.equal(ANSATZ_PRODUCT.executableName, 'Ansatz')
+	assert.equal(ANSATZ_PRODUCT.artifactPrefix, 'Ansatz')
+	assert.equal(ANSATZ_PRODUCT.protocolScheme, 'ansatz-voice-trace')
 })
 
 test('resolveAnsatzRuntimeRoot isolates macOS and Windows user data from Hermes', () => {
