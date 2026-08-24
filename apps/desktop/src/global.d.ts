@@ -27,6 +27,7 @@ declare global {
         retry: () => Promise<{ ok: boolean }>
         onChanged: (callback: (payload: DesktopSafeBootstrapEvent) => void) => () => void
       }
+      traceOnline: () => void
       // Resolve a backend connection. Omit `profile` (or pass the primary) for
       // the window's backend; pass a named profile to lazily spawn/reuse that
       // profile's backend from the pool.

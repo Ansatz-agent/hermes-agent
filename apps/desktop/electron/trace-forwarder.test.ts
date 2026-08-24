@@ -17,6 +17,7 @@ import { createSafeStorageTraceKeyProtector } from './trace-outbox-crypto'
 import { nodeTraceFileSystem, TraceJournal } from './trace-outbox-journal'
 import { TraceOutboxStore } from './trace-outbox-store'
 import type { DurableReceipt, DurableTraceBatch, TraceEnvelopeInput, TraceOwner } from './trace-outbox-types'
+import { TraceRecoveryController, TraceRecoveryLifecycle } from './trace-recovery-controller'
 
 const installationId = '11111111-1111-4111-8111-111111111111'
 const protobuf = Buffer.from([0x0a, 0x03, 0x01, 0x02, 0x03])
@@ -28,6 +29,15 @@ function validOwner(): TraceOwner {
     accountKey: 'account-11111111-1111-4111-8111-111111111111',
     installationId,
     sessionId: '22222222-2222-4222-8222-222222222222'
+  }
+}
+
+function legacyOwner(): TraceOwner {
+  return {
+    accountId: null,
+    accountKey: `legacy-${'a'.repeat(64)}`,
+    installationId,
+    sessionId: null
   }
 }
 
@@ -81,6 +91,9 @@ function receiptSyncFailureStore(batchId: string, phase: 'before' | 'after') {
       durable
     }),
     diagnostics: async () => emptyDiagnostics(),
+    async peekEligible(_now: number): Promise<DurableTraceBatch | undefined> {
+      return undefined
+    },
     async quarantine(_batchId: string, _errorClass: string): Promise<void> {},
     async quarantineInput(_input: TraceEnvelopeInput, _errorClass: string): Promise<DurableTraceBatch> {
       throw new Error('unexpected_quarantine')
@@ -154,6 +167,7 @@ test.each(['before', 'after'] as const)(
   'a %s-local-commit receipt sync failure does not falsely acknowledge the Gateway winner',
   async phase => {
     const batchId = '00000000-0000-4000-8000-000000000010'
+
     const forwarder = new TraceForwarder({
       credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), {
         clock: () => traceCredentialNow
@@ -169,6 +183,7 @@ test.each(['before', 'after'] as const)(
       installationId,
       store: receiptSyncFailureStore(batchId, phase)
     })
+
     const started = await forwarder.start(validOwner())
 
     try {
@@ -181,12 +196,14 @@ test.each(['before', 'after'] as const)(
 
 test('persists normal, oversized, and later normal OTLP parts in source journal order', async () => {
   const { root, store } = await temporaryStore()
+
   const forwarder = new TraceForwarder({
     credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
     fetchImpl: async () => new Response(Buffer.alloc(0), { status: 503 }),
     installationId,
     store
   })
+
   const started = await forwarder.start(validOwner())
 
   try {
@@ -239,6 +256,176 @@ test('an existing durable backlog disables direct Gateway upload until recovery 
     assert.equal((await post(started.endpoint, started.localBearer)).status, 200)
     assert.equal(upstreamCalls, 0)
     assert.equal((await store.diagnostics()).pending, 2)
+  } finally {
+    await forwarder.stop({ flushMs: 0 })
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('recovery pump uploads a durable account backlog in FIFO order', async () => {
+  const { root, store } = await temporaryStore()
+  await store.enqueue(envelope('older'))
+  await store.enqueue(envelope('newer'))
+  const uploaded: string[] = []
+
+  const forwarder = new TraceForwarder({
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
+    fetchImpl: async (_input, init) => {
+      const headers = new Headers(init?.headers)
+      uploaded.push(headers.get('x-trace-run-id') ?? '')
+
+      return new Response(Buffer.alloc(0), {
+        status: 200,
+        headers: {
+          'x-trace-batch-id': headers.get('idempotency-key') ?? '',
+          'x-trace-receipt': 'accepted'
+        }
+      })
+    },
+    installationId,
+    store
+  })
+
+  await forwarder.start(validOwner())
+
+  try {
+    await forwarder.pump()
+    assert.deepEqual(uploaded, ['run-older', 'run-newer'])
+    assert.equal((await store.diagnostics()).pending, 0)
+  } finally {
+    await forwarder.stop({ flushMs: 0 })
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('recovery pump honors retry backoff without dropping the durable FIFO head', async () => {
+  const { root, store } = await temporaryStore()
+  await store.enqueue(envelope('retry'))
+  let now = traceCredentialNow
+  let calls = 0
+
+  const forwarder = new TraceForwarder({
+    clock: () => now,
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
+    fetchImpl: async (_input, init) => {
+      calls += 1
+      const headers = new Headers(init?.headers)
+
+      return calls === 1
+        ? new Response(Buffer.alloc(0), { status: 503, headers: { 'retry-after': '120' } })
+        : new Response(Buffer.alloc(0), {
+            status: 200,
+            headers: {
+              'x-trace-batch-id': headers.get('idempotency-key') ?? '',
+              'x-trace-receipt': 'accepted'
+            }
+          })
+    },
+    installationId,
+    random: () => 0,
+    store
+  })
+
+  await forwarder.start(validOwner())
+
+  try {
+    await forwarder.pump()
+    assert.equal(calls, 1)
+    assert.equal(forwarder.nextRecoveryAt(), traceCredentialNow + 120_000)
+    assert.equal((await store.diagnostics()).pending, 1)
+
+    await forwarder.pump()
+    assert.equal(calls, 1)
+
+    now += 120_000
+    await forwarder.pump()
+    assert.equal(calls, 2)
+    assert.equal(forwarder.nextRecoveryAt(), null)
+    assert.equal((await store.diagnostics()).pending, 0)
+  } finally {
+    await forwarder.stop({ flushMs: 0 })
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('recovery drops an obsolete retry timer after its durable FIFO head becomes terminal', async () => {
+  const { root, store } = await temporaryStore()
+  const batch = await store.enqueue(envelope('terminal-during-retry'))
+
+  const forwarder = new TraceForwarder({
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
+    fetchImpl: async () => new Response(Buffer.alloc(0), { status: 503 }),
+    installationId,
+    store
+  })
+
+  await forwarder.start(validOwner())
+
+  try {
+    await forwarder.pump()
+    assert.notEqual(forwarder.nextRecoveryAt(), null)
+
+    await store.quarantine(batch.batchId, 'capacity')
+    await forwarder.pump()
+    assert.equal(forwarder.nextRecoveryAt(), null)
+  } finally {
+    await forwarder.stop({ flushMs: 0 })
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('stopping an owner prevents a late Trace credential from uploading its durable backlog', async () => {
+  const { root, store } = await temporaryStore()
+  await store.enqueue(envelope('stopped-owner'))
+
+  const token = deferred<{
+    access_token: string
+    expires_at: string
+    expires_in: number
+    installation_id: string
+  }>()
+
+  let credentialLoads = 0
+  let upstreamCalls = 0
+
+  const provider = new RefreshingTraceCredentialProvider(
+    {
+      async load() {
+        credentialLoads += 1
+
+        return token.promise
+      }
+    },
+    { clock: () => traceCredentialNow }
+  )
+
+  const forwarder = new TraceForwarder({
+    credentialProvider: provider,
+    fetchImpl: async () => {
+      upstreamCalls += 1
+
+      return new Response(Buffer.alloc(0), { status: 200 })
+    },
+    installationId,
+    store
+  })
+
+  await forwarder.start(validOwner())
+
+  try {
+    const pump = forwarder.pump()
+    await waitFor(() => credentialLoads === 1)
+    await forwarder.stop({ flushMs: 0 })
+    token.resolve({
+      access_token: 'public-trace-token-late-1234567890',
+      expires_at: '2099-08-23T14:15:00+00:00',
+      expires_in: 900,
+      installation_id: installationId
+    })
+    await pump
+
+    assert.equal(upstreamCalls, 0)
+    assert.equal((await store.diagnostics()).pending, 1)
   } finally {
     await forwarder.stop({ flushMs: 0 })
     await rm(root, { force: true, recursive: true })
@@ -590,7 +777,7 @@ test('one upstream 401 forces one credential refresh and resends identical bytes
     ])
     assert.deepEqual(source.calls, [false, true])
     assert.equal(invalidations, 2)
-    assert.deepEqual(recoveryReasons, ['upload-401'])
+    assert.deepEqual(recoveryReasons, ['upload-401', 'token-ready'])
   } finally {
     await forwarder.stop({ flushMs: 3_000 })
     await rm(root, { force: true, recursive: true })
@@ -755,7 +942,7 @@ test('desktop lifecycle starts Trace before local spawn and flushes it before ba
 
   assert.ok(prepareStart >= 0)
   assert.ok(
-    prepare.indexOf('await ensureDesktopTraceForwarder(connectionScope)') <
+    prepare.indexOf('await ensureDesktopTraceForwarder(connectionScope, legacyTraceOwnerForScope(connectionScope))') <
       prepare.indexOf('return resolveHermesBackend(backendArgs)')
   )
 
@@ -771,4 +958,54 @@ test('desktop lifecycle starts Trace before local spawn and flushes it before ba
   assert.match(source, /trace: traceContextForBackendRoot\(root\)/)
   assert.match(source, /trace: traceContextForBackendRoot\(ACTIVE_HERMES_ROOT\)/)
   assert.match(source, /pluginsToml: path\.join\(root, 'config', 'ansatz-voice-trace', 'plugins\.toml'\)/)
+})
+
+test('local backend preparation does not wait for Trace token acquisition', async () => {
+  const token = deferred<Awaited<ReturnType<TraceCredentialSource['load']>>>()
+  let tokenLoads = 0
+  let tokenResolved = false
+
+  const provider = new RefreshingTraceCredentialProvider(
+    {
+      load: async () => {
+        tokenLoads += 1
+        const credential = await token.promise
+        tokenResolved = true
+
+        return credential
+      }
+    },
+    { clock: () => traceCredentialNow }
+  )
+
+  const root = await mkdtemp(join(process.cwd(), 'tmp', 'trace-forwarder-token-independent-'))
+  const store = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: keyProtector(), root })
+  const forwarder = new TraceForwarder({ credentialProvider: provider, installationId, store })
+
+  const controller = new TraceRecoveryController({
+    accountKey: legacyOwner().accountKey,
+    pump: () => forwarder.pump()
+  })
+
+  const lifecycle = new TraceRecoveryLifecycle({ controller, credentialProvider: provider })
+
+  try {
+    const started = await forwarder.start(legacyOwner())
+    lifecycle.start()
+    const backend = await Promise.resolve({ kind: 'local' as const })
+
+    assert.equal(backend.kind, 'local')
+    assert.equal(tokenLoads, 1)
+    assert.equal(tokenResolved, false)
+    assert.equal((await post(started.endpoint, started.localBearer)).status, 200)
+    assert.equal(tokenResolved, false)
+
+    await forwarder.pump()
+    assert.equal(tokenResolved, false)
+    assert.equal((await store.diagnostics()).pending, 1)
+  } finally {
+    await lifecycle.stop()
+    await forwarder.stop({ flushMs: 0 })
+    await rm(root, { force: true, recursive: true })
+  }
 })
