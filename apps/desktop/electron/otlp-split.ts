@@ -3,7 +3,10 @@ import { encodeLengthDelimited, encodeMessage, type ProtobufField, readFields } 
 export type SplitOtlpResult = {
   batches: Buffer[]
   oversizedSpans: Buffer[]
+  parts: SplitOtlpPart[]
 }
+
+export type SplitOtlpPart = { body: Buffer; kind: 'batch' } | { body: Buffer; kind: 'oversized-span' }
 
 type SpanUnit = {
   kind: 'span'
@@ -38,18 +41,19 @@ export function splitOtlpExportTraceRequest(body: Buffer, maxBytes: number): Spl
   const decoded = decodeExportRequest(body)
 
   if (!decoded || maxBytes <= 0) {
-    return { batches: [], oversizedSpans: [body] }
+    return { batches: [], oversizedSpans: [body], parts: [{ body, kind: 'oversized-span' }] }
   }
 
   if (body.length <= maxBytes) {
-    return { batches: [body], oversizedSpans: [] }
+    return { batches: [body], oversizedSpans: [], parts: [{ body, kind: 'batch' }] }
   }
 
   const batches: Buffer[] = []
   const oversizedSpans: Buffer[] = []
+  const parts: SplitOtlpPart[] = []
 
   if (decoded.resources.length === 0) {
-    return { batches: [], oversizedSpans: [body] }
+    return { batches: [], oversizedSpans: [body], parts: [{ body, kind: 'oversized-span' }] }
   }
 
   for (const resource of decoded.resources) {
@@ -65,7 +69,10 @@ export function splitOtlpExportTraceRequest(body: Buffer, maxBytes: number): Spl
       }
 
       if (current.length > 0) {
-        batches.push(encodeExport(decoded.fields, resource, current))
+        const batch = encodeExport(decoded.fields, resource, current)
+
+        batches.push(batch)
+        parts.push({ body: batch, kind: 'batch' })
       }
 
       current = []
@@ -73,6 +80,7 @@ export function splitOtlpExportTraceRequest(body: Buffer, maxBytes: number): Spl
 
       if (single.length > maxBytes) {
         oversizedSpans.push(single)
+        parts.push({ body: single, kind: 'oversized-span' })
 
         continue
       }
@@ -81,11 +89,14 @@ export function splitOtlpExportTraceRequest(body: Buffer, maxBytes: number): Spl
     }
 
     if (current.length > 0) {
-      batches.push(encodeExport(decoded.fields, resource, current))
+      const batch = encodeExport(decoded.fields, resource, current)
+
+      batches.push(batch)
+      parts.push({ body: batch, kind: 'batch' })
     }
   }
 
-  return { batches, oversizedSpans }
+  return { batches, oversizedSpans, parts }
 }
 
 function decodeExportRequest(body: Buffer): DecodedExportRequest | null {

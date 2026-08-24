@@ -14,8 +14,9 @@ import {
   TraceForwarder
 } from './trace-forwarder'
 import { createSafeStorageTraceKeyProtector } from './trace-outbox-crypto'
+import { nodeTraceFileSystem, TraceJournal } from './trace-outbox-journal'
 import { TraceOutboxStore } from './trace-outbox-store'
-import type { TraceEnvelopeInput, TraceOwner } from './trace-outbox-types'
+import type { DurableReceipt, DurableTraceBatch, TraceEnvelopeInput, TraceOwner } from './trace-outbox-types'
 
 const installationId = '11111111-1111-4111-8111-111111111111'
 const protobuf = Buffer.from([0x0a, 0x03, 0x01, 0x02, 0x03])
@@ -67,6 +68,44 @@ function envelope(label: string): TraceEnvelopeInput {
   }
 }
 
+function receiptSyncFailureStore(batchId: string, phase: 'before' | 'after') {
+  const durable = new Promise<DurableTraceBatch>(() => {})
+
+  return {
+    async acknowledge(_batchId: string, _receipt: DurableReceipt): Promise<void> {},
+    beginEnqueue: () => ({
+      batchId,
+      cancelForGatewayReceipt: async () => {
+        throw new Error(`receipt_sync_${phase}_local_commit_failed`)
+      },
+      durable
+    }),
+    diagnostics: async () => emptyDiagnostics(),
+    async quarantine(_batchId: string, _errorClass: string): Promise<void> {},
+    async quarantineInput(_input: TraceEnvelopeInput, _errorClass: string): Promise<DurableTraceBatch> {
+      throw new Error('unexpected_quarantine')
+    }
+  }
+}
+
+function emptyDiagnostics() {
+  return {
+    accepted: 0,
+    deduplicated: 0,
+    duplicate: 0,
+    evictedCapacity: 0,
+    expired: 0,
+    keyLost: 0,
+    payloadBytes: 0,
+    pending: 0,
+    pendingBytes: 0,
+    quarantined: 0,
+    recoveredCorruptTail: 0,
+    tombstoneBytes: 0,
+    tombstones: 0
+  }
+}
+
 test('product Trace uploads use the public same-origin Gateway API by default', () => {
   assert.equal(DEFAULT_TRACE_UPSTREAM_URL, 'https://c2sml.cn/trace-ingest/v1/traces')
 })
@@ -105,6 +144,73 @@ test('a matching Gateway receipt owns a trace before local fsync without retaini
     assert.match(upstream[0].headers.get('x-trace-payload-sha256') ?? '', /^[a-f0-9]{64}$/)
     assert.deepEqual(upstream[0].body, protobuf)
     assert.equal((await store.diagnostics()).payloadBytes, 0)
+  } finally {
+    await forwarder.stop({ flushMs: 0 })
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test.each(['before', 'after'] as const)(
+  'a %s-local-commit receipt sync failure does not falsely acknowledge the Gateway winner',
+  async phase => {
+    const batchId = '00000000-0000-4000-8000-000000000010'
+    const forwarder = new TraceForwarder({
+      credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), {
+        clock: () => traceCredentialNow
+      }),
+      fetchImpl: async (_input, init) => {
+        const headers = new Headers(init?.headers)
+
+        return new Response(Buffer.alloc(0), {
+          status: 200,
+          headers: { 'x-trace-batch-id': headers.get('idempotency-key') ?? '', 'x-trace-receipt': 'accepted' }
+        })
+      },
+      installationId,
+      store: receiptSyncFailureStore(batchId, phase)
+    })
+    const started = await forwarder.start(validOwner())
+
+    try {
+      assert.equal((await post(started.endpoint, started.localBearer)).status, 507)
+    } finally {
+      await forwarder.stop({ flushMs: 0 })
+    }
+  }
+)
+
+test('persists normal, oversized, and later normal OTLP parts in source journal order', async () => {
+  const { root, store } = await temporaryStore()
+  const forwarder = new TraceForwarder({
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
+    fetchImpl: async () => new Response(Buffer.alloc(0), { status: 503 }),
+    installationId,
+    store
+  })
+  const started = await forwarder.start(validOwner())
+
+  try {
+    assert.equal(
+      (
+        await post(started.endpoint, started.localBearer, {
+          body: otlpSequencePayload()
+        })
+      ).status,
+      413
+    )
+    const journal = await TraceJournal.open({ fs: nodeTraceFileSystem, path: join(root, 'index.journal') })
+    const operations = (await journal.recover()).operations
+
+    assert.deepEqual(
+      operations
+        .filter(operation => operation.op === 'pending' || operation.op === 'terminal')
+        .map(operation => operation.op),
+      ['pending', 'pending', 'terminal', 'pending']
+    )
+    assert.deepEqual(
+      operations.filter(operation => operation.op === 'pending').map(operation => operation.sequence),
+      [0, 1, 2]
+    )
   } finally {
     await forwarder.stop({ flushMs: 0 })
     await rm(root, { force: true, recursive: true })
@@ -279,6 +385,19 @@ function lengthDelimited(field: number, value: Buffer | string): Buffer {
   const body = typeof value === 'string' ? Buffer.from(value) : value
 
   return Buffer.concat([varint((field << 3) | 2), varint(body.length), body])
+}
+
+function otlpSequencePayload(): Buffer {
+  const span = (id: string, bytes: number) =>
+    lengthDelimited(
+      1,
+      lengthDelimited(
+        2,
+        lengthDelimited(2, Buffer.concat([lengthDelimited(1, id), lengthDelimited(2, Buffer.alloc(bytes))]))
+      )
+    )
+
+  return Buffer.concat([span('normal-a', 1), span('oversized-b', 8 * 1024 * 1024), span('normal-c', 1)])
 }
 
 function keyValue(key: string, value: string): Buffer {

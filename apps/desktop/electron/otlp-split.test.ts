@@ -246,6 +246,15 @@ test('continues across later scopes and resources after an oversize span', () =>
   assert.deepEqual(result.oversizedSpans.flatMap(readSpanIds), [5])
   assert.deepEqual(result.batches.map(readResource), ['service-a', 'service-a', 'service-b'])
   assert.deepEqual(result.batches.map(readScope), ['relay-a', 'relay-a-later', 'relay-b'])
+  assert.deepEqual(
+    result.parts.map(part => ({ kind: part.kind, spanIds: readSpanIds(part.body) })),
+    [
+      { kind: 'batch', spanIds: [4] },
+      { kind: 'oversized-span', spanIds: [5] },
+      { kind: 'batch', spanIds: [6] },
+      { kind: 'batch', spanIds: [7] }
+    ]
+  )
   assert.ok([...result.batches, ...result.oversizedSpans].every(batch => batch.length > 0))
   assert.ok([...result.batches, ...result.oversizedSpans].every(deriveOtlpCorrelation))
 })
@@ -271,7 +280,8 @@ test('preserves empty scope and empty resource envelopes exactly once', () => {
   assert.ok(body.length > maxBytes)
   assert.deepEqual(splitOtlpExportTraceRequest(body, maxBytes), {
     batches: expected,
-    oversizedSpans: []
+    oversizedSpans: [],
+    parts: expected.map(body => ({ body, kind: 'batch' as const }))
   })
 })
 
@@ -286,7 +296,11 @@ test('quarantines one oversize empty envelope and continues to a later empty res
     splitOtlpExportTraceRequest(exportResourceMessages([oversizeScope, laterEmptyResource]), laterRequest.length),
     {
       batches: [laterRequest],
-      oversizedSpans: [oversizeRequest]
+      oversizedSpans: [oversizeRequest],
+      parts: [
+        { body: oversizeRequest, kind: 'oversized-span' },
+        { body: laterRequest, kind: 'batch' }
+      ]
     }
   )
 })
@@ -307,7 +321,8 @@ test('preserves unknown varint, fixed64, fixed32, and nested group fields when s
   assert.ok(body.length > maxBytes)
   assert.deepEqual(splitOtlpExportTraceRequest(body, maxBytes), {
     batches: expected,
-    oversizedSpans: []
+    oversizedSpans: [],
+    parts: expected.map(body => ({ body, kind: 'batch' as const }))
   })
   assert.ok(expected.every(deriveOtlpCorrelation))
 })
@@ -318,7 +333,8 @@ test('rejects an unmatched protobuf end-group deterministically', () => {
   assert.equal(readFields(malformed), null)
   assert.deepEqual(splitOtlpExportTraceRequest(malformed, 150), {
     batches: [],
-    oversizedSpans: [malformed]
+    oversizedSpans: [malformed],
+    parts: [{ body: malformed, kind: 'oversized-span' }]
   })
 })
 
@@ -327,6 +343,7 @@ test('rejects malformed protobuf deterministically', () => {
 
   assert.deepEqual(splitOtlpExportTraceRequest(malformed, 150), {
     batches: [],
-    oversizedSpans: [malformed]
+    oversizedSpans: [malformed],
+    parts: [{ body: malformed, kind: 'oversized-span' }]
   })
 })

@@ -234,18 +234,18 @@ export class TraceForwarder {
 
       const split =
         body.length <= MAX_LOGICAL_BATCH_BYTES
-          ? { batches: [body], oversizedSpans: [] }
+          ? { batches: [body], oversizedSpans: [], parts: [{ body, kind: 'batch' as const }] }
           : splitOtlpExportTraceRequest(body, MAX_LOGICAL_BATCH_BYTES)
 
       let rejectedOversize = false
 
-      for (const oversized of split.oversizedSpans) {
-        await this.store.quarantineInput(this.envelope(metadata, oversized), 'payload_too_large')
-        rejectedOversize = true
-      }
-
-      for (const batch of split.batches) {
-        await this.admitBatch(this.envelope(metadata, batch))
+      for (const part of split.parts) {
+        if (part.kind === 'oversized-span') {
+          await this.store.quarantineInput(this.envelope(metadata, part.body), 'payload_too_large')
+          rejectedOversize = true
+        } else {
+          await this.admitBatch(this.envelope(metadata, part.body))
+        }
       }
       respond(response, rejectedOversize ? 413 : 200, !rejectedOversize)
     } catch (error) {
@@ -285,7 +285,11 @@ export class TraceForwarder {
 
       if (winner.kind === 'gateway') {
         void pending.durable.catch(() => undefined)
-        await pending.cancelForGatewayReceipt(winner.receipt).catch(() => undefined)
+        try {
+          await pending.cancelForGatewayReceipt(winner.receipt)
+        } catch {
+          throw new Error('trace_durability_unavailable')
+        }
 
         return
       }
