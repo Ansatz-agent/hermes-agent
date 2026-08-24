@@ -6,15 +6,27 @@ export type SplitOtlpResult = {
 }
 
 type SpanUnit = {
+  kind: 'span'
   scopeFieldIndex: number
   scopeFields: ProtobufField[]
   spanFieldIndex: number
 }
 
+type EmptyScopeUnit = {
+  kind: 'empty-scope'
+  scopeFieldIndex: number
+}
+
+type EmptyResourceUnit = {
+  kind: 'empty-resource'
+}
+
+type EnvelopeUnit = EmptyResourceUnit | EmptyScopeUnit | SpanUnit
+
 type ResourceEnvelope = {
   fieldIndex: number
   fields: ProtobufField[]
-  spans: SpanUnit[]
+  units: EnvelopeUnit[]
 }
 
 type DecodedExportRequest = {
@@ -35,17 +47,19 @@ export function splitOtlpExportTraceRequest(body: Buffer, maxBytes: number): Spl
 
   const batches: Buffer[] = []
   const oversizedSpans: Buffer[] = []
-  let spanCount = 0
+
+  if (decoded.resources.length === 0) {
+    return { batches: [], oversizedSpans: [body] }
+  }
 
   for (const resource of decoded.resources) {
-    let current: SpanUnit[] = []
+    let current: EnvelopeUnit[] = []
 
-    for (const span of resource.spans) {
-      spanCount += 1
-      const candidate = encodeExport(decoded.fields, resource, [...current, span])
+    for (const unit of resource.units) {
+      const candidate = encodeExport(decoded.fields, resource, [...current, unit])
 
       if (candidate.length <= maxBytes) {
-        current.push(span)
+        current.push(unit)
 
         continue
       }
@@ -55,7 +69,7 @@ export function splitOtlpExportTraceRequest(body: Buffer, maxBytes: number): Spl
       }
 
       current = []
-      const single = encodeExport(decoded.fields, resource, [span])
+      const single = encodeExport(decoded.fields, resource, [unit])
 
       if (single.length > maxBytes) {
         oversizedSpans.push(single)
@@ -63,16 +77,12 @@ export function splitOtlpExportTraceRequest(body: Buffer, maxBytes: number): Spl
         continue
       }
 
-      current.push(span)
+      current.push(unit)
     }
 
     if (current.length > 0) {
       batches.push(encodeExport(decoded.fields, resource, current))
     }
-  }
-
-  if (spanCount === 0) {
-    oversizedSpans.push(body)
   }
 
   return { batches, oversizedSpans }
@@ -101,7 +111,7 @@ function decodeExportRequest(body: Buffer): DecodedExportRequest | null {
     const resource: ResourceEnvelope = {
       fieldIndex,
       fields: resourceFields,
-      spans: []
+      units: []
     }
 
     for (const [scopeFieldIndex, scopeField] of resourceFields.entries()) {
@@ -115,6 +125,8 @@ function decodeExportRequest(body: Buffer): DecodedExportRequest | null {
         return null
       }
 
+      let spanCount = 0
+
       for (const [spanFieldIndex, spanField] of scopeFields.entries()) {
         if (spanField.number !== 2 || spanField.wireType !== 2 || !spanField.bytes) {
           continue
@@ -124,12 +136,22 @@ function decodeExportRequest(body: Buffer): DecodedExportRequest | null {
           return null
         }
 
-        resource.spans.push({
+        spanCount += 1
+        resource.units.push({
+          kind: 'span',
           scopeFieldIndex,
           scopeFields,
           spanFieldIndex
         })
       }
+
+      if (spanCount === 0) {
+        resource.units.push({ kind: 'empty-scope', scopeFieldIndex })
+      }
+    }
+
+    if (resource.units.length === 0) {
+      resource.units.push({ kind: 'empty-resource' })
     }
 
     resources.push(resource)
@@ -144,8 +166,8 @@ function validateNestedMessages(fields: ProtobufField[], fieldNumber: number): b
   )
 }
 
-function encodeExport(requestFields: ProtobufField[], resource: ResourceEnvelope, spans: SpanUnit[]): Buffer {
-  const encodedResource = encodeResource(resource, spans)
+function encodeExport(requestFields: ProtobufField[], resource: ResourceEnvelope, units: EnvelopeUnit[]): Buffer {
+  const encodedResource = encodeResource(resource, units)
   const parts: Buffer[] = []
 
   for (const [fieldIndex, field] of requestFields.entries()) {
@@ -159,7 +181,11 @@ function encodeExport(requestFields: ProtobufField[], resource: ResourceEnvelope
   return Buffer.concat(parts)
 }
 
-function encodeResource(resource: ResourceEnvelope, spans: SpanUnit[]): Buffer {
+function encodeResource(resource: ResourceEnvelope, units: EnvelopeUnit[]): Buffer {
+  if (units.some(unit => unit.kind === 'empty-resource')) {
+    return encodeMessage(resource.fields)
+  }
+
   const parts: Buffer[] = []
 
   for (const [fieldIndex, field] of resource.fields.entries()) {
@@ -169,9 +195,11 @@ function encodeResource(resource: ResourceEnvelope, spans: SpanUnit[]): Buffer {
       continue
     }
 
-    for (const span of spans) {
-      if (span.scopeFieldIndex === fieldIndex) {
-        parts.push(encodeScope(span))
+    for (const unit of units) {
+      if (unit.kind === 'span' && unit.scopeFieldIndex === fieldIndex) {
+        parts.push(encodeScope(unit))
+      } else if (unit.kind === 'empty-scope' && unit.scopeFieldIndex === fieldIndex) {
+        parts.push(field.encoded)
       }
     }
   }

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 
 import { test } from 'vitest'
 
-import { deriveOtlpCorrelation } from './otlp-correlation'
+import { deriveOtlpCorrelation, readFields } from './otlp-correlation'
 import { splitOtlpExportTraceRequest } from './otlp-split'
 
 function varint(value: number): Buffer {
@@ -23,6 +23,30 @@ function lengthDelimited(field: number, value: Buffer | string): Buffer {
   const body = typeof value === 'string' ? Buffer.from(value) : value
 
   return Buffer.concat([varint((field << 3) | 2), varint(body.length), body])
+}
+
+function key(field: number, wireType: number): Buffer {
+  return varint((field << 3) | wireType)
+}
+
+function varintField(field: number, value: number): Buffer {
+  return Buffer.concat([key(field, 0), varint(value)])
+}
+
+function fixed64Field(field: number, value: Buffer): Buffer {
+  assert.equal(value.length, 8)
+
+  return Buffer.concat([key(field, 1), value])
+}
+
+function groupField(field: number, value: Buffer): Buffer {
+  return Buffer.concat([key(field, 3), value, key(field, 4)])
+}
+
+function fixed32Field(field: number, value: Buffer): Buffer {
+  assert.equal(value.length, 4)
+
+  return Buffer.concat([key(field, 5), value])
 }
 
 function fields(message: Buffer): Array<{ body: Buffer; number: number }> {
@@ -119,6 +143,23 @@ function exportResourceMessages(resources: Buffer[]): Buffer {
   ])
 }
 
+function exportResourceMessagesWithUnknownWires(resources: Buffer[]): Buffer {
+  const nestedGroup = groupField(
+    95,
+    Buffer.concat([varintField(1, 7), fixed32Field(2, Buffer.from('01020304', 'hex'))])
+  )
+
+  const unknownGroup = groupField(94, Buffer.concat([lengthDelimited(1, 'group'), nestedGroup]))
+
+  return Buffer.concat([
+    varintField(90, 300),
+    fixed64Field(91, Buffer.from('0102030405060708', 'hex')),
+    unknownGroup,
+    ...resources.map(resource => lengthDelimited(1, resource)),
+    fixed32Field(93, Buffer.from('090a0b0c', 'hex'))
+  ])
+}
+
 function exportRequest(input: ResourceInput): Buffer {
   return exportRequests([input])
 }
@@ -207,6 +248,78 @@ test('continues across later scopes and resources after an oversize span', () =>
   assert.deepEqual(result.batches.map(readScope), ['relay-a', 'relay-a-later', 'relay-b'])
   assert.ok([...result.batches, ...result.oversizedSpans].every(batch => batch.length > 0))
   assert.ok([...result.batches, ...result.oversizedSpans].every(deriveOtlpCorrelation))
+})
+
+test('preserves empty scope and empty resource envelopes exactly once', () => {
+  const first = span(10, 70)
+  const second = span(11, 70)
+  const emptyScope = { scope: 'relay-empty', spans: [] }
+  const populatedScope = (spans: Buffer[]) => ({ scope: 'relay', spans })
+  const mixedResource = resourceSpansWithScopes('service-a', [emptyScope, populatedScope([first, second])])
+  const emptyResource = resourceSpansWithScopes('service-empty-resource', [])
+
+  const expected = [
+    exportResourceMessages([resourceSpansWithScopes('service-a', [emptyScope])]),
+    exportResourceMessages([resourceSpansWithScopes('service-a', [populatedScope([first])])]),
+    exportResourceMessages([resourceSpansWithScopes('service-a', [populatedScope([second])])]),
+    exportResourceMessages([emptyResource])
+  ]
+
+  const body = exportResourceMessages([mixedResource, emptyResource])
+  const maxBytes = Math.max(...expected.map(batch => batch.length))
+
+  assert.ok(body.length > maxBytes)
+  assert.deepEqual(splitOtlpExportTraceRequest(body, maxBytes), {
+    batches: expected,
+    oversizedSpans: []
+  })
+})
+
+test('quarantines one oversize empty envelope and continues to a later empty resource', () => {
+  const oversizeScope = resourceSpansWithScopes('service-oversize-empty-scope', [{ scope: 'x'.repeat(512), spans: [] }])
+  const laterEmptyResource = resourceSpansWithScopes('service-later-empty-resource', [])
+  const oversizeRequest = exportResourceMessages([oversizeScope])
+  const laterRequest = exportResourceMessages([laterEmptyResource])
+
+  assert.ok(oversizeRequest.length > laterRequest.length)
+  assert.deepEqual(
+    splitOtlpExportTraceRequest(exportResourceMessages([oversizeScope, laterEmptyResource]), laterRequest.length),
+    {
+      batches: [laterRequest],
+      oversizedSpans: [oversizeRequest]
+    }
+  )
+})
+
+test('preserves unknown varint, fixed64, fixed32, and nested group fields when splitting', () => {
+  const first = span(8, 70)
+  const second = span(9, 70)
+  const resource = (spans: Buffer[]) => resourceSpans({ resource: 'service-wire', scope: 'relay', spans })
+
+  const expected = [
+    exportResourceMessagesWithUnknownWires([resource([first])]),
+    exportResourceMessagesWithUnknownWires([resource([second])])
+  ]
+
+  const body = exportResourceMessagesWithUnknownWires([resource([first, second])])
+  const maxBytes = Math.max(...expected.map(batch => batch.length))
+
+  assert.ok(body.length > maxBytes)
+  assert.deepEqual(splitOtlpExportTraceRequest(body, maxBytes), {
+    batches: expected,
+    oversizedSpans: []
+  })
+  assert.ok(expected.every(deriveOtlpCorrelation))
+})
+
+test('rejects an unmatched protobuf end-group deterministically', () => {
+  const malformed = Buffer.concat([key(94, 3), key(95, 4)])
+
+  assert.equal(readFields(malformed), null)
+  assert.deepEqual(splitOtlpExportTraceRequest(malformed, 150), {
+    batches: [],
+    oversizedSpans: [malformed]
+  })
 })
 
 test('rejects malformed protobuf deterministically', () => {

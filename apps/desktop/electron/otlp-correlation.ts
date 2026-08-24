@@ -162,8 +162,18 @@ function messages(source: ProtobufField[], fieldNumber: number): Buffer[] {
 }
 
 export function readFields(message: Buffer): ProtobufField[] | null {
+  const sequence = readFieldSequence(message, 0, null)
+
+  return sequence?.offset === message.length ? sequence.fields : null
+}
+
+function readFieldSequence(
+  message: Buffer,
+  startOffset: number,
+  endGroupNumber: number | null
+): { fields: ProtobufField[]; offset: number } | null {
   const result: ProtobufField[] = []
-  let offset = 0
+  let offset = startOffset
 
   while (offset < message.length) {
     const start = offset
@@ -179,6 +189,27 @@ export function readFields(message: Buffer): ProtobufField[] | null {
 
     if (number < 1) {
       return null
+    }
+
+    if (wireType === 4) {
+      if (endGroupNumber === null || number !== endGroupNumber) {
+        return null
+      }
+
+      return { fields: result, offset }
+    }
+
+    if (wireType === 3) {
+      const group = readFieldSequence(message, offset, number)
+
+      if (!group) {
+        return null
+      }
+
+      offset = group.offset
+      result.push({ encoded: message.subarray(start, offset), number, wireType })
+
+      continue
     }
 
     if (wireType === 0) {
@@ -229,7 +260,7 @@ export function readFields(message: Buffer): ProtobufField[] | null {
     })
   }
 
-  return result
+  return endGroupNumber === null ? { fields: result, offset } : null
 }
 
 export function encodeLengthDelimited(fieldNumber: number, value: Buffer): Buffer {
