@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 import os
 import socket
@@ -15,6 +16,9 @@ import pytest
 from hermes_cli.client_auth.client import (
     AuthServiceError,
     CookieRecord,
+    ExplicitSessionRevocation,
+    NativeSessionCredential,
+    NativeSessionStatus,
     SessionRejected,
     SessionStatus,
     TraceCredential,
@@ -34,6 +38,7 @@ from hermes_cli.client_auth.runtime import (
     ProcessHardener,
     RuntimeConsumer,
     RuntimeSnapshot,
+    ValidationState,
     RemoteRuntimeOwner,
     SocketLivenessProbe,
     UnixEndpoint,
@@ -57,6 +62,11 @@ from hermes_cli.client_auth.runtime import (
     _read_runtime_frame,
     _test_runtime_suffix,
 )
+
+
+INSTALLATION_ID = "11111111-1111-4111-8111-111111111111"
+ACCOUNT_ID = "22222222-2222-4222-8222-222222222222"
+NATIVE_SESSION_ID = "33333333-3333-4333-8333-333333333333"
 
 
 def _scope_bearer(seed: bytes = b"A") -> str:
@@ -380,8 +390,8 @@ class FakeClock:
 
 
 class FakeSecretBackend:
-    def __init__(self, *, fail_reads: bool = False, fail_writes: bool = False) -> None:
-        self.raw: str | None = None
+    def __init__(self, raw: str | None = None, *, fail_reads: bool = False, fail_writes: bool = False) -> None:
+        self.raw = raw
         self.fail_reads = fail_reads
         self.fail_writes = fail_writes
         self.read_count = 0
@@ -418,9 +428,12 @@ class FakeAuthClient:
         self.status_value = status_at()
         self.login_error: AuthServiceError | None = None
         self.status_error: AuthServiceError | None = None
+        self.native_status_error: AuthServiceError | None = None
         self.logout_error: AuthServiceError | None = None
         self.login_calls = 0
         self.status_calls = 0
+        self.native_status_calls = 0
+        self.native_issue_calls = 0
         self.logout_calls = 0
         self.trace_token_calls: list[dict[str, str]] = []
         self.events: list[str] = []
@@ -458,6 +471,219 @@ class FakeAuthClient:
             expires_in=900,
             installation_id=params["installation_id"],
         )
+
+    def legacy_trace_token(self, cookies: dict[str, str], **params: str) -> TraceCredential:
+        return self.trace_token(cookies, **params)
+
+    def legacy_status(self, cookies: dict[str, str]) -> SessionStatus:
+        return self.status(cookies)
+
+    def legacy_logout(self, cookies: dict[str, str]) -> None:
+        self.logout(cookies)
+
+    def logout_client_session(self, _credential: NativeSessionCredential) -> None:
+        self.logout_calls += 1
+
+    def issue_client_session(
+        self, cookies: dict[str, str], *, installation_id: str, client_version: str
+    ) -> NativeSessionCredential:
+        assert cookies == self.record.cookies
+        assert client_version == "0.17.0"
+        self.native_issue_calls += 1
+        return NativeSessionCredential(
+            account_id=ACCOUNT_ID,
+            session_id=NATIVE_SESSION_ID,
+            session_token="session-token-sentinel-1234567890",
+            installation_id=installation_id,
+            username="alice",
+            issued_at="2026-08-24T12:00:00+00:00",
+        )
+
+    def client_session_status(
+        self, credential: NativeSessionCredential
+    ) -> NativeSessionStatus:
+        assert credential.account_id == ACCOUNT_ID
+        self.native_status_calls += 1
+        if self.native_status_error is not None:
+            raise self.native_status_error
+        return NativeSessionStatus(
+            account_id=ACCOUNT_ID,
+            session_id=NATIVE_SESSION_ID,
+            installation_id=credential.installation_id,
+            username="alice",
+            server_time="2026-08-24T12:00:00+00:00",
+        )
+
+
+def native_owner_factory(**backend_options):
+    clock = FakeClock()
+    backend = FakeSecretBackend(**backend_options)
+    client = FakeAuthClient()
+    owner = VaultOwner(
+        client,
+        secret_backend=backend,
+        clock=clock,
+        jitter=lambda _low, _high: 1.0,
+    )
+    return owner, backend, client, clock
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "server_unavailable",
+        "rate_limited",
+        "invalid_response",
+        "invalid_session_credential",
+        "runtime_unavailable",
+    ],
+)
+def test_native_validation_failure_preserves_scope_and_cached_authorization(reason):
+    owner, backend, client, clock = native_owner_factory()
+    active = owner.login(
+        "alice",
+        bytearray(b"secret"),
+        installation_id=INSTALLATION_ID,
+        client_version="0.17.0",
+    )
+    client.native_status_error = AuthServiceError(reason)
+    clock.now = owner.next_refresh_at
+
+    degraded = owner.validate_now()
+
+    assert degraded.state is AuthState.AUTHENTICATED
+    assert degraded.scope == active.scope
+    assert (degraded.account_id, degraded.session_id) == (
+        active.account_id,
+        active.session_id,
+    )
+    assert (degraded.validation_state, degraded.validation_reason) == (
+        ValidationState.DEGRADED,
+        reason,
+    )
+    assert backend.raw is not None
+
+
+def test_native_cache_restores_before_network_after_process_restart():
+    first, backend, client, _ = native_owner_factory()
+    logged_in = first.login(
+        "alice",
+        bytearray(b"secret"),
+        installation_id=INSTALLATION_ID,
+        client_version="0.17.0",
+    )
+    client.native_status_error = AuthServiceError("server_unavailable")
+    restarted = VaultOwner(
+        client,
+        secret_backend=backend,
+        clock=FakeClock(),
+        jitter=lambda *_: 1.0,
+    )
+
+    restored = restarted.refresh()
+
+    assert restored.state is AuthState.AUTHENTICATED
+    assert (restored.account_id, restored.session_id) == (
+        logged_in.account_id,
+        logged_in.session_id,
+    )
+    assert restored.runtime_instance_id != logged_in.runtime_instance_id
+    assert client.native_status_calls == 0
+
+
+def test_matching_explicit_revoke_writes_secret_free_tombstone_once():
+    owner, backend, client, _ = native_owner_factory()
+    active = owner.login(
+        "alice",
+        bytearray(b"secret"),
+        installation_id=INSTALLATION_ID,
+        client_version="0.17.0",
+    )
+    client.native_status_error = ExplicitSessionRevocation(
+        code="session_revoked",
+        account_id=active.account_id,
+        session_id=active.session_id,
+        revoked_at="2026-08-24T12:00:00+00:00",
+    )
+
+    revoked = owner.validate_now()
+
+    assert (revoked.state, revoked.reason, revoked.epoch) == (
+        AuthState.LOCKED,
+        "session_revoked",
+        active.epoch + 1,
+    )
+    decoded = json.loads(backend.raw)
+    assert decoded["kind"] == "revoked"
+    assert "session-token-sentinel" not in backend.raw
+    assert owner.validate_now() == revoked
+    assert backend.write_count == 2
+
+
+def legacy_v1_blob() -> str:
+    return json.dumps(
+        {
+            "version": 1,
+            "cookies": {
+                "__Host-ansatz_sessionid": "session-1",
+                "__Host-ansatz_csrftoken": "csrf-1",
+            },
+            "username": "alice",
+            "session_expires_at": "2026-08-24T12:02:00+00:00",
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def test_legacy_cookie_restores_offline_then_upgrades_atomically_online():
+    raw = legacy_v1_blob()
+    backend = FakeSecretBackend(raw=raw)
+    client = FakeAuthClient()
+    client.native_status_error = AuthServiceError("server_unavailable")
+    owner = VaultOwner(
+        client,
+        secret_backend=backend,
+        clock=FakeClock(),
+        jitter=lambda *_: 1.0,
+    )
+
+    restored = owner.refresh()
+
+    assert restored.legacy is True
+    assert restored.principal_key == "legacy:" + hashlib.sha256(raw.encode()).hexdigest()
+    client.native_status_error = None
+    upgraded = owner.validate_now()
+    assert upgraded.legacy is False
+    assert upgraded.account_id == ACCOUNT_ID
+    assert json.loads(backend.raw)["kind"] == "native"
+
+
+def test_legacy_upgrade_readback_failure_restores_v1_and_keeps_cached_scope():
+    class ReadbackFailBackend(FakeSecretBackend):
+        def read(self) -> str | None:
+            raw = super().read()
+            if raw is not None and json.loads(raw).get("kind") == "native":
+                raise RuntimeError("readback unavailable")
+            return raw
+
+    raw = legacy_v1_blob()
+    backend = ReadbackFailBackend(raw=raw)
+    client = FakeAuthClient()
+    owner = VaultOwner(
+        client,
+        secret_backend=backend,
+        clock=FakeClock(),
+        jitter=lambda *_: 1.0,
+    )
+    restored = owner.refresh()
+
+    degraded = owner.validate_now()
+
+    assert degraded.scope == restored.scope
+    assert degraded.legacy is True
+    assert degraded.validation_state is ValidationState.DEGRADED
+    assert backend.raw == raw
 
 
 class RecordingHardener:
@@ -633,18 +859,22 @@ def test_logout_locks_and_clears_secret_even_when_remote_logout_fails():
     assert secret_backend.read() is None
 
 
-def test_refresh_failure_revokes_scope_without_extra_grace():
-    owner, _secret_backend, auth_client, clock = vault_owner_factory()
-    authenticated = owner.login("alice", bytearray(b"secret"))
-    auth_client.status_error = AuthServiceError("server_unavailable")
+def test_native_refresh_failure_preserves_scope_without_extra_grace():
+    owner, _secret_backend, auth_client, clock = native_owner_factory()
+    authenticated = owner.login(
+        "alice",
+        bytearray(b"secret"),
+        installation_id=INSTALLATION_ID,
+        client_version="0.17.0",
+    )
+    auth_client.native_status_error = AuthServiceError("server_unavailable")
     clock.now = owner.next_refresh_at
 
-    with pytest.raises(AuthRequired, match="server_unavailable"):
-        owner.refresh()
+    refreshed = owner.validate_now()
 
-    assert owner.snapshot().state is AuthState.LOCKED
-    assert owner.snapshot().epoch == authenticated.epoch + 1
-    assert owner.snapshot().valid_until == clock.now
+    assert refreshed.state is AuthState.AUTHENTICATED
+    assert refreshed.scope == authenticated.scope
+    assert refreshed.validation_state is ValidationState.DEGRADED
 
 
 def test_local_login_rate_limit_stops_repeated_invalid_credentials():

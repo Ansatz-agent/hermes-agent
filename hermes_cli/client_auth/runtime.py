@@ -16,6 +16,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -30,6 +31,8 @@ from hermes_cli.client_auth.client import (
     AuthClient,
     AuthServiceError,
     CookieRecord,
+    ExplicitSessionRevocation,
+    NativeSessionCredential,
     SessionRejected,
     SessionStatus,
     TraceCredential,
@@ -124,9 +127,38 @@ class AuthState(StrEnum):
     LOCKED = "locked"
 
 
+class ValidationState(StrEnum):
+    """Online validation health, deliberately independent of local access."""
+
+    UNKNOWN = "unknown"
+    VALIDATING = "validating"
+    ONLINE = "online"
+    DEGRADED = "degraded"
+
+
 class LockedWaitingResult(StrEnum):
     AUTHENTICATED = "authenticated"
     OWNER_STOPPED = "owner_stopped"
+
+
+@dataclass(frozen=True)
+class NativeCredentialRecord:
+    credential: NativeSessionCredential
+    last_validated_at: str
+
+
+@dataclass(frozen=True)
+class LegacyCredentialRecord:
+    cookie_record: CookieRecord
+    principal_key: str
+
+
+@dataclass(frozen=True)
+class RevocationTombstone:
+    account_id: str
+    session_id: str
+    reason: str
+    revoked_at: str
 
 
 @dataclass(frozen=True)
@@ -423,6 +455,14 @@ class RuntimeSnapshot:
     username: str | None
     session_expires_at: str | None
     reason: str | None
+    account_id: str | None = None
+    session_id: str | None = None
+    installation_id: str | None = None
+    principal_key: str | None = None
+    validation_state: ValidationState = ValidationState.UNKNOWN
+    validation_reason: str | None = None
+    last_validated_at: str | None = None
+    legacy: bool = False
 
     @classmethod
     def new_authenticated(
@@ -485,6 +525,54 @@ class RuntimeSnapshot:
             reason=reason,
         )
 
+    @classmethod
+    def from_native_credential(
+        cls,
+        record: NativeCredentialRecord,
+        *,
+        runtime_instance_id: str | None = None,
+        epoch: int = 1,
+    ) -> RuntimeSnapshot:
+        credential = record.credential
+        return cls(
+            state=AuthState.AUTHENTICATED,
+            epoch=epoch,
+            valid_until=float("inf"),
+            runtime_instance_id=runtime_instance_id or secrets.token_hex(16),
+            boot_id=_read_boot_id(),
+            username=credential.username,
+            session_expires_at=None,
+            reason=None,
+            account_id=credential.account_id,
+            session_id=credential.session_id,
+            installation_id=credential.installation_id,
+            principal_key=f"account:{credential.account_id}",
+            validation_state=ValidationState.UNKNOWN,
+            last_validated_at=record.last_validated_at,
+        )
+
+    @classmethod
+    def from_legacy_record(
+        cls,
+        record: LegacyCredentialRecord,
+        *,
+        runtime_instance_id: str | None = None,
+        epoch: int = 1,
+    ) -> RuntimeSnapshot:
+        return cls(
+            state=AuthState.AUTHENTICATED,
+            epoch=epoch,
+            valid_until=float("inf"),
+            runtime_instance_id=runtime_instance_id or secrets.token_hex(16),
+            boot_id=_read_boot_id(),
+            username=record.cookie_record.username,
+            session_expires_at=record.cookie_record.session_expires_at,
+            reason=None,
+            principal_key=record.principal_key,
+            validation_state=ValidationState.UNKNOWN,
+            legacy=True,
+        )
+
     @property
     def scope(self) -> AuthScope:
         return AuthScope(self.runtime_instance_id, self.epoch)
@@ -519,6 +607,22 @@ class RuntimeSnapshot:
             valid_until=now,
             runtime_instance_id=secrets.token_hex(16),
             reason=reason,
+            validation_state=ValidationState.DEGRADED,
+            validation_reason=reason,
+        )
+
+    def validating(self) -> RuntimeSnapshot:
+        return replace(self, validation_state=ValidationState.VALIDATING, validation_reason=None)
+
+    def degraded(self, reason: str) -> RuntimeSnapshot:
+        return replace(self, validation_state=ValidationState.DEGRADED, validation_reason=reason)
+
+    def online(self, *, last_validated_at: str) -> RuntimeSnapshot:
+        return replace(
+            self,
+            validation_state=ValidationState.ONLINE,
+            validation_reason=None,
+            last_validated_at=last_validated_at,
         )
 
     def require_authorized(
@@ -532,7 +636,7 @@ class RuntimeSnapshot:
             raise AuthRequired("runtime_unavailable")
         if self.state is not AuthState.AUTHENTICATED:
             raise AuthRequired(self.reason or "signed_out")
-        if now >= self.valid_until or _read_boot_id() != self.boot_id:
+        if (self.principal_key is None and now >= self.valid_until) or _read_boot_id() != self.boot_id:
             raise AuthRequired("session_expired")
         if expected != self.scope:
             raise AuthRequired("runtime_unavailable")
@@ -547,6 +651,14 @@ class RuntimeSnapshot:
             "valid_until": self.valid_until,
             "session_expires_at": self.session_expires_at,
             "reason": self.reason,
+            "account_id": self.account_id,
+            "session_id": self.session_id,
+            "installation_id": self.installation_id,
+            "principal_key": self.principal_key,
+            "validation_state": self.validation_state.value,
+            "validation_reason": self.validation_reason,
+            "last_validated_at": self.last_validated_at,
+            "legacy": self.legacy,
         }
 
 
@@ -1327,13 +1439,14 @@ class _OwnerCore:
         self._jitter = jitter
         self._snapshot = RuntimeSnapshot.signed_out()
         self._on_transition = on_transition
-        self._record: CookieRecord | None = None
+        self._record: CookieRecord | NativeCredentialRecord | LegacyCredentialRecord | RevocationTombstone | None = None
         self._record_loaded = False
         self._consumers: list[RuntimeConsumer] = []
         self._alive = True
         self._lock = threading.RLock()
         self._refresh_lock = threading.Lock()
         self._next_refresh_at: float | None = None
+        self._validation_failures = 0
         self._failed_login_attempts: list[float] = []
         self._last_authenticated_activity = self._clock()
         if self._on_transition is not None:
@@ -1360,7 +1473,67 @@ class _OwnerCore:
             self._consumers.append(consumer)
             return consumer
 
-    def login(self, username: str, password: bytearray) -> RuntimeSnapshot:
+    def login(
+        self,
+        username: str,
+        password: bytearray,
+        *,
+        installation_id: str | None = None,
+        client_version: str | None = None,
+    ) -> RuntimeSnapshot:
+        """Log in and persist a native credential when native context is supplied.
+
+        The no-context path remains only for older broker callers while they are
+        migrated by Task 9; it retains the schema-v1 compatibility behavior.
+        """
+        if installation_id is None and client_version is None:
+            return self._login_legacy(username, password)
+        if not isinstance(installation_id, str) or not isinstance(client_version, str):
+            raise AuthRequired("runtime_unavailable")
+        self._check_login_rate_limit()
+        self._prepare_cookie_acquisition()
+        try:
+            cookie = self._client.login(username, password)
+            credential = self._client.issue_client_session(
+                cookie.cookies,
+                installation_id=installation_id,
+                client_version=client_version,
+            )
+        except AuthServiceError as error:
+            if error.reason == "invalid_credentials":
+                self._record_failed_login()
+            self._lock_with_reason(error.reason)
+            raise AuthRequired(error.reason) from None
+        now = self._clock()
+        record = NativeCredentialRecord(
+            credential=credential,
+            last_validated_at=credential.issued_at,
+        )
+        try:
+            self._secret_backend.write(_encode_native_blob(record))
+            if _decode_credential_blob(self._secret_backend.read() or "") != record:
+                raise AuthRequired("runtime_unavailable")
+        except Exception:
+            reason = "vault_unavailable" if self._vault_required else "runtime_unavailable"
+            self._lock_with_reason(reason)
+            self._best_effort_remote_logout(cookie)
+            raise AuthRequired(reason) from None
+        with self._lock:
+            self._record = record
+            self._record_loaded = True
+            self._failed_login_attempts.clear()
+            self._last_authenticated_activity = now
+            self._validation_failures = 0
+            snapshot = RuntimeSnapshot.from_native_credential(
+                record,
+                runtime_instance_id=self._snapshot.runtime_instance_id,
+                epoch=self._snapshot.epoch + 1,
+            ).online(last_validated_at=record.last_validated_at)
+            self._publish_locked(snapshot)
+            self._schedule_validation_locked(now)
+            return snapshot
+
+    def _login_legacy(self, username: str, password: bytearray) -> RuntimeSnapshot:
         self._check_login_rate_limit()
         self._prepare_cookie_acquisition()
         try:
@@ -1432,12 +1605,24 @@ class _OwnerCore:
                 raise AuthRequired("signed_out")
             self._last_authenticated_activity = self._clock()
         try:
-            credential = self._client.trace_token(
-                record.cookies,
-                installation_id=installation_id,
-                client_version=client_version,
-                telemetry_schema_version=telemetry_schema_version,
-            )
+            if isinstance(record, NativeCredentialRecord):
+                credential = self._client.trace_token(record.credential)
+            elif isinstance(record, LegacyCredentialRecord):
+                credential = self._client.legacy_trace_token(
+                    record.cookie_record.cookies,
+                    installation_id=installation_id,
+                    client_version=client_version,
+                    telemetry_schema_version=telemetry_schema_version,
+                )
+            elif isinstance(record, CookieRecord):
+                credential = self._client.legacy_trace_token(
+                    record.cookies,
+                    installation_id=installation_id,
+                    client_version=client_version,
+                    telemetry_schema_version=telemetry_schema_version,
+                )
+            else:
+                raise AuthRequired("signed_out")
         except AuthServiceError as error:
             if isinstance(error, SessionRejected):
                 with self._lock:
@@ -1464,6 +1649,8 @@ class _OwnerCore:
     def _refresh_once(self) -> RuntimeSnapshot:
         record = self._load_record()
         if record is None:
+            return self.snapshot()
+        if isinstance(record, (NativeCredentialRecord, LegacyCredentialRecord, RevocationTombstone)):
             return self.snapshot()
         try:
             status = self._client.status(record.cookies)
@@ -1568,7 +1755,10 @@ class _OwnerCore:
                 self._next_refresh_at is not None and now >= self._next_refresh_at
             )
         if refresh_due:
-            self.refresh()
+            if self.snapshot().principal_key is not None:
+                self.validate_now()
+            else:
+                self.refresh()
         return True
 
     def _record_authenticated_activity(self) -> None:
@@ -1604,7 +1794,9 @@ class _OwnerCore:
             self._lock_with_reason("runtime_unavailable")
             raise AuthRequired("runtime_unavailable") from None
 
-    def _load_record(self) -> CookieRecord | None:
+    def _load_record(
+        self,
+    ) -> CookieRecord | NativeCredentialRecord | LegacyCredentialRecord | RevocationTombstone | None:
         with self._lock:
             if self._record_loaded:
                 return self._record
@@ -1621,7 +1813,14 @@ class _OwnerCore:
             raise AuthRequired(reason) from None
         if raw:
             try:
-                record = _decode_cookie_blob(raw)
+                decoded = _decode_credential_blob(raw)
+                if isinstance(decoded, CookieRecord):
+                    record = LegacyCredentialRecord(
+                        cookie_record=decoded,
+                        principal_key="legacy:" + hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+                    )
+                else:
+                    record = decoded
             except AuthRequired:
                 try:
                     self._secret_backend.delete()
@@ -1646,7 +1845,149 @@ class _OwnerCore:
                 return self._record
             self._record = record
             self._record_loaded = True
+            if isinstance(record, NativeCredentialRecord):
+                self._publish_locked(RuntimeSnapshot.from_native_credential(record))
+                self._validation_failures = 0
+                self._schedule_validation_locked(self._clock())
+            elif isinstance(record, LegacyCredentialRecord):
+                self._publish_locked(RuntimeSnapshot.from_legacy_record(record))
+                self._validation_failures = 0
+                self._schedule_validation_locked(self._clock())
+            elif isinstance(record, RevocationTombstone):
+                self._publish_locked(self._snapshot.locked(record.reason, now=self._clock()))
+                self._next_refresh_at = None
             return record
+
+    def validate_now(self) -> RuntimeSnapshot:
+        """Validate a cached principal without making outages terminal locally."""
+        record = self._load_record()
+        if not isinstance(record, (NativeCredentialRecord, LegacyCredentialRecord)):
+            return self.snapshot()
+        with self._lock:
+            if self._record is not record or self._snapshot.state is not AuthState.AUTHENTICATED:
+                return self._snapshot
+            self._publish_locked(self._snapshot.validating())
+        try:
+            if isinstance(record, NativeCredentialRecord):
+                status = self._client.client_session_status(record.credential)
+                if (
+                    status.account_id != record.credential.account_id
+                    or status.session_id != record.credential.session_id
+                    or status.installation_id != record.credential.installation_id
+                    or status.username != record.credential.username
+                ):
+                    raise AuthServiceError("invalid_response")
+                updated = NativeCredentialRecord(record.credential, status.server_time)
+                self._replace_record_atomically(updated)
+                with self._lock:
+                    if self._record is record or self._record == updated:
+                        self._record = updated
+                        snapshot = self._snapshot.online(last_validated_at=status.server_time)
+                        self._validation_failures = 0
+                        self._publish_locked(snapshot)
+                        self._schedule_validation_locked(self._clock())
+                    return self._snapshot
+
+            status = self._client.legacy_status(record.cookie_record.cookies)
+            if status.username != record.cookie_record.username:
+                raise AuthServiceError("invalid_response")
+            installation_id = str(uuid.uuid4())
+            credential = self._client.issue_client_session(
+                record.cookie_record.cookies,
+                installation_id=installation_id,
+                client_version="0.17.0",
+            )
+            updated = NativeCredentialRecord(credential, status.server_time)
+            self._replace_record_atomically(updated)
+            with self._lock:
+                if self._record is record:
+                    self._record = updated
+                    snapshot = RuntimeSnapshot.from_native_credential(
+                        updated,
+                        runtime_instance_id=self._snapshot.runtime_instance_id,
+                        epoch=self._snapshot.epoch,
+                    ).online(last_validated_at=status.server_time)
+                    self._validation_failures = 0
+                    self._publish_locked(snapshot)
+                    self._schedule_validation_locked(self._clock())
+                return self._snapshot
+        except ExplicitSessionRevocation as error:
+            return self._handle_explicit_revocation(record, error)
+        except (AuthServiceError, AuthRequired) as error:
+            reason = error.reason or "runtime_unavailable"
+        except Exception:
+            reason = "runtime_unavailable"
+        else:
+            return self.snapshot()
+        with self._lock:
+            if self._record is record and self._snapshot.state is AuthState.AUTHENTICATED:
+                self._validation_failures += 1
+                self._publish_locked(self._snapshot.degraded(reason))
+                self._schedule_validation_locked(self._clock())
+            return self._snapshot
+
+    def _handle_explicit_revocation(
+        self,
+        record: NativeCredentialRecord | LegacyCredentialRecord,
+        error: ExplicitSessionRevocation,
+    ) -> RuntimeSnapshot:
+        with self._lock:
+            current = self._snapshot
+            if (
+                not isinstance(record, NativeCredentialRecord)
+                or self._record is not record
+                or current.account_id != error.account_id
+                or current.session_id != error.session_id
+            ):
+                self._validation_failures += 1
+                self._publish_locked(current.degraded(error.reason))
+                self._schedule_validation_locked(self._clock())
+                return self._snapshot
+            tombstone = RevocationTombstone(
+                account_id=error.account_id,
+                session_id=error.session_id,
+                reason=error.code,
+                revoked_at=error.revoked_at,
+            )
+            try:
+                self._secret_backend.write(_encode_tombstone_blob(tombstone))
+            except Exception:
+                self._validation_failures += 1
+                self._publish_locked(current.degraded("vault_unavailable"))
+                self._schedule_validation_locked(self._clock())
+                return self._snapshot
+            self._record = tombstone
+            self._record_loaded = True
+            self._next_refresh_at = None
+            self._publish_locked(current.locked(error.code, now=self._clock()))
+            return self._snapshot
+
+    def _replace_record_atomically(self, record: NativeCredentialRecord) -> None:
+        """Write/read-back v2 before replacing a v1 record in memory."""
+        raw = _encode_native_blob(record)
+        previous: str | None
+        try:
+            previous = self._secret_backend.read()
+        except Exception:
+            raise AuthServiceError("vault_unavailable") from None
+        try:
+            self._secret_backend.write(raw)
+            if _decode_credential_blob(self._secret_backend.read() or "") != record:
+                raise AuthRequired("runtime_unavailable")
+        except Exception:
+            if previous is not None:
+                try:
+                    self._secret_backend.write(previous)
+                except Exception:
+                    pass
+            raise AuthServiceError("vault_unavailable") from None
+
+    def _schedule_validation_locked(self, now: float) -> None:
+        cap = min(300.0, float(2 ** self._validation_failures))
+        delay = self._jitter(0.0, cap)
+        if not isinstance(delay, (float, int)) or isinstance(delay, bool) or not 0.0 <= delay <= cap:
+            delay = cap
+        self._next_refresh_at = now + float(delay)
 
     def _schedule_locked(self, now: float) -> None:
         delay = self._jitter(57.0, 60.0)
@@ -1677,9 +2018,17 @@ class _OwnerCore:
             retained.append(consumer)
         self._consumers = retained
 
-    def _best_effort_remote_logout(self, record: CookieRecord) -> None:
+    def _best_effort_remote_logout(
+        self,
+        record: CookieRecord | NativeCredentialRecord | LegacyCredentialRecord | RevocationTombstone,
+    ) -> None:
         try:
-            self._client.logout(record.cookies)
+            if isinstance(record, NativeCredentialRecord):
+                self._client.logout_client_session(record.credential)
+            elif isinstance(record, LegacyCredentialRecord):
+                self._client.legacy_logout(record.cookie_record.cookies)
+            elif isinstance(record, CookieRecord):
+                self._client.legacy_logout(record.cookies)
         except AuthServiceError:
             return
 
@@ -2493,7 +2842,7 @@ def _scope_from_wire(value: object) -> AuthScope:
 
 
 def _snapshot_from_public(value: object) -> RuntimeSnapshot:
-    if not isinstance(value, dict) or set(value) != {
+    legacy_keys = {
         "state",
         "username",
         "runtime_instance_id",
@@ -2501,7 +2850,18 @@ def _snapshot_from_public(value: object) -> RuntimeSnapshot:
         "valid_until",
         "session_expires_at",
         "reason",
-    }:
+    }
+    continuity_keys = legacy_keys | {
+        "account_id",
+        "session_id",
+        "installation_id",
+        "principal_key",
+        "validation_state",
+        "validation_reason",
+        "last_validated_at",
+        "legacy",
+    }
+    if not isinstance(value, dict) or (set(value) != legacy_keys and set(value) != continuity_keys):
         raise AuthRequired("runtime_unavailable")
     try:
         state = AuthState(value["state"])
@@ -2525,6 +2885,32 @@ def _snapshot_from_public(value: object) -> RuntimeSnapshot:
         raise AuthRequired("runtime_unavailable")
     if reason is not None and not isinstance(reason, str):
         raise AuthRequired("runtime_unavailable")
+    if set(value) == legacy_keys:
+        return RuntimeSnapshot(
+            state=state,
+            epoch=epoch,
+            valid_until=float(valid_until),
+            runtime_instance_id=instance,
+            boot_id=_read_boot_id(),
+            username=username,
+            session_expires_at=expires,
+            reason=reason,
+        )
+    account_id = value["account_id"]
+    session_id = value["session_id"]
+    installation_id = value["installation_id"]
+    principal_key = value["principal_key"]
+    validation_reason = value["validation_reason"]
+    last_validated_at = value["last_validated_at"]
+    legacy = value["legacy"]
+    if any(item is not None and not isinstance(item, str) for item in (
+        account_id, session_id, installation_id, principal_key, validation_reason, last_validated_at
+    )) or not isinstance(legacy, bool):
+        raise AuthRequired("runtime_unavailable")
+    try:
+        validation_state = ValidationState(value["validation_state"])
+    except (TypeError, ValueError):
+        raise AuthRequired("runtime_unavailable") from None
     return RuntimeSnapshot(
         state=state,
         epoch=epoch,
@@ -2534,6 +2920,14 @@ def _snapshot_from_public(value: object) -> RuntimeSnapshot:
         username=username,
         session_expires_at=expires,
         reason=reason,
+        account_id=account_id,
+        session_id=session_id,
+        installation_id=installation_id,
+        principal_key=principal_key,
+        validation_state=validation_state,
+        validation_reason=validation_reason,
+        last_validated_at=last_validated_at,
+        legacy=legacy,
     )
 
 
@@ -2967,6 +3361,112 @@ def _decode_cookie_blob(raw: str) -> CookieRecord:
         normalized[name] = value
     _parse_aware_datetime(session_expires_at)
     return CookieRecord(normalized, username, session_expires_at)
+
+
+def _encode_native_blob(record: NativeCredentialRecord) -> str:
+    credential = record.credential
+    return json.dumps(
+        {
+            "version": 2,
+            "kind": "native",
+            "account_id": credential.account_id,
+            "session_id": credential.session_id,
+            "session_token": credential.session_token,
+            "installation_id": credential.installation_id,
+            "username": credential.username,
+            "issued_at": credential.issued_at,
+            "last_validated_at": record.last_validated_at,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _encode_tombstone_blob(tombstone: RevocationTombstone) -> str:
+    return json.dumps(
+        {
+            "version": 2,
+            "kind": "revoked",
+            "account_id": tombstone.account_id,
+            "session_id": tombstone.session_id,
+            "reason": tombstone.reason,
+            "revoked_at": tombstone.revoked_at,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _decode_credential_blob(
+    raw: str,
+) -> CookieRecord | NativeCredentialRecord | RevocationTombstone:
+    if not isinstance(raw, str) or not raw or len(raw) > 16_384:
+        raise AuthRequired("runtime_unavailable")
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        raise AuthRequired("runtime_unavailable") from None
+    if not isinstance(payload, dict):
+        raise AuthRequired("runtime_unavailable")
+    if payload.get("version") == 1:
+        return _decode_cookie_blob(raw)
+    if payload.get("version") != 2 or not isinstance(payload.get("kind"), str):
+        raise AuthRequired("runtime_unavailable")
+    if payload["kind"] == "revoked":
+        if set(payload) != {
+            "version", "kind", "account_id", "session_id", "reason", "revoked_at"
+        }:
+            raise AuthRequired("runtime_unavailable")
+        account_id = payload["account_id"]
+        session_id = payload["session_id"]
+        reason = payload["reason"]
+        revoked_at = payload["revoked_at"]
+        if not all(isinstance(value, str) and value for value in (account_id, session_id, reason, revoked_at)):
+            raise AuthRequired("runtime_unavailable")
+        _validate_uuid4(account_id)
+        _validate_uuid4(session_id)
+        _parse_aware_datetime(revoked_at)
+        return RevocationTombstone(account_id, session_id, reason, revoked_at)
+    if payload["kind"] != "native" or set(payload) != {
+        "version", "kind", "account_id", "session_id", "session_token",
+        "installation_id", "username", "issued_at", "last_validated_at",
+    }:
+        raise AuthRequired("runtime_unavailable")
+    fields = (
+        payload["account_id"], payload["session_id"], payload["session_token"],
+        payload["installation_id"], payload["username"], payload["issued_at"],
+        payload["last_validated_at"],
+    )
+    if not all(isinstance(value, str) and value for value in fields):
+        raise AuthRequired("runtime_unavailable")
+    account_id, session_id, token, installation_id, username, issued_at, last_validated_at = fields
+    _validate_uuid4(account_id)
+    _validate_uuid4(session_id)
+    _validate_uuid4(installation_id)
+    if len(token) < 32 or len(token) > 128 or re.fullmatch(r"[A-Za-z0-9_-]+", token) is None:
+        raise AuthRequired("runtime_unavailable")
+    _parse_aware_datetime(issued_at)
+    _parse_aware_datetime(last_validated_at)
+    return NativeCredentialRecord(
+        NativeSessionCredential(
+            account_id=account_id,
+            session_id=session_id,
+            session_token=token,
+            installation_id=installation_id,
+            username=username,
+            issued_at=issued_at,
+        ),
+        last_validated_at,
+    )
+
+
+def _validate_uuid4(value: str) -> None:
+    try:
+        parsed = uuid.UUID(value)
+    except (ValueError, AttributeError):
+        raise AuthRequired("runtime_unavailable") from None
+    if parsed.version != 4 or str(parsed) != value.lower():
+        raise AuthRequired("runtime_unavailable")
 
 
 _consumer_lock = threading.RLock()
