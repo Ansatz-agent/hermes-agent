@@ -130,7 +130,7 @@ import { DESKTOP_WINDOW_TITLE } from './desktop-branding'
 import { loadOrCreateInstallationId, sshOwnershipId } from './desktop-installation'
 import { formatDesktopLogLine } from './desktop-log-line'
 import { DesktopRuntimeGate } from './desktop-runtime-gate'
-import { prepareLocalTraceCapture } from './desktop-trace-startup'
+import { LocalTraceCaptureController } from './desktop-trace-startup'
 import {
   buildPosixCleanupScript,
   buildWindowsCleanupScript,
@@ -8837,61 +8837,16 @@ const sshConnections = new Map<string, any>()
 const sshAuthBridges = new Map<string, any>()
 const desktopInstallationId = loadOrCreateInstallationId(DESKTOP_INSTALLATION_PATH)
 
-let desktopTraceContext = null
-let desktopTraceForwarder = null
-let desktopTraceGeneration = 0
-let desktopTraceStartupPromise = null
-let desktopTraceStartupScope = null
-let desktopTraceRetryTimer = null
-let desktopTraceRetryScope = null
-
 const TRACE_CAPTURE_RETRY_MS = 15_000
 const TRACE_CAPTURE_SETUP_TIMEOUT_MS = 5_000
 
-function traceContextForBackendRoot(root) {
-  if (!desktopTraceContext) {
-    return null
-  }
-
-  return {
-    ...desktopTraceContext,
-    pluginsToml: path.join(root, 'config', 'ansatz-voice-trace', 'plugins.toml')
-  }
-}
-
-async function ensureDesktopTraceForwarder(scope) {
-  if (desktopTraceContext && sameConnectionScope(desktopTraceContext.scope, scope)) {
-    return desktopTraceContext
-  }
-
-  if (desktopTraceStartupPromise) {
-    const pendingScope = desktopTraceStartupScope
-
-    try {
-      await desktopTraceStartupPromise
-    } catch (error) {
-      if (sameConnectionScope(pendingScope, scope)) {
-        throw error
-      }
-    }
-
-    if (desktopTraceContext && sameConnectionScope(desktopTraceContext.scope, scope)) {
-      return desktopTraceContext
-    }
-  }
-
-  const generation = ++desktopTraceGeneration
-
-  const startup = (async () => {
-    const previous = desktopTraceForwarder
-
-    desktopTraceForwarder = null
-    desktopTraceContext = null
-
-    if (previous) {
-      await previous.stop({ flushMs: 0 })
-    }
-
+const desktopTraceCapture = new LocalTraceCaptureController({
+  isScopeCurrent: scope => sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope),
+  onDiagnostic: () => rememberLog('[trace] trace capture unavailable'),
+  retryMs: TRACE_CAPTURE_RETRY_MS,
+  sameScope: sameConnectionScope,
+  setupTimeoutMs: TRACE_CAPTURE_SETUP_TIMEOUT_MS,
+  startCapture: async scope => {
     const provider = new RefreshingTraceCredentialProvider({
       load: async () => {
         const bridge = desktopAuthBridge
@@ -8907,10 +8862,7 @@ async function ensureDesktopTraceForwarder(scope) {
           telemetry_schema_version: '1'
         })
 
-        if (
-          generation !== desktopTraceGeneration ||
-          !sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope)
-        ) {
+        if (!sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope)) {
           throw new AuthBridgeError('auth_required', 'session_rejected')
         }
 
@@ -8925,114 +8877,44 @@ async function ensureDesktopTraceForwarder(scope) {
 
     const started = await forwarder.start(scope.epoch)
 
-    if (generation !== desktopTraceGeneration || !sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope)) {
-      await forwarder.stop({ flushMs: 0 })
-      throw new AuthBridgeError('auth_required', 'session_rejected')
+    return {
+      forwarder,
+      traceContext: {
+        endpoint: started.endpoint,
+        installationId: desktopInstallationId,
+        localAuthorization: `Bearer ${started.localBearer}`,
+        scope: { ...scope }
+      }
     }
+  },
+  stopCapture: async (capture, flushMs) => {
+    await capture.forwarder.stop({ flushMs })
+  }
+})
 
-    desktopTraceForwarder = forwarder
-    desktopTraceContext = {
-      endpoint: started.endpoint,
-      installationId: desktopInstallationId,
-      localAuthorization: `Bearer ${started.localBearer}`,
-      scope: { ...scope }
-    }
+function traceContextForBackendRoot(root) {
+  const capture = desktopTraceCapture.current()
 
-    return desktopTraceContext
-  })()
+  if (!capture) {
+    return null
+  }
 
-  desktopTraceStartupPromise = startup
-  desktopTraceStartupScope = { ...scope }
-
-  try {
-    return await startup
-  } finally {
-    if (desktopTraceStartupPromise === startup) {
-      desktopTraceStartupPromise = null
-      desktopTraceStartupScope = null
-    }
+  return {
+    ...capture.traceContext,
+    pluginsToml: path.join(root, 'config', 'ansatz-voice-trace', 'plugins.toml')
   }
 }
 
-function cancelDesktopTraceCaptureRetry() {
-  if (desktopTraceRetryTimer) {
-    clearTimeout(desktopTraceRetryTimer)
-    desktopTraceRetryTimer = null
-  }
-
-  desktopTraceRetryScope = null
-}
-
-async function startDesktopTraceForwarderWithDeadline(scope) {
-  let timeout = null
-
-  const deadline = new Promise((_, reject) => {
-    timeout = setTimeout(() => reject(new Error('trace_capture_setup_timeout')), TRACE_CAPTURE_SETUP_TIMEOUT_MS)
-    timeout.unref?.()
-  })
-
-  try {
-    return await Promise.race([ensureDesktopTraceForwarder(scope), deadline])
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout)
-    }
-  }
-}
-
-function scheduleDesktopTraceCaptureRetry(scope) {
-  const currentScope = desktopAuthCoordinator?.scope('local')
-
-  if (!sameConnectionScope(currentScope, scope)) {
-    return
-  }
-
-  if (desktopTraceRetryTimer && sameConnectionScope(desktopTraceRetryScope, scope)) {
-    return
-  }
-
-  cancelDesktopTraceCaptureRetry()
-  desktopTraceRetryScope = { ...scope }
-  desktopTraceRetryTimer = setTimeout(() => {
-    const retryScope = desktopTraceRetryScope
-
-    desktopTraceRetryTimer = null
-    desktopTraceRetryScope = null
-
-    if (!sameConnectionScope(desktopAuthCoordinator?.scope('local'), retryScope)) {
-      return
-    }
-
-    void prepareTraceCaptureForLocalScope(retryScope).catch(() => {})
-  }, TRACE_CAPTURE_RETRY_MS)
-  desktopTraceRetryTimer.unref?.()
+async function ensureDesktopTraceForwarder(scope) {
+  return (await desktopTraceCapture.prepare(scope))?.traceContext ?? null
 }
 
 async function prepareTraceCaptureForLocalScope(scope) {
-  const context = await prepareLocalTraceCapture({
-    startListener: () => startDesktopTraceForwarderWithDeadline(scope),
-    onDiagnostic: () => rememberLog('[trace] trace capture unavailable'),
-    scheduleRetry: () => scheduleDesktopTraceCaptureRetry(scope)
-  })
-
-  if (context) {
-    cancelDesktopTraceCaptureRetry()
-  }
-
-  return context
+  return ensureDesktopTraceForwarder(scope)
 }
 
 async function stopDesktopTraceForwarder(flushMs = 3_000) {
-  desktopTraceGeneration += 1
-  cancelDesktopTraceCaptureRetry()
-  const forwarder = desktopTraceForwarder
-
-  desktopTraceForwarder = null
-  desktopTraceContext = null
-
-  if (forwarder) {
-    await forwarder.stop({ flushMs })
-  }
+  await desktopTraceCapture.stop(flushMs)
 }
 
 const sshBootstrapCoordinator = createBootstrapCoordinator()

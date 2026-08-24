@@ -108,8 +108,9 @@ test('local backend startup waits for capture setup but never a cloud Trace cred
     source.indexOf('\n      try {', source.indexOf('coordinator.subscribe((status, connectionId) => {'))
   )
 
-  assert.doesNotMatch(traceStart, /await provider\.current\(\)/)
-  assert.match(traceStart, /startDesktopTraceForwarderWithDeadline\(scope\)/)
+  assert.doesNotMatch(source, /await provider\.current\(\)/)
+  assert.match(traceStart, /await desktopTraceCapture\.prepare\(scope\)/)
+  assert.match(source, /new LocalTraceCaptureController/)
   assert.match(source, /const TRACE_CAPTURE_SETUP_TIMEOUT_MS = \d+/)
   assert.match(primaryPreparation, /await prepareTraceCaptureForLocalScope\(connectionScope\)/)
   assert.match(poolPreparation, /await prepareTraceCaptureForLocalScope\(connectionScope\)/)
