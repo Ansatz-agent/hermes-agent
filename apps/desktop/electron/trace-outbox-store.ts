@@ -458,15 +458,37 @@ export class TraceOutboxStore {
           }
         }
 
-        const recordLength =
-          RECORD_PREFIX_BYTES +
-          prefix.readUInt32BE(5) +
-          prefix.readUInt32BE(9) +
-          prefix.readUInt32BE(13) +
-          prefix.readUInt32BE(17) +
-          32
-
-        if (recordLength > MAX_RECORD_BYTES || recordLength > size - offset) {
+        const headerLength = prefix.readUInt32BE(5)
+        const nonceLength = prefix.readUInt32BE(9)
+        const tagLength = prefix.readUInt32BE(13)
+        const ciphertextLength = prefix.readUInt32BE(17)
+        if (
+          !prefix.subarray(0, 4).equals(Buffer.from('ATOB')) ||
+          prefix.readUInt8(4) !== 1 ||
+          nonceLength !== 12 ||
+          tagLength !== 16 ||
+          headerLength > 64 * 1024 ||
+          ciphertextLength > 64 * 1024 * 1024
+        ) {
+          return {
+            nextOffset: offset,
+            quarantined: true,
+            records: [],
+            recoveredTornTail: false,
+            trustedPrefix: Buffer.alloc(0)
+          }
+        }
+        const recordLength = RECORD_PREFIX_BYTES + headerLength + nonceLength + tagLength + ciphertextLength + 32
+        if (recordLength > MAX_RECORD_BYTES) {
+          return {
+            nextOffset: offset,
+            quarantined: true,
+            records: [],
+            recoveredTornTail: false,
+            trustedPrefix: Buffer.alloc(0)
+          }
+        }
+        if (recordLength > size - offset) {
           return {
             nextOffset: offset,
             quarantined: false,

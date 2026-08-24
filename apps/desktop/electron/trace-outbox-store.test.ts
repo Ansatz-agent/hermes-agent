@@ -596,3 +596,25 @@ test('quarantines a sparse segment above capacity without reading its reported c
     false
   )
 })
+
+test('does not truncate a corrupt oversize prefix or scan past it', async () => {
+  const root = await temporaryOutboxDirectory()
+  try {
+    await buildCrashFixture(root, 'during-send')
+    const path = join(root, 'segments', 'active.segment')
+    const valid = await readFile(path)
+    const corrupt = Buffer.alloc(25)
+    Buffer.from('ATOB').copy(corrupt)
+    corrupt.writeUInt8(1, 4)
+    corrupt.writeUInt32BE(64 * 1024 * 1024 + 1, 17)
+    const fixture = Buffer.concat([valid.subarray(0, decodeSegmentRecord(valid, 0)!.nextOffset), corrupt, valid])
+    await writeFile(path, fixture)
+
+    const recovered = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+    assert.deepEqual(await readFile(path), fixture)
+    assert.equal((await recovered.diagnostics()).quarantined, 1)
+    assert.equal(await recovered.peekEligible(Number.MAX_SAFE_INTEGER), undefined)
+  } finally {
+    await rm(root, { force: true, recursive: true })
+  }
+})
