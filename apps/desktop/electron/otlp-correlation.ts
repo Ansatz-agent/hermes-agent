@@ -1,8 +1,9 @@
 const CORRELATION_ID = /^[0-9A-Za-z][0-9A-Za-z._:-]{0,127}$/
 const UTF8 = new TextDecoder('utf-8', { fatal: true })
 
-type ProtobufField = {
+export type ProtobufField = {
   bytes?: Buffer
+  encoded: Buffer
   number: number
   wireType: number
 }
@@ -42,7 +43,7 @@ const RUN_KEYS = Object.freeze([
  * whose span projection does not include a Hermes-specific attribute.
  */
 export function deriveOtlpCorrelation(body: Buffer): OtlpCorrelation | null {
-  const request = fields(body)
+  const request = readFields(body)
 
   if (!request) {
     return null
@@ -52,14 +53,14 @@ export function deriveOtlpCorrelation(body: Buffer): OtlpCorrelation | null {
   let traceId = ''
 
   for (const resourceSpans of messages(request, 1)) {
-    const resourceSpansFields = fields(resourceSpans)
+    const resourceSpansFields = readFields(resourceSpans)
 
     if (!resourceSpansFields) {
       return null
     }
 
     for (const resource of messages(resourceSpansFields, 1)) {
-      const resourceFields = fields(resource)
+      const resourceFields = readFields(resource)
 
       if (!resourceFields || !collectKeyValues(resourceFields, 1, attributes)) {
         return null
@@ -67,14 +68,14 @@ export function deriveOtlpCorrelation(body: Buffer): OtlpCorrelation | null {
     }
 
     for (const scopeSpans of messages(resourceSpansFields, 2)) {
-      const scopeSpansFields = fields(scopeSpans)
+      const scopeSpansFields = readFields(scopeSpans)
 
       if (!scopeSpansFields) {
         return null
       }
 
       for (const span of messages(scopeSpansFields, 2)) {
-        const spanFields = fields(span)
+        const spanFields = readFields(span)
 
         if (!spanFields) {
           return null
@@ -105,13 +106,9 @@ export function deriveOtlpCorrelation(body: Buffer): OtlpCorrelation | null {
   }
 }
 
-function collectKeyValues(
-  source: ProtobufField[],
-  fieldNumber: number,
-  target: Map<string, string>
-): boolean {
+function collectKeyValues(source: ProtobufField[], fieldNumber: number, target: Map<string, string>): boolean {
   for (const message of messages(source, fieldNumber)) {
-    const keyValueFields = fields(message)
+    const keyValueFields = readFields(message)
 
     if (!keyValueFields) {
       return false
@@ -124,7 +121,7 @@ function collectKeyValues(
       continue
     }
 
-    const valueFields = fields(valueMessage)
+    const valueFields = readFields(valueMessage)
     const valueBytes = valueFields?.find(field => field.number === 1 && field.wireType === 2)?.bytes
 
     if (!valueFields || !valueBytes) {
@@ -164,11 +161,12 @@ function messages(source: ProtobufField[], fieldNumber: number): Buffer[] {
     .map(field => field.bytes!)
 }
 
-function fields(message: Buffer): ProtobufField[] | null {
+export function readFields(message: Buffer): ProtobufField[] | null {
   const result: ProtobufField[] = []
   let offset = 0
 
   while (offset < message.length) {
+    const start = offset
     const key = readVarint(message, offset)
 
     if (!key || key.value === 0) {
@@ -191,7 +189,7 @@ function fields(message: Buffer): ProtobufField[] | null {
       }
 
       offset = value.offset
-      result.push({ number, wireType })
+      result.push({ encoded: message.subarray(start, offset), number, wireType })
 
       continue
     }
@@ -204,7 +202,7 @@ function fields(message: Buffer): ProtobufField[] | null {
       }
 
       offset += size
-      result.push({ number, wireType })
+      result.push({ encoded: message.subarray(start, offset), number, wireType })
 
       continue
     }
@@ -222,11 +220,38 @@ function fields(message: Buffer): ProtobufField[] | null {
     offset = length.offset
     const end = offset + length.value
 
-    result.push({ bytes: message.subarray(offset, end), number, wireType })
     offset = end
+    result.push({
+      bytes: message.subarray(length.offset, end),
+      encoded: message.subarray(start, offset),
+      number,
+      wireType
+    })
   }
 
   return result
+}
+
+export function encodeLengthDelimited(fieldNumber: number, value: Buffer): Buffer {
+  return Buffer.concat([encodeVarint((fieldNumber << 3) | 2), encodeVarint(value.length), value])
+}
+
+export function encodeMessage(fields: readonly ProtobufField[]): Buffer {
+  return Buffer.concat(fields.map(field => field.encoded))
+}
+
+function encodeVarint(value: number): Buffer {
+  const bytes: number[] = []
+  let remaining = value
+
+  do {
+    const byte = remaining & 0x7f
+
+    remaining = Math.floor(remaining / 128)
+    bytes.push(remaining > 0 ? byte | 0x80 : byte)
+  } while (remaining > 0)
+
+  return Buffer.from(bytes)
 }
 
 function readVarint(buffer: Buffer, start: number): { offset: number; value: number } | null {
