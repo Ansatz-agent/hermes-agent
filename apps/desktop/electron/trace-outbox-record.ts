@@ -92,7 +92,7 @@ function isTraceOwner(value: unknown): value is TraceOwner {
   }
 }
 
-function isTraceSegmentHeader(value: unknown): value is TraceSegmentHeader {
+export function isValidTraceSegmentHeader(value: unknown): value is TraceSegmentHeader {
   if (!isRecordObject(value) || !hasExactFields(value, HEADER_FIELDS)) {
     return false
   }
@@ -216,7 +216,7 @@ export function decodeSegmentRecord(segment: Buffer, offset: number): DecodedTra
     throw new Error('invalid_record_header')
   }
 
-  if (!isTraceSegmentHeader(header)) {
+  if (!isValidTraceSegmentHeader(header)) {
     throw new Error('invalid_record_header')
   }
 

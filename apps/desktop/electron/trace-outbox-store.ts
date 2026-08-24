@@ -9,7 +9,7 @@ import {
   type TraceJournalOperation,
   type TraceJournalReceiptOperation
 } from './trace-outbox-journal'
-import { encodeSegmentRecord } from './trace-outbox-record'
+import { encodeSegmentRecord, isValidTraceSegmentHeader } from './trace-outbox-record'
 import {
   type DurableReceipt,
   type DurableTraceBatch,
@@ -32,6 +32,7 @@ interface PersistedKey {
 interface PendingCommit {
   batchId: string
   cancellation: DurableReceipt | null
+  cancellationPromise: Promise<void> | null
   durable: Promise<DurableTraceBatch>
   input: TraceEnvelopeInput | null
   reject: (error: unknown) => void
@@ -58,6 +59,7 @@ export interface TraceOutboxStoreOptions {
   groupCommitBytes?: number
   groupCommitMs?: number
   keyProtector: TraceKeyProtector
+  monotonicNow?: () => number
   now?: () => number
   root: string
 }
@@ -135,6 +137,7 @@ export class TraceOutboxStore {
       groupCommitBytes,
       groupCommitMs,
       journal,
+      monotonicNow: options.monotonicNow ?? performance.now.bind(performance),
       now: options.now ?? Date.now,
       segmentPath: join(segmentDirectory, SEGMENT_FILE_NAME)
     })
@@ -178,6 +181,7 @@ export class TraceOutboxStore {
   private journalTail: Promise<void> = Promise.resolve()
   private nextSequence = 0
   private pendingInputBytes = 0
+  private pendingDeadline: number | null = null
   private segmentOffset = 0
 
   private constructor(
@@ -187,6 +191,7 @@ export class TraceOutboxStore {
       groupCommitBytes: number
       groupCommitMs: number
       journal: TraceJournal
+      monotonicNow: () => number
       now: () => number
       segmentPath: string
     }
@@ -211,6 +216,7 @@ export class TraceOutboxStore {
     const item: PendingCommit = {
       batchId,
       cancellation: null,
+      cancellationPromise: null,
       durable,
       input: { ...input, body: Buffer.from(input.body), owner: { ...input.owner } },
       receiptJournaled: false,
@@ -222,6 +228,11 @@ export class TraceOutboxStore {
 
     this.pending.push(item)
     this.pendingInputBytes += input.body.length
+
+    if (this.pendingDeadline === null) {
+      this.pendingDeadline = this.config.monotonicNow() + this.config.groupCommitMs
+    }
+
     this.scheduleFlush()
 
     return {
@@ -283,11 +294,13 @@ export class TraceOutboxStore {
   }
 
   private scheduleFlush(): void {
-    if (this.flushPromise !== null || this.pending.length === 0) {
+    if (this.pending.length === 0 || this.flushPromise !== null) {
       return
     }
 
-    if (this.pendingInputBytes >= this.config.groupCommitBytes) {
+    const delay = Math.max(0, (this.pendingDeadline ?? this.config.monotonicNow()) - this.config.monotonicNow())
+
+    if (this.pendingInputBytes >= this.config.groupCommitBytes || delay === 0) {
       void this.flush().catch(() => undefined)
 
       return
@@ -297,7 +310,7 @@ export class TraceOutboxStore {
       this.flushTimer = setTimeout(() => {
         this.flushTimer = null
         void this.flush().catch(() => undefined)
-      }, this.config.groupCommitMs)
+      }, delay)
     }
   }
 
@@ -318,6 +331,7 @@ export class TraceOutboxStore {
     }
 
     this.pendingInputBytes = 0
+    this.pendingDeadline = null
     group.forEach(item => {
       item.state = 'flushing'
     })
@@ -418,13 +432,19 @@ export class TraceOutboxStore {
       sequence: item.sequence
     }
 
+    const header = this.headerFrom(batch)
+
+    if (!isValidTraceSegmentHeader(header)) {
+      throw new Error('invalid_record_header')
+    }
+
     const encrypted = await encryptTraceRecord(
       body,
       this.config.dataKey,
       Buffer.from(`${owner.accountKey}/${batch.batchId}`, 'utf8')
     )
 
-    return { batch, encoded: encodeSegmentRecord({ encrypted, header: this.headerFrom(batch) }), item }
+    return { batch, encoded: encodeSegmentRecord({ encrypted, header }), item }
   }
 
   private headerFrom(batch: DurableTraceBatch): Omit<DurableTraceBatch, 'body'> {
@@ -433,21 +453,27 @@ export class TraceOutboxStore {
     return header
   }
 
-  private async cancelForGatewayReceipt(item: PendingCommit, receipt: DurableReceipt): Promise<void> {
+  private cancelForGatewayReceipt(item: PendingCommit, receipt: DurableReceipt): Promise<void> {
     if (receipt.batchId !== item.batchId) {
-      throw new TypeError('receipt_batch_mismatch')
+      return Promise.reject(new TypeError('receipt_batch_mismatch'))
     }
 
     if (item.cancellation !== null) {
       if (item.cancellation.outcome !== receipt.outcome || item.cancellation.receivedAt !== receipt.receivedAt) {
-        throw new Error('conflicting_gateway_receipt')
+        return Promise.reject(new Error('conflicting_gateway_receipt'))
       }
 
-      return
+      return item.cancellationPromise ?? Promise.resolve()
     }
 
     item.cancellation = { ...receipt }
+    const cancellation = this.persistCancellation(item, receipt)
+    item.cancellationPromise = cancellation
 
+    return cancellation
+  }
+
+  private async persistCancellation(item: PendingCommit, receipt: DurableReceipt): Promise<void> {
     if (item.state === 'queued') {
       const index = this.pending.indexOf(item)
 
@@ -458,8 +484,14 @@ export class TraceOutboxStore {
       this.pendingInputBytes -= item.input?.body.length ?? 0
       item.input = null
       item.state = 'cancelled'
-      await this.persistReceipt(receipt)
-      item.reject(new Error('local_commit_cancelled'))
+
+      try {
+        await this.persistReceipt(receipt)
+        item.reject(new Error('local_commit_cancelled'))
+      } catch (error) {
+        item.reject(error)
+        throw error
+      }
 
       return
     }

@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto'
-import { appendFile, mkdir, open, readFile, rename, unlink, writeFile } from 'node:fs/promises'
+import { constants, type Stats } from 'node:fs'
+import { lstat, mkdir, open, rename, unlink } from 'node:fs/promises'
+import { type FileHandle } from 'node:fs/promises'
 
 export interface TraceFileSystem {
   appendFile(path: string, data: Buffer): Promise<void>
@@ -12,14 +14,96 @@ export interface TraceFileSystem {
   writeFile(path: string, data: Buffer, options?: { exclusive?: boolean }): Promise<void>
 }
 
+const UNSAFE_PATH = 'unsafe_trace_outbox_path'
+const PRIVATE_MODE_MASK = 0o077
+const NO_FOLLOW = constants.O_NOFOLLOW ?? 0
+
+function currentUid(): number | null {
+  return typeof process.getuid === 'function' ? process.getuid() : null
+}
+
+function assertSafeStats(stats: Stats, type: 'directory' | 'file'): void {
+  if (stats.isSymbolicLink() || (type === 'directory' ? !stats.isDirectory() : !stats.isFile())) {
+    throw new Error(UNSAFE_PATH)
+  }
+
+  const uid = currentUid()
+
+  if ((uid !== null && stats.uid !== uid) || (stats.mode & PRIVATE_MODE_MASK) !== 0) {
+    throw new Error(UNSAFE_PATH)
+  }
+}
+
+async function assertSafePath(path: string, type: 'directory' | 'file'): Promise<void> {
+  try {
+    assertSafeStats(await lstat(path), type)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      throw error
+    }
+
+    if ((error as Error).message === UNSAFE_PATH) {
+      throw error
+    }
+
+    throw new Error(UNSAFE_PATH)
+  }
+}
+
+async function openSafeFile(path: string, flags: number): Promise<FileHandle> {
+  let handle: FileHandle
+
+  try {
+    handle = await open(path, flags | NO_FOLLOW, 0o600)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ELOOP') {
+      throw new Error(UNSAFE_PATH)
+    }
+
+    throw error
+  }
+
+  try {
+    assertSafeStats(await handle.stat(), 'file')
+
+    return handle
+  } catch (error) {
+    await handle.close()
+    throw error
+  }
+}
+
 export const nodeTraceFileSystem: TraceFileSystem = {
-  appendFile,
+  async appendFile(path: string, data: Buffer): Promise<void> {
+    const handle = await openSafeFile(path, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT)
+
+    try {
+      await handle.writeFile(data)
+    } finally {
+      await handle.close()
+    }
+  },
   async mkdir(path: string): Promise<void> {
-    await mkdir(path, { recursive: true })
+    try {
+      await mkdir(path, { mode: 0o700, recursive: true })
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+        throw error
+      }
+    }
+
+    await assertSafePath(path, 'directory')
   },
   async readFile(path: string): Promise<Buffer | null> {
     try {
-      return await readFile(path)
+      await assertSafePath(path, 'file')
+      const handle = await openSafeFile(path, constants.O_RDONLY)
+
+      try {
+        return await handle.readFile()
+      } finally {
+        await handle.close()
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         return null
@@ -28,9 +112,24 @@ export const nodeTraceFileSystem: TraceFileSystem = {
       throw error
     }
   },
-  rename,
+  async rename(from: string, to: string): Promise<void> {
+    await assertSafePath(from, 'file')
+
+    try {
+      await lstat(to)
+      throw new Error(UNSAFE_PATH)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw error
+      }
+    }
+
+    await rename(from, to)
+    await assertSafePath(to, 'file')
+  },
   async syncDirectory(path: string): Promise<void> {
-    const handle = await open(path, 'r')
+    await assertSafePath(path, 'directory')
+    const handle = await open(path, constants.O_RDONLY | constants.O_DIRECTORY | NO_FOLLOW)
 
     try {
       await handle.sync()
@@ -39,7 +138,8 @@ export const nodeTraceFileSystem: TraceFileSystem = {
     }
   },
   async syncFile(path: string): Promise<void> {
-    const handle = await open(path, 'r')
+    await assertSafePath(path, 'file')
+    const handle = await openSafeFile(path, constants.O_RDONLY)
 
     try {
       await handle.sync()
@@ -47,9 +147,21 @@ export const nodeTraceFileSystem: TraceFileSystem = {
       await handle.close()
     }
   },
-  unlink,
+  async unlink(path: string): Promise<void> {
+    await assertSafePath(path, 'file')
+    await unlink(path)
+  },
   async writeFile(path: string, data: Buffer, options?: { exclusive?: boolean }): Promise<void> {
-    await writeFile(path, data, { flag: options?.exclusive ? 'wx' : 'w' })
+    const flags =
+      constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (options?.exclusive ? constants.O_EXCL : 0)
+
+    const handle = await openSafeFile(path, flags)
+
+    try {
+      await handle.writeFile(data)
+    } finally {
+      await handle.close()
+    }
   }
 }
 

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
 import { test } from 'vitest'
@@ -202,6 +202,7 @@ test('syncs an exclusive same-directory key temporary before renaming it into pl
   const keyWrite = fs.allEvents.findIndex(
     event => event.startsWith('write:/outbox/key.json.tmp-') && event.endsWith(':exclusive')
   )
+
   const keySync = fs.allEvents.findIndex(event => event.startsWith('sync-file:/outbox/key.json.tmp-'))
   const keyRename = fs.allEvents.findIndex(event => event.startsWith('rename:/outbox/key.json.tmp-'))
   const directorySync = fs.allEvents.indexOf('sync-directory:/outbox')
@@ -277,4 +278,123 @@ test('a segment sync failure rejects every member before journal metadata is wri
     /segment_sync_failed/
   )
   assert.equal(fs.events.includes('journal.write'), false)
+})
+
+test('rejects invalid runtime input and invalid injected time before writing an outgoing record', async () => {
+  const cases = [
+    {
+      input: { ...envelope('bad-input'), runId: '../bad' } as TraceEnvelopeInput,
+      now: () => 1_798_000_000_000
+    },
+    { input: envelope('bad-now'), now: () => Number.NaN }
+  ]
+
+  for (const testCase of cases) {
+    const fs = new FakeTraceFileSystem()
+    const store = await TraceOutboxStore.open(options({ fs, groupCommitMs: 1, now: testCase.now }))
+
+    await assert.rejects(store.enqueue(testCase.input), /invalid_record_header/)
+    assert.equal(fs.events.includes('segment.write'), false)
+    assert.equal(fs.events.includes('journal.write'), false)
+    assert.equal((await store.diagnostics()).payloadBytes, 0)
+  }
+})
+
+test('coalesces concurrent identical Gateway receipts and rejects all callers if their receipt sync fails', async () => {
+  const fs = new FakeTraceFileSystem({
+    'journal.sync': () => {
+      throw new Error('receipt_sync_failed')
+    }
+  })
+
+  const store = await TraceOutboxStore.open(options({ fs }))
+  const pending = store.beginEnqueue(envelope('receipt-failure'))
+  const accepted = receipt(pending.batchId, 'accepted')
+  const first = pending.cancelForGatewayReceipt(accepted)
+  const second = pending.cancelForGatewayReceipt(accepted)
+
+  assert.strictEqual(first, second)
+  await assert.rejects(first, /receipt_sync_failed/)
+  await assert.rejects(second, /receipt_sync_failed/)
+  await assert.rejects(pending.durable, /receipt_sync_failed/)
+  await assert.rejects(
+    pending.cancelForGatewayReceipt(receipt(pending.batchId, 'duplicate')),
+    /conflicting_gateway_receipt/
+  )
+})
+
+test('rejects symlinked outbox root, segments, key, and journal paths before reading or writing through them', async () => {
+  const tmpBase = resolve(process.cwd(), 'tmp')
+  await mkdir(tmpBase, { recursive: true })
+  const base = await mkdtemp(join(tmpBase, 'trace-outbox-symlink-'))
+
+  try {
+    const target = join(base, 'target')
+    await mkdir(target)
+
+    const cases = [
+      { name: 'root', setup: async () => symlink(target, join(base, 'root')) },
+      {
+        name: 'segments',
+        setup: async () => {
+          const root = join(base, 'segments-root')
+          await mkdir(root)
+          await symlink(target, join(root, 'segments'))
+
+          return root
+        }
+      },
+      {
+        name: 'key',
+        setup: async () => {
+          const root = join(base, 'key-root')
+          await mkdir(root)
+          await writeFile(join(base, 'key-target'), 'not-a-key')
+          await symlink(join(base, 'key-target'), join(root, 'key.json'))
+
+          return root
+        }
+      },
+      {
+        name: 'journal',
+        setup: async () => {
+          const root = join(base, 'journal-root')
+          await mkdir(root)
+          await writeFile(join(base, 'journal-target'), '')
+          await symlink(join(base, 'journal-target'), join(root, 'index.journal'))
+
+          return root
+        }
+      }
+    ]
+
+    for (const candidate of cases) {
+      const configuredRoot = await candidate.setup()
+      const root = typeof configuredRoot === 'string' ? configuredRoot : join(base, 'root')
+      await assert.rejects(
+        TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root }),
+        /unsafe_trace_outbox_path/
+      )
+    }
+  } finally {
+    await rm(base, { force: true, recursive: true })
+  }
+})
+
+test('drains an overdue next group immediately after a slow prior group releases', async () => {
+  const gate = deferred<void>()
+  let monotonicNow = 0
+  const fs = new FakeTraceFileSystem({ 'segment.sync': () => gate.promise })
+  const store = await TraceOutboxStore.open(options({ fs, groupCommitMs: 50, monotonicNow: () => monotonicNow }))
+  const first = store.enqueue(envelope('slow-first'))
+
+  await fs.waitFor('segment.sync')
+  const second = store.enqueue(envelope('overdue-second'))
+  monotonicNow = 51
+  gate.resolve()
+  await first
+  await new Promise<void>(resolve => setTimeout(resolve, 20))
+
+  assert.equal(fs.events.filter(event => event === 'segment.write').length, 2)
+  await second
 })
