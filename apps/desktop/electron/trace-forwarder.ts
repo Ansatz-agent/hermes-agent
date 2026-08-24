@@ -3,6 +3,7 @@ import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 
 import type { TraceCredential } from './auth-bridge'
 import { deriveOtlpCorrelation } from './otlp-correlation'
+import type { TraceCredentialProvider } from './trace-credential-provider'
 import {
   TraceForwarderQueue,
   type TraceForwarderQueueSummary,
@@ -16,66 +17,11 @@ const UPSTREAM_TIMEOUT_MS = 15_000
 const CORRELATION_ID = /^[0-9A-Za-z][0-9A-Za-z._:-]{0,127}$/
 const ENTRYPOINTS = new Set(['desktop', 'voice', 'cli', 'dashboard'])
 
-export type TraceCredentialSource = {
-  load(forceRefresh: boolean): Promise<TraceCredential>
-}
-
-export type TraceCredentialProvider = {
-  current(options?: { forceRefresh?: boolean }): Promise<TraceCredential>
-  clear(): void
-}
-
-type RefreshingTraceCredentialProviderOptions = {
-  clock?: () => number
-}
-
-export class RefreshingTraceCredentialProvider implements TraceCredentialProvider {
-  private readonly clock: () => number
-  private credential: TraceCredential | null = null
-  private pending: Promise<TraceCredential> | null = null
-
-  constructor(
-    private readonly source: TraceCredentialSource,
-    options: RefreshingTraceCredentialProviderOptions = {}
-  ) {
-    this.clock = options.clock ?? Date.now
-  }
-
-  current({ forceRefresh = false }: { forceRefresh?: boolean } = {}): Promise<TraceCredential> {
-    const expiresAt = this.credential ? Date.parse(this.credential.expires_at) : 0
-
-    if (!forceRefresh && this.credential && this.clock() < expiresAt - 60_000) {
-      return Promise.resolve(this.credential)
-    }
-
-    if (this.pending) {
-      return this.pending
-    }
-
-    this.pending = this.source.load(forceRefresh).then(credential => {
-      if (
-        credential.installation_id.length !== 36 ||
-        !Number.isFinite(Date.parse(credential.expires_at)) ||
-        Date.parse(credential.expires_at) <= this.clock()
-      ) {
-        throw new Error('trace_credential_unavailable')
-      }
-
-      this.credential = credential
-
-      return credential
-    })
-
-    return this.pending.finally(() => {
-      this.pending = null
-    })
-  }
-
-  clear(): void {
-    this.credential = null
-    this.pending = null
-  }
-}
+export {
+  RefreshingTraceCredentialProvider,
+  type TraceCredentialProvider,
+  type TraceCredentialSource
+} from './trace-credential-provider'
 
 type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>
 
@@ -188,7 +134,6 @@ export class TraceForwarder {
     this.server = null
 
     const closePromise = server ? new Promise<void>(resolve => server.close(() => resolve())) : Promise.resolve()
-
     // `server.close()` waits for active requests. A crashed or suspended OTLP
     // producer can leave an incomplete loopback request open forever, which
     // would otherwise block terminal auth cleanup before the backend is
@@ -337,6 +282,7 @@ export class TraceForwarder {
       const response = await this.fetchUpstream(batch, initial)
 
       if (response.status === 401) {
+        this.credentialProvider.invalidate()
         const rotated = await this.credentialProvider.current({ forceRefresh: true })
         const retried = await this.fetchUpstream(batch, rotated)
 

@@ -231,8 +231,18 @@ test('one upstream 401 forces one credential refresh and resends identical bytes
   const bodies: Buffer[] = []
   const authorizations: string[] = []
 
+  const provider = new RefreshingTraceCredentialProvider(source)
+  const invalidate = provider.invalidate.bind(provider)
+
+  let invalidations = 0
+
+  provider.invalidate = () => {
+    invalidations += 1
+    invalidate()
+  }
+
   const forwarder = new TraceForwarder({
-    credentialProvider: new RefreshingTraceCredentialProvider(source),
+    credentialProvider: provider,
     fetchImpl: async (_input, init) => {
       bodies.push(Buffer.from(init?.body as Buffer))
       authorizations.push(new Headers(init?.headers).get('authorization') ?? '')
@@ -253,6 +263,7 @@ test('one upstream 401 forces one credential refresh and resends identical bytes
       'Bearer public-trace-token-refreshed-1234567890'
     ])
     assert.deepEqual(source.calls, [false, true])
+    assert.equal(invalidations, 2)
   } finally {
     await forwarder.stop({ flushMs: 3_000 })
   }
