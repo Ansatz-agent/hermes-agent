@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   createMediaProtocolHandler,
   isStreamableMediaPath,
+  MEDIA_PROTOCOL,
   type MediaProtocolDependencies,
   mediaRequestHeaders,
   remoteMediaEndpoint
@@ -30,6 +31,10 @@ function request(url: string, headers: Record<string, string> = {}, method = 'GE
 }
 
 describe('media protocol helpers', () => {
+  it('uses the Ansatz-owned local media scheme', () => {
+    expect(MEDIA_PROTOCOL).toBe('ansatz-media')
+  })
+
   it('recognises only supported audio/video extensions case-insensitively', () => {
     expect(isStreamableMediaPath('/tmp/render.MP4')).toBe(true)
     expect(isStreamableMediaPath('/tmp/voice.flac')).toBe(true)
@@ -63,7 +68,7 @@ describe('createMediaProtocolHandler', () => {
     const deps = dependencies()
 
     const response = await createMediaProtocolHandler(deps)(
-      request('hermes-media://stream/%2Ftmp%2Fclip.mp4', {
+      request('ansatz-media://stream/%2Ftmp%2Fclip.mp4', {
         Authorization: 'Bearer renderer-secret',
         Range: 'bytes=1-3'
       })
@@ -85,7 +90,7 @@ describe('createMediaProtocolHandler', () => {
     })
 
     const response = await createMediaProtocolHandler(deps)(
-      request('hermes-media://stream/%2Ftmp%2Fclip.mp4', {}, 'HEAD')
+      request('ansatz-media://stream/%2Ftmp%2Fclip.mp4', {}, 'HEAD')
     )
 
     expect(response.status).toBe(200)
@@ -105,7 +110,7 @@ describe('createMediaProtocolHandler', () => {
     })
 
     const response = await createMediaProtocolHandler(deps)(
-      request('hermes-media://remote/%2Froot%2Foutputs%2Frender.mp4?profile=reviewer', {
+      request('ansatz-media://remote/%2Froot%2Foutputs%2Frender.mp4?profile=reviewer', {
         Range: 'bytes=0-1023'
       })
     )
@@ -130,7 +135,7 @@ describe('createMediaProtocolHandler', () => {
     })
 
     const response = await createMediaProtocolHandler(deps)(
-      request('hermes-media://remote/%2Froot%2Foutputs%2Frender.mp4', {}, 'HEAD')
+      request('ansatz-media://remote/%2Froot%2Foutputs%2Frender.mp4', {}, 'HEAD')
     )
 
     expect(response.status).toBe(200)
@@ -142,7 +147,7 @@ describe('createMediaProtocolHandler', () => {
     const deps = dependencies()
 
     const response = await createMediaProtocolHandler(deps)(
-      request('hermes-media://remote/%2Froot%2Foutputs%2Frender.mp4', {}, 'POST')
+      request('ansatz-media://remote/%2Froot%2Foutputs%2Frender.mp4', {}, 'POST')
     )
 
     expect(response.status).toBe(405)
@@ -162,7 +167,7 @@ describe('createMediaProtocolHandler', () => {
       }))
     })
 
-    const response = await createMediaProtocolHandler(deps)(request('hermes-media://remote/%2Ftmp%2Fclip.mp4'))
+    const response = await createMediaProtocolHandler(deps)(request('ansatz-media://remote/%2Ftmp%2Fclip.mp4'))
 
     expect(response.status).toBe(206)
     expect(deps.fetchRemote).toHaveBeenCalledOnce()
@@ -186,7 +191,7 @@ describe('createMediaProtocolHandler', () => {
     })
 
     const response = await createMediaProtocolHandler(deps)(
-      request('hermes-media://remote/%2Ftmp%2Fclip.mp4', {}, 'HEAD')
+      request('ansatz-media://remote/%2Ftmp%2Fclip.mp4', {}, 'HEAD')
     )
 
     expect(response.status).toBe(200)
@@ -206,7 +211,7 @@ describe('createMediaProtocolHandler', () => {
       }))
     })
 
-    const response = await createMediaProtocolHandler(deps)(request('hermes-media://remote/%2Ftmp%2Fclip.mp4'))
+    const response = await createMediaProtocolHandler(deps)(request('ansatz-media://remote/%2Ftmp%2Fclip.mp4'))
 
     expect(response.status).toBe(206)
     expect(deps.fetchRemote).not.toHaveBeenCalled()
@@ -229,7 +234,7 @@ describe('createMediaProtocolHandler', () => {
     })
 
     const response = await createMediaProtocolHandler(deps)(
-      request('hermes-media://remote/%2Ftmp%2Fclip.mp4', {}, 'HEAD')
+      request('ansatz-media://remote/%2Ftmp%2Fclip.mp4', {}, 'HEAD')
     )
 
     expect(response.status).toBe(200)
@@ -251,8 +256,8 @@ describe('createMediaProtocolHandler', () => {
 
     const handler = createMediaProtocolHandler(deps)
 
-    expect((await handler(request('hermes-media://remote/%2Ftmp%2Fsecret.txt'))).status).toBe(415)
-    expect((await handler(request('hermes-media://remote/%2Ftmp%2Fclip.mp4'))).status).toBe(401)
+    expect((await handler(request('ansatz-media://remote/%2Ftmp%2Fsecret.txt'))).status).toBe(415)
+    expect((await handler(request('ansatz-media://remote/%2Ftmp%2Fclip.mp4'))).status).toBe(401)
     expect(deps.fetchRemote).not.toHaveBeenCalled()
   })
 })

@@ -238,6 +238,7 @@ export async function startIsolatedInstance({
     const env = {
       ...process.env,
       HERMES_HOME: home,
+      ANSATZ_VOICE_TRACE_CLIENT_HOME: home,
       // The app's dev-CDP resolver (electron/dev-cdp.ts) appends its own
       // remote-debugging-port switch AFTER argv, so on a non-default --port the
       // Chromium flag below loses and the instance binds 9222 anyway. The env

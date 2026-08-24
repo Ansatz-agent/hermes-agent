@@ -467,6 +467,7 @@ export function AuthGate({
   }
 
   const reason = reasonText(t.auth.reasons, status.reason)
+  const reasonIsGuidance = !status.reason || status.reason === 'interactive_login_required'
   const runtimeSnapshot = bootstrapState?.manifest?.bootstrapScope === 'runtime' ? bootstrapState : null
   const authSnapshot = bootstrapState?.manifest?.bootstrapScope !== 'runtime' ? bootstrapState : null
 
@@ -510,8 +511,6 @@ export function AuthGate({
           </div>
           <code className="mt-1 block break-all text-sm">{ACCOUNT_SERVER}</code>
         </div>
-        <p className="mt-3 text-xs leading-5 text-(--dt-muted-foreground)">{t.auth.traceNotice}</p>
-
         {showAuthBootstrap && authSnapshot ? (
           <AuthBootstrapProgress mode="auth" now={now} onRetry={authSnapshot.error ? retry : undefined} state={authSnapshot} />
         ) : null}
@@ -562,7 +561,10 @@ export function AuthGate({
             </label>
 
             {reason ? (
-              <p className="text-sm text-(--dt-destructive)" role="alert">
+              <p
+                className={`text-sm ${reasonIsGuidance ? 'text-(--dt-muted-foreground)' : 'text-(--dt-destructive)'}`}
+                role={reasonIsGuidance ? 'status' : 'alert'}
+              >
                 {reason}
               </p>
             ) : null}

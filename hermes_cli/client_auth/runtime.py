@@ -49,6 +49,18 @@ _RUNTIME_RECOVERY_START_SECONDS = 4.0
 _RUNTIME_SERVER_READ_TIMEOUT_SECONDS = 5.0
 _RUNTIME_LOGIN_OPERATION_WAIT_SECONDS = 15.0
 _RUNTIME_LOGOUT_OPERATION_WAIT_SECONDS = 3.0
+_AUTH_RUNTIME_NAMESPACE_ENV = "HERMES_AUTH_RUNTIME_NAMESPACE"
+_AUTH_RUNTIME_NAMESPACE_PATTERN = re.compile(
+    r"[a-z0-9](?:[a-z0-9.-]{0,62}[a-z0-9])?",
+    flags=re.ASCII,
+)
+_AUTH_KEYRING_SERVICE_ENV = "HERMES_AUTH_KEYRING_SERVICE"
+_AUTH_LEGACY_KEYRING_SERVICE_ENV = "HERMES_AUTH_LEGACY_KEYRING_SERVICE"
+_AUTH_KEYRING_SERVICE_PATTERN = re.compile(
+    r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,126}[A-Za-z0-9])?",
+    flags=re.ASCII,
+)
+_DEFAULT_AUTH_KEYRING_SERVICE = "cn.c2sml.hermes.remote-auth"
 
 
 def _test_runtime_suffix() -> str:
@@ -58,6 +70,51 @@ def _test_runtime_suffix() -> str:
         return ""
     digest = hashlib.blake2s(marker.encode("utf-8"), digest_size=4).hexdigest()
     return f"-t{digest}"
+
+
+def _validate_auth_runtime_namespace(value: str) -> str:
+    if _AUTH_RUNTIME_NAMESPACE_PATTERN.fullmatch(value) is None:
+        raise AuthRequired("runtime_unavailable")
+    return value
+
+
+def _auth_runtime_namespace() -> str | None:
+    value = os.environ.get(_AUTH_RUNTIME_NAMESPACE_ENV)
+    if value is None:
+        return None
+    return _validate_auth_runtime_namespace(value)
+
+
+def _auth_runtime_namespace_suffix(namespace: str | None) -> str:
+    if namespace is None:
+        return ""
+    validated = _validate_auth_runtime_namespace(namespace)
+    digest = hashlib.blake2s(validated.encode("ascii"), digest_size=6).hexdigest()
+    return f"-p{digest}"
+
+
+def _validate_auth_keyring_service(value: str) -> str:
+    if _AUTH_KEYRING_SERVICE_PATTERN.fullmatch(value) is None:
+        raise AuthRequired("runtime_unavailable")
+    return value
+
+
+def _auth_keyring_services() -> tuple[str, str | None]:
+    service = os.environ.get(_AUTH_KEYRING_SERVICE_ENV)
+    legacy_service = os.environ.get(_AUTH_LEGACY_KEYRING_SERVICE_ENV)
+    if service is None:
+        if legacy_service is not None:
+            raise AuthRequired("runtime_unavailable")
+        return _DEFAULT_AUTH_KEYRING_SERVICE, None
+    validated_service = _validate_auth_keyring_service(service)
+    validated_legacy = (
+        _validate_auth_keyring_service(legacy_service)
+        if legacy_service is not None
+        else None
+    )
+    if validated_legacy == validated_service:
+        raise AuthRequired("runtime_unavailable")
+    return validated_service, validated_legacy
 
 
 class AuthState(StrEnum):
@@ -744,15 +801,20 @@ class UnixEndpoint:
         random_name: str,
         forbid_abstract: bool,
         darwin_user_temp: bool,
+        runtime_namespace: str | None = None,
     ) -> UnixEndpoint:
+        namespace_suffix = _auth_runtime_namespace_suffix(runtime_namespace)
         if sys.platform.startswith("linux"):
             if not forbid_abstract:
                 raise AuthRequired("runtime_unavailable")
-            runtime_root = _linux_runtime_root()
+            runtime_root = _linux_runtime_root(runtime_namespace=runtime_namespace)
         elif sys.platform == "darwin":
             if not darwin_user_temp:
                 raise AuthRequired("runtime_unavailable")
-            runtime_root = _darwin_user_temp_dir() / f"ha{_test_runtime_suffix()}"
+            runtime_root = (
+                _darwin_user_temp_dir()
+                / f"ha{namespace_suffix}{_test_runtime_suffix()}"
+            )
         else:
             raise AuthRequired("runtime_unavailable")
         return cls.for_directory(runtime_root, random_name=random_name)
@@ -1059,25 +1121,65 @@ class _MemorySecretBackend:
 
 
 class _KeyringSecretBackend:
-    SERVICE = "cn.c2sml.hermes.remote-auth"
+    SERVICE = _DEFAULT_AUTH_KEYRING_SERVICE
     ACCOUNT = "django-session"
+
+    def __init__(
+        self,
+        *,
+        service: str | None = None,
+        legacy_service: str | None = None,
+    ) -> None:
+        if service is None:
+            if legacy_service is not None:
+                raise AuthRequired("runtime_unavailable")
+            service, legacy_service = _auth_keyring_services()
+        else:
+            service = _validate_auth_keyring_service(service)
+            if legacy_service is not None:
+                legacy_service = _validate_auth_keyring_service(legacy_service)
+            if legacy_service == service:
+                raise AuthRequired("runtime_unavailable")
+        self._service = service
+        self._legacy_service = legacy_service
 
     def read(self) -> str | None:
         import keyring
 
-        return keyring.get_password(self.SERVICE, self.ACCOUNT)
+        raw = keyring.get_password(self._service, self.ACCOUNT)
+        if raw is not None:
+            if self._legacy_service is not None:
+                self._delete_service(keyring, self._legacy_service)
+            return raw
+        if self._legacy_service is None:
+            return None
+        legacy_raw = keyring.get_password(self._legacy_service, self.ACCOUNT)
+        if legacy_raw is None:
+            return None
+        keyring.set_password(self._service, self.ACCOUNT, legacy_raw)
+        if keyring.get_password(self._service, self.ACCOUNT) != legacy_raw:
+            self._delete_service(keyring, self._service)
+            raise RuntimeError("secure credential migration failed")
+        self._delete_service(keyring, self._legacy_service)
+        return legacy_raw
 
     def write(self, raw: str) -> None:
         import keyring
 
-        keyring.set_password(self.SERVICE, self.ACCOUNT, raw)
+        keyring.set_password(self._service, self.ACCOUNT, raw)
 
     def delete(self) -> None:
         import keyring
+
+        self._delete_service(keyring, self._service)
+        if self._legacy_service is not None:
+            self._delete_service(keyring, self._legacy_service)
+
+    def _delete_service(self, keyring, service: str) -> None:
         from keyring.errors import PasswordDeleteError
 
         try:
-            keyring.delete_password(self.SERVICE, self.ACCOUNT)
+            keyring.delete_password(service, self.ACCOUNT)
         except PasswordDeleteError:
             return
 
@@ -2246,6 +2348,10 @@ def _owner_process_environment() -> dict[str, str]:
     exact = {
         "APPDATA",
         "DISPLAY",
+        "HERMES_AUTH_KEYRING_SERVICE",
+        "HERMES_AUTH_LEGACY_KEYRING_SERVICE",
+        "HERMES_AUTH_RUNTIME_NAMESPACE",
+        "HERMES_HOME",
         "HOME",
         "KUBERNETES_SERVICE_HOST",
         "LANG",
@@ -2809,10 +2915,12 @@ def resolve_owner(
 def runtime_endpoint() -> UnixEndpoint | WindowsNamedPipeEndpoint:
     if os.name == "nt":
         return WindowsNamedPipeEndpoint.for_current_sid(first_instance=True)
+    runtime_namespace = _auth_runtime_namespace()
     return UnixEndpoint.for_current_user(
         random_name=secrets.token_hex(16),
         forbid_abstract=sys.platform.startswith("linux"),
         darwin_user_temp=sys.platform == "darwin",
+        runtime_namespace=runtime_namespace,
     )
 
 
@@ -3173,8 +3281,9 @@ def _validate_peer_uid(connection: socket.socket) -> None:
         raise AuthRequired("runtime_unavailable")
 
 
-def _linux_runtime_root() -> Path:
-    suffix = _test_runtime_suffix()
+def _linux_runtime_root(*, runtime_namespace: str | None = None) -> Path:
+    test_suffix = _test_runtime_suffix()
+    namespace_suffix = _auth_runtime_namespace_suffix(runtime_namespace)
     configured = os.environ.get("XDG_RUNTIME_DIR")
     if configured:
         base = Path(configured)
@@ -3188,8 +3297,16 @@ def _linux_runtime_root() -> Path:
             or stat.S_IMODE(details.st_mode) != 0o700
         ):
             raise AuthRequired("runtime_unavailable")
-        return base / f"hermes-remote-auth{suffix}"
-    return Path(tempfile.gettempdir()) / f"hermes-remote-auth-{os.getuid()}{suffix}"
+        if runtime_namespace is None:
+            return base / f"hermes-remote-auth{test_suffix}"
+        return base / f"ha{namespace_suffix}{test_suffix}"
+    if runtime_namespace is None:
+        return Path(tempfile.gettempdir()) / (
+            f"hermes-remote-auth-{os.getuid()}{test_suffix}"
+        )
+    return Path(tempfile.gettempdir()) / (
+        f"ha-{os.getuid()}{namespace_suffix}{test_suffix}"
+    )
 
 
 def _darwin_user_temp_dir() -> Path:

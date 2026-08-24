@@ -102,6 +102,67 @@ test('verifyHermesCli returns true when --version exits 0', () => {
   }
 })
 
+test('verifyHermesCli forwards the explicit probe environment', () => {
+  const expectedHome = path.join(os.tmpdir(), `ansatz-probe-home-${process.pid}`)
+  const windows = process.platform === 'win32'
+
+  const probePath = path.join(
+    os.tmpdir(),
+    `hermes-probe-env-${Date.now()}-${process.pid}${windows ? '.cmd' : '.sh'}`
+  )
+
+  const previousInherited = process.env.HERMES_PROBE_INHERITED
+  process.env.HERMES_PROBE_INHERITED = 'parent-sentinel'
+  const probeEnv = { ...process.env }
+  delete probeEnv.HERMES_PROBE_INHERITED
+
+  try {
+    if (windows) {
+      // Windows paths cannot contain double quotes, so quoted equality is safe.
+      fs.writeFileSync(
+        probePath,
+        '@echo off\r\n' +
+          'if "%HERMES_HOME%"=="" exit /b 97\r\n' +
+          'if "%HERMES_PROBE_EXPECTED_HOME%"=="" exit /b 97\r\n' +
+          'if not "%HERMES_HOME%"=="%HERMES_PROBE_EXPECTED_HOME%" exit /b 97\r\n' +
+          'if not "%HERMES_PROBE_INHERITED%"=="parent-sentinel" exit /b 97\r\n' +
+          'exit /b 0\r\n'
+      )
+    } else {
+      fs.writeFileSync(
+        probePath,
+        '#!/bin/sh\n' +
+          '[ -n "${HERMES_HOME:-}" ] &&\n' +
+          '[ -n "${HERMES_PROBE_EXPECTED_HOME:-}" ] &&\n' +
+          '[ "${HERMES_HOME:-}" = "${HERMES_PROBE_EXPECTED_HOME:-}" ] &&\n' +
+          '[ "${HERMES_PROBE_INHERITED:-}" = "parent-sentinel" ]\n'
+      )
+      fs.chmodSync(probePath, 0o755)
+    }
+
+    assert.equal(verifyHermesCli(probePath, {
+      env: {
+        ...probeEnv,
+        HERMES_HOME: expectedHome,
+        HERMES_PROBE_EXPECTED_HOME: expectedHome
+      },
+      shell: windows
+    }), true)
+  } finally {
+    if (previousInherited === undefined) {
+      delete process.env.HERMES_PROBE_INHERITED
+    } else {
+      process.env.HERMES_PROBE_INHERITED = previousInherited
+    }
+
+    try {
+      fs.unlinkSync(probePath)
+    } catch {
+      void 0
+    }
+  }
+})
+
 test('verifyHermesCli swallows timeouts (does not throw)', () => {
   // We can't easily provoke a real hang in CI without slowing the
   // suite, but we CAN confirm that an invocation that DOES throw

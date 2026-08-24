@@ -70,6 +70,7 @@ test('resolveRemovableAppPath finds only the Ansatz app bundle on macOS', () => 
     ),
     '/Users/x/Applications/Ansatz.app'
   )
+  // An independent legacy Hermes app is not owned by this product and must not be deleted.
   assert.equal(resolveRemovableAppPath('/Applications/Hermes.app/Contents/MacOS/Hermes', 'darwin'), null)
 })
 
@@ -98,8 +99,10 @@ test('resolveRemovableAppPath returns null for an unrecognized Windows dir', () 
 
 test('resolveRemovableAppPath uses APPIMAGE on Linux when set', () => {
   assert.equal(
-    resolveRemovableAppPath('/tmp/.mount_HermesXXXX/hermes', 'linux', { APPIMAGE: '/home/x/Apps/Hermes.AppImage' }),
-    '/home/x/Apps/Hermes.AppImage'
+    resolveRemovableAppPath('/tmp/.mount_AnsatzXXXX/ansatz-voice-trace-client', 'linux', {
+      APPIMAGE: '/home/x/Apps/Ansatz.AppImage'
+    }),
+    '/home/x/Apps/Ansatz.AppImage'
   )
 })
 
@@ -117,8 +120,8 @@ test('resolveRemovableAppPath returns null for an empty exe path', () => {
 // --- shouldRemoveAppBundle ---
 
 test('shouldRemoveAppBundle requires packaged AND a resolved path', () => {
-  assert.equal(shouldRemoveAppBundle(true, '/Applications/Hermes.app'), true)
-  assert.equal(shouldRemoveAppBundle(false, '/Applications/Hermes.app'), false)
+  assert.equal(shouldRemoveAppBundle(true, '/Applications/Ansatz.app'), true)
+  assert.equal(shouldRemoveAppBundle(false, '/Applications/Ansatz.app'), false)
   assert.equal(shouldRemoveAppBundle(true, null), false)
   assert.equal(shouldRemoveAppBundle(false, null), false)
 })

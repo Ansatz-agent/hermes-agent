@@ -92,7 +92,7 @@ test('a protected handle resolves the execution connection and authorizes before
 })
 
 test('locked and stale authorities fail closed with one redacted error', async () => {
-  for (const secret of ['__Host-ansatz_sessionid=do-not-leak', 'stale scope password-sentinel']) {
+  for (const secret of ['agent_history_sessionid=do-not-leak', 'stale scope password-sentinel']) {
     const { guarded, ipcMain } = fixture({
       require: vi.fn(async () => {
         throw new Error(secret)

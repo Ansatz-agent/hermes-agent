@@ -1,6 +1,8 @@
 import { session } from 'electron'
 
-const EMBED_SESSION_PARTITION = 'persist:hermes-embed'
+import { ANSATZ_PRODUCT } from './ansatz-product'
+
+const EMBED_SESSION_PARTITION = ANSATZ_PRODUCT.embedSessionPartition
 const EMBED_REFERER = 'https://www.youtube.com/'
 
 const YOUTUBE_REFERER_HOST_RE =
@@ -45,4 +47,4 @@ function installEmbedReferer() {
   }
 }
 
-export { installEmbedReferer }
+export { EMBED_SESSION_PARTITION, installEmbedReferer }

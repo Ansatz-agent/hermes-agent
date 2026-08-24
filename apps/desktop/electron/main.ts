@@ -32,13 +32,20 @@ import nodePty from 'node-pty'
 import { classifyActiveRuntime } from './active-runtime-state'
 import {
   ANSATZ_PRODUCT,
-  resolveAnsatzRuntimeRoot,
-  resolveAnsatzUserDataRoot
+  ansatzAuthEnvironment,
+  buildAnsatzTerminalEnvironment,
+  resolveAnsatzDesktopRuntimeRoot,
+  resolveAnsatzSshControlDirectory
 } from './ansatz-product'
 import { AuthBridgeError, DesktopAuthBridge } from './auth-bridge'
 import { AuthCoordinator } from './auth-coordinator'
 import { isAuthRuntimeUsable } from './auth-runtime-contract'
-import { encodeScopeTokenRegistration, issueAuthScopeToken, sanitizeAuthChildEnvironment } from './auth-scope-token'
+import {
+  encodeScopeTokenRegistration,
+  issueAuthScopeToken,
+  sanitizeAnsatzAuthChildEnvironment,
+  sanitizeAuthChildEnvironment
+} from './auth-scope-token'
 import { stopBackendChild as stopBackendChildImpl, stopBackendTreesForUpdate } from './backend-child'
 import { dashboardFallbackArgs, sourceDeclaresServe } from './backend-command'
 import { createBackendConnectionState } from './backend-connection-state'
@@ -119,6 +126,7 @@ import {
 } from './connection-registry'
 import { describeCrashReason, installCrashForensics } from './crash-forensics'
 import { adoptServedDashboardToken } from './dashboard-token'
+import { DESKTOP_WINDOW_TITLE } from './desktop-branding'
 import { loadOrCreateInstallationId, sshOwnershipId } from './desktop-installation'
 import { formatDesktopLogLine } from './desktop-log-line'
 import { DesktopRuntimeGate } from './desktop-runtime-gate'
@@ -217,6 +225,7 @@ import { createHudSnapShortcut } from './hud-snap-shortcut'
 import { buildHudWindowUrl } from './hud-url'
 import { imageContextMenuItems } from './image-context-menu'
 import { prepareInstallFirstRuntime } from './install-first-runtime'
+import { removeLegacyAnsatzPartitions } from './legacy-product-cleanup'
 import { createLinkTitleWindow, guardLinkTitleSession, readLinkTitleWindowTitle } from './link-title-window'
 import { ensureMainWindow } from './main-window-lifecycle'
 import { createMediaProtocolHandler, MEDIA_PROTOCOL } from './media-protocol'
@@ -358,10 +367,6 @@ if (USER_DATA_OVERRIDE) {
   const resolvedUserData = path.resolve(USER_DATA_OVERRIDE)
   fs.mkdirSync(resolvedUserData, { recursive: true })
   app.setPath('userData', resolvedUserData)
-} else if (app.isPackaged || Boolean(process.env.HERMES_DESKTOP_IS_PACKAGED)) {
-  const preservedUserData = resolveAnsatzUserDataRoot(process.platform, app.getPath('appData'))
-  fs.mkdirSync(preservedUserData, { recursive: true })
-  app.setPath('userData', preservedUserData)
 }
 
 const DEV_SERVER = process.env.HERMES_DESKTOP_DEV_SERVER
@@ -660,15 +665,17 @@ if (INSTALL_STAMP) {
 // existing Hermes root. Only an explicit developer/test override may replace
 // the product-owned default.
 function resolveHermesHome() {
-  if (process.env.HERMES_HOME) {
-    return normalizeHermesHomeRoot(process.env.HERMES_HOME)
-  }
-
-  if (USER_DATA_OVERRIDE) {
-    return path.join(path.resolve(USER_DATA_OVERRIDE), 'ansatz-voice-trace-home')
-  }
-
-  return resolveAnsatzRuntimeRoot(process.platform, app.getPath('home'), process.env.LOCALAPPDATA)
+  return resolveAnsatzDesktopRuntimeRoot({
+    isPackaged: IS_PACKAGED,
+    platform: process.platform,
+    homeDirectory: app.getPath('home'),
+    localAppData: process.env.LOCALAPPDATA,
+    inheritedHermesHome: process.env.HERMES_HOME,
+    dedicatedRuntimeHomeOverride:
+      process.env[ANSATZ_PRODUCT.runtimeHomeOverrideEnvironmentVariable],
+    desktopUserDataOverride: USER_DATA_OVERRIDE,
+    normalizeInheritedRoot: normalizeHermesHomeRoot
+  })
 }
 
 const HERMES_HOME = resolveHermesHome()
@@ -794,7 +801,7 @@ function createDesktopAuthBridge() {
 
   return new DesktopAuthBridge({
     cwd,
-    env: { ...process.env, HERMES_HOME },
+    env: ansatzAuthEnvironment(HERMES_HOME),
     onDiagnostic: rememberLog,
     pythonExecutable
   })
@@ -2238,7 +2245,7 @@ async function waitForUpdateToFinish() {
 
       await advanceBootProgress(
         'backend.update-wait',
-        'An update is finishing — Hermes will start automatically when it completes…',
+        `An update is finishing — ${ANSATZ_PRODUCT.productName} will start automatically when it completes…`,
         12
       )
     },
@@ -2262,7 +2269,7 @@ async function waitForUpdateToFinish() {
       rememberLog(`[updates] detached update finished with manual action (branch ${result.branch}): ${result.message}`)
       dialog.showMessageBox({
         type: 'warning',
-        title: 'Hermes update',
+        title: `${ANSATZ_PRODUCT.productName} update`,
         message: 'The update finished, but needs one more step',
         detail: result.message
       })
@@ -2271,7 +2278,7 @@ async function waitForUpdateToFinish() {
     } else if (result) {
       rememberLog(`[updates] detached update FAILED (exit ${result.exitCode}): ${result.message}`)
       dialog.showErrorBox(
-        'Hermes update did not finish',
+        `${ANSATZ_PRODUCT.productName} update did not finish`,
         `${result.message}\n\nDetails: ${path.join(HERMES_HOME, 'logs', 'desktop-update-handoff.log')}`
       )
     }
@@ -3695,8 +3702,7 @@ async function applyUpdates(opts = {}) {
 
     emitUpdateProgress({
       stage: 'restart',
-      message:
-        'Updating Hermes — this window will close and the updater will open. Don’t reopen Hermes yourself; it restarts automatically when the update finishes.',
+      message: `Updating ${ANSATZ_PRODUCT.productName} — this window will close and the updater will open. Don’t reopen ${ANSATZ_PRODUCT.productName} yourself; it restarts automatically when the update finishes.`,
       percent: 100
     })
     repairMacUpdaterHelper(updater)
@@ -3732,7 +3738,7 @@ async function applyUpdates(opts = {}) {
       // keeps working after the failed attempt.
       const message =
         'Update aborted: another process is holding the Hermes install open ' +
-        '(a second Hermes window or a terminal running hermes?). Close it and retry.'
+        `(a second ${ANSATZ_PRODUCT.productName} window or a terminal running hermes?). Close it and retry.`
 
       emitUpdateProgress({ stage: 'error', message, percent: null })
       startHermes().catch(() => {})
@@ -3887,7 +3893,7 @@ async function applyUpdates(opts = {}) {
     const handoffOutcome = await observeUpdaterHandoff(child, UPDATE_HANDOFF_DWELL_MS)
 
     if (!handoffOutcome.ok) {
-      const message = `Update failed to start: ${handoffOutcome.message}. Hermes will keep running — try again, or run \`hermes update\` from a terminal.`
+      const message = `Update failed to start: ${handoffOutcome.message}. ${ANSATZ_PRODUCT.productName} will keep running — try again, or run \`hermes update\` from a terminal.`
 
       rememberLog(`[updates] hand-off not viable, aborting quit: ${handoffOutcome.message}`)
       emitUpdateProgress({ stage: 'error', message, percent: null })
@@ -4212,8 +4218,7 @@ async function applyUpdatesPosixHandoff(opts: any) {
   rememberLog(`[updates] launched posix hand-off: ${handoff.scriptPath} (branch ${branch}); quitting to hand off`)
   emitUpdateProgress({
     stage: 'restart',
-    message:
-      'Updating Hermes — this window will close. Don’t reopen Hermes yourself; it restarts automatically when the update finishes.',
+    message: `Updating ${ANSATZ_PRODUCT.productName} — this window will close. Don’t reopen ${ANSATZ_PRODUCT.productName} yourself; it restarts automatically when the update finishes.`,
     percent: 100
   })
 
@@ -4226,7 +4231,7 @@ async function applyUpdatesPosixHandoff(opts: any) {
   const handoffOutcome = await observeUpdaterHandoff(child, UPDATE_HANDOFF_DWELL_MS)
 
   if (!handoffOutcome.ok) {
-    const message = `Update failed to start: ${handoffOutcome.message}. Hermes will keep running — try again, or run \`hermes update\` from a terminal.`
+    const message = `Update failed to start: ${handoffOutcome.message}. ${ANSATZ_PRODUCT.productName} will keep running — try again, or run \`hermes update\` from a terminal.`
 
     rememberLog(`[updates] posix hand-off not viable, aborting quit: ${handoffOutcome.message}`)
     emitUpdateProgress({ stage: 'error', message, percent: null })
@@ -4283,9 +4288,11 @@ function isActiveRuntimeUsable() {
     isHermesSourceRoot(ACTIVE_HERMES_ROOT) &&
     fileExists(venvPython) &&
     canImportHermesCli(venvPython, {
-      env: {
-        PYTHONPATH: [ACTIVE_HERMES_ROOT, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter)
-      }
+      env: buildDesktopBackendEnv({
+        hermesHome: HERMES_HOME,
+        pythonPathEntries: [ACTIVE_HERMES_ROOT],
+        venvRoot: VENV_ROOT
+      })
     })
   )
 }
@@ -4442,7 +4449,7 @@ function isPackagedInstallPath(dir) {
 
 function resolveHermesCwd() {
   // In a packaged build, `process.cwd()` resolves to the install root (e.g.
-  // `…/win-unpacked` on Windows or `/Applications/Hermes.app/Contents/...`
+  // `…/win-unpacked` on Windows or `/Applications/Ansatz.app/Contents/...`
   // on macOS). Sessions spawned there leave files inside the app bundle
   // and bewilder users when "where did my files go?" is the install dir.
   // The user-configurable default project directory wins over everything,
@@ -4592,6 +4599,8 @@ function createActiveBackend(backendArgs) {
 }
 
 function resolveHermesBackend(backendArgs, options: any = {}) {
+  const probeEnv = buildDesktopBackendEnv({ hermesHome: HERMES_HOME })
+
   // 1. Explicit override -- HERMES_DESKTOP_HERMES_ROOT points at a developer
   //    checkout. Honour it as-is (no bootstrap; the user is driving).
   const overrideRoot = process.env.HERMES_DESKTOP_HERMES_ROOT && path.resolve(process.env.HERMES_DESKTOP_HERMES_ROOT)
@@ -4728,7 +4737,8 @@ function resolveHermesBackend(backendArgs, options: any = {}) {
       // out under load; the pinned backend is the only valid runtime there.
       if (
         hermesCommand &&
-        (shouldTrustHermesOverride(hermesOverride) || verifyHermesCli(hermesCommand, { shell: shellForProbe }))
+        (shouldTrustHermesOverride(hermesOverride) ||
+          verifyHermesCli(hermesCommand, { env: probeEnv, shell: shellForProbe }))
       ) {
         // `unwrapped` above already answered "is this a Windows venv shim?" —
         // it was null (not a shim, or its import probe failed). Do NOT re-run
@@ -4740,7 +4750,7 @@ function resolveHermesBackend(backendArgs, options: any = {}) {
           command: hermesCommand,
           args: backendArgs,
           bootstrap: false,
-          env: {},
+          env: probeEnv,
           kind: 'command',
           shell: shellForProbe
         }
@@ -4766,14 +4776,14 @@ function resolveHermesBackend(backendArgs, options: any = {}) {
     // Verify the import works before trusting the candidate; on
     // failure, fall through to step 6 so the bootstrap runner pulls
     // a uv-managed 3.11 into %LOCALAPPDATA%\hermes\hermes-agent\venv.
-    if (canImportHermesCli(python)) {
+    if (canImportHermesCli(python, { env: probeEnv })) {
       return {
         kind: 'python',
         label: `installed hermes_cli module via ${python}`,
         command: python,
         args: ['-m', 'hermes_cli.main', ...backendArgs],
         bootstrap: false,
-        env: {},
+        env: probeEnv,
         shell: false
       }
     }
@@ -4793,7 +4803,7 @@ function resolveHermesBackend(backendArgs, options: any = {}) {
   //    is a recoverable state the GUI can drive through.
   return {
     kind: 'bootstrap-needed',
-    label: 'Ansatz runtime not installed yet; bootstrap required',
+    label: 'Hermes Agent not installed yet; bootstrap required',
     command: null,
     args: backendArgs,
     bootstrap: true,
@@ -5447,7 +5457,7 @@ function getLinkTitleSession() {
     return linkTitleSession
   }
 
-  linkTitleSession = session.fromPartition('hermes:link-titles', { cache: false })
+  linkTitleSession = session.fromPartition(ANSATZ_PRODUCT.linkTitleSession, { cache: false })
   linkTitleSession.webRequest.onBeforeRequest((details, callback) => {
     callback({ cancel: RENDER_TITLE_BLOCKED_RESOURCES.has(details.resourceType) })
   })
@@ -6712,7 +6722,7 @@ function installMediaPermissions() {
 //     "is the user signed in at all?" gate / display signal.
 // ---------------------------------------------------------------------------
 
-const OAUTH_SESSION_PARTITION = 'persist:hermes-remote-oauth'
+const OAUTH_SESSION_PARTITION = ANSATZ_PRODUCT.remoteOauthSessionPartition
 
 function getOauthSession() {
   if (oauthSession || !app.isReady()) {
@@ -6730,7 +6740,7 @@ function getOauthSession() {
 // hydrating from disk and return an empty array — even though the user is
 // signed in. That false-negative used to make hasLiveOauthSession() report
 // "not signed in", which on the initial boot path (startHermes → the renderer's
-// single-shot boot() with no retry) surfaced as the "Hermes couldn't start"
+// single-shot boot() with no retry) surfaced as the desktop startup failure
 // OAuth overlay that vanishes the instant the user clicks Retry.
 //
 // We force the store to hydrate once, up front: flushStorageData() then a
@@ -7599,7 +7609,7 @@ async function freshGatewayWsUrl(profile) {
 // The "cloud" connection mode lets a user sign in to the Nous portal ONCE in
 // the OAuth session partition, then (a) discover their hosted agents and (b)
 // connect to any of them with no second interactive sign-in. Both ride the one
-// portal session cookie living in `persist:hermes-remote-oauth`:
+// portal session cookie living in the Ansatz remote OAuth partition:
 //   - discovery  → GET {portal}/api/agents over the partition-bound net; the
 //     portal session cookie authenticates it (NAS Phase 2.5 accepts the cookie).
 //   - cascade    → opening an agent's own /login in the same partition hits the
@@ -9126,6 +9136,7 @@ async function prepareRegistryConnectionAuth(connectionId) {
         keyPath: resolvedConfig.keyPath
       },
       {
+        controlDir: resolveAnsatzSshControlDirectory(HERMES_HOME),
         rememberLog: sshRememberLog,
         ownershipId: sshOwnershipId(desktopInstallationId, authScope),
         scope: authScope,
@@ -9298,6 +9309,7 @@ async function bootstrapSshConnectionInner(profile, sshConfig, reuseToken, sourc
     ssh = new SshConnection(
       { host: sshConfig.host, user: sshConfig.user, port: sshConfig.port, keyPath: sshConfig.keyPath },
       {
+        controlDir: resolveAnsatzSshControlDirectory(HERMES_HOME),
         rememberLog: sshRememberLog,
         ownershipId: sshOwnershipKey(profile),
         scope,
@@ -10278,7 +10290,7 @@ async function spawnPoolBackend(profile, entry) {
     hiddenWindowsChildOptions({
       cwd: hermesCwd,
       env: {
-        ...sanitizeAuthChildEnvironment({ ...process.env, HERMES_HOME, ...backend.env }),
+        ...sanitizeAnsatzAuthChildEnvironment({ ...process.env, ...backend.env }, HERMES_HOME),
         // Pin the gateway's tool/terminal cwd to the same directory we chose for
         // the child process. Inherited TERMINAL_CWD (or a stale config bridge)
         // can still point at the install dir even when spawn cwd is home.
@@ -10613,7 +10625,7 @@ async function startHermes() {
       hiddenWindowsChildOptions({
         cwd: hermesCwd,
         env: {
-          ...sanitizeAuthChildEnvironment({ ...process.env, HERMES_HOME, ...backend.env }),
+          ...sanitizeAnsatzAuthChildEnvironment({ ...process.env, ...backend.env }, HERMES_HOME),
           // Explicitly pin HERMES_HOME for the child so Python's get_hermes_home()
           // resolves to the SAME location our resolveHermesHome() picked. Without
           // this pin, Python falls back to ~/.hermes on every platform — fine on
@@ -10931,7 +10943,7 @@ function spawnSecondaryWindow({ sessionId, watch }: { sessionId?: string; watch?
     height: SESSION_WINDOW_MIN_HEIGHT,
     minWidth: SESSION_WINDOW_MIN_WIDTH,
     minHeight: SESSION_WINDOW_MIN_HEIGHT,
-    title: 'Hermes',
+    title: DESKTOP_WINDOW_TITLE,
     titleBarStyle: 'hidden',
     titleBarOverlay: getTitleBarOverlayOptions(),
     trafficLightPosition: IS_MAC ? WINDOW_BUTTON_POSITION : undefined,
@@ -11031,7 +11043,7 @@ function createInstanceWindow() {
     ...nextInstanceBounds(),
     minWidth: WINDOW_MIN_WIDTH,
     minHeight: WINDOW_MIN_HEIGHT,
-    title: 'Hermes',
+    title: DESKTOP_WINDOW_TITLE,
     titleBarStyle: 'hidden',
     titleBarOverlay: getTitleBarOverlayOptions(),
     trafficLightPosition: IS_MAC ? WINDOW_BUTTON_POSITION : undefined,
@@ -11886,7 +11898,7 @@ function createWindow() {
     ...computeWindowOptions(savedWindowState, screen.getAllDisplays()),
     minWidth: WINDOW_MIN_WIDTH,
     minHeight: WINDOW_MIN_HEIGHT,
-    title: 'Hermes',
+    title: DESKTOP_WINDOW_TITLE,
     // Frameless title bar on every platform so the renderer can paint the
     // "hide sidebar" button (and other left-side titlebar tools) flush with
     // the top edge — matching the macOS layout where the traffic lights sit
@@ -13452,7 +13464,7 @@ guardedHandle('hermes:notify', (_event, payload) => {
   const actions = Array.isArray(payload?.actions) ? payload.actions : []
 
   const notification = new Notification({
-    title: payload?.title || 'Hermes',
+    title: payload?.title || ANSATZ_PRODUCT.productName,
     body: payload?.body || '',
     silent: Boolean(payload?.silent),
     actions: actions.map(action => ({ type: 'button', text: String(action?.text || '') }))
@@ -14121,36 +14133,7 @@ function safeTerminalCwd(cwd) {
 }
 
 function terminalShellEnv() {
-  const env = sanitizeAuthChildEnvironment()
-
-  // Electron is commonly launched through `npm run dev`; do not leak npm's
-  // managed prefix into a user's interactive shell (nvm/proto warn loudly).
-  for (const key of Object.keys(env)) {
-    if (key === 'npm_config_prefix' || key.startsWith('npm_config_') || key.startsWith('npm_package_')) {
-      delete env[key]
-    }
-  }
-
-  // Strip color/theme-detection vars that ride along when Electron is launched
-  // from a non-tty agent shell (Cursor's runner sets NO_COLOR/FORCE_COLOR=0
-  // /TERM=dumb; some terminals set COLORFGBG which would flip Hermes' TUI into
-  // light-mode). Our PTY is a real xterm-compat terminal — force truecolor.
-  delete env.NO_COLOR
-  delete env.FORCE_COLOR
-  delete env.COLORFGBG
-
-  env.COLORTERM = 'truecolor'
-  env.LC_CTYPE = env.LC_CTYPE || 'UTF-8'
-  env.TERM = 'xterm-256color'
-  env.TERM_PROGRAM = 'Hermes'
-  env.TERM_PROGRAM_VERSION = app.getVersion()
-
-  // Let a hermes/--tui launched in this pane know it's embedded in the desktop
-  // GUI (build_environment_hints surfaces this). Distinct from HERMES_DESKTOP,
-  // which marks the agent *backend* and gates cron/gateway behavior.
-  env.HERMES_DESKTOP_TERMINAL = '1'
-
-  return env
+  return buildAnsatzTerminalEnvironment(HERMES_HOME, app.getVersion(), sanitizeAuthChildEnvironment())
 }
 
 function terminalChannel(id, suffix) {
@@ -15058,6 +15041,14 @@ app.whenReady().then(async () => {
     passwordStoreSwitch: app.commandLine.getSwitchValue('password-store'),
     safeStorageApi: safeStorage
   })
+
+  const removedLegacyPartitions = await removeLegacyAnsatzPartitions(app.getPath('userData'), {
+    onError: partitionName => rememberLog(`[identity] could not remove legacy partition ${partitionName}`)
+  })
+
+  if (removedLegacyPartitions.length > 0) {
+    rememberLog(`[identity] removed legacy partitions: ${removedLegacyPartitions.join(', ')}`)
+  }
 
   Menu.setApplicationMenu(null)
 

@@ -70,11 +70,11 @@ jobs:
           set -euo pipefail
           dmg="$(find apps/desktop/release -maxdepth 1 -type f -name '*-mac-arm64.dmg' -print -quit)"
           test -n "$dmg"
-          mount="$RUNNER_TEMP/hermes-dmg-audit"
+          mount="$RUNNER_TEMP/ansatz-voice-trace-dmg-audit"
           mkdir -p "$mount"
           hdiutil attach "$dmg" -mountpoint "$mount" -nobrowse -readonly
           trap 'hdiutil detach "$mount" -force >/dev/null 2>&1 || true' EXIT
-          app="$mount/Hermes.app"
+          app="$mount/Ansatz Voice Trace Client.app"
           asar="$app/Contents/Resources/app.asar"
           node --input-type=module -e \
             "import {listPackage} from '@electron/asar'; const entries=listPackage(process.argv[1]); const bad=entries.find(x=>/(^|\/)\.github\/|credential-login|\.log$/i.test(x)); if(bad) throw new Error('forbidden ASAR entry: '+bad)" \
@@ -98,17 +98,17 @@ jobs:
           set -euo pipefail
           dmg="$(find apps/desktop/release -maxdepth 1 -type f -name '*-mac-arm64.dmg' -print -quit)"
           test -n "$dmg"
-          mount="$RUNNER_TEMP/hermes-dmg-login"
-          home="$RUNNER_TEMP/hermes-clean-home"
+          mount="$RUNNER_TEMP/ansatz-voice-trace-dmg-login"
+          home="$RUNNER_TEMP/ansatz-voice-trace-clean-home"
           mkdir -p "$mount" "$home"
           hdiutil attach "$dmg" -mountpoint "$mount" -nobrowse -readonly
           cleanup() {
-            pkill -f '/Applications/Hermes.app/Contents/MacOS/Hermes' >/dev/null 2>&1 || true
+            pkill -f '/Applications/Ansatz Voice Trace Client.app/Contents/MacOS/AnsatzVoiceTraceClient' >/dev/null 2>&1 || true
             hdiutil detach "$mount" -force >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
-          ditto "$mount/Hermes.app" /Applications/Hermes.app
-          HERMES_HOME="$home" /Applications/Hermes.app/Contents/MacOS/Hermes \
+          ditto "$mount/Ansatz Voice Trace Client.app" "/Applications/Ansatz Voice Trace Client.app"
+          HERMES_HOME="$home" "/Applications/Ansatz Voice Trace Client.app/Contents/MacOS/AnsatzVoiceTraceClient" \
             --remote-debugging-address=127.0.0.1 \
             --remote-debugging-port=9222 >/dev/null 2>&1 &
           for _ in $(seq 1 240); do
@@ -135,7 +135,7 @@ jobs:
       - name: Upload DMG and sanitized report
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: hermes-macos-dmg-${{ github.sha }}
+          name: ansatz-voice-trace-client-macos-dmg-${{ github.sha }}
           path: |
             apps/desktop/release/*-mac-arm64.dmg
             apps/desktop/build/reports/macos-package.json

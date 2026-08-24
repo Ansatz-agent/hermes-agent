@@ -90,12 +90,12 @@ describe('mediaGatewayStreamUrl', () => {
 
   it('rewrites gateway-local media to the main-process remote stream proxy', () => {
     $connection.set({ mode: 'remote', baseUrl: 'https://gw', token: 's e/cret' } as never)
-    expect(mediaGatewayStreamUrl('file:///tmp/a b.mp4')).toBe('hermes-media://remote/%2Ftmp%2Fa%20b.mp4')
+    expect(mediaGatewayStreamUrl('file:///tmp/a b.mp4')).toBe('ansatz-media://remote/%2Ftmp%2Fa%20b.mp4')
   })
 
   it('supports OAuth remotes with no renderer-visible token and scopes pool profiles', () => {
     $connection.set({ authMode: 'oauth', mode: 'remote', profile: 'voice reviewer', token: null } as never)
-    expect(mediaGatewayStreamUrl('/tmp/a.mp4')).toBe('hermes-media://remote/%2Ftmp%2Fa.mp4?profile=voice%20reviewer')
+    expect(mediaGatewayStreamUrl('/tmp/a.mp4')).toBe('ansatz-media://remote/%2Ftmp%2Fa.mp4?profile=voice%20reviewer')
   })
 })
 
@@ -181,7 +181,7 @@ describe('resolveMediaPlaybackSrc', () => {
     $connection.set({ authMode: 'oauth', mode: 'remote', profile: 'default', token: null } as never)
 
     await expect(resolveMediaPlaybackSrc('/root/outputs/render.mp4')).resolves.toBe(
-      'hermes-media://remote/%2Froot%2Foutputs%2Frender.mp4?profile=default'
+      'ansatz-media://remote/%2Froot%2Foutputs%2Frender.mp4?profile=default'
     )
   })
 
@@ -190,7 +190,7 @@ describe('resolveMediaPlaybackSrc', () => {
     $connection.set({ mode: 'local' } as never)
 
     await expect(resolveMediaPlaybackSrc('C:\\renders\\demo.mp4')).resolves.toBe(
-      'hermes-media://stream/C%3A%5Crenders%5Cdemo.mp4'
+      'ansatz-media://stream/C%3A%5Crenders%5Cdemo.mp4'
     )
   })
 })

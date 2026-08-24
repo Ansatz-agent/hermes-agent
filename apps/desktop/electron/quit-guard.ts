@@ -4,6 +4,8 @@
 // that go. The decision + copy live here (pure, testable) so main.ts only owns
 // the IPC and the dialog call.
 
+import { ANSATZ_PRODUCT } from './ansatz-product'
+
 const MAX_LISTED = 4
 
 export interface ActiveWork {
@@ -87,6 +89,9 @@ export function quitPromptFor(work: ActiveWork, quittingForHandoff: boolean): nu
       .filter(line => line !== null)
       .join('\n')
       .trim(),
-    message: work.count === 1 ? 'Hermes is still working on 1 chat.' : `Hermes is still working on ${work.count} chats.`
+    message:
+      work.count === 1
+        ? `${ANSATZ_PRODUCT.productName} is still working on 1 chat.`
+        : `${ANSATZ_PRODUCT.productName} is still working on ${work.count} chats.`
   }
 }

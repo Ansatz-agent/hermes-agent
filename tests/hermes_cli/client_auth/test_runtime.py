@@ -2319,6 +2319,283 @@ def test_owner_mode_election_is_fixed_by_runtime_context(context, expected):
     assert selected == expected
 
 
+def test_detached_owner_preserves_only_product_auth_environment(monkeypatch):
+    from hermes_cli.client_auth.runtime import _owner_process_environment
+
+    monkeypatch.setenv("HERMES_HOME", "/Users/a/.ansatz-voice-trace-client")
+    monkeypatch.setenv(
+        "HERMES_AUTH_RUNTIME_NAMESPACE",
+        "ansatz-voice-trace-client-auth-v1",
+    )
+    monkeypatch.setenv(
+        "HERMES_AUTH_KEYRING_SERVICE",
+        "cn.c2sml.ansatz.voice-trace-client.remote-auth",
+    )
+    monkeypatch.setenv(
+        "HERMES_AUTH_LEGACY_KEYRING_SERVICE",
+        "cn.c2sml.hermes.remote-auth",
+    )
+    monkeypatch.setenv("PROVIDER_API_KEY", "must-not-cross-owner-boundary")
+
+    child_env = _owner_process_environment()
+
+    assert child_env["HERMES_HOME"] == "/Users/a/.ansatz-voice-trace-client"
+    assert (
+        child_env["HERMES_AUTH_RUNTIME_NAMESPACE"]
+        == "ansatz-voice-trace-client-auth-v1"
+    )
+    assert (
+        child_env["HERMES_AUTH_KEYRING_SERVICE"]
+        == "cn.c2sml.ansatz.voice-trace-client.remote-auth"
+    )
+    assert (
+        child_env["HERMES_AUTH_LEGACY_KEYRING_SERVICE"]
+        == "cn.c2sml.hermes.remote-auth"
+    )
+    assert "PROVIDER_API_KEY" not in child_env
+
+
+def test_keyring_backend_migrates_legacy_record_before_deleting_it(monkeypatch):
+    import keyring
+
+    from hermes_cli.client_auth.runtime import _KeyringSecretBackend
+
+    new_service = "cn.c2sml.ansatz.voice-trace-client.remote-auth"
+    legacy_service = "cn.c2sml.hermes.remote-auth"
+    account = "django-session"
+    store = {(legacy_service, account): "cookie-record-sentinel"}
+    events: list[tuple[str, str]] = []
+
+    def get_password(service, requested_account):
+        assert requested_account == account
+        events.append(("get", service))
+        return store.get((service, requested_account))
+
+    def set_password(service, requested_account, raw):
+        assert requested_account == account
+        events.append(("set", service))
+        store[(service, requested_account)] = raw
+
+    def delete_password(service, requested_account):
+        assert requested_account == account
+        events.append(("delete", service))
+        store.pop((service, requested_account), None)
+
+    monkeypatch.setattr(keyring, "get_password", get_password)
+    monkeypatch.setattr(keyring, "set_password", set_password)
+    monkeypatch.setattr(keyring, "delete_password", delete_password)
+    backend = _KeyringSecretBackend(
+        service=new_service,
+        legacy_service=legacy_service,
+    )
+
+    assert backend.read() == "cookie-record-sentinel"
+    assert events == [
+        ("get", new_service),
+        ("get", legacy_service),
+        ("set", new_service),
+        ("get", new_service),
+        ("delete", legacy_service),
+    ]
+    assert store == {(new_service, account): "cookie-record-sentinel"}
+
+
+def test_keyring_backend_keeps_legacy_record_when_migration_write_fails(monkeypatch):
+    import keyring
+
+    from hermes_cli.client_auth.runtime import _KeyringSecretBackend
+
+    new_service = "cn.c2sml.ansatz.voice-trace-client.remote-auth"
+    legacy_service = "cn.c2sml.hermes.remote-auth"
+    account = "django-session"
+    store = {(legacy_service, account): "cookie-record-sentinel"}
+    events: list[tuple[str, str]] = []
+
+    def get_password(service, requested_account):
+        events.append(("get", service))
+        return store.get((service, requested_account))
+
+    def fail_write(service, _requested_account, _raw):
+        events.append(("set", service))
+        raise RuntimeError("secure store unavailable")
+
+    def delete_password(service, _requested_account):
+        events.append(("delete", service))
+        store.pop((service, account), None)
+
+    monkeypatch.setattr(keyring, "get_password", get_password)
+    monkeypatch.setattr(keyring, "set_password", fail_write)
+    monkeypatch.setattr(keyring, "delete_password", delete_password)
+    backend = _KeyringSecretBackend(
+        service=new_service,
+        legacy_service=legacy_service,
+    )
+
+    with pytest.raises(RuntimeError, match="secure store unavailable"):
+        backend.read()
+
+    assert store == {(legacy_service, account): "cookie-record-sentinel"}
+    assert events == [
+        ("get", new_service),
+        ("get", legacy_service),
+        ("set", new_service),
+    ]
+
+
+def test_keyring_backend_removes_unverified_new_record_and_keeps_legacy(
+    monkeypatch,
+):
+    import keyring
+
+    from hermes_cli.client_auth.runtime import _KeyringSecretBackend
+
+    new_service = "cn.c2sml.ansatz.voice-trace-client.remote-auth"
+    legacy_service = "cn.c2sml.hermes.remote-auth"
+    account = "django-session"
+    store = {(legacy_service, account): "cookie-record-sentinel"}
+    events: list[tuple[str, str]] = []
+
+    def get_password(service, requested_account):
+        events.append(("get", service))
+        return store.get((service, requested_account))
+
+    def write_corrupt_record(service, requested_account, _raw):
+        events.append(("set", service))
+        store[(service, requested_account)] = "different-record"
+
+    def delete_password(service, requested_account):
+        events.append(("delete", service))
+        store.pop((service, requested_account), None)
+
+    monkeypatch.setattr(keyring, "get_password", get_password)
+    monkeypatch.setattr(keyring, "set_password", write_corrupt_record)
+    monkeypatch.setattr(keyring, "delete_password", delete_password)
+    backend = _KeyringSecretBackend(
+        service=new_service,
+        legacy_service=legacy_service,
+    )
+
+    with pytest.raises(RuntimeError, match="secure credential migration failed"):
+        backend.read()
+
+    assert events == [
+        ("get", new_service),
+        ("get", legacy_service),
+        ("set", new_service),
+        ("get", new_service),
+        ("delete", new_service),
+    ]
+    assert store == {(legacy_service, account): "cookie-record-sentinel"}
+
+
+def test_keyring_backend_logout_deletes_new_and_configured_legacy_services(
+    monkeypatch,
+):
+    import keyring
+
+    from hermes_cli.client_auth.runtime import _KeyringSecretBackend
+
+    new_service = "cn.c2sml.ansatz.voice-trace-client.remote-auth"
+    legacy_service = "cn.c2sml.hermes.remote-auth"
+    deleted: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        keyring,
+        "delete_password",
+        lambda service, account: deleted.append((service, account)),
+    )
+    backend = _KeyringSecretBackend(
+        service=new_service,
+        legacy_service=legacy_service,
+    )
+
+    backend.delete()
+
+    assert deleted == [
+        (new_service, "django-session"),
+        (legacy_service, "django-session"),
+    ]
+
+
+def test_keyring_backend_uses_product_services_from_environment(monkeypatch):
+    import keyring
+
+    from hermes_cli.client_auth.runtime import _KeyringSecretBackend
+
+    new_service = "cn.c2sml.ansatz.voice-trace-client.remote-auth"
+    legacy_service = "cn.c2sml.hermes.remote-auth"
+    writes: list[tuple[str, str, str]] = []
+    monkeypatch.setenv("HERMES_AUTH_KEYRING_SERVICE", new_service)
+    monkeypatch.setenv("HERMES_AUTH_LEGACY_KEYRING_SERVICE", legacy_service)
+    monkeypatch.setattr(
+        keyring,
+        "set_password",
+        lambda service, account, raw: writes.append((service, account, raw)),
+    )
+
+    _KeyringSecretBackend().write("cookie-record-sentinel")
+
+    assert writes == [
+        (new_service, "django-session", "cookie-record-sentinel"),
+    ]
+
+
+def test_keyring_backend_prefers_new_record_and_removes_stale_legacy(monkeypatch):
+    import keyring
+
+    from hermes_cli.client_auth.runtime import _KeyringSecretBackend
+
+    new_service = "cn.c2sml.ansatz.voice-trace-client.remote-auth"
+    legacy_service = "cn.c2sml.hermes.remote-auth"
+    account = "django-session"
+    store = {
+        (new_service, account): "new-cookie-record",
+        (legacy_service, account): "old-cookie-record",
+    }
+    events: list[tuple[str, str]] = []
+
+    def get_password(service, requested_account):
+        events.append(("get", service))
+        return store.get((service, requested_account))
+
+    def delete_password(service, requested_account):
+        events.append(("delete", service))
+        store.pop((service, requested_account), None)
+
+    monkeypatch.setattr(keyring, "get_password", get_password)
+    monkeypatch.setattr(keyring, "delete_password", delete_password)
+    backend = _KeyringSecretBackend(
+        service=new_service,
+        legacy_service=legacy_service,
+    )
+
+    assert backend.read() == "new-cookie-record"
+    assert events == [("get", new_service), ("delete", legacy_service)]
+    assert store == {(new_service, account): "new-cookie-record"}
+
+
+@pytest.mark.parametrize(
+    ("service", "legacy_service"),
+    [
+        ("contains/slash", "cn.c2sml.hermes.remote-auth"),
+        ("cn.c2sml.ansatz.voice-trace-client.remote-auth", "contains whitespace"),
+        ("cn.c2sml.same", "cn.c2sml.same"),
+    ],
+)
+def test_keyring_backend_rejects_invalid_environment_services(
+    service,
+    legacy_service,
+    monkeypatch,
+):
+    from hermes_cli.client_auth.runtime import _KeyringSecretBackend
+
+    monkeypatch.setenv("HERMES_AUTH_KEYRING_SERVICE", service)
+    monkeypatch.setenv("HERMES_AUTH_LEGACY_KEYRING_SERVICE", legacy_service)
+
+    with pytest.raises(AuthRequired, match="runtime_unavailable"):
+        _KeyringSecretBackend()
+
+
 def _run_native_hardener_subprocess() -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -2406,6 +2683,43 @@ def test_macos_runtime_endpoint_is_namespaced_for_test_isolation(
     assert first.root.name.startswith("ha-t")
     assert second.root.name.startswith("ha-t")
     assert production.root == tmp_path / "ha"
+
+
+@pytest.mark.macos_only
+def test_macos_runtime_endpoint_isolated_by_product_namespace(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime._darwin_user_temp_dir",
+        lambda: tmp_path,
+    )
+    monkeypatch.setenv(
+        "HERMES_AUTH_RUNTIME_NAMESPACE",
+        "ansatz-voice-trace-client-auth-v1",
+    )
+    product = runtime_endpoint()
+    monkeypatch.delenv("HERMES_AUTH_RUNTIME_NAMESPACE")
+    legacy = runtime_endpoint()
+
+    assert product.root != legacy.root
+    assert product.root.name.startswith("ha-")
+    assert "hermes" not in product.root.name
+    assert legacy.root.name.startswith("ha")
+
+
+@pytest.mark.parametrize(
+    "namespace",
+    [
+        "contains/slash",
+        "contains\\backslash",
+        "contains whitespace",
+        "非ascii",
+        "a" * 65,
+    ],
+)
+def test_runtime_endpoint_rejects_invalid_product_namespace(namespace, monkeypatch):
+    monkeypatch.setenv("HERMES_AUTH_RUNTIME_NAMESPACE", namespace)
+
+    with pytest.raises(AuthRequired, match="runtime_unavailable"):
+        runtime_endpoint()
 
 
 @pytest.mark.linux_only

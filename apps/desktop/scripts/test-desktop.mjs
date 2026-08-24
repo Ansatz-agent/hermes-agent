@@ -60,8 +60,8 @@ const APP = (() => {
 })()
 
 // Default HERMES_HOME for non-sandboxed runs -- matches main.ts's
-// resolveHermesHome(). The fresh-install sandbox launchFresh() sets its own
-// HERMES_HOME and never touches this.
+// resolveHermesHome(). The fresh-install sandbox launchFresh() sets the
+// product-specific runtime-home override and never touches this.
 const DEFAULT_HERMES_HOME = (() => {
   if (PLATFORM === 'win32' && process.env.LOCALAPPDATA) {
     return path.join(process.env.LOCALAPPDATA, 'AnsatzVoiceTraceClient')
@@ -270,6 +270,7 @@ function launchFresh() {
   env.HERMES_DESKTOP_TEST_MODE = 'fresh-install'
   env.HERMES_DESKTOP_USER_DATA_DIR = userDataDir
   env.HERMES_HOME = hermesHome
+  env.ANSATZ_VOICE_TRACE_CLIENT_HOME = hermesHome
   delete env.HERMES_DESKTOP_HERMES
   delete env.HERMES_DESKTOP_HERMES_ROOT
 

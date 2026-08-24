@@ -7,8 +7,6 @@ export const ja = defineLocale({
     title: 'Ansatz にサインイン',
     description: '完全なオフラインランタイムのインストール後にアカウントへサインインできます。',
     serverLabel: 'アカウントサーバー',
-    traceNotice:
-      '入力、モデル応答、ツール引数・結果を含む完全な会話 Trace は自動的にアップロードされ、プラットフォーム管理者のみが閲覧できます。アップロードは無効にできません。生音声と認証情報は除外されます。',
     username: 'ユーザー名',
     password: 'パスワード',
     signIn: 'サインイン',
@@ -16,14 +14,14 @@ export const ja = defineLocale({
     retry: '再試行',
     checking: 'アカウントセッションを確認中…',
     preparingRuntime: '安全なサインインサービスを準備中…',
-    preparingStage: (current, total, title) =>
-      `安全なサインインサービスを準備中（${current}/${total}）：${title}…`,
+    preparingStage: (current, total, title) => `安全なサインインサービスを準備中（${current}/${total}）：${title}…`,
     runtimeTitle: 'Ansatz をインストール中',
     runtimeDescription: 'アカウントのサインインを表示する前に、完全なオフラインランタイムをインストールします。',
     preparingFullRuntime: '完全なオフラインランタイムをインストール中…',
     preparingFullStage: (current, total, title) =>
       `完全なオフラインランタイムをインストール中（${current}/${total}）：${title}…`,
-    runtimePreparationFailed: 'Ansatz のローカルランタイムをインストールできませんでした。再試行してください。',
+    runtimePreparationFailed:
+      'Ansatz のローカルランタイムをインストールできませんでした。再試行してください。',
     administratorManaged: 'アカウントの発行とパスワードの支援はサーバー管理者が行います。',
     accountMenu: 'アカウント',
     signOut: 'サインアウト',
@@ -126,14 +124,14 @@ export const ja = defineLocale({
     desktopBootFailedWithMessage: message => `デスクトップの起動に失敗しました: ${message}`,
     steps: {
       connectingGateway: 'ライブデスクトップゲートウェイに接続中',
-      loadingSettings: 'Hermes の設定を読み込み中',
+      loadingSettings: 'Ansatz の設定を読み込み中',
       loadingSessions: '最近のセッションを読み込み中',
       startingDesktopConnection: 'デスクトップ接続を開始中',
       startingHermesDesktop: 'Ansatz を起動中…'
     },
     errors: {
-      backgroundExited: 'Hermes バックグラウンドプロセスが終了しました。',
-      backgroundExitedDuringStartup: '起動中に Hermes バックグラウンドプロセスが終了しました。',
+      backgroundExited: 'Ansatz のバックグラウンドプロセスが終了しました。',
+      backgroundExitedDuringStartup: 'Ansatz のバックグラウンドプロセスが起動中に終了しました。',
       backendStopped: 'バックエンドが停止しました',
       desktopBootFailed: 'デスクトップの起動に失敗しました',
       gatewayConnectionLost: 'ゲートウェイへの接続が切断されました',
@@ -141,7 +139,7 @@ export const ja = defineLocale({
       ipcBridgeUnavailable: 'デスクトップ IPC ブリッジが利用できません。'
     },
     failure: {
-      title: 'Hermes を起動できませんでした',
+      title: 'Ansatz を起動できませんでした',
       description:
         'バックグラウンドゲートウェイが起動しませんでした。以下の回復手順をお試しください。チャットや設定は削除されません。',
       remoteTitle: 'リモートゲートウェイへのサインインが必要です',
@@ -305,7 +303,7 @@ export const ja = defineLocale({
       intro: 'アプリ内トーストとは別の、ネイティブのデスクトップ通知です。設定は端末ごとに保存されます。',
       enableAll: '通知を有効にする',
       enableAllDesc: 'オフで以下の通知をすべて無効にします。',
-      focusedHint: '完了通知は Hermes がバックグラウンドにあるときのみ表示されます。',
+      focusedHint: '完了通知はアプリがバックグラウンドにあるときのみ表示されます。',
       kinds: {
         approval: {
           label: '承認が必要',
@@ -317,7 +315,7 @@ export const ja = defineLocale({
         },
         turnDone: {
           label: '応答完了',
-          description: 'Hermes がバックグラウンドのときにターンが完了しました。'
+          description: 'アプリがバックグラウンドのときにターンが完了しました。'
         },
         turnError: {
           label: 'ターン失敗',
@@ -333,11 +331,11 @@ export const ja = defineLocale({
         },
         plugin: {
           label: 'プラグイン通知',
-          description: 'Hermes がバックグラウンドの間に、デスクトッププラグインが通知を送信しました。'
+          description: 'アプリがバックグラウンドの間に、デスクトッププラグインが通知を送信しました。'
         }
       },
       test: 'テスト通知を送信',
-      testTitle: 'Hermes',
+      testTitle: 'Ansatz',
       testBody: '通知は正常に動作しています。',
       testSent:
         'テストを送信しました。表示されない場合は、OS の通知許可と集中モード／おやすみモードを確認してください。',
@@ -374,7 +372,7 @@ export const ja = defineLocale({
       intro:
         'デスクトップ専用の表示設定です。モードは明るさ、テーマはアクセントカラーとチャット面のスタイルを制御します。',
       colorMode: 'カラーモード',
-      colorModeDesc: '固定モードを選ぶか、Hermes をシステム設定に合わせます。',
+      colorModeDesc: '固定モードを選ぶか、アプリをシステム設定に合わせます。',
       toolViewTitle: 'ツール呼び出しの表示',
       toolViewDesc: 'プロダクト表示は生のツールペイロードを隠し、テクニカル表示は入出力をすべて表示します。',
       reasoningCollapsedTitle: '思考ブロックをデフォルトで折りたたむ',
@@ -432,7 +430,7 @@ export const ja = defineLocale({
         intro:
           'アプリ上に浮かぶ petdex のアニメーションマスコットを採用しましょう。ツール実行中は走り、成功すると喜び、エラーでしょんぼりと、Hermes の状態に反応します。',
         restartHint:
-          'ペット機能には再起動が必要です。この機能が追加される前に起動したアプリが動作中です。Hermes を終了して再度開き、このページに戻ってください。',
+          'ペット機能には再起動が必要です。この機能が追加される前に起動したアプリが動作中です。アプリを終了して再度開き、このページに戻ってください。',
         scaleTitle: 'サイズ',
         scaleDesc: '浮遊マスコットの大きさを変更します。すべての画面に即時反映されます。',
         roamTitle: '散歩',
@@ -711,7 +709,7 @@ export const ja = defineLocale({
       lastChecked: age => `前回確認: ${age}`,
       justNowSuffix: ' · たった今',
       automaticUpdates: '自動更新',
-      automaticUpdatesDesc: 'Hermes はバックグラウンドで自動的に更新を確認し、利用可能になったら通知します。',
+      automaticUpdatesDesc: 'アプリはバックグラウンドで自動的に更新を確認し、利用可能になったら通知します。',
       branchCommit: (branch, commit) => `ブランチ ${branch} · コミット ${commit}`,
       never: '未確認',
       justNow: 'たった今',
@@ -741,7 +739,7 @@ export const ja = defineLocale({
     quickEntry: {
       enabledTitle: 'クイック入力',
       enabledDesc:
-        'グローバルショートカットで小さな入力欄をどこからでも呼び出し、Hermes を開かずにプロンプトを送信します。',
+        'グローバルショートカットで小さな入力欄をどこからでも呼び出し、アプリを開かずにプロンプトを送信します。',
       shortcutTitle: 'クイック入力のショートカット',
       shortcutDesc: '修飾キーが 1 つ以上必要です（例: CommandOrControl+Shift+Space）。',
       active: 'ショートカットは有効です。',
@@ -1277,7 +1275,7 @@ export const ja = defineLocale({
     },
     nav: {
       newChat: { title: '新しいセッション', detail: '新しいセッションを開始' },
-      settings: { title: '設定', detail: 'Hermes デスクトップを設定' },
+      settings: { title: '設定', detail: 'Ansatz を設定' },
       skills: { title: 'スキルとツール', detail: 'スキル、ツールセット、プロバイダーを有効化' },
       messaging: { title: 'メッセージング', detail: 'Telegram、Slack、Discord などを設定' },
       artifacts: { title: 'アーティファクト', detail: '生成された出力を閲覧' }
@@ -2151,9 +2149,9 @@ export const ja = defineLocale({
     copied: 'コピーしました',
     done: '完了',
     applyingBody:
-      'Hermes アップデーターが独自のウィンドウで引き継ぎ、完了後に自動的に Hermes を再度開きます。更新中はご自分で Hermes を開き直さないでください。',
-    applyingBodyBackend: 'リモートバックエンドが更新を適用して再起動します。復帰すると Hermes が自動的に再接続します。',
-    applyingClose: 'このウィンドウは更新中に閉じ、その後 Hermes が自動的に再度開きます。',
+      'アプリのアップデーターが独自のウィンドウで引き継ぎ、完了後に自動的にアプリを再度開きます。更新中はご自分でアプリを開き直さないでください。',
+    applyingBodyBackend: 'リモートバックエンドが更新を適用して再起動します。復帰するとアプリが自動的に再接続します。',
+    applyingClose: 'このウィンドウは更新中に閉じ、その後アプリが自動的に再度開きます。',
     errorTitle: '更新が完了しませんでした',
     errorBody: 'ご安心ください。何も失われていません。今すぐ再試行できます。',
     notNow: '今は後で',
@@ -2245,7 +2243,7 @@ export const ja = defineLocale({
   },
 
   onboarding: {
-    headerTitle: 'Ansatz のセットアップをしましょう',
+    headerTitle: 'Ansatz のセットアップを始めましょう',
     headerDesc: 'チャットを始めるにはモデルプロバイダーを接続してください。ほとんどのオプションはワンクリックです。',
     preparingInstall: 'Hermes はインストールを完了中です。初回実行では通常 1 分以内に完了します。',
     starting: 'Hermes を起動中…',

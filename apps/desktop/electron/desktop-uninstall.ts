@@ -86,7 +86,7 @@ function resolveRemovableAppPath(execPath, platform, env: any = {}) {
     // Strip three segments from Contents/MacOS/<executable> to the .app.
     const macOsDir = p.dirname(exe) // …/Contents/MacOS
     const contents = p.dirname(macOsDir) // …/Contents
-    const appBundle = p.dirname(contents) // …/Hermes.app
+    const appBundle = p.dirname(contents) // …/Ansatz.app
 
     if (
       p.basename(appBundle) === `${ANSATZ_PRODUCT.productName}.app` &&

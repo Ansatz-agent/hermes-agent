@@ -94,6 +94,7 @@ describe('PreviewPane console state', () => {
     const webview = rendered.container.querySelector('webview')
 
     expect(webview).toBeInstanceOf(HTMLElement)
+    expect(webview?.getAttribute('partition')).toBe('persist:ansatz-voice-trace-preview')
 
     act(() => {
       webview?.dispatchEvent(

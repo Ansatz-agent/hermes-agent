@@ -1,5 +1,5 @@
 /**
- * Build the backend source payload shipped with Hermes Desktop.
+ * Build the backend source payload shipped with Ansatz.
  *
  * The archive is produced from one committed Git tree, never from working-tree
  * files. This keeps the packaged backend aligned with install-stamp.json and

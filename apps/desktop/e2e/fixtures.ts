@@ -213,6 +213,7 @@ function writeEmptyConfig(hermesHome: string): void {
  *
  * Key env vars:
  *  - HERMES_HOME → sandbox hermes-home (isolated config/sessions)
+ *  - ANSATZ_VOICE_TRACE_CLIENT_HOME → trusted packaged-Desktop runtime root
  *  - HERMES_DESKTOP_USER_DATA_DIR → sandbox electron-user-data
  *  - HERMES_DESKTOP_IGNORE_EXISTING=1 → don't pick up `hermes` from PATH
  *    (we want the dev checkout at REPO_ROOT)
@@ -237,6 +238,7 @@ export function buildAppEnv(sandbox: Sandbox, extra: Record<string, string> = {}
   return {
     ...clean,
     HERMES_HOME: sandbox.hermesHome,
+    ANSATZ_VOICE_TRACE_CLIENT_HOME: sandbox.hermesHome,
     HERMES_DESKTOP_USER_DATA_DIR: sandbox.userDataDir,
     HERMES_DESKTOP_IGNORE_EXISTING: '1',
     HERMES_DESKTOP_HERMES_ROOT: REPO_ROOT,
