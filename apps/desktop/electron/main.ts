@@ -40,6 +40,7 @@ import {
 } from './ansatz-product'
 import { AuthBridgeError, DesktopAuthBridge } from './auth-bridge'
 import { AuthCoordinator } from './auth-coordinator'
+import { resolveNoConsoleAuthPython } from './auth-python'
 import { isAuthRuntimeUsable } from './auth-runtime-contract'
 import {
   encodeScopeTokenRegistration,
@@ -915,11 +916,14 @@ function createDesktopAuthBridge() {
       requireLauncher: false
     })
 
-  const pythonExecutable = packagedWindowsAuthReady
-    ? path.join(AUTH_VENV_ROOT, 'python.exe')
-    : candidate?.kind === 'python' && candidate.command
-      ? candidate.command
-      : getVenvPython(VENV_ROOT)
+  const pythonExecutable = resolveNoConsoleAuthPython(
+    packagedWindowsAuthReady
+      ? path.join(AUTH_VENV_ROOT, 'python.exe')
+      : candidate?.kind === 'python' && candidate.command
+        ? candidate.command
+        : getVenvPython(VENV_ROOT),
+    IS_WINDOWS
+  )
 
   const candidateRoot =
     candidate && 'root' in candidate && candidate.root && directoryExists(candidate.root) ? candidate.root : null

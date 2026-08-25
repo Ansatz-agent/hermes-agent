@@ -5,6 +5,7 @@ import errno
 import hashlib
 import json
 import math
+import ntpath
 import os
 import re
 import secrets
@@ -3012,6 +3013,7 @@ def start_runtime_owner(
     if time.monotonic() >= deadline:
         raise AuthRequired("runtime_unavailable")
     environment = _owner_process_environment()
+    owner_executable = _runtime_owner_executable(sys.executable)
     kwargs: dict[str, object] = {
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
@@ -3029,7 +3031,7 @@ def start_runtime_owner(
     try:
         subprocess.Popen(
             [
-                sys.executable,
+                owner_executable,
                 "-m",
                 "hermes_cli.client_auth.runtime",
                 "owner",
@@ -3051,6 +3053,31 @@ def start_runtime_owner(
         except AuthRequired:
             time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
     raise AuthRequired("runtime_unavailable")
+
+
+def _runtime_owner_executable(
+    executable: str,
+    *,
+    is_windows: bool | None = None,
+    is_file: Callable[[str], bool] = os.path.isfile,
+) -> str:
+    """Use the GUI Python sibling for the detached Windows auth owner.
+
+    A Windows venv ``python.exe`` is a launcher shim. ``DETACHED_PROCESS``
+    detaches that first process, but the shim can then re-exec the base console
+    interpreter and surface a persistent conhost. The auth owner has no
+    terminal children and discards all stdio, so ``pythonw.exe`` preserves the
+    process-isolation contract without creating a user-visible console.
+    """
+
+    windows = os.name == "nt" if is_windows is None else is_windows
+    if not windows:
+        return executable
+    name = ntpath.basename(executable).casefold()
+    if name == "pythonw.exe" or name != "python.exe":
+        return executable
+    candidate = ntpath.join(ntpath.dirname(executable), "pythonw.exe")
+    return candidate if is_file(candidate) else executable
 
 
 def _owner_process_environment() -> dict[str, str]:

@@ -63,6 +63,7 @@ from hermes_cli.client_auth.runtime import (
     start_runtime_owner,
     wait_until_authorized,
     _read_runtime_frame,
+    _runtime_owner_executable,
     _test_runtime_suffix,
 )
 
@@ -3193,7 +3194,7 @@ def test_owner_starter_detaches_without_forwarding_secret_environment(monkeypatc
 
     assert start_runtime_owner(timeout=1.0) is remote
     assert captured["argv"] == [
-        sys.executable,
+        _runtime_owner_executable(sys.executable),
         "-m",
         "hermes_cli.client_auth.runtime",
         "owner",
@@ -3206,6 +3207,43 @@ def test_owner_starter_detaches_without_forwarding_secret_environment(monkeypatc
     assert "HERMES_ACCOUNT_TOKEN" not in captured["env"]
     assert len(connect_timeouts) == 2
     assert all(0 < timeout <= 1.0 for timeout in connect_timeouts)
+
+
+def test_runtime_owner_executable_prefers_windows_gui_sibling():
+    checked: list[str] = []
+
+    def is_file(candidate: str) -> bool:
+        checked.append(candidate)
+        return candidate == r"C:\Hermes\venv\Scripts\pythonw.exe"
+
+    assert (
+        _runtime_owner_executable(
+            r"C:\Hermes\venv\Scripts\python.exe",
+            is_windows=True,
+            is_file=is_file,
+        )
+        == r"C:\Hermes\venv\Scripts\pythonw.exe"
+    )
+    assert checked == [r"C:\Hermes\venv\Scripts\pythonw.exe"]
+
+
+def test_runtime_owner_executable_preserves_non_windows_and_missing_siblings():
+    assert (
+        _runtime_owner_executable(
+            "/opt/hermes/venv/bin/python",
+            is_windows=False,
+            is_file=lambda _candidate: pytest.fail("must not probe off Windows"),
+        )
+        == "/opt/hermes/venv/bin/python"
+    )
+    assert (
+        _runtime_owner_executable(
+            r"C:\Hermes\venv\Scripts\python.exe",
+            is_windows=True,
+            is_file=lambda _candidate: False,
+        )
+        == r"C:\Hermes\venv\Scripts\python.exe"
+    )
 
 
 def test_live_owner_is_reused_before_new_mode_election():
