@@ -2411,18 +2411,18 @@ def _ensure_acp_launcher() -> None:
                 or venv_scripts["hermes-agent"]
                 or ansatz_target
             )
-            acp_target = (
-                venv_scripts["ansatz-acp"]
-                or venv_scripts["hermes-acp"]
-                or ansatz_target
-            )
+            # A real ACP console script speaks ACP directly. Any fallback —
+            # the main CLI entry point or the legacy PATH launcher — is the
+            # general CLI, so the shim must dispatch the `acp` subcommand.
+            acp_entry = venv_scripts["ansatz-acp"] or venv_scripts["hermes-acp"]
+            acp_target = acp_entry or ansatz_target
             canonical = (
                 ("ansatz", ansatz_target, ()),
                 ("ansatz-agent", agent_target, ()),
                 (
                     "ansatz-acp",
                     acp_target,
-                    () if acp_target != legacy_fallback else ("acp",),
+                    () if acp_entry is not None else ("acp",),
                 ),
             )
             canonical_targets = {

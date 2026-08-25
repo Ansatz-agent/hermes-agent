@@ -55,12 +55,16 @@ def _scan_dashboard_processes(
     """
     patterns = [
         "ansatz dashboard",
+        # Pre-upgrade processes and the compatibility aliases still run under
+        # the legacy `hermes` command name; they must stay reapable.
+        "hermes dashboard",
         "hermes_cli.main dashboard",
         "hermes_cli/main.py dashboard",
         # The headless backend (`ansatz serve`) is the same long-lived server
         # under a different command name — the desktop app spawns it. Reap it
         # on update for the same frontend/backend-mismatch reason.
         "ansatz serve",
+        "hermes serve",
         "hermes_cli.main serve",
         "hermes_cli/main.py serve",
     ]

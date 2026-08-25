@@ -29,16 +29,20 @@ async function probeWindowsRemote(ssh, explicitHermesPath = '') {
     'if(-not $hermesHome){$hermesHome=Join-Path $env:LOCALAPPDATA "hermes"}',
     '$candidates=@()',
     'if($explicit){$candidates+=$explicit}',
+    '$cmd=Get-Command ansatz.exe -ErrorAction SilentlyContinue',
+    'if($cmd){$candidates+=$cmd.Source}',
     '$cmd=Get-Command hermes.exe -ErrorAction SilentlyContinue',
     'if($cmd){$candidates+=$cmd.Source}',
+    '$candidates+=(Join-Path $hermesHome "hermes-agent\\venv\\Scripts\\ansatz.exe")',
     '$candidates+=(Join-Path $hermesHome "hermes-agent\\venv\\Scripts\\hermes.exe")',
+    '$candidates+=(Join-Path $HOME "hermes-agent\\.venv\\Scripts\\ansatz.exe")',
     '$candidates+=(Join-Path $HOME "hermes-agent\\.venv\\Scripts\\hermes.exe")',
-    '$hermes=$candidates|Where-Object{Test-Path -LiteralPath $_ -PathType Leaf}|Select-Object -First 1',
-    'if(-not $hermes){throw "Hermes is not installed on the remote Windows host."}',
+    '$ansatz=$candidates|Where-Object{Test-Path -LiteralPath $_ -PathType Leaf}|Select-Object -First 1',
+    'if(-not $ansatz){throw "Hermes is not installed on the remote Windows host."}',
     'if($explicit -and $ansatz -ne $explicit){throw "The configured Hermes path is not an executable file."}',
-    '$python=Join-Path (Split-Path $hermes) "python.exe"',
+    '$python=Join-Path (Split-Path $ansatz) "python.exe"',
     'if(-not (Test-Path -LiteralPath $python -PathType Leaf)){throw "The remote Hermes Python runtime was not found."}',
-    '[ordered]@{os="Windows";arch=$env:PROCESSOR_ARCHITECTURE;hermesHome=$hermesHome;hermesPath=$hermes;python=$python}|ConvertTo-Json -Compress'
+    '[ordered]@{os="Windows";arch=$env:PROCESSOR_ARCHITECTURE;hermesHome=$hermesHome;hermesPath=$ansatz;python=$python}|ConvertTo-Json -Compress'
   ].join(';')
 
   return JSON.parse((await ssh.exec(powerShellCommand(script))).trim())

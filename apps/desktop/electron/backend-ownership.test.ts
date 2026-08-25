@@ -197,6 +197,13 @@ test('backend identity check matches only serve and dashboard invocation shapes'
   assert.equal(backendCommandMatches('unrelated dashboard'), false)
 })
 
+test('backend identity check recognizes canonical ansatz alongside legacy hermes', () => {
+  assert.equal(backendCommandMatches('/venv/bin/ansatz serve --port 0'), true)
+  assert.equal(backendCommandMatches('/venv/bin/ansatz --profile work dashboard --no-open'), true)
+  assert.equal(backendCommandMatches('"C:\\Ansatz Runtime\\ansatz.exe" serve --port 0'), true)
+  assert.equal(backendCommandMatches('ansatz chat --query serve'), false)
+})
+
 test('shutdown coordinator returns one promise and awaits teardown exactly once', async () => {
   const completion = deferred()
   const teardown = vi.fn(() => completion.promise)

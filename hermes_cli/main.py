@@ -7695,6 +7695,7 @@ def _parse_dashboard_runtime(command: str) -> tuple[str, str, int] | None:
         pattern in command
         for pattern in (
             "ansatz dashboard",
+            "hermes dashboard",
             "hermes_cli.main dashboard",
             "hermes_cli/main.py dashboard",
         )
@@ -7704,6 +7705,7 @@ def _parse_dashboard_runtime(command: str) -> tuple[str, str, int] | None:
         pattern in command
         for pattern in (
             "ansatz serve",
+            "hermes serve",
             "hermes_cli.main serve",
             "hermes_cli/main.py serve",
         )

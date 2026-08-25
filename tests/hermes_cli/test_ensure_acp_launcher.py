@@ -220,3 +220,41 @@ def test_unwritable_bin_dir_is_skipped(fake_home):
         assert not (fake_home / "hermes-acp").exists()
     finally:
         fake_home.chmod(0o755)
+
+
+def test_acp_fallback_to_main_cli_dispatches_acp_subcommand(
+    fake_home,
+    tmp_path,
+    monkeypatch,
+):
+    """When no real ACP entry point exists, ACP shims must run `<cli> acp`.
+
+    The main CLI entry point speaks the CLI protocol, not ACP; a shim that
+    execs it bare leaves ACP hosts talking to the wrong program.
+    """
+    venv_bin = tmp_path / "venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    (venv_bin / "python").write_text("#!/bin/sh\n", encoding="utf-8")
+    ansatz = venv_bin / "ansatz"
+    ansatz.write_text("#!/bin/sh\n", encoding="utf-8")
+    ansatz.chmod(0o755)
+    monkeypatch.setattr("hermes_cli.main.sys.executable", str(venv_bin / "python"))
+
+    _ensure_acp_launcher()
+
+    for name in ("ansatz-acp", "hermes-acp"):
+        shim = (fake_home / name).read_text(encoding="utf-8")
+        assert f'exec "{ansatz}" "acp" "$@"' in shim, name
+
+
+def test_real_acp_entry_point_is_execed_without_subcommand(
+    fake_home,
+    venv_console_scripts,
+):
+    """A real ACP console script already speaks ACP; no subcommand injection."""
+    _ensure_acp_launcher()
+
+    for name in ("ansatz-acp", "hermes-acp"):
+        shim = (fake_home / name).read_text(encoding="utf-8")
+        assert f'exec "{venv_console_scripts / name}" "$@"' in shim, name
+        assert '"acp"' not in shim, name

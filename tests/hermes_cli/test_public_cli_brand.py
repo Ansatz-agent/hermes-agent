@@ -26,6 +26,16 @@ EXCLUDED_FILES = {
     ROOT / "hermes_cli" / "cli_identity.py",
     ROOT / "hermes_cli" / "entrypoints.py",
 }
+INTERNAL_COMPAT_COMMANDS = {
+    ROOT / "hermes_cli" / "dashboard_procs.py": {
+        '"hermes dashboard",',
+        '"hermes serve",',
+    },
+    ROOT / "hermes_cli" / "main.py": {
+        '"hermes dashboard",',
+        '"hermes serve",',
+    },
+}
 PUBLIC_SUBCOMMANDS = {
     "acp",
     "approvals",
@@ -138,6 +148,8 @@ def test_public_surfaces_do_not_recommend_legacy_cli():
     for path in _files():
         lines = path.read_text(encoding="utf-8").splitlines()
         for line_number, line in enumerate(lines, start=1):
+            if line.strip() in INTERNAL_COMPAT_COMMANDS.get(path, set()):
+                continue
             candidate = line.replace(
                 "docker exec hermes ",
                 "docker exec <container> ",

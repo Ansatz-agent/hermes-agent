@@ -9,6 +9,7 @@ import {
   encodedPowerShell,
   helperCommand,
   powerShellCommand,
+  probeWindowsRemote,
   psLiteral,
   reusableWindowsLock,
   validLock
@@ -78,6 +79,43 @@ test('platform detection surfaces transport failures as themselves, not unsuppor
       })
     ),
     (err: any) => err.kind === 'unsupported-platform' && /Hermes is not installed/.test(err.message)
+  )
+})
+
+test('Windows probe discovers canonical ansatz with hermes fallback and a coherent explicit-path guard', async () => {
+  let probeScript = ''
+  await probeWindowsRemote(
+    sshWith(async command => {
+      probeScript = Buffer.from(command.split(' ').pop()!, 'base64').toString('utf16le')
+
+      return JSON.stringify({
+        os: 'Windows',
+        arch: 'AMD64',
+        hermesHome: 'C:\\h',
+        hermesPath: 'C:\\h\\ansatz.exe',
+        python: 'C:\\h\\python.exe'
+      })
+    }),
+    'C:\\custom\\ansatz.exe'
+  )
+
+  // Canonical launcher discovery, with the legacy name retained as fallback.
+  assert.match(probeScript, /Get-Command ansatz\.exe/)
+  assert.match(probeScript, /Get-Command hermes\.exe/)
+  assert.match(probeScript, /venv\\Scripts\\ansatz\.exe/)
+  assert.match(probeScript, /venv\\Scripts\\hermes\.exe/)
+  assert.ok(
+    probeScript.indexOf('Get-Command ansatz.exe') < probeScript.indexOf('Get-Command hermes.exe'),
+    'canonical launcher must be probed before the legacy fallback'
+  )
+
+  // The explicit-path mismatch guard must compare the variable the probe
+  // actually assigned; an undefined variable makes every explicit path throw.
+  const guard = probeScript.match(/if\(\$explicit -and \$(\w+) -ne \$explicit\)/)
+  assert.ok(guard, 'explicit-path mismatch guard is present')
+  assert.ok(
+    probeScript.includes(`$${guard![1]}=$candidates`),
+    `guard variable $${guard![1]} must be the selected candidate`
   )
 })
 
