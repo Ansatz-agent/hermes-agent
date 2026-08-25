@@ -897,6 +897,8 @@ export class TraceOutboxStore {
   }
 
   private async recover(): Promise<void> {
+    // A crash during segment compaction can orphan its bounded scratch file.
+    await this.config.fs.unlink(`${this.config.segmentPath}.compact`).catch(() => {})
     const scanned = await this.scanActiveSegment()
     const recovered = await this.config.journal.recover()
     const pendingOperations = new Set<string>()
@@ -2005,11 +2007,14 @@ export class TraceOutboxStore {
       return false
     }
 
-    const temporaryPath = `${this.config.segmentPath}.compact-${randomUUID()}`
+    // Deterministic scratch path: a crash orphans at most one file, removed
+    // on the next open or before the next compaction reuses it.
+    const temporaryPath = `${this.config.segmentPath}.compact`
     const rewritten: Array<{ offset: number; record: StoredRecord }> = []
     let offset = 0
     let temporaryExists = true
 
+    await this.config.fs.unlink(temporaryPath).catch(() => {})
     await this.config.fs.writeFile(temporaryPath, Buffer.alloc(0), { exclusive: true })
 
     try {

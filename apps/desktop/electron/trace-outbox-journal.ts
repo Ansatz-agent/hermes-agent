@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
 import { constants, type Stats } from 'node:fs'
 import { lstat, mkdir, open, rename, statfs, unlink } from 'node:fs/promises'
 import { type FileHandle } from 'node:fs/promises'
@@ -565,21 +565,49 @@ export class TraceJournal {
     }
   }
 
+  // The single deterministic scratch path bounds compaction disk usage: a
+  // crash can orphan at most one file, which the next open (or the next
+  // rewrite) removes before reuse.
+  private scratchPath(): string {
+    return `${this.options.path}.compact`
+  }
+
+  private async removeStaleScratch(): Promise<void> {
+    try {
+      await this.options.fs.unlink(this.scratchPath())
+    } catch {
+      // Missing scratch is the normal case; an unsafe path fails the
+      // exclusive create below instead of being followed.
+    }
+  }
+
   async replace(operations: readonly TraceJournalOperation[]): Promise<number> {
     this.assertAvailable()
-    const temporary = `${this.options.path}.compact-${randomUUID()}`
+    const temporary = this.scratchPath()
     const encoded = Buffer.from(operations.map(operation => encodeOperationLine(operation)).join(''), 'utf8')
 
-    await this.options.fs.writeFile(temporary, encoded, { exclusive: true })
-    await this.options.fs.syncFile(temporary)
-    await this.options.fs.replaceFile(temporary, this.options.path)
-    await this.options.fs.syncDirectory(dirname(this.options.path))
+    await this.removeStaleScratch()
+    let scratchExists = false
+
+    try {
+      await this.options.fs.writeFile(temporary, encoded, { exclusive: true })
+      scratchExists = true
+      await this.options.fs.syncFile(temporary)
+      await this.options.fs.replaceFile(temporary, this.options.path)
+      scratchExists = false
+      await this.options.fs.syncDirectory(dirname(this.options.path))
+    } finally {
+      if (scratchExists) {
+        await this.options.fs.unlink(temporary).catch(() => {})
+      }
+    }
 
     return encoded.length
   }
 
   async recover(): Promise<TraceJournalRecovery> {
     this.recoveredTornTailOffset = null
+    await this.removeStaleScratch()
     const size = await this.options.fs.stat(this.options.path)
 
     if (size === null || size === 0) {

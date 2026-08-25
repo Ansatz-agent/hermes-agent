@@ -1175,13 +1175,13 @@ test('restart maintenance avoids segment reads while streaming and compacts the 
   const originalWriteFile = fs.writeFile.bind(fs)
   const originalAppendFile = fs.appendFile.bind(fs)
   fs.writeFile = async (path, data, writeOptions) => {
-    if (path.includes('active.segment.compact-')) {
+    if (path.includes('active.segment.compact')) {
       compactWrites.push(data.length)
     }
     await originalWriteFile(path, data, writeOptions)
   }
   fs.appendFile = async (path, data) => {
-    if (path.includes('active.segment.compact-')) {
+    if (path.includes('active.segment.compact')) {
       compactAppends.push(data.length)
     }
     await originalAppendFile(path, data)
@@ -1967,6 +1967,81 @@ test('fails the store closed when the journal rollback cannot be proven durable'
 
     assert.deepEqual(await drainLogicalBatches(reopened), [fresh.batchId])
     await reopened.close()
+  } finally {
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+
+test('stale compaction scratch files are removed when the store opens', async () => {
+  const fs = new FakeTraceFileSystem()
+  fs.files.set('/outbox/segments/active.segment.compact', Buffer.from('stale-scratch'))
+  fs.files.set('/outbox/index.journal.compact', Buffer.from('stale-scratch'))
+
+  const store = await TraceOutboxStore.open(options({ fs, groupCommitMs: 1 }))
+
+  assert.equal(fs.files.has('/outbox/segments/active.segment.compact'), false)
+  assert.equal(fs.files.has('/outbox/index.journal.compact'), false)
+  await store.close()
+})
+
+test('repeated compaction cycles and an injected failure leave no scratch files on real disk', async () => {
+  const { readdir } = await import('node:fs/promises')
+  const root = await mkdtemp(join(process.cwd(), 'tmp', 'trace-outbox-scratch-'))
+
+  try {
+    let failNextJournalReplace = false
+
+    const faulty: TraceFileSystem = {
+      ...nodeTraceFileSystem,
+      replaceFile: async (from, to) => {
+        if (failNextJournalReplace && to.endsWith('index.journal')) {
+          failNextJournalReplace = false
+          throw Object.assign(new Error('injected_replace_failure'), { code: 'EIO' })
+        }
+
+        await nodeTraceFileSystem.replaceFile(from, to)
+      }
+    }
+
+    const store = await TraceOutboxStore.open({
+      expectedOwner: envelope('scratch-owner').owner,
+      fs: faulty,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
+
+    for (let index = 0; index < 3; index += 1) {
+      const batch = await store.enqueue(envelope(`scratch-${index}`))
+      await store
+        .acknowledge(batch.batchId, { batchId: batch.batchId, outcome: 'accepted', receivedAt: Date.now() })
+        .catch(() => {})
+      await store.compactIfIdle().catch(() => {})
+
+      if (index === 0) {
+        failNextJournalReplace = true
+      }
+    }
+
+    await store.close()
+
+    const reopened = await TraceOutboxStore.open({
+      expectedOwner: envelope('scratch-owner').owner,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
+
+    await reopened.compactIfIdle()
+    await reopened.close()
+
+    const entries = (await readdir(root, { recursive: true })).map(entry => String(entry))
+    assert.deepEqual(
+      entries.filter(entry => entry.includes('.compact')),
+      [],
+      `scratch files leaked: ${entries.join(', ')}`
+    )
   } finally {
     await rm(root, { force: true, recursive: true })
   }

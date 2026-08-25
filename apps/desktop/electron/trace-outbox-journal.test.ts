@@ -220,3 +220,56 @@ test('replays a strict persistent owner binding operation', async () => {
   await journal.replace([{ op: 'owner', accountKey: null }])
   assert.deepEqual((await journal.recover()).operations, [{ op: 'owner', accountKey: null }])
 })
+
+test('journal compaction scratch is deterministic, crash-recoverable, and cleaned on failure', async () => {
+  const fs = new MemoryFileSystem()
+  const path = '/outbox/index.journal'
+  const journal = await TraceJournal.open({ fs, path })
+  const owner = { op: 'owner', accountKey: null } as const
+
+  await journal.append([owner])
+
+  // A crash orphan from a previous process is removed on recovery.
+  fs.files.set(`${path}.compact`, Buffer.from('stale-scratch'))
+  await journal.recover()
+  assert.equal(fs.files.has(`${path}.compact`), false)
+
+  // The scratch path is bounded and deterministic.
+  const scratchWrites: string[] = []
+  const originalWrite = fs.writeFile.bind(fs)
+
+  fs.writeFile = async (writePath, data) => {
+    scratchWrites.push(writePath)
+    await originalWrite(writePath, data)
+  }
+
+  fs.files.set(`${path}.compact`, Buffer.from('stale-scratch'))
+  await journal.replace([owner])
+  assert.deepEqual(scratchWrites, [`${path}.compact`])
+  assert.deepEqual((await journal.recover()).operations, [owner])
+  assert.equal(fs.files.has(`${path}.compact`), false)
+
+  // An ordinary failure cleans its own scratch and stays retryable.
+  const originalReplace = fs.replaceFile.bind(fs)
+  let failNextReplace = true
+
+  fs.replaceFile = async (from, to) => {
+    if (failNextReplace) {
+      failNextReplace = false
+      throw new Error('injected_replace_failure')
+    }
+
+    await originalReplace(from, to)
+  }
+
+  await assert.rejects(journal.replace([owner]), /injected_replace_failure/)
+  assert.deepEqual(
+    [...fs.files.keys()].filter(key => key.includes('.compact')),
+    []
+  )
+  await journal.replace([owner])
+  assert.deepEqual(
+    [...fs.files.keys()].filter(key => key.includes('.compact')),
+    []
+  )
+})

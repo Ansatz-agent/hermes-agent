@@ -271,6 +271,14 @@ function collectByteDigests(
     return
   }
   if (stats.isFile()) {
+    // An in-flight trace compaction may legitimately expose its bounded,
+    // deterministic scratch file. Only these two explicitly non-authoritative
+    // names are excluded; every authoritative artifact stays digested.
+    const base = path.basename(root)
+
+    if (base === 'index.journal.compact' || base === 'active.segment.compact') {
+      return
+    }
     output.set(reportPath(options, root), physicalFileEvidence(root))
   }
 }
