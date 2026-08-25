@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { type ReactNode, useEffect } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { I18nProvider } from '@/i18n'
@@ -9,10 +9,17 @@ import { AuthGate, type DesktopAccountStatus, useDesktopAuth } from './auth-gate
 const signedOut: DesktopAccountStatus = {
   state: 'signed_out',
   username: null,
+  account_id: null,
+  session_id: null,
+  installation_id: null,
+  principal_key: null,
   runtime_instance_id: 'runtime-1',
   epoch: 1,
   valid_until: 0,
-  session_expires_at: null,
+  validation_state: 'unknown',
+  validation_reason: null,
+  last_validated_at: null,
+  legacy: false,
   reason: 'signed_out',
   runtime_ready: false
 }
@@ -21,6 +28,9 @@ const authenticated: DesktopAccountStatus = {
   ...signedOut,
   state: 'authenticated',
   username: 'alice',
+  account_id: 'alice',
+  session_id: 'session-a',
+  principal_key: 'account:alice',
   epoch: 2,
   valid_until: 60,
   reason: null,
@@ -78,6 +88,20 @@ function ProtectedMountProbe({ onMount }: { onMount: () => void }) {
   return <div>Protected Hermes application</div>
 }
 
+function StatefulProtectedProbe({ onMount }: { onMount: () => void }) {
+  const [count, setCount] = useState(0)
+
+  useEffect(() => {
+    onMount()
+  }, [onMount])
+
+  return (
+    <button onClick={() => setCount(current => current + 1)} type="button">
+      Protected Hermes application {count}
+    </button>
+  )
+}
+
 afterEach(() => {
   vi.useRealTimers()
   vi.restoreAllMocks()
@@ -129,10 +153,13 @@ describe('AuthGate', () => {
   it('installs the complete runtime before exposing account credentials', async () => {
     let emitBootstrap: ((event: Record<string, unknown>) => void) | null = null
 
-    const status = vi.fn().mockImplementationOnce(() => new Promise<DesktopAccountStatus>(() => {})).mockResolvedValueOnce({
-      ...signedOut,
-      runtime_ready: true
-    })
+    const status = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise<DesktopAccountStatus>(() => {}))
+      .mockResolvedValueOnce({
+        ...signedOut,
+        runtime_ready: true
+      })
 
     const bootstrap = {
       getState: vi.fn(async () => ({
@@ -357,35 +384,206 @@ describe('AuthGate', () => {
     expect(screen.queryByDisplayValue('password-sentinel')).toBeNull()
   })
 
-  it('unmounts the protected tree immediately when main emits a lock', async () => {
+  it('keeps the protected conversation mounted when validation degrades and recovers', async () => {
+    const localAuthorization = authenticated
+    const onMount = vi.fn()
+
+    const { emit } = renderGate(
+      { status: vi.fn(async () => localAuthorization) },
+      null,
+      <StatefulProtectedProbe onMount={onMount} />
+    )
+
+    const protectedButton = await screen.findByRole('button', { name: 'Protected Hermes application 0' })
+    fireEvent.click(protectedButton)
+    expect(screen.getByRole('button', { name: 'Protected Hermes application 1' })).not.toBeNull()
+
+    act(() => emit({ ...signedOut, state: 'locked', reason: 'runtime_unavailable', epoch: 3 }))
+
+    expect(screen.getByRole('button', { name: 'Protected Hermes application 1' })).not.toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Sign in to Ansatz' })).toBeNull()
+    expect(screen.getByRole('status').textContent).toBe('The account server is unavailable. Try again.')
+
+    act(() =>
+      emit({ ...localAuthorization, runtime_ready: false, validation_state: 'online', validation_reason: null })
+    )
+
+    expect(screen.getByRole('button', { name: 'Protected Hermes application 1' })).not.toBeNull()
+    expect(onMount).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the protected conversation mounted when validation times out', async () => {
+    vi.useFakeTimers()
+
+    const localAuthorization = authenticated
+
+    const { emit } = renderGate(
+      { status: vi.fn(async () => localAuthorization) },
+      null,
+      <div>Protected Hermes application</div>
+    )
+
+    await act(async () => Promise.resolve())
+    expect(screen.getByText('Protected Hermes application')).not.toBeNull()
+
+    act(() =>
+      emit({
+        ...localAuthorization,
+        validation_state: 'degraded',
+        validation_reason: 'runtime_unavailable'
+      })
+    )
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(15_000)
+    })
+
+    expect(screen.getByText('Protected Hermes application')).not.toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Sign in to Ansatz' })).toBeNull()
+  })
+
+  it.each(['account_disabled', 'account_revoked', 'session_revoked'] as const)(
+    'unmounts the protected tree when main emits matching %s',
+    async reason => {
+      const { emit } = renderGate({ status: vi.fn(async () => authenticated) })
+      expect(await screen.findByText('Protected Hermes application')).not.toBeNull()
+
+      act(() => emit({ ...authenticated, state: 'locked', reason, epoch: 3 }))
+
+      expect(screen.queryByText('Protected Hermes application')).toBeNull()
+      expect(await screen.findByRole('heading', { name: 'Sign in to Ansatz' })).not.toBeNull()
+    }
+  )
+
+  it.each(['account_disabled', 'account_revoked'] as const)(
+    'unmounts the protected tree when matching %s carries an older Session id',
+    async reason => {
+      const { emit } = renderGate({ status: vi.fn(async () => authenticated) })
+      expect(await screen.findByText('Protected Hermes application')).not.toBeNull()
+
+      act(() => emit({ ...authenticated, state: 'locked', reason, session_id: 'old-session', epoch: 3 }))
+
+      expect(screen.queryByText('Protected Hermes application')).toBeNull()
+      expect(await screen.findByRole('heading', { name: 'Sign in to Ansatz' })).not.toBeNull()
+    }
+  )
+
+  it('keeps the protected tree for a stale session_revoked event from the same account', async () => {
     const { emit } = renderGate({ status: vi.fn(async () => authenticated) })
     expect(await screen.findByText('Protected Hermes application')).not.toBeNull()
 
-    act(() => emit({ ...signedOut, state: 'locked', reason: 'session_expired', epoch: 3 }))
+    act(() =>
+      emit({ ...authenticated, state: 'locked', reason: 'session_revoked', session_id: 'old-session', epoch: 3 })
+    )
+
+    expect(screen.getByText('Protected Hermes application')).not.toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Sign in to Ansatz' })).toBeNull()
+  })
+
+  it.each([
+    { state: 'locked' as const, reason: 'session_expired' },
+    { state: 'locked' as const, reason: 'runtime_unavailable' },
+    { state: 'signed_out' as const, reason: 'signed_out' }
+  ])(
+    'does not retain local authorization after the renderer switches to a remote $state/$reason status',
+    async remote => {
+      const { emit } = renderGate({ status: vi.fn(async () => authenticated) })
+      expect(await screen.findByText('Protected Hermes application')).not.toBeNull()
+
+      act(() => emit({ ...signedOut, ...remote, epoch: 3 }, 'remote-a'))
+
+      expect(screen.queryByText('Protected Hermes application')).toBeNull()
+      expect(await screen.findByRole('heading', { name: 'Sign in to Ansatz' })).not.toBeNull()
+    }
+  )
+
+  it('does not merge a local transient status into an active remote authorization owner', async () => {
+    const remoteAuthenticated = {
+      ...authenticated,
+      username: 'remote-user',
+      account_id: 'remote-account',
+      session_id: 'remote-session',
+      principal_key: 'account:remote-account'
+    }
+
+    let localStatus: DesktopAccountStatus = authenticated
+
+    const { emit } = renderGate(
+      { status: vi.fn(async connectionId => (connectionId === 'remote-a' ? remoteAuthenticated : localStatus)) },
+      null,
+      <AuthProbe />
+    )
+
+    expect(await screen.findByRole('button', { name: 'alice:local' })).not.toBeNull()
+
+    act(() => emit(remoteAuthenticated, 'remote-a'))
+    expect(await screen.findByRole('button', { name: 'remote-user:remote-a' })).not.toBeNull()
+
+    localStatus = { ...signedOut, state: 'locked', reason: 'runtime_unavailable', epoch: 3 }
+    act(() => emit(localStatus, 'local'))
+
+    expect(screen.queryByRole('button', { name: 'remote-user:local' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'remote-user:remote-a' })).toBeNull()
+    expect(await screen.findByRole('heading', { name: 'Sign in to Ansatz' })).not.toBeNull()
+  })
+
+  it('unmounts the protected tree when main emits signed out', async () => {
+    const { emit } = renderGate({ status: vi.fn(async () => authenticated) })
+    expect(await screen.findByText('Protected Hermes application')).not.toBeNull()
+
+    act(() => emit(signedOut))
 
     expect(screen.queryByText('Protected Hermes application')).toBeNull()
     expect(await screen.findByRole('heading', { name: 'Sign in to Ansatz' })).not.toBeNull()
   })
 
-  it('does not let an older status response overwrite a newer lock event', async () => {
-    let resolveStatus: ((status: DesktopAccountStatus) => void) | null = null
+  it('remounts the protected scope when the authorized account changes', async () => {
+    const alice = { ...authenticated, principal_key: 'account:alice', account_id: 'alice', session_id: 'session-a' }
 
-    const pendingStatus = new Promise<DesktopAccountStatus>(resolve => {
-      resolveStatus = resolve
+    const bob = {
+      ...authenticated,
+      username: 'bob',
+      principal_key: 'account:bob',
+      account_id: 'bob',
+      session_id: 'session-b'
+    }
+
+    const onMount = vi.fn()
+
+    const { emit } = renderGate(
+      { status: vi.fn(async () => alice) },
+      null,
+      <StatefulProtectedProbe onMount={onMount} />
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Protected Hermes application 0' }))
+    expect(screen.getByRole('button', { name: 'Protected Hermes application 1' })).not.toBeNull()
+
+    act(() => emit(bob))
+
+    expect(screen.getByRole('button', { name: 'Protected Hermes application 0' })).not.toBeNull()
+    expect(onMount).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not let a late status error regress a transient event', async () => {
+    let rejectStatus: ((error: Error) => void) | null = null
+
+    const pendingStatus = new Promise<DesktopAccountStatus>((_resolve, reject) => {
+      rejectStatus = reject
     })
 
-    const { emit } = renderGate({ status: vi.fn(() => pendingStatus) })
+    const { emit } = renderGate({ status: vi.fn(() => pendingStatus) }, null, <div>Protected Hermes application</div>)
 
-    act(() => emit({ ...signedOut, state: 'locked', reason: 'session_expired', epoch: 3 }))
-    expect(await screen.findByRole('heading', { name: 'Sign in to Ansatz' })).not.toBeNull()
+    act(() => emit(authenticated))
+    expect(await screen.findByText('Protected Hermes application')).not.toBeNull()
+    act(() => emit({ ...signedOut, state: 'locked', reason: 'server_unavailable', epoch: 3 }))
 
     await act(async () => {
-      resolveStatus?.(authenticated)
-      await pendingStatus
+      rejectStatus?.(new Error('late status failure'))
+      await Promise.resolve()
     })
 
-    expect(screen.queryByText('Protected Hermes application')).toBeNull()
-    expect(screen.getByText('Your session expired. Sign in again.')).not.toBeNull()
+    expect(screen.getByText('Protected Hermes application')).not.toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Sign in to Ansatz' })).toBeNull()
   })
 
   it('turns an unresolved account status request into a terminal retryable state', async () => {
@@ -670,12 +868,7 @@ describe('AuthGate', () => {
       retry: vi.fn(async () => ({ ok: true }))
     }
 
-    const { auth } = renderGate(
-      { status },
-      null,
-      <ProtectedMountProbe onMount={onMount} />,
-      bootstrap
-    )
+    const { auth } = renderGate({ status }, null, <ProtectedMountProbe onMount={onMount} />, bootstrap)
 
     await screen.findByText('Finish install')
     act(() => emitBootstrap?.({ type: 'complete', completedAt: 2_000 }))
@@ -785,9 +978,7 @@ describe('AuthGate', () => {
       emitBootstrap?.({ type: 'failed', error: 'sessionid=secret Traceback private detail' })
     })
 
-    expect(
-      screen.getByText('Ansatz could not prepare the secure sign-in service.')
-    ).not.toBeNull()
+    expect(screen.getByText('Ansatz could not prepare the secure sign-in service.')).not.toBeNull()
     expect(globalThis.document.body.textContent).not.toContain('sessionid')
     expect(globalThis.document.body.textContent).not.toContain('Traceback')
 

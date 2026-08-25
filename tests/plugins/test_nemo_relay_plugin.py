@@ -15,6 +15,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 
+from agent import ansatz_trace_policy
 from hermes_cli import lifecycle, plugins as plugin_api
 from hermes_cli.observability import relay_runtime, relay_shared_metrics
 from hermes_cli.plugins import PluginManager
@@ -446,6 +447,106 @@ def test_product_auto_activation_shares_one_desktop_voice_coordinator(
         if event[0] in {"otel.flush", "otel.deregister", "otel.shutdown"}
     ] == ["otel.flush", "otel.deregister", "otel.shutdown"]
     relay_runtime._reset_for_tests()
+
+
+def test_running_relay_host_dynamically_attaches_product_transport_without_restart(
+    tmp_path, monkeypatch
+):
+    fake = _FakeNemoRelay()
+    _fresh_plugin(monkeypatch, fake)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "running-profile"))
+    for name in (
+        "HERMES_NEMO_RELAY_PLUGINS_TOML",
+        "ANSATZ_TRACE_LOCAL_ENDPOINT",
+        "ANSATZ_TRACE_LOCAL_AUTHORIZATION",
+        "ANSATZ_TRACE_INSTALLATION_ID",
+        "ANSATZ_TRACE_ENTRYPOINT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    host_before = relay_runtime.get_runtime()
+    assert host_before is not None
+    assert not [event for event in fake.events if event[0] == "otel.register"]
+
+    relay_runtime.register_ansatz_product_trace_transport(
+        endpoint="http://127.0.0.1:49152/v1/traces",
+        authorization="Bearer " + "a" * 43,
+        installation_id="11111111-1111-4111-8111-111111111111",
+        entrypoint="desktop",
+        plugins_toml=str(REPO_ROOT / "config" / "ansatz-voice-trace" / "plugins.toml"),
+    )
+    try:
+        assert relay_runtime.get_runtime(create=False) is host_before
+        registrations = [event for event in fake.events if event[0] == "otel.register"]
+        assert len(registrations) == 1
+        assert registrations[0][2].endpoint == "http://127.0.0.1:49152/v1/traces"
+    finally:
+        ansatz_trace_policy.clear_registered_product_trace_transport_for_tests()
+
+
+def test_dynamic_product_attach_failure_does_not_stop_local_relay_conversation(
+    tmp_path, monkeypatch
+):
+    fake = _FakeNemoRelay()
+    plugin = _fresh_plugin(monkeypatch, fake)
+    host = relay_runtime.RelayRuntime(relay=fake, profile_key=str(tmp_path / "profile"))
+    monkeypatch.setattr(ansatz_trace_policy, "ansatz_product_trace_requested", lambda: True)
+    monkeypatch.setattr(ansatz_trace_policy, "ansatz_product_trace_enabled", lambda: True)
+    monkeypatch.setattr(
+        plugin,
+        "activate_ansatz_product",
+        lambda _host: (_ for _ in ()).throw(RuntimeError("subscriber unavailable")),
+    )
+
+    relay_runtime._activate_ansatz_product_trace(host)
+
+    lease = relay_runtime.SESSION_COORDINATOR.acquire_conversation(
+        profile_key=host.profile_key,
+        session_id="still-local",
+        platform="desktop",
+    )
+    assert lease is not None
+    relay_runtime.SESSION_COORDINATOR.release_conversation(lease)
+    host.shutdown()
+
+
+def test_repeated_dynamic_registration_recovers_once_without_duplicate_subscriber(
+    tmp_path, monkeypatch
+):
+    fake = _FakeNemoRelay()
+    plugin = _fresh_plugin(monkeypatch, fake)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "retry-profile"))
+    host = relay_runtime.get_runtime()
+    assert host is not None
+    original_factory = fake.OpenTelemetrySubscriber
+    attempts = 0
+
+    def transient_factory(config):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("transient subscriber failure")
+        return original_factory(config)
+
+    fake.OpenTelemetrySubscriber = transient_factory
+    transport = {
+        "endpoint": "http://127.0.0.1:49152/v1/traces",
+        "authorization": "Bearer " + "a" * 43,
+        "installation_id": "11111111-1111-4111-8111-111111111111",
+        "entrypoint": "desktop",
+        "plugins_toml": str(REPO_ROOT / "config" / "ansatz-voice-trace" / "plugins.toml"),
+    }
+
+    try:
+        relay_runtime.register_ansatz_product_trace_transport(**transport)
+        relay_runtime.register_ansatz_product_trace_transport(**transport)
+        relay_runtime.register_ansatz_product_trace_transport(**transport)
+
+        assert attempts == 2
+        assert len([event for event in fake.events if event[0] == "otel.register"]) == 1
+        assert plugin._get_runtime(profile_key=host.profile_key, host=host) is not None
+    finally:
+        ansatz_trace_policy.clear_registered_product_trace_transport_for_tests()
 
 
 def test_shared_metrics_and_rich_plugin_share_one_core_session(

@@ -9,10 +9,17 @@ import { AuthGate, type DesktopAccountStatus } from './auth-gate'
 const signedOut: DesktopAccountStatus = {
   state: 'signed_out',
   username: null,
+  account_id: null,
+  session_id: null,
+  installation_id: null,
+  principal_key: null,
   runtime_instance_id: 'runtime-1',
   epoch: 1,
   valid_until: 0,
-  session_expires_at: null,
+  validation_state: 'unknown',
+  validation_reason: null,
+  last_validated_at: null,
+  legacy: false,
   reason: 'signed_out',
   runtime_ready: false
 }

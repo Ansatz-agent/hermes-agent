@@ -91,6 +91,8 @@ interface SafeBootstrapState {
 interface InstalledAccountStatus {
   state: 'checking' | 'authenticated' | 'signed_out' | 'locked'
   username: string | null
+  validation_state: 'unknown' | 'validating' | 'online' | 'degraded'
+  validation_reason: string | null
   runtime_ready: boolean
 }
 
@@ -1001,6 +1003,56 @@ test('installed Windows Hermes enforces the complete account lifecycle', async (
       })
       .toBeGreaterThan(0)
     expect(keyringRecordExists(authVenvPython)).toBe(true)
+
+    const restoredBackendPids = backendDescendants(restoredRootPid!)
+      .map(row => row.pid)
+      .sort((left, right) => left - right)
+    server.setMode('500')
+    await expect
+      .poll(
+        async () => {
+          const status = await installedAccountStatus(page!)
+
+          return {
+            state: status.state,
+            validation_state: status.validation_state,
+            validation_reason: status.validation_reason,
+            runtime_ready: status.runtime_ready
+          }
+        },
+        {
+          timeout: 2 * 60_000,
+          intervals: [500, 1_000, 2_000],
+          message: 'installed cached authorization did not degrade safely during an auth 5xx'
+        }
+      )
+      .toEqual({
+        state: 'authenticated',
+        validation_state: 'degraded',
+        validation_reason: 'server_unavailable',
+        runtime_ready: true
+      })
+    expect(
+      backendDescendants(restoredRootPid!)
+        .map(row => row.pid)
+        .sort((left, right) => left - right)
+    ).toEqual(restoredBackendPids)
+    await expect(page.locator('[data-slot="statusbar"]')).toBeVisible()
+    await expect(page.locator('input[name="username"]')).toHaveCount(0)
+
+    server.setMode('online')
+    await expect
+      .poll(async () => (await installedAccountStatus(page!)).validation_state, {
+        timeout: 2 * 60_000,
+        intervals: [500, 1_000, 2_000],
+        message: 'installed cached authorization did not silently revalidate after auth recovery'
+      })
+      .toBe('online')
+    expect(
+      backendDescendants(restoredRootPid!)
+        .map(row => row.pid)
+        .sort((left, right) => left - right)
+    ).toEqual(restoredBackendPids)
 
     const logoutStatus = await page.evaluate(() =>
       (

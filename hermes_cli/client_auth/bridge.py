@@ -12,6 +12,7 @@ from typing import BinaryIO
 from hermes_cli.client_auth.client import TraceCredential
 from hermes_cli.client_auth.runtime import (
     AuthRequired,
+    DURABLE_AUTHORIZATION_VALID_UNTIL,
     account_login,
     account_logout,
     account_status,
@@ -23,7 +24,7 @@ from hermes_cli.client_auth.runtime import (
 )
 
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 MAX_LINE_BYTES = 64 * 1024
 MAX_REQUEST_ID_LENGTH = 64
 MAX_USERNAME_LENGTH = 150
@@ -33,14 +34,23 @@ _PUBLIC_KEYS = frozenset(
     {
         "state",
         "username",
+        "account_id",
+        "session_id",
+        "installation_id",
+        "principal_key",
+        "predecessor_principal_key",
         "runtime_instance_id",
         "epoch",
         "valid_until",
-        "session_expires_at",
+        "validation_state",
+        "validation_reason",
+        "last_validated_at",
+        "legacy",
         "reason",
     }
 )
 _PUBLIC_STATES = frozenset({"checking", "authenticated", "signed_out", "locked"})
+_VALIDATION_STATES = frozenset({"unknown", "validating", "online", "degraded"})
 _SAFE_REASONS = frozenset(
     {
         "interactive_login_required",
@@ -50,17 +60,47 @@ _SAFE_REASONS = frozenset(
         "server_unavailable",
         "session_expired",
         "session_rejected",
+        "invalid_response",
+        "invalid_session_credential",
         "signed_out",
+        "session_revoked",
+        "account_disabled",
+        "account_revoked",
         "vault_unavailable",
     }
 )
+_VALIDATION_REASONS = frozenset(
+    {
+        "rate_limited",
+        "runtime_unavailable",
+        "server_unavailable",
+        "session_expired",
+        "session_rejected",
+        "invalid_response",
+        "invalid_session_credential",
+        "session_revoked",
+        "account_disabled",
+        "account_revoked",
+        "vault_unavailable",
+    }
+)
+_TERMINAL_REASONS = frozenset(
+    {"signed_out", "session_revoked", "account_disabled", "account_revoked"}
+)
 
 
-def _status(_params: Mapping[str, object]) -> dict[str, object]:
-    snapshot = account_status()
+def _status(params: Mapping[str, object]) -> dict[str, object]:
+    # The desktop's validated installation/client context lets the owner
+    # perform the silent legacy-to-native upgrade on the first successful
+    # online validation without fabricating an identity.
+    context = _native_context(params)
+    snapshot = account_status(
+        installation_id=context["installation_id"],
+        client_version=context["client_version"],
+    )
     if snapshot.reason == "runtime_unavailable":
         raise AuthRequired("runtime_unavailable")
-    return _validated_public_result(snapshot.public_dict())
+    return _validated_public_result(_bridge_public_snapshot(snapshot.public_dict()))
 
 
 def _login(params: Mapping[str, object]) -> dict[str, object]:
@@ -83,14 +123,19 @@ def _login(params: Mapping[str, object]) -> dict[str, object]:
         params["password"] = ""
     password_text = ""
     try:
-        snapshot = account_login(username.strip(), password)
+        snapshot = account_login(
+            username.strip(),
+            password,
+            installation_id=_native_context(params)["installation_id"],
+            client_version=_native_context(params)["client_version"],
+        )
     finally:
         password[:] = b"\0" * len(password)
-    return _validated_public_result(snapshot.public_dict())
+    return _validated_public_result(_bridge_public_snapshot(snapshot.public_dict()))
 
 
 def _logout(_params: Mapping[str, object]) -> dict[str, object]:
-    return _validated_public_result(account_logout().public_dict())
+    return _validated_public_result(_bridge_public_snapshot(account_logout().public_dict()))
 
 
 def _trace_token(params: Mapping[str, object]) -> dict[str, object]:
@@ -127,8 +172,8 @@ METHODS: dict[str, Callable[[Mapping[str, object]], dict[str, object]]] = {
     "trace_token": _trace_token,
 }
 ALLOWED_PARAMS = {
-    "status": frozenset(),
-    "login": frozenset({"username", "password"}),
+    "status": frozenset({"installation_id", "client_version"}),
+    "login": frozenset({"username", "password", "installation_id", "client_version"}),
     "logout": frozenset(),
     "trace_token": frozenset(
         {"installation_id", "client_version", "telemetry_schema_version"}
@@ -154,6 +199,8 @@ def dispatch(request: object) -> dict[str, object]:
         return _error(request_id, "INVALID_PARAMS")
 
     try:
+        if method in {"status", "login"}:
+            _native_context(params)
         result = METHODS[method](params)
     except AuthRequired as error:
         reason = error.reason if error.reason in _SAFE_REASONS else "runtime_unavailable"
@@ -236,15 +283,34 @@ def _validated_public_result(value: object) -> dict[str, object]:
         raise RuntimeError("invalid public result")
     state = value.get("state")
     username = value.get("username")
+    account_id = value.get("account_id")
+    session_id = value.get("session_id")
+    installation_id = value.get("installation_id")
     runtime_instance_id = value.get("runtime_instance_id")
     epoch = value.get("epoch")
     valid_until = value.get("valid_until")
-    session_expires_at = value.get("session_expires_at")
+    validation_state = value.get("validation_state")
+    validation_reason = value.get("validation_reason")
+    last_validated_at = value.get("last_validated_at")
+    legacy = value.get("legacy")
     reason = value.get("reason")
+    principal_key = value.get("principal_key")
+    predecessor_principal_key = value.get("predecessor_principal_key")
     if state not in _PUBLIC_STATES:
         raise RuntimeError("invalid public result")
     if username is not None and (
         not isinstance(username, str) or not username or len(username) > 150
+    ):
+        raise RuntimeError("invalid public result")
+    if any(
+        item is not None and (not isinstance(item, str) or not item or len(item) > 256)
+        for item in (
+            account_id,
+            session_id,
+            installation_id,
+            principal_key,
+            predecessor_principal_key,
+        )
     ):
         raise RuntimeError("invalid public result")
     if (
@@ -262,21 +328,103 @@ def _validated_public_result(value: object) -> dict[str, object]:
         or not math.isfinite(valid_until)
     ):
         raise RuntimeError("invalid public result")
-    if session_expires_at is not None and (
-        not isinstance(session_expires_at, str) or len(session_expires_at) > 128
+    if validation_state not in _VALIDATION_STATES:
+        raise RuntimeError("invalid public result")
+    if validation_reason is not None and validation_reason not in _VALIDATION_REASONS:
+        raise RuntimeError("invalid public result")
+    if last_validated_at is not None and (
+        not isinstance(last_validated_at, str) or not last_validated_at or len(last_validated_at) > 128
     ):
+        raise RuntimeError("invalid public result")
+    if not isinstance(legacy, bool):
         raise RuntimeError("invalid public result")
     if reason is not None and reason not in _SAFE_REASONS:
         raise RuntimeError("invalid public result")
+    if state == "locked" and reason not in _TERMINAL_REASONS:
+        # A non-terminal lock (rate limit, vault or server outage) is a
+        # legitimate transient state: surface it as AUTH_REQUIRED with its
+        # safe reason instead of an INTERNAL_ERROR.
+        raise AuthRequired(reason if reason in _SAFE_REASONS else "runtime_unavailable")
+    if not _has_consistent_public_identity(
+        state=state,
+        account_id=account_id,
+        session_id=session_id,
+        installation_id=installation_id,
+        principal_key=principal_key,
+        legacy=legacy,
+    ):
+        raise RuntimeError("invalid public result")
+    if predecessor_principal_key is not None and (
+        legacy is not False
+        or re.fullmatch(r"legacy:[0-9a-f]{64}", predecessor_principal_key) is None
+    ):
+        raise RuntimeError("invalid public result")
     result = dict(value)
-    if state == "authenticated":
+    if state == "authenticated" and valid_until != DURABLE_AUTHORIZATION_VALID_UNTIL:
         # Runtime leases use a process-local monotonic clock. Convert the
         # remaining duration to a Unix timestamp before returning it to a
         # Desktop process (including one reached over SSH), whose monotonic
-        # clock has a different origin.
+        # clock has a different origin. Durable native and legacy principals
+        # already carry the finite Unix sentinel used across process boundaries.
         remaining = max(0.0, float(valid_until) - time.monotonic())
         result["valid_until"] = time.time() + remaining
     return result
+
+
+def _has_consistent_public_identity(
+    *,
+    state: object,
+    account_id: object,
+    session_id: object,
+    installation_id: object,
+    principal_key: object,
+    legacy: object,
+) -> bool:
+    if all(value is None for value in (account_id, session_id, installation_id, principal_key)):
+        return state != "authenticated" and legacy is False
+    if legacy is True:
+        return (
+            account_id is None
+            and session_id is None
+            and installation_id is None
+            and isinstance(principal_key, str)
+            and re.fullmatch(r"legacy:[0-9a-f]{64}", principal_key) is not None
+        )
+    uuid4 = r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
+    return (
+        isinstance(account_id, str)
+        and re.fullmatch(uuid4, account_id) is not None
+        and isinstance(session_id, str)
+        and re.fullmatch(uuid4, session_id) is not None
+        and isinstance(installation_id, str)
+        and re.fullmatch(uuid4, installation_id) is not None
+        and principal_key == f"account:{account_id}"
+    )
+
+
+def _native_context(params: Mapping[str, object]) -> dict[str, str]:
+    installation_id = params.get("installation_id")
+    client_version = params.get("client_version")
+    if (
+        not isinstance(installation_id, str)
+        or re.fullmatch(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}",
+            installation_id,
+            re.IGNORECASE,
+        )
+        is None
+        or not isinstance(client_version, str)
+        or re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}", client_version)
+        is None
+    ):
+        raise ValueError("invalid native client context")
+    return {"installation_id": installation_id, "client_version": client_version}
+
+
+def _bridge_public_snapshot(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise RuntimeError("invalid public result")
+    return {key: value.get(key) for key in _PUBLIC_KEYS}
 
 
 def _validated_trace_result(

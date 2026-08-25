@@ -6,6 +6,8 @@ import { ja } from './ja'
 import { zh } from './zh'
 import { zhHant } from './zh-hant'
 
+import { validationHealthText } from './index'
+
 const requiredReasonKeys = [
   'interactiveLoginRequired',
   'invalidCredentials',
@@ -64,5 +66,11 @@ describe('account auth locale catalog', () => {
 
     expect(copy).not.toMatch(/\b(register|sign up|create account|forgot password|reset password|change password)\b/i)
     expect(en.auth.administratorManaged).toMatch(/server administrator/i)
+  })
+
+  it('uses a localized, generic validation-health message without exposing validation details', () => {
+    for (const locale of [en, ja, zh, zhHant, ar]) {
+      expect(validationHealthText(locale.auth)).toBe(locale.auth.reasons.serverUnavailable)
+    }
   })
 })

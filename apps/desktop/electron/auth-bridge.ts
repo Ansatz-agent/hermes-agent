@@ -1,12 +1,19 @@
 import { spawn } from 'node:child_process'
 
-export const AUTH_BRIDGE_PROTOCOL_VERSION = 1
+import type { BridgeStatus } from '../auth-bridge-status'
+
+export type { BridgeStatus } from '../auth-bridge-status'
+
+export const AUTH_BRIDGE_PROTOCOL_VERSION = 2
 const PROTOCOL_VERSION = AUTH_BRIDGE_PROTOCOL_VERSION
 const MAX_LINE_BYTES = 64 * 1024
 const MAX_REQUEST_ID_LENGTH = 64
 const DEFAULT_TIMEOUT_MS = 20_000
 const DEFAULT_LOGIN_TIMEOUT_MS = 85_000
 const DEFAULT_LOGOUT_TIMEOUT_MS = 45_000
+// Permit small host-clock disagreement while still bounding credentials to the
+// server-declared maximum short-lived token lifetime.
+export const TRACE_CREDENTIAL_CLOCK_SKEW_MS = 30_000
 
 const SAFE_ENV_KEYS = new Set([
   'APPDATA',
@@ -44,21 +51,34 @@ const SAFE_REASONS = new Set([
   'server_unavailable',
   'session_expired',
   'session_rejected',
+  'invalid_response',
+  'invalid_session_credential',
   'signed_out',
+  'session_revoked',
+  'account_disabled',
+  'account_revoked',
   'vault_unavailable'
 ])
 
+const VALIDATION_REASONS = new Set([
+  'rate_limited',
+  'runtime_unavailable',
+  'server_unavailable',
+  'session_expired',
+  'session_rejected',
+  'invalid_response',
+  'invalid_session_credential',
+  'session_revoked',
+  'account_disabled',
+  'account_revoked',
+  'vault_unavailable'
+])
+
+const TERMINAL_REASONS = new Set(['signed_out', 'session_revoked', 'account_disabled', 'account_revoked'])
+
 export type AuthMethod = 'status' | 'login' | 'logout' | 'trace_token'
 
-export type BridgeStatus = {
-  state: 'checking' | 'authenticated' | 'signed_out' | 'locked'
-  username: string | null
-  runtime_instance_id: string
-  epoch: number
-  valid_until: number
-  session_expires_at: string | null
-  reason: string | null
-}
+export type NativeClientContext = { installation_id: string; client_version: string }
 
 export type ConnectionScope = {
   connection_id: string
@@ -80,8 +100,8 @@ export type TraceCredential = {
 }
 
 type AuthRequest =
-  | { method: 'status'; params: Record<string, never> }
-  | { method: 'login'; params: { username: string; password: string } }
+  | { method: 'status'; params: NativeClientContext }
+  | { method: 'login'; params: { username: string; password: string } & NativeClientContext }
   | { method: 'logout'; params: Record<string, never> }
   | { method: 'trace_token'; params: TraceTokenRequest }
 
@@ -105,9 +125,11 @@ type SpawnChild = (
 ) => ChildLike
 
 type DesktopAuthBridgeOptions = {
+  clock?: () => number
   cwd: string
   env?: NodeJS.ProcessEnv
   onDiagnostic?: (message: string) => void
+  nativeClientContext: NativeClientContext
   pythonExecutable: string
   spawnChild?: SpawnChild
   timeoutMs?: number
@@ -187,20 +209,27 @@ export function requireAuthenticatedConnectionScope(value: unknown): ConnectionS
 
 export class DesktopAuthBridge {
   private readonly child: ChildLike
+  private readonly clock: () => number
   private readonly onDiagnostic: (message: string) => void
   private readonly pending = new Map<string, PendingRequest>()
   private readonly loginTimeoutMs: number
   private readonly logoutTimeoutMs: number
   private readonly timeoutMs: number
+  private readonly nativeClientContext: NativeClientContext
   private nextRequestId = 0n
   private stdoutBuffer = Buffer.alloc(0)
   private unavailable = false
 
   constructor(options: DesktopAuthBridgeOptions) {
+    this.clock = options.clock ?? Date.now
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
     this.loginTimeoutMs = options.loginTimeoutMs ?? options.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS
     this.logoutTimeoutMs = options.logoutTimeoutMs ?? options.timeoutMs ?? DEFAULT_LOGOUT_TIMEOUT_MS
     this.onDiagnostic = options.onDiagnostic ?? (() => {})
+    if (!isNativeClientContext(options.nativeClientContext)) {
+      throw new AuthBridgeError('invalid_request')
+    }
+    this.nativeClientContext = { ...options.nativeClientContext }
 
     const spawnChild: SpawnChild =
       options.spawnChild ?? ((command, args, childOptions) => spawn(command, args, childOptions) as ChildLike)
@@ -227,11 +256,11 @@ export class DesktopAuthBridge {
   }
 
   status(): Promise<BridgeStatus> {
-    return this.invoke({ method: 'status', params: {} })
+    return this.invoke({ method: 'status', params: this.nativeClientContext })
   }
 
   login(username: string, password: string): Promise<BridgeStatus> {
-    return this.invoke({ method: 'login', params: { username, password } })
+    return this.invoke({ method: 'login', params: { username, password, ...this.nativeClientContext } })
   }
 
   logout(): Promise<BridgeStatus> {
@@ -361,7 +390,7 @@ export class DesktopAuthBridge {
     if (Object.hasOwn(response, 'result')) {
       const validResult =
         pending.request.method === 'trace_token'
-          ? isTraceCredential(response.result, pending.request.params.installation_id)
+          ? isTraceCredential(response.result, pending.request.params.installation_id, this.clock())
           : isBridgeStatus(response.result)
 
       if (Object.keys(response).length !== 3 || !validResult) {
@@ -424,7 +453,11 @@ function isValidRequest(value: unknown): value is AuthRequest {
 
   const paramKeys = Object.keys(value.params)
 
-  if (value.method === 'status' || value.method === 'logout') {
+  if (value.method === 'status') {
+    return isNativeClientContext(value.params)
+  }
+
+  if (value.method === 'logout') {
     return paramKeys.length === 0
   }
 
@@ -441,7 +474,7 @@ function isValidRequest(value: unknown): value is AuthRequest {
 
   return (
     value.method === 'login' &&
-    paramKeys.length === 2 &&
+    paramKeys.length === 4 &&
     Object.hasOwn(value.params, 'username') &&
     Object.hasOwn(value.params, 'password') &&
     typeof value.params.username === 'string' &&
@@ -449,38 +482,136 @@ function isValidRequest(value: unknown): value is AuthRequest {
     value.params.username.length <= 150 &&
     typeof value.params.password === 'string' &&
     value.params.password.length > 0 &&
-    value.params.password.length <= 4096
+    value.params.password.length <= 4096 &&
+    hasValidNativeClientContextFields(value.params)
   )
 }
 
-function isTraceCredential(value: unknown, expectedInstallationId: string): value is TraceCredential {
+export function traceCredentialExpiresAt(
+  value: unknown,
+  expectedInstallationId: string | undefined,
+  now: number = Date.now()
+): number | null {
   if (
+    !Number.isSafeInteger(now) ||
     !isPlainObject(value) ||
-    !sameKeys(value, ['access_token', 'expires_at', 'expires_in', 'installation_id']) ||
+    !sameKeys(value, ['access_token', 'expires_at', 'expires_in', 'installation_id'])
+  ) {
+    return null
+  }
+
+  if (
     typeof value.access_token !== 'string' ||
     value.access_token.length < 20 ||
     value.access_token.length > 4096 ||
     /[\r\n]/.test(value.access_token) ||
     typeof value.expires_at !== 'string' ||
     value.expires_at.length > 128 ||
-    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(value.expires_at) ||
-    !Number.isFinite(Date.parse(value.expires_at)) ||
-    Date.parse(value.expires_at) <= Date.now() - 30_000 ||
     !Number.isSafeInteger(value.expires_in) ||
     value.expires_in < 1 ||
     value.expires_in > 900 ||
-    value.installation_id !== expectedInstallationId
+    typeof value.installation_id !== 'string' ||
+    !isUuidV4(value.installation_id) ||
+    (expectedInstallationId !== undefined && value.installation_id !== expectedInstallationId)
   ) {
-    return false
+    return null
   }
 
-  return isUuidV4(value.installation_id)
+  const expiresAt = parseRfc3339Epoch(value.expires_at)
+  const latest = now + value.expires_in * 1_000 + TRACE_CREDENTIAL_CLOCK_SKEW_MS
+
+  if (expiresAt === null || !Number.isSafeInteger(latest) || expiresAt <= now || expiresAt > latest) {
+    return null
+  }
+
+  return expiresAt
+}
+
+function isTraceCredential(value: unknown, expectedInstallationId: string, now: number): value is TraceCredential {
+  return traceCredentialExpiresAt(value, expectedInstallationId, now) !== null
+}
+
+function parseRfc3339Epoch(value: string): number | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|([+-])(\d{2}):(\d{2}))$/.exec(value)
+
+  if (!match) {
+    return null
+  }
+
+  const year = Number(match[1])
+  const month = Number(match[2]) - 1
+  const day = Number(match[3])
+  const hour = Number(match[4])
+  const minute = Number(match[5])
+  const second = Number(match[6])
+  const fraction = match[7] ?? ''
+  // Round fractional seconds up to the next millisecond so an unrepresentable
+  // sub-millisecond remainder can never make an overlong token look valid.
+  const millisecond = Number(fraction.slice(0, 3).padEnd(3, '0')) + (/[1-9]/.test(fraction.slice(3)) ? 1 : 0)
+  const offsetSign = match[9]
+  const offsetHours = match[10] === undefined ? 0 : Number(match[10])
+  const offsetMinutes = match[11] === undefined ? 0 : Number(match[11])
+
+  if (
+    year < 100 ||
+    month < 0 ||
+    month > 11 ||
+    day < 1 ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    offsetHours > 23 ||
+    offsetMinutes > 59
+  ) {
+    return null
+  }
+
+  const localBase = Date.UTC(year, month, day, hour, minute, second)
+  const localDate = new Date(localBase)
+
+  if (
+    !Number.isSafeInteger(localBase) ||
+    localDate.getUTCFullYear() !== year ||
+    localDate.getUTCMonth() !== month ||
+    localDate.getUTCDate() !== day ||
+    localDate.getUTCHours() !== hour ||
+    localDate.getUTCMinutes() !== minute ||
+    localDate.getUTCSeconds() !== second
+  ) {
+    return null
+  }
+
+  const local = localBase + millisecond
+
+  if (!Number.isSafeInteger(local)) {
+    return null
+  }
+
+  const offset = (offsetHours * 60 + offsetMinutes) * 60 * 1_000
+  const epoch = match[8] === 'Z' ? local : local - (offsetSign === '+' ? offset : -offset)
+
+  return Number.isSafeInteger(epoch) ? epoch : null
 }
 
 function isUuidV4(value: unknown): value is string {
   return (
-    typeof value === 'string' &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+    typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+  )
+}
+
+function isNativeClientContext(value: unknown): value is NativeClientContext {
+  return (
+    isPlainObject(value) &&
+    sameKeys(value, ['installation_id', 'client_version']) &&
+    hasValidNativeClientContextFields(value)
+  )
+}
+
+function hasValidNativeClientContextFields(value: Record<string, unknown>): boolean {
+  return (
+    isUuidV4(value.installation_id) &&
+    typeof value.client_version === 'string' &&
+    /^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$/.test(value.client_version)
   )
 }
 
@@ -491,15 +622,39 @@ function isPlainObject(value: unknown): value is Record<string, any> {
 function isBridgeStatus(value: unknown): value is BridgeStatus {
   if (
     !isPlainObject(value) ||
-    !sameKeys(value, [
+    (!sameKeys(value, [
       'state',
       'username',
+      'account_id',
+      'session_id',
+      'installation_id',
+      'principal_key',
+      'predecessor_principal_key',
       'runtime_instance_id',
       'epoch',
       'valid_until',
-      'session_expires_at',
+      'validation_state',
+      'validation_reason',
+      'last_validated_at',
+      'legacy',
       'reason'
-    ])
+    ]) &&
+      !sameKeys(value, [
+        'state',
+        'username',
+        'account_id',
+        'session_id',
+        'installation_id',
+        'principal_key',
+        'runtime_instance_id',
+        'epoch',
+        'valid_until',
+        'validation_state',
+        'validation_reason',
+        'last_validated_at',
+        'legacy',
+        'reason'
+      ]))
   ) {
     return false
   }
@@ -508,6 +663,11 @@ function isBridgeStatus(value: unknown): value is BridgeStatus {
     ['checking', 'authenticated', 'signed_out', 'locked'].includes(value.state) &&
     (value.username === null ||
       (typeof value.username === 'string' && value.username.length > 0 && value.username.length <= 150)) &&
+    isOptionalBoundedString(value.account_id) &&
+    isOptionalBoundedString(value.session_id) &&
+    isOptionalBoundedString(value.installation_id) &&
+    isOptionalBoundedString(value.principal_key) &&
+    (value.predecessor_principal_key === undefined || isOptionalBoundedString(value.predecessor_principal_key)) &&
     typeof value.runtime_instance_id === 'string' &&
     value.runtime_instance_id.length > 0 &&
     value.runtime_instance_id.length <= 128 &&
@@ -516,10 +676,59 @@ function isBridgeStatus(value: unknown): value is BridgeStatus {
     typeof value.valid_until === 'number' &&
     Number.isFinite(value.valid_until) &&
     value.valid_until >= 0 &&
-    (value.session_expires_at === null ||
-      (typeof value.session_expires_at === 'string' && value.session_expires_at.length <= 128)) &&
-    (value.reason === null || (typeof value.reason === 'string' && SAFE_REASONS.has(value.reason)))
+    ['unknown', 'validating', 'online', 'degraded'].includes(value.validation_state) &&
+    (value.validation_reason === null ||
+      (typeof value.validation_reason === 'string' && VALIDATION_REASONS.has(value.validation_reason))) &&
+    (value.last_validated_at === null ||
+      (typeof value.last_validated_at === 'string' &&
+        value.last_validated_at.length > 0 &&
+        value.last_validated_at.length <= 128)) &&
+    typeof value.legacy === 'boolean' &&
+    (value.reason === null || (typeof value.reason === 'string' && SAFE_REASONS.has(value.reason))) &&
+    (value.state !== 'locked' || (typeof value.reason === 'string' && TERMINAL_REASONS.has(value.reason))) &&
+    hasConsistentBridgeIdentity(value)
   )
+}
+
+function hasConsistentBridgeIdentity(value: Record<string, any>): boolean {
+  const emptyIdentity =
+    value.account_id === null &&
+    value.session_id === null &&
+    value.installation_id === null &&
+    value.principal_key === null
+
+  if (emptyIdentity) {
+    return value.state !== 'authenticated' && value.legacy === false
+  }
+
+  if (value.legacy) {
+    return (
+      value.account_id === null &&
+      value.session_id === null &&
+      value.installation_id === null &&
+      typeof value.principal_key === 'string' &&
+      /^legacy:[0-9a-f]{64}$/.test(value.principal_key)
+    )
+  }
+
+  if (
+    value.predecessor_principal_key !== undefined &&
+    value.predecessor_principal_key !== null &&
+    !/^legacy:[0-9a-f]{64}$/.test(value.predecessor_principal_key)
+  ) {
+    return false
+  }
+
+  return (
+    isUuidV4(value.account_id) &&
+    isUuidV4(value.session_id) &&
+    isUuidV4(value.installation_id) &&
+    value.principal_key === `account:${value.account_id}`
+  )
+}
+
+function isOptionalBoundedString(value: unknown): value is string | null {
+  return value === null || (typeof value === 'string' && value.length > 0 && value.length <= 256)
 }
 
 function isBridgeRemoteError(value: unknown): value is { code: string; reason?: string } {

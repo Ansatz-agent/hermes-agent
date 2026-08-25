@@ -9,10 +9,7 @@ export const AUTH_SCOPE_TOKEN_TTL_SECONDS = 60
 const AUTH_SCOPE_TOKEN_BYTES = 32
 const AUTH_SCOPE_CONTROL_FRAME_MAX_BYTES = 4_096
 
-const AUTH_SECRET_ENVIRONMENT_KEYS = new Set([
-  'HERMES_AUTH_SCOPE_TOKEN',
-  'HERMES_DASHBOARD_SESSION_TOKEN'
-])
+const AUTH_SECRET_ENVIRONMENT_KEYS = new Set(['HERMES_AUTH_SCOPE_TOKEN', 'HERMES_DASHBOARD_SESSION_TOKEN'])
 
 export type AuthScopeToken = {
   bearer: string
@@ -21,9 +18,14 @@ export type AuthScopeToken = {
   validUntil: number
 }
 
-export function sanitizeAuthChildEnvironment(
-  source: NodeJS.ProcessEnv = process.env
-): NodeJS.ProcessEnv {
+export type TraceTransportRegistration = {
+  endpoint: string
+  installationId: string
+  localBearer: string
+  pluginsToml: string
+}
+
+export function sanitizeAuthChildEnvironment(source: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const sanitized = { ...source }
 
   for (const key of AUTH_SECRET_ENVIRONMENT_KEYS) {
@@ -33,10 +35,7 @@ export function sanitizeAuthChildEnvironment(
   return sanitized
 }
 
-export function sanitizeAnsatzAuthChildEnvironment(
-  source: NodeJS.ProcessEnv,
-  hermesHome: string
-): NodeJS.ProcessEnv {
+export function sanitizeAnsatzAuthChildEnvironment(source: NodeJS.ProcessEnv, hermesHome: string): NodeJS.ProcessEnv {
   return sanitizeAuthChildEnvironment(ansatzAuthEnvironment(hermesHome, source))
 }
 
@@ -46,10 +45,7 @@ type IssueAuthScopeTokenOptions = {
   ttlSeconds?: number
 }
 
-export function issueAuthScopeToken(
-  scope: ConnectionScope,
-  options: IssueAuthScopeTokenOptions = {}
-): AuthScopeToken {
+export function issueAuthScopeToken(scope: ConnectionScope, options: IssueAuthScopeTokenOptions = {}): AuthScopeToken {
   let required: ConnectionScope
 
   try {
@@ -93,6 +89,41 @@ export function encodeScopeTokenRegistration(token: AuthScopeToken): string {
 
   if (Buffer.byteLength(frame) > AUTH_SCOPE_CONTROL_FRAME_MAX_BYTES) {
     throw new Error('Auth scope token registration frame is too large')
+  }
+
+  return frame
+}
+
+export function encodeTraceTransportRegistration(transport: TraceTransportRegistration): string {
+  const endpoint = new URL(transport.endpoint)
+
+  if (
+    endpoint.protocol !== 'http:' ||
+    endpoint.hostname !== '127.0.0.1' ||
+    endpoint.pathname !== '/v1/traces' ||
+    !endpoint.port ||
+    endpoint.search ||
+    endpoint.hash ||
+    !/^[0-9A-Za-z_-]{43}$/.test(transport.localBearer) ||
+    Buffer.from(transport.localBearer, 'base64url').byteLength !== 32 ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(transport.installationId) ||
+    !transport.pluginsToml.replaceAll('\\', '/').endsWith('/ansatz-voice-trace/plugins.toml')
+  ) {
+    throw new TypeError('Invalid Trace transport registration')
+  }
+
+  const frame = `${JSON.stringify({
+    authorization: `Bearer ${transport.localBearer}`,
+    endpoint: transport.endpoint,
+    entrypoint: 'desktop',
+    installation_id: transport.installationId,
+    operation: 'register_trace_transport',
+    plugins_toml: transport.pluginsToml,
+    version: 1
+  })}\n`
+
+  if (Buffer.byteLength(frame) > AUTH_SCOPE_CONTROL_FRAME_MAX_BYTES) {
+    throw new Error('Trace transport registration frame is too large')
   }
 
   return frame

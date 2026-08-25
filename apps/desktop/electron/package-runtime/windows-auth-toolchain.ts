@@ -309,7 +309,7 @@ function publishAuthContract(activeRoot: string, source: { commit: string; archi
       sourceCommit: source.commit,
       sourceArchiveSha256: source.archiveSha256,
       authLockSha256: sha256File(lockPath),
-      protocolVersion: 1
+      protocolVersion: 2
     })}\n`
   )
 }
@@ -344,10 +344,9 @@ export async function prepareWindowsPackagedAuthRuntime(options: PrepareOptions)
     emit,
     env = process.env,
     runProcess = runBootstrapProcess,
-    retireAuthOwners =
-      process.platform === 'win32'
-        ? retireExactWindowsAuthOwners
-        : async () => ({ inspected: 0, stopped: 0 }),
+    retireAuthOwners = process.platform === 'win32'
+      ? retireExactWindowsAuthOwners
+      : async () => ({ inspected: 0, stopped: 0 }),
     toolchain
   } = options
 
@@ -380,14 +379,7 @@ export async function prepareWindowsPackagedAuthRuntime(options: PrepareOptions)
       runProcess,
       {
         command: windowsPowerShellExecutable(env),
-        args: [
-          '-NoProfile',
-          '-NonInteractive',
-          '-ExecutionPolicy',
-          'Bypass',
-          '-Command',
-          EXPAND_ARCHIVE_COMMAND
-        ],
+        args: ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', EXPAND_ARCHIVE_COMMAND],
         abortSignal,
         emit,
         env: {

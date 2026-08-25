@@ -44,6 +44,7 @@ const LOCAL_CHANNELS = [
   'hermes:native-theme',
   'hermes:translucency',
   'hermes:power-battery:get',
+  'hermes:trace:online',
   'hermes:window:openInstance',
   'hermes:wake-indicator:get',
   'hermes:wake-indicator:set',
@@ -168,6 +169,8 @@ const LOCAL_CHANNELS = [
   'hermes:deep-link-ready'
 ] as const
 
+const NO_ARGUMENT_CHANNELS = new Set<string>(['hermes:trace:online'])
+
 export const CHANNEL_AUTH_POLICY = buildPolicyMap([
   ['auth-free', AUTH_FREE_CHANNELS_SOURCE],
   ['connection', CONNECTION_CHANNELS],
@@ -225,6 +228,10 @@ export function createGuardedIpc(ipcMain: IpcMainLike, authority: () => GuardedI
     const policy = policyFor(channel)
 
     try {
+      if (NO_ARGUMENT_CHANNELS.has(channel) && args.length !== 0) {
+        throw new Error('unexpected arguments')
+      }
+
       const current = authority()
 
       if (!current || !current.ownsSender(event)) {

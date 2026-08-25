@@ -12,18 +12,17 @@ import {
 
 import { AuthBootstrapProgress } from '@/components/auth-bootstrap-progress'
 import { Button } from '@/components/ui/button'
-import type {
-  DesktopBootstrapProgressUnit,
-  DesktopSafeBootstrapEvent,
-  DesktopSafeBootstrapState
-} from '@/global'
+import type { DesktopBootstrapProgressUnit, DesktopSafeBootstrapEvent, DesktopSafeBootstrapState } from '@/global'
 import { useViewedInterval } from '@/hooks/use-viewed-interval'
-import { type Translations, useI18n } from '@/i18n'
+import { type Translations, useI18n, validationHealthText } from '@/i18n'
 import { sanitizeAuthBootstrapText } from '@/lib/auth-bootstrap-progress'
+
+import type { BridgeStatus } from '../../auth-bridge-status'
 
 const ACCOUNT_SERVER = 'https://c2sml.cn/auth'
 const AUTH_REQUEST_TIMEOUT_MS = 15_000
 const AUTH_LOGIN_TIMEOUT_MS = 90_000
+const EXPLICIT_TERMINAL_REASONS = new Set(['account_disabled', 'account_revoked', 'session_revoked'])
 
 function withAuthDeadline<T>(request: Promise<T>, timeoutMs = AUTH_REQUEST_TIMEOUT_MS): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -42,16 +41,7 @@ function withAuthDeadline<T>(request: Promise<T>, timeoutMs = AUTH_REQUEST_TIMEO
   })
 }
 
-export type DesktopAccountStatus = {
-  state: 'checking' | 'authenticated' | 'signed_out' | 'locked'
-  username: string | null
-  runtime_instance_id: string
-  epoch: number
-  valid_until: number
-  session_expires_at: string | null
-  reason: string | null
-  runtime_ready: boolean
-}
+export type DesktopAccountStatus = BridgeStatus & { runtime_ready: boolean }
 
 export type DesktopAuthClient = {
   status: (connectionId?: string) => Promise<DesktopAccountStatus>
@@ -72,6 +62,11 @@ export type DesktopAuthContextValue = {
   status: DesktopAccountStatus
 }
 
+type DesktopAuthSnapshot = {
+  connectionId: string
+  status: DesktopAccountStatus
+}
+
 const DesktopAuthContext = createContext<DesktopAuthContextValue | null>(null)
 
 export function useDesktopAuth(): DesktopAuthContextValue {
@@ -87,13 +82,87 @@ export function useDesktopAuth(): DesktopAuthContextValue {
 const unavailableStatus = (): DesktopAccountStatus => ({
   state: 'locked',
   username: null,
+  account_id: null,
+  session_id: null,
+  installation_id: null,
+  principal_key: null,
   runtime_instance_id: 'unavailable',
   epoch: 0,
   valid_until: 0,
-  session_expires_at: null,
+  validation_state: 'unknown',
+  validation_reason: 'runtime_unavailable',
+  last_validated_at: null,
+  legacy: false,
   reason: 'runtime_unavailable',
   runtime_ready: false
 })
+
+export function hasCachedLocalAuthorization(status: DesktopAccountStatus): boolean {
+  return status.state === 'authenticated' && Boolean(status.principal_key)
+}
+
+function sameAccount(left: DesktopAccountStatus, right: DesktopAccountStatus): boolean {
+  return (
+    Boolean(left.principal_key) && left.principal_key === right.principal_key && left.account_id === right.account_id
+  )
+}
+
+function sameCurrentSession(left: DesktopAccountStatus, right: DesktopAccountStatus): boolean {
+  return sameAccount(left, right) && Boolean(left.session_id) && left.session_id === right.session_id
+}
+
+function isMatchingExplicitTerminal(
+  current: DesktopAccountStatus,
+  next: DesktopAccountStatus,
+  reason: string
+): boolean {
+  if (!hasCachedLocalAuthorization(current)) {
+    return false
+  }
+
+  return reason === 'session_revoked' ? sameCurrentSession(current, next) : sameAccount(current, next)
+}
+
+function degradedFrom(current: DesktopAccountStatus, reason: string): DesktopAccountStatus {
+  return hasCachedLocalAuthorization(current)
+    ? { ...current, validation_state: 'degraded', validation_reason: reason, reason: null }
+    : unavailableStatus()
+}
+
+function reconcileStatus(
+  current: DesktopAccountStatus,
+  next: DesktopAccountStatus,
+  currentConnectionId: string,
+  sourceConnectionId: string
+): DesktopAccountStatus {
+  if (currentConnectionId !== 'local' || sourceConnectionId !== 'local') {
+    return next
+  }
+
+  if (hasCachedLocalAuthorization(next)) {
+    return hasCachedLocalAuthorization(current) &&
+      sameAccount(current, next) &&
+      current.runtime_ready &&
+      !next.runtime_ready
+      ? { ...next, runtime_ready: true }
+      : next
+  }
+
+  if (next.state === 'signed_out') {
+    return next
+  }
+
+  const reason = next.reason ?? next.validation_reason ?? 'runtime_unavailable'
+
+  const matchingExplicitTerminal =
+    EXPLICIT_TERMINAL_REASONS.has(reason) && isMatchingExplicitTerminal(current, next, reason)
+
+  if (matchingExplicitTerminal) {
+    return next
+  }
+
+  return hasCachedLocalAuthorization(current) ? degradedFrom(current, reason) : next
+}
 
 const emptyBootstrapState = (): DesktopSafeBootstrapState => ({
   active: false,
@@ -162,7 +231,8 @@ function applyAuthBootstrapEvent(
     const previous = current.stages[event.stage]
     const units = new Set<DesktopBootstrapProgressUnit>(['bytes', 'packages', 'items', 'files', 'steps'])
     const completed = Number.isFinite(event.completed) && event.completed >= 0 ? event.completed : 0
-    const total = typeof event.total === 'number' && Number.isFinite(event.total) && event.total > 0 ? event.total : null
+    const total =
+      typeof event.total === 'number' && Number.isFinite(event.total) && event.total > 0 ? event.total : null
 
     if (!previous || !units.has(event.unit)) {
       return current
@@ -229,16 +299,16 @@ export function AuthGate({
 }) {
   const { t } = useI18n()
 
-  const [status, setStatus] = useState<DesktopAccountStatus>({
-    ...unavailableStatus(),
-    state: 'checking',
-    reason: null
+  const [authSnapshot, setAuthSnapshot] = useState<DesktopAuthSnapshot>({
+    connectionId: 'local',
+    status: { ...unavailableStatus(), state: 'checking', reason: null }
   })
+
+  const { connectionId, status } = authSnapshot
 
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [submitting, setSubmitting] = useState(false)
-  const [connectionId, setConnectionId] = useState('local')
   const [bootstrapState, setBootstrapState] = useState<DesktopSafeBootstrapState | null>(null)
   const [now, setNow] = useState(() => Date.now())
   const eventRevision = useRef(0)
@@ -256,22 +326,32 @@ export function AuthGate({
     (markChecking = false) => {
       if (!auth) {
         requestRevision.current += 1
-        setStatus(unavailableStatus())
+        setAuthSnapshot({ connectionId: 'local', status: unavailableStatus() })
 
         return Promise.resolve(unavailableStatus())
       }
 
       const request = ++requestRevision.current
       const observedEvent = eventRevision.current
+      const requestConnectionId = connectionId
 
       if (markChecking) {
-        setStatus(current => ({ ...current, state: 'checking', reason: null }))
+        setAuthSnapshot(current => ({
+          ...current,
+          status:
+            current.connectionId === 'local' && hasCachedLocalAuthorization(current.status)
+              ? { ...current.status, validation_state: 'validating', validation_reason: null, reason: null }
+              : { ...current.status, state: 'checking', reason: null }
+        }))
       }
 
-      return withAuthDeadline(auth.status(connectionId === 'local' ? undefined : connectionId))
+      return withAuthDeadline(auth.status(requestConnectionId === 'local' ? undefined : requestConnectionId))
         .then(next => {
           if (request === requestRevision.current && observedEvent === eventRevision.current) {
-            setStatus(next)
+            setAuthSnapshot(current => ({
+              connectionId: requestConnectionId,
+              status: reconcileStatus(current.status, next, current.connectionId, requestConnectionId)
+            }))
           }
 
           return next
@@ -281,7 +361,10 @@ export function AuthGate({
             // Bootstrap owns readiness while it is active. Its idle/total
             // deadlines, not this short auth deadline, decide terminal failure.
             if (!bootstrapStateRef.current?.active) {
-              setStatus(unavailableStatus())
+              setAuthSnapshot(current => ({
+                connectionId: requestConnectionId,
+                status: reconcileStatus(current.status, unavailableStatus(), current.connectionId, requestConnectionId)
+              }))
             }
           }
 
@@ -314,7 +397,7 @@ export function AuthGate({
   useEffect(() => {
     if (!auth) {
       requestRevision.current += 1
-      setStatus(unavailableStatus())
+      setAuthSnapshot({ connectionId: 'local', status: unavailableStatus() })
 
       return
     }
@@ -325,8 +408,10 @@ export function AuthGate({
       if (active) {
         eventRevision.current += 1
         requestRevision.current += 1
-        setConnectionId(nextConnectionId)
-        setStatus(next)
+        setAuthSnapshot(current => ({
+          connectionId: nextConnectionId,
+          status: reconcileStatus(current.status, next, current.connectionId, nextConnectionId)
+        }))
       }
     })
 
@@ -388,7 +473,10 @@ export function AuthGate({
 
     return auth.logout(connectionId === 'local' ? undefined : connectionId).then(next => {
       requestRevision.current += 1
-      setStatus(next)
+      setAuthSnapshot(current => ({
+        connectionId,
+        status: reconcileStatus(current.status, next, current.connectionId, connectionId)
+      }))
 
       return next
     })
@@ -399,8 +487,17 @@ export function AuthGate({
     [connectionId, logout, status]
   )
 
-  if (status.state === 'authenticated' && status.runtime_ready) {
-    return <DesktopAuthContext.Provider value={authenticatedContext}>{children}</DesktopAuthContext.Provider>
+  if (hasCachedLocalAuthorization(status) && status.runtime_ready) {
+    return (
+      <DesktopAuthContext.Provider key={`${connectionId}:${status.principal_key}`} value={authenticatedContext}>
+        {children}
+        {status.validation_state === 'degraded' ? (
+          <p className="sr-only" role="status">
+            {validationHealthText(t.auth)}
+          </p>
+        ) : null}
+      </DesktopAuthContext.Provider>
+    )
   }
 
   const retry = () => {
@@ -440,25 +537,24 @@ export function AuthGate({
     const request = ++requestRevision.current
     const observedEvent = eventRevision.current
 
-    const loginRequest = auth.login(
-      username.trim(),
-      password,
-      ...(connectionId === 'local' ? [] : [connectionId])
-    )
+    const loginRequest = auth.login(username.trim(), password, ...(connectionId === 'local' ? [] : [connectionId]))
 
     setPassword('')
-    void withAuthDeadline(
-      loginRequest,
-      AUTH_LOGIN_TIMEOUT_MS
-    )
+    void withAuthDeadline(loginRequest, AUTH_LOGIN_TIMEOUT_MS)
       .then(next => {
         if (request === requestRevision.current && observedEvent === eventRevision.current) {
-          setStatus(next)
+          setAuthSnapshot(current => ({
+            connectionId,
+            status: reconcileStatus(current.status, next, current.connectionId, connectionId)
+          }))
         }
       })
       .catch(() => {
         if (request === requestRevision.current && observedEvent === eventRevision.current) {
-          setStatus(unavailableStatus())
+          setAuthSnapshot(current => ({
+            connectionId,
+            status: reconcileStatus(current.status, unavailableStatus(), current.connectionId, connectionId)
+          }))
         }
       })
       .finally(() => {
@@ -469,17 +565,19 @@ export function AuthGate({
   const reason = reasonText(t.auth.reasons, status.reason)
   const reasonIsGuidance = !status.reason || status.reason === 'interactive_login_required'
   const runtimeSnapshot = bootstrapState?.manifest?.bootstrapScope === 'runtime' ? bootstrapState : null
-  const authSnapshot = bootstrapState?.manifest?.bootstrapScope !== 'runtime' ? bootstrapState : null
+  const authBootstrapSnapshot = bootstrapState?.manifest?.bootstrapScope !== 'runtime' ? bootstrapState : null
 
   const showRuntimeBootstrap = Boolean(
     runtimeSnapshot?.manifest &&
-      (runtimeSnapshot.active || runtimeSnapshot.error || runtimeSnapshot.completedAt === null)
+    (runtimeSnapshot.active || runtimeSnapshot.error || runtimeSnapshot.completedAt === null)
   )
 
   const showAuthBootstrap = Boolean(
     !showRuntimeBootstrap &&
-      authSnapshot &&
-      (authSnapshot.active || authSnapshot.error || (status.state === 'checking' && authSnapshot.manifest))
+    authBootstrapSnapshot &&
+    (authBootstrapSnapshot.active ||
+      authBootstrapSnapshot.error ||
+      (status.state === 'checking' && authBootstrapSnapshot.manifest))
   )
 
   const showBootstrapProgress = showAuthBootstrap || showRuntimeBootstrap
@@ -511,8 +609,13 @@ export function AuthGate({
           </div>
           <code className="mt-1 block break-all text-sm">{ACCOUNT_SERVER}</code>
         </div>
-        {showAuthBootstrap && authSnapshot ? (
-          <AuthBootstrapProgress mode="auth" now={now} onRetry={authSnapshot.error ? retry : undefined} state={authSnapshot} />
+        {showAuthBootstrap && authBootstrapSnapshot ? (
+          <AuthBootstrapProgress
+            mode="auth"
+            now={now}
+            onRetry={authBootstrapSnapshot.error ? retry : undefined}
+            state={authBootstrapSnapshot}
+          />
         ) : null}
 
         {showRuntimeBootstrap && runtimeSnapshot ? (
@@ -569,11 +672,7 @@ export function AuthGate({
               </p>
             ) : null}
 
-            <Button
-              className="w-full"
-              disabled={submitting || !username.trim() || !password}
-              type="submit"
-            >
+            <Button className="w-full" disabled={submitting || !username.trim() || !password} type="submit">
               {submitting ? t.auth.signingIn : t.auth.signIn}
             </Button>
           </form>

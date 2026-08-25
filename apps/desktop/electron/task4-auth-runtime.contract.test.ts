@@ -17,10 +17,17 @@ class FakeChild extends EventEmitter {
 const signedOut: BridgeStatus = {
   state: 'signed_out',
   username: null,
+  account_id: null,
+  session_id: null,
+  installation_id: null,
+  principal_key: null,
   runtime_instance_id: 'runtime-1',
   epoch: 1,
   valid_until: 0,
-  session_expires_at: null,
+  validation_state: 'unknown',
+  validation_reason: null,
+  last_validated_at: null,
+  legacy: false,
   reason: 'signed_out'
 }
 
@@ -30,6 +37,12 @@ const authenticated: BridgeStatus = {
   username: 'alice',
   epoch: 2,
   valid_until: 4_000_000_000,
+  account_id: '22222222-2222-4222-8222-222222222222',
+  session_id: '33333333-3333-4333-8333-333333333333',
+  installation_id: '11111111-1111-4111-8111-111111111111',
+  principal_key: 'account:22222222-2222-4222-8222-222222222222',
+  validation_state: 'online',
+  last_validated_at: '2026-08-24T12:00:00+00:00',
   reason: null
 }
 
@@ -37,6 +50,10 @@ function bridgeFixture() {
   const child = new FakeChild()
   const bridge = new DesktopAuthBridge({
     cwd: '/opt/hermes-agent',
+    nativeClientContext: {
+      installation_id: '11111111-1111-4111-8111-111111111111',
+      client_version: '0.17.0'
+    },
     pythonExecutable: '/opt/hermes-agent/venv/bin/python',
     spawnChild: vi.fn(() => child as any)
   })

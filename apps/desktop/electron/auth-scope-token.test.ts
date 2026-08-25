@@ -5,6 +5,7 @@ import { test, vi } from 'vitest'
 
 import {
   encodeScopeTokenRegistration,
+  encodeTraceTransportRegistration,
   issueAuthScopeToken,
   sanitizeAnsatzAuthChildEnvironment,
   sanitizeAuthChildEnvironment
@@ -56,6 +57,26 @@ test('serializes the bearer only inside a bounded stdin registration frame', () 
     ttl_seconds: 45,
     version: 1
   })
+})
+
+test('serializes dynamic Trace transport only inside the bounded main-to-backend control frame', () => {
+  const encoded = encodeTraceTransportRegistration({
+    endpoint: 'http://127.0.0.1:49152/v1/traces',
+    installationId: '11111111-1111-4111-8111-111111111111',
+    localBearer: 'a'.repeat(43),
+    pluginsToml: '/Applications/Ansatz.app/Contents/Resources/config/ansatz-voice-trace/plugins.toml'
+  })
+
+  assert.deepEqual(JSON.parse(encoded.trim()), {
+    authorization: `Bearer ${'a'.repeat(43)}`,
+    endpoint: 'http://127.0.0.1:49152/v1/traces',
+    entrypoint: 'desktop',
+    installation_id: '11111111-1111-4111-8111-111111111111',
+    operation: 'register_trace_transport',
+    plugins_toml: '/Applications/Ansatz.app/Contents/Resources/config/ansatz-voice-trace/plugins.toml',
+    version: 1
+  })
+  assert.ok(Buffer.byteLength(encoded) <= 4_096)
 })
 
 test('rejects oversized TTLs and malformed scopes before producing a secret', () => {

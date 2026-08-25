@@ -57,6 +57,7 @@ test('the single policy table contains the required account, local, connection, 
   assert.equal(CHANNEL_AUTH_POLICY['hermes:titlebar-theme'], 'local')
   assert.equal(CHANNEL_AUTH_POLICY['hermes:native-theme'], 'local')
   assert.equal(CHANNEL_AUTH_POLICY['hermes:translucency'], 'local')
+  assert.equal(CHANNEL_AUTH_POLICY['hermes:trace:online'], 'local')
   assert.equal(CHANNEL_AUTH_POLICY['hermes:terminal:start'], 'local')
   assert.equal(CHANNEL_AUTH_POLICY['hermes:fs:writeText'], 'local')
   assert.equal(CHANNEL_AUTH_POLICY['hermes:gateway:ws-url-for'], 'connection')
@@ -162,6 +163,27 @@ test('send-style handlers are denied without executing their side effect', async
   ipcMain.listeners.get('hermes:terminal:write')?.(knownEvent, 'pty-1', 'whoami')
   await vi.waitFor(() => assert.deepEqual(knownEvent.returnValue, { error: { code: 'AUTH_REQUIRED' } }))
   assert.equal(handler.mock.calls.length, 0)
+})
+
+test('Trace online IPC rejects renderer-supplied account, token, path, or payload arguments', async () => {
+  const { guarded, ipcMain } = fixture()
+  const handler = vi.fn()
+  guarded.on('hermes:trace:online', handler)
+  const malformedEvent = { sender: { id: 7 }, returnValue: undefined }
+
+  ipcMain.listeners.get('hermes:trace:online')?.(malformedEvent, {
+    accountKey: 'account-attacker',
+    path: '/tmp/outbox',
+    payload: 'bytes',
+    token: 'secret'
+  })
+
+  await vi.waitFor(() => assert.deepEqual(malformedEvent.returnValue, { error: { code: 'AUTH_REQUIRED' } }))
+  assert.equal(handler.mock.calls.length, 0)
+
+  const validEvent = { sender: { id: 7 }, returnValue: undefined }
+  ipcMain.listeners.get('hermes:trace:online')?.(validEvent)
+  await vi.waitFor(() => assert.equal(handler.mock.calls.length, 1))
 })
 
 test('coverage is compared to table keys without a hard-coded handler count', () => {

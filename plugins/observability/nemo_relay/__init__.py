@@ -282,7 +282,13 @@ class _Runtime:
             if field_name in endpoint:
                 setattr(config, field_name, endpoint[field_name])
         for header, env_name in (endpoint.get("header_env") or {}).items():
-            config.set_header(header, os.environ[env_name])
+            value = (
+                ansatz_trace_policy.product_trace_authorization()
+                if self.settings.product_mode
+                and env_name == "ANSATZ_TRACE_LOCAL_AUTHORIZATION"
+                else os.environ[env_name]
+            )
+            config.set_header(header, value)
         for key, value in (endpoint.get("resource_attributes") or {}).items():
             config.set_resource_attribute(key, value)
         subscriber = self.nemo_relay.OpenTelemetrySubscriber(config)
@@ -628,6 +634,9 @@ def activate_ansatz_product(host: relay_runtime.RelayRuntime) -> None:
         _SESSION_INITIALIZER_NAME,
         _prepare_core_session,
     )
+    with _LOCK:
+        if _RUNTIMES.get(host.profile_key) is _INIT_FAILED:
+            _RUNTIMES.pop(host.profile_key, None)
     runtime = _get_runtime(profile_key=host.profile_key, host=host)
     if runtime is None or not runtime.settings.product_mode:
         raise RuntimeError("Ansatz product Relay exporter failed to initialize")

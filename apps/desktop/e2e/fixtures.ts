@@ -20,13 +20,13 @@
  * Prerequisite: `npm run build` must have been run so that `dist/` exists.
  */
 
-import { spawnSync } from 'node:child_process'
 import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 
 import { _electron, type ElectronApplication, type Page } from '@playwright/test'
 
+import { resolveElectronBinary } from './electron-path'
 import { startMockServer, type MockServerOptions } from './mock-server'
 import { installErrorBannerGuard } from './test'
 
@@ -286,27 +286,11 @@ function assertDistBuilt(): void {
  * As a fallback, use the node_modules/.bin/electron from the desktop package.
  */
 export function findElectron(): string {
-  // In dev mode, we use the `electron` binary directly (not the packaged app).
-  // The dev:electron script in package.json does exactly this: `electron .`
-  // after building. We replicate that here.
-  const localElectron = path.join(REPO_ROOT, 'node_modules', 'electron', 'dist', 'electron')
-
-  if (fs.existsSync(localElectron)) {
-    return localElectron
-  }
-
-  // Fall back to PATH
-  const result = spawnSync('which', ['electron'], {
-    encoding: 'utf8',
+  return resolveElectronBinary({
+    desktopRoot: DESKTOP_ROOT,
+    platform: process.platform,
+    repoRoot: REPO_ROOT,
   })
-
-  if (result.status === 0 && result.stdout.trim()) {
-    return result.stdout.trim()
-  }
-
-  throw new Error(
-    'Electron binary not found. Run "npm install" from the repo root to install devDependencies.',
-  )
 }
 
 /**

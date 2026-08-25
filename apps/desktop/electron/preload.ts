@@ -1,5 +1,9 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
+const traceOnline = () => ipcRenderer.send('hermes:trace:online')
+
+globalThis.addEventListener?.('online', traceOnline)
+
 contextBridge.exposeInMainWorld('hermesDesktop', {
   auth: {
     status: connectionId => ipcRenderer.invoke('hermes:auth:status', connectionId),
@@ -23,6 +27,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
       return () => ipcRenderer.removeListener('hermes:auth-bootstrap:event', listener)
     }
   },
+  traceOnline,
   getConnection: profile => ipcRenderer.invoke('hermes:connection', profile),
   // Registry-scoped backend resolution: { connectionId, profile } → descriptor.
   getConnectionFor: payload => ipcRenderer.invoke('hermes:connection:for', payload),
