@@ -6,7 +6,8 @@ import {
   legacyTraceOwnerForPrincipal,
   localOnlyTraceOwnerForPrincipal,
   migratePreviousLegacyTraceNamespace,
-  previousLegacyTraceAccountKey
+  previousLegacyTraceAccountKey,
+  traceOwnerFromScope
 } from './trace-legacy-owner'
 
 const installationId = '11111111-1111-4111-8111-111111111111'
@@ -39,6 +40,62 @@ test('native auth principals keep a stable local-only outbox seam until trusted 
   assert.notEqual(other.accountKey, first.accountKey)
   assert.equal(first.accountId, null)
   assert.equal(first.sessionId, null)
+})
+
+test('exact native cached authorization produces a trusted uploadable owner without username inference', () => {
+  const accountId = '22222222-2222-4222-8222-222222222222'
+  const sessionId = '33333333-3333-4333-8333-333333333333'
+  const scope = { connection_id: 'local', epoch: 7, runtime_instance_id: 'runtime-native' }
+  const status = {
+    account_id: accountId,
+    epoch: scope.epoch,
+    installation_id: installationId,
+    legacy: false,
+    principal_key: `account:${accountId}`,
+    runtime_instance_id: scope.runtime_instance_id,
+    session_id: sessionId,
+    state: 'authenticated' as const,
+    username: 'must-not-be-an-owner-input'
+  }
+
+  assert.deepEqual(traceOwnerFromScope(status, scope, installationId), {
+    accountId,
+    accountKey: `account-${accountId}`,
+    installationId,
+    sessionId
+  })
+})
+
+test('legacy, missing, or inconsistent cached identity remains stable local-only', () => {
+  const scope = { connection_id: 'local', epoch: 7, runtime_instance_id: 'runtime-native' }
+  const accountId = '22222222-2222-4222-8222-222222222222'
+  const base = {
+    account_id: accountId,
+    epoch: scope.epoch,
+    installation_id: installationId,
+    legacy: false,
+    principal_key: `account:${accountId}`,
+    runtime_instance_id: scope.runtime_instance_id,
+    session_id: '33333333-3333-4333-8333-333333333333',
+    state: 'authenticated' as const,
+    username: 'alice'
+  }
+
+  for (const status of [
+    { ...base, legacy: true },
+    { ...base, session_id: null },
+    { ...base, installation_id: '44444444-4444-4444-8444-444444444444' },
+    { ...base, principal_key: `account:55555555-5555-4555-8555-555555555555` }
+  ]) {
+    const owner = traceOwnerFromScope(status, scope, installationId)
+    assert.match(owner.accountKey, /^legacy-/)
+    assert.equal(owner.accountId, null)
+    assert.equal(owner.sessionId, null)
+  }
+
+  const missingA = traceOwnerFromScope({ ...base, principal_key: null }, scope, installationId)
+  const missingB = traceOwnerFromScope({ ...base, principal_key: null, username: 'bob' }, scope, installationId)
+  assert.deepEqual(missingB, missingA)
 })
 
 test('the exact previous scope namespace is atomically retained under the stable principal owner', async () => {

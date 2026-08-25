@@ -106,6 +106,8 @@ test('local backend startup coordinates encrypted capture but never waits for a 
   assert.match(primaryPreparation, /startEncryptedTrace: \(\) => ensureDesktopTraceForwarder\(connectionScope, owner\)/)
   assert.match(poolPreparation, /await prepareDesktopTraceForwarder\(connectionScope,/)
   assert.match(source, /isConversationStreaming: isDesktopConversationStreaming/)
+  assert.match(source, /traceOwnerFromScope\(status, scope, desktopInstallationId\)/)
+  assert.match(source, /onTerminalRevocation: revocation =>[\s\S]*?applyTraceTerminalRevocation\(revocation\)/)
   assert.match(source, /const store = await TraceOutboxStore\.open\([\s\S]*?void store\.compactIfIdle\(\)/)
   assert.match(
     source,

@@ -470,6 +470,34 @@ test('a stale session_revoked event from the same account does not clean the new
   assert.equal(cleanup.mock.calls.length, 0)
 })
 
+test('matching Trace terminal revocation locks and cleans exactly once while mismatches are ignored', async () => {
+  const { cleanup, coordinator } = fixture(authenticated)
+  await coordinator.start()
+
+  assert.equal(
+    await coordinator.applyTraceTerminalRevocation({
+      accountId: authenticated.account_id!,
+      code: 'session_revoked',
+      revokedAt: '2026-08-25T00:00:00Z',
+      sessionId: '44444444-4444-4444-8444-444444444444'
+    }),
+    false
+  )
+  assert.equal(coordinator.isAuthenticated(), true)
+
+  const revocation = {
+    accountId: authenticated.account_id!,
+    code: 'session_revoked' as const,
+    revokedAt: '2026-08-25T00:00:00Z',
+    sessionId: authenticated.session_id!
+  }
+  assert.equal(await coordinator.applyTraceTerminalRevocation(revocation), true)
+  assert.equal(await coordinator.applyTraceTerminalRevocation(revocation), false)
+  assert.equal(coordinator.status().reason, 'session_revoked')
+  assert.equal(coordinator.isAuthenticated(), false)
+  assert.equal(cleanup.mock.calls.length, 1)
+})
+
 test('a mismatched terminal identity degrades without replacing or cleaning the current account', async () => {
   const { cleanup, coordinator, setStatus } = fixture(authenticated)
   await coordinator.start()

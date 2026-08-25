@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rename, rm } from 'node:fs/promises'
 import http from 'node:http'
 import { join } from 'node:path'
 
@@ -289,12 +289,16 @@ async function launchTraceHarness(options: {
 }
 
 function envelopeFor(harness: TraceHarness, body: Buffer, sequence: number): TraceEnvelopeInput {
+  return envelopeForOwner(harness.owner, body, sequence)
+}
+
+function envelopeForOwner(owner: TraceOwner, body: Buffer, sequence: number): TraceEnvelopeInput {
   return {
     body,
     contentType: 'application/x-protobuf',
     entrypoint: 'desktop',
     hermesSessionId: `session-${sequence}`,
-    owner: harness.owner,
+    owner,
     runId: `run-${sequence}`,
     telemetrySchemaVersion: '1'
   }
@@ -483,6 +487,73 @@ test('offline accepted Trace survives quit and uploads FIFO only from the same-a
     await resumed.quit()
   } finally {
     await cleanupContinuityTest(harnesses, [gateway], userData)
+  }
+})
+
+test('native login migrates a same-principal local-only FIFO through a synced staging namespace without changing batch ids', async () => {
+  const userData = await temporaryUserData()
+  const sourceOwner: TraceOwner = {
+    accountId: null,
+    accountKey: `legacy-${'c'.repeat(64)}`,
+    installationId,
+    sessionId: null
+  }
+  const targetOwner = owner('a')
+  const sourceRoot = join(userData, 'trace-outbox', sourceOwner.accountKey)
+  const targetRoot = join(userData, 'trace-outbox', targetOwner.accountKey)
+
+  try {
+    const source = await TraceOutboxStore.open({
+      expectedOwner: sourceOwner,
+      keyProtector: protector(),
+      root: sourceRoot
+    })
+    const first = await source.enqueue(envelopeForOwner(sourceOwner, payload('migrate-one'), 1))
+    const second = await source.enqueue(envelopeForOwner(sourceOwner, payload('migrate-two'), 2))
+    await source.close()
+
+    assert.equal(
+      await TraceOutboxStore.migrateTrustedNamespace({
+        keyProtector: protector(),
+        renameDirectory: rename,
+        sourceOwner,
+        sourceRoot,
+        targetOwner,
+        targetRoot
+      }),
+      true
+    )
+    assert.notEqual(await readFile(join(sourceRoot, 'key.json')), null)
+
+    const migrated = await TraceOutboxStore.open({
+      expectedOwner: targetOwner,
+      keyProtector: protector(),
+      root: targetRoot
+    })
+    const migratedFirst = await migrated.peekEligible(Number.MAX_SAFE_INTEGER)
+    assert.equal(migratedFirst?.batchId, first.batchId)
+    assert.deepEqual(migratedFirst?.owner, targetOwner)
+    await migrated.acknowledge(first.batchId, {
+      batchId: first.batchId,
+      outcome: 'accepted',
+      receivedAt: Date.now()
+    })
+    assert.equal((await migrated.peekEligible(Number.MAX_SAFE_INTEGER))?.batchId, second.batchId)
+    await migrated.close()
+
+    assert.equal(
+      await TraceOutboxStore.migrateTrustedNamespace({
+        keyProtector: protector(),
+        renameDirectory: rename,
+        sourceOwner,
+        sourceRoot,
+        targetOwner,
+        targetRoot
+      }),
+      false
+    )
+  } finally {
+    await rm(userData, { force: true, recursive: true })
   }
 })
 

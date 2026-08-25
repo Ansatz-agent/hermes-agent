@@ -301,7 +301,8 @@ import { TraceIngressFacade } from './trace-ingress-facade'
 import {
   localOnlyTraceOwnerForPrincipal,
   migratePreviousLegacyTraceNamespace,
-  previousLegacyTraceAccountKey
+  previousLegacyTraceAccountKey,
+  traceOwnerFromScope
 } from './trace-legacy-owner'
 import { createSafeStorageTraceKeyProtector } from './trace-outbox-crypto'
 import { TraceOutboxStore } from './trace-outbox-store'
@@ -9004,7 +9005,7 @@ async function ensureDesktopTraceFacade() {
   }
 }
 
-function legacyTraceOwnerForScope(scope): TraceOwner {
+function traceOwnerForScope(scope): TraceOwner {
   const status = desktopAuthCoordinator?.status(scope.connection_id)
 
   if (
@@ -9016,10 +9017,7 @@ function legacyTraceOwnerForScope(scope): TraceOwner {
     throw new AuthBridgeError('auth_required', 'session_rejected')
   }
 
-  // This remains validator-enforced local-only. Task 19 replaces the legacy
-  // principal with the trusted account/session owner without re-keying it from
-  // runtime_instance_id, epoch, username, or installation ID.
-  return localOnlyTraceOwnerForPrincipal(status.principal_key, desktopInstallationId)
+  return traceOwnerFromScope(status, scope, desktopInstallationId)
 }
 
 async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
@@ -9057,13 +9055,40 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
 
     const owner = validateTraceOwner(requestedOwner).owner
     const traceOutboxRoot = path.join(app.getPath('userData'), 'trace-outbox')
+    const status = desktopAuthCoordinator?.status('local')
+
+    if (!status || status.principal_key === null) {
+      throw new AuthBridgeError('auth_required', 'session_rejected')
+    }
+
+    const currentOwner = traceOwnerFromScope(status, scope, desktopInstallationId)
+    if (
+      currentOwner.accountKey !== owner.accountKey ||
+      currentOwner.accountId !== owner.accountId ||
+      currentOwner.sessionId !== owner.sessionId
+    ) {
+      throw new AuthBridgeError('auth_required', 'session_rejected')
+    }
+
+    const localOnlyOwner = localOnlyTraceOwnerForPrincipal(status.principal_key, desktopInstallationId)
 
     await migratePreviousLegacyTraceNamespace({
-      currentAccountKey: owner.accountKey,
+      currentAccountKey: validateTraceOwner(owner).uploadable ? localOnlyOwner.accountKey : owner.accountKey,
       previousAccountKey: previousLegacyTraceAccountKey(scope, desktopInstallationId),
       rename: (source, destination) => fs.promises.rename(source, destination),
       root: traceOutboxRoot
     })
+
+    if (validateTraceOwner(owner).uploadable && localOnlyOwner.accountKey !== owner.accountKey) {
+      await TraceOutboxStore.migrateTrustedNamespace({
+        keyProtector: createSafeStorageTraceKeyProtector(safeStorage),
+        renameDirectory: (source, destination) => fs.promises.rename(source, destination),
+        sourceOwner: localOnlyOwner,
+        sourceRoot: path.join(traceOutboxRoot, localOnlyOwner.accountKey),
+        targetOwner: owner,
+        targetRoot: path.join(traceOutboxRoot, owner.accountKey)
+      })
+    }
 
     const store = await TraceOutboxStore.open({
       expectedOwner: owner,
@@ -9083,8 +9108,18 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
       load: async () => {
         const bridge = desktopAuthBridge
         const currentScope = desktopAuthCoordinator?.scope('local')
+        const currentStatus = desktopAuthCoordinator?.status('local')
 
-        if (!bridge || !sameConnectionScope(currentScope, scope)) {
+        if (!bridge || !currentStatus || !sameConnectionScope(currentScope, scope)) {
+          throw new AuthBridgeError('auth_required', 'session_rejected')
+        }
+
+        const issuanceOwner = traceOwnerFromScope(currentStatus, scope, desktopInstallationId)
+        if (
+          issuanceOwner.accountKey !== owner.accountKey ||
+          issuanceOwner.accountId !== owner.accountId ||
+          issuanceOwner.sessionId !== owner.sessionId
+        ) {
           throw new AuthBridgeError('auth_required', 'session_rejected')
         }
 
@@ -9094,9 +9129,18 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
           telemetry_schema_version: '1'
         })
 
+        const validatedStatus = desktopAuthCoordinator?.status('local')
+        const validatedOwner = validatedStatus
+          ? traceOwnerFromScope(validatedStatus, scope, desktopInstallationId)
+          : null
+
         if (
           generation !== desktopTraceGeneration ||
-          !sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope)
+          !sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope) ||
+          validatedOwner === null ||
+          validatedOwner.accountKey !== owner.accountKey ||
+          validatedOwner.accountId !== owner.accountId ||
+          validatedOwner.sessionId !== owner.sessionId
         ) {
           throw new AuthBridgeError('auth_required', 'session_rejected')
         }
@@ -9122,6 +9166,12 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
     const forwarder = new TraceForwarder({
       credentialProvider: provider,
       installationId: desktopInstallationId,
+      onTerminalRevocation: revocation => {
+        const coordinator = desktopAuthCoordinator
+        if (coordinator) {
+          void coordinator.applyTraceTerminalRevocation(revocation)
+        }
+      },
       recovery: controller,
       store
     })
@@ -10489,7 +10539,7 @@ async function spawnPoolBackend(profile, entry) {
 
   const connectionScope = await requireDesktopConnectionScope()
   const scopeToken = issueAuthScopeToken(connectionScope)
-  await prepareDesktopTraceForwarder(connectionScope, legacyTraceOwnerForScope(connectionScope))
+  await prepareDesktopTraceForwarder(connectionScope, traceOwnerForScope(connectionScope))
 
   // Same update mutual exclusion as the primary window's waitForLocalStart
   // (#73822): pool backends spawn from the same venv, so an ungated respawn
@@ -10839,7 +10889,7 @@ async function startHermes() {
       ensureLocalRuntime: ensureRuntime,
       prepareLocalBackend: async () => {
         await advanceBootProgress('backend.runtime', 'Resolving Hermes runtime', 28)
-        const owner = legacyTraceOwnerForScope(connectionScope)
+        const owner = traceOwnerForScope(connectionScope)
 
         return resolveLocalBackendWithTrace({
           key: owner.accountKey,

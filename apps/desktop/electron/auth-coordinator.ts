@@ -50,6 +50,13 @@ type AuthCoordinatorOptions = {
 
 type StatusListener = (status: BridgeStatus, connectionId: string) => void
 
+type TraceTerminalRevocation = {
+  accountId: string
+  code: 'account_disabled' | 'account_revoked' | 'session_revoked'
+  revokedAt: string
+  sessionId: string
+}
+
 export class CoordinatorAuthRequiredError extends Error {
   readonly code = 'AUTH_REQUIRED'
 
@@ -222,6 +229,32 @@ export class AuthCoordinator {
       } catch (error) {
         return this.applyFailure(error, connectionId)
       }
+    })
+  }
+
+  async applyTraceTerminalRevocation(revocation: TraceTerminalRevocation): Promise<boolean> {
+    return this.runExclusive(async () => {
+      const connectionId = LOCAL_CONNECTION_ID
+      const current = this.status(connectionId)
+
+      if (
+        !this.scopes.has(connectionId) ||
+        !isLocallyAuthorized(current) ||
+        !EXPLICIT_TERMINAL_REASONS.has(revocation.code) ||
+        current.account_id !== revocation.accountId ||
+        current.session_id !== revocation.sessionId
+      ) {
+        return false
+      }
+
+      const locked = lockFrom(current, revocation.code)
+      this.scopes.delete(connectionId)
+      this.advanceGeneration(connectionId)
+      this.statuses.set(connectionId, locked)
+      this.emit(locked, connectionId)
+      await this.cleanup(connectionId, locked)
+
+      return true
     })
   }
 

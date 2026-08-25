@@ -110,6 +110,16 @@ export interface TraceOutboxStoreOptions {
   root: string
 }
 
+export interface TraceOutboxNamespaceMigrationOptions {
+  fs?: TraceFileSystem
+  keyProtector: TraceKeyProtector
+  renameDirectory: (source: string, destination: string) => Promise<void>
+  sourceOwner: TraceOwner
+  sourceRoot: string
+  targetOwner: TraceOwner
+  targetRoot: string
+}
+
 export interface PendingLocalCommit {
   batchId: string
   cancelForGatewayReceipt(receipt: DurableReceipt): Promise<void>
@@ -168,6 +178,72 @@ function parseKey(contents: Buffer): PersistedKey {
 }
 
 export class TraceOutboxStore {
+  static async migrateTrustedNamespace(options: TraceOutboxNamespaceMigrationOptions): Promise<boolean> {
+    const sourceOwner = validateTraceOwner(options.sourceOwner).owner
+    const targetOwner = validateTraceOwner(options.targetOwner).owner
+    const fs = options.fs ?? nodeTraceFileSystem
+
+    if (
+      !sourceOwner.accountKey.startsWith('legacy-') ||
+      !targetOwner.accountKey.startsWith('account-') ||
+      sourceOwner.installationId !== targetOwner.installationId
+    ) {
+      throw new Error('invalid_trace_namespace_migration')
+    }
+
+    if ((await fs.readFile(join(options.targetRoot, KEY_FILE_NAME))) !== null) {
+      return false
+    }
+
+    if ((await fs.readFile(join(options.sourceRoot, KEY_FILE_NAME))) === null) {
+      return false
+    }
+
+    const stagingRoot = `${options.targetRoot}.migrating-${randomUUID()}`
+    const source = await TraceOutboxStore.open({
+      expectedOwner: sourceOwner,
+      fs,
+      keyProtector: options.keyProtector,
+      root: options.sourceRoot
+    })
+    let staging: TraceOutboxStore | null = null
+
+    try {
+      const batches = await Promise.all(
+        [...source.records.values()]
+          .filter(
+            (record): record is StoredRecord & { state: 'pending' | 'quarantined' } =>
+              record.state === 'pending' || record.state === 'quarantined'
+          )
+          .sort((left, right) => left.batch.sequence - right.batch.sequence)
+          .map(async record => ({ batch: await source.readStoredBatch(record.batch.batchId), state: record.state }))
+      )
+      staging = await TraceOutboxStore.open({
+        expectedOwner: targetOwner,
+        fs,
+        keyProtector: options.keyProtector,
+        root: stagingRoot
+      })
+      await staging.importMigratedBatches(batches, targetOwner)
+      await staging.close()
+      staging = null
+      await options.renameDirectory(stagingRoot, options.targetRoot)
+      await fs.syncDirectory(dirname(options.targetRoot))
+
+      const verified = await TraceOutboxStore.open({
+        expectedOwner: targetOwner,
+        fs,
+        keyProtector: options.keyProtector,
+        root: options.targetRoot
+      })
+      await verified.close()
+
+      return true
+    } finally {
+      await Promise.allSettled([source.close(), staging?.close() ?? Promise.resolve()])
+    }
+  }
+
   static async open(options: TraceOutboxStoreOptions): Promise<TraceOutboxStore> {
     const expectedOwner = validateTraceOwner(options.expectedOwner).owner
     const fs = options.fs ?? nodeTraceFileSystem
@@ -1199,6 +1275,68 @@ export class TraceOutboxStore {
     )
 
     return { batch, encoded: encodeSegmentRecord({ encrypted, header }), item }
+  }
+
+  private async importMigratedBatches(
+    batches: Array<{ batch: DurableTraceBatch; state: 'pending' | 'quarantined' }>,
+    owner: TraceOwner
+  ): Promise<void> {
+    if (this.records.size !== 0 || this.pending.length !== 0) {
+      throw new Error('trace_namespace_migration_target_not_empty')
+    }
+
+    const operations: TraceJournalOperation[] = [{ op: 'owner', accountKey: owner.accountKey }]
+    let offset = 0
+
+    for (const item of batches) {
+      const batch = { ...item.batch, body: Buffer.from(item.batch.body), owner: { ...owner } }
+      const header = this.headerFrom(batch)
+
+      if (!isValidTraceSegmentHeader(header)) {
+        throw new Error('invalid_record_header')
+      }
+
+      const encrypted = await encryptTraceRecord(
+        batch.body,
+        this.config.dataKey,
+        Buffer.from(`${owner.accountKey}/${batch.batchId}`, 'utf8')
+      )
+      const encoded = encodeSegmentRecord({ encrypted, header })
+      await this.config.fs.appendFile(this.config.segmentPath, encoded)
+      operations.push({
+        op: 'pending',
+        batchId: batch.batchId,
+        createdAt: batch.createdAt,
+        length: encoded.length,
+        offset,
+        segment: SEGMENT_FILE_NAME,
+        sequence: batch.sequence
+      })
+      if (item.state === 'quarantined') {
+        operations.push({
+          op: 'terminal',
+          batchId: batch.batchId,
+          errorClass: batch.lastErrorClass ?? 'migration_quarantined',
+          terminal: 'quarantined'
+        })
+      }
+      this.records.set(batch.batchId, {
+        batch: header,
+        encodedBytes: encoded.length,
+        offset,
+        state: item.state
+      })
+      this.dedupe.set(this.dedupeKey(batch), batch.batchId)
+      this.nextSequence = Math.max(this.nextSequence, batch.sequence + 1)
+      offset += encoded.length
+    }
+
+    await this.config.fs.syncFile(this.config.segmentPath)
+    await this.config.journal.append(operations)
+    await this.config.fs.syncFile(join(dirname(dirname(this.config.segmentPath)), JOURNAL_FILE_NAME))
+    this.accountKey = owner.accountKey
+    this.ownerJournaled = true
+    this.segmentOffset = offset
   }
 
   private headerFrom(batch: DurableTraceBatch): Omit<DurableTraceBatch, 'body'> {
