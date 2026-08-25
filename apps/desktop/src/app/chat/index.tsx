@@ -258,26 +258,40 @@ function ChatRuntimeBoundary({
 
   const transcriptWindow = useMemo(() => ({ olderAvailable: windowed, expandWindow }), [expandWindow, windowed])
 
-  // The adapter is an external-store identity boundary. Recreating this
-  // object on every render makes assistant-ui call __internal_setAdapter on
-  // every effect pass; that publishes a new snapshot, which immediately
-  // schedules another render and can trip React's "getSnapshot should be
-  // cached" / maximum-update-depth guard (especially while auth status polls).
-  // Keep it stable until one of its actual inputs changes.
+  // The adapter is an external-store identity boundary. The wiring controller
+  // deliberately keeps its actions object stable, but the callback adapters
+  // passed through ChatView can still change when an unrelated store (session
+  // list, auth status, route) updates. If those callback identities are put in
+  // the adapter's dependency list, assistant-ui sees a new external store on
+  // every wiring tick, publishes a new snapshot, and can recurse into React's
+  // "getSnapshot should be cached" / maximum-update-depth guard. Keep the
+  // imperative handlers behind a ref and expose stable adapter functions; only
+  // the message repository and running bit are actual store state.
+  const runtimeCallbacksRef = useRef({ onCancel, onEdit, onReload, onThreadMessagesChange })
+  runtimeCallbacksRef.current = { onCancel, onEdit, onReload, onThreadMessagesChange }
+
+  const stableRuntimeCallbacks = useMemo(
+    () => ({
+      setMessages: (nextMessages: readonly ThreadMessage[]) =>
+        runtimeCallbacksRef.current.onThreadMessagesChange(nextMessages),
+      onNew: async () => {
+        // Submission is handled explicitly by ChatBar. Keeping this no-op
+        // avoids duplicate prompt.submit calls.
+      },
+      onEdit: (message: AppendMessage) => runtimeCallbacksRef.current.onEdit(message),
+      onCancel: async () => runtimeCallbacksRef.current.onCancel(),
+      onReload: (parentId: string | null) => runtimeCallbacksRef.current.onReload(parentId)
+    }),
+    []
+  )
+
   const runtimeAdapter = useMemo(
     () => ({
       messageRepository: runtimeMessageRepository,
       isRunning: busy,
-      setMessages: onThreadMessagesChange,
-      onNew: async () => {
-        // Submission is handled explicitly by ChatBar.
-        // Keeping this no-op avoids duplicate prompt.submit calls.
-      },
-      onEdit,
-      onCancel: async () => onCancel(),
-      onReload
+      ...stableRuntimeCallbacks
     }),
-    [busy, onCancel, onEdit, onReload, onThreadMessagesChange, runtimeMessageRepository]
+    [busy, runtimeMessageRepository, stableRuntimeCallbacks]
   )
 
   const runtime = useIncrementalExternalStoreRuntime<ThreadMessage>(runtimeAdapter)

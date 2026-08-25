@@ -3071,6 +3071,48 @@ except Exception:
         throw "Failed to install hermes-agent package even with no extras. Inspect the uv pip install output above."
     }
 
+    # Windows x64 product trace path imports the native NeMo Relay module
+    # in-process. uv's marker evaluation has historically normalized
+    # Windows x64 as either AMD64 or x86_64 depending on the bundled uv
+    # build; the project dependency marker can therefore be skipped while
+    # `uv pip install -e .[all]` still exits successfully. Install the
+    # pinned wheel explicitly on the supported Windows target and verify
+    # the import below, so a green installer can never leave the backend
+    # in the unusable "Ansatz product requires the NeMo Relay runtime"
+    # state again.
+    $isWindowsX64 = $false
+    if ($IsWindows -or $env:OS -eq "Windows_NT") {
+        $isWindowsX64 = ($env:PROCESSOR_ARCHITECTURE -eq "AMD64" -or $env:PROCESSOR_ARCHITEW6432 -eq "AMD64")
+    }
+    if ($isWindowsX64 -and -not $NoVenv) {
+        $nemoSpec = "nemo-relay==0.7.1"
+        Write-Info "Ensuring Windows NeMo Relay runtime ($nemoSpec) ..."
+        $env:UV_PROJECT_ENVIRONMENT = "$InstallDir\venv"
+        # Keep the same mirror policy as the rest of the installer, but make
+        # the explicit repair resilient when the primary mirror has not yet
+        # mirrored this platform-specific wheel.  Do not silently fall back to
+        # an arbitrary index: both URLs are installer-owned constants above.
+        $nemoInstallExitCode = 1
+        foreach ($nemoIndex in @($script:PythonPrimaryMirror, $script:PythonSecondaryMirror)) {
+            Write-Info "Installing NeMo Relay from $nemoIndex ..."
+            $env:UV_INDEX = $nemoIndex
+            $env:UV_DEFAULT_INDEX = $nemoIndex
+            Invoke-NativeWithRelaxedErrorAction { & $UvCmd pip install --reinstall --index $nemoIndex $nemoSpec }
+            $nemoInstallExitCode = $LASTEXITCODE
+            if ($nemoInstallExitCode -eq 0) {
+                break
+            }
+            Write-Warn "NeMo Relay install failed from $nemoIndex (exit $nemoInstallExitCode); trying the configured fallback mirror..."
+        }
+        # Restore the primary mirror for subsequent optional/runtime installs.
+        $env:UV_INDEX = $script:PythonPrimaryMirror
+        $env:UV_DEFAULT_INDEX = $script:PythonPrimaryMirror
+        if ($nemoInstallExitCode -ne 0) {
+            throw "NeMo Relay runtime installation failed ($nemoSpec). Verify the configured Python mirror contains the win_amd64 wheel and rerun the installer."
+        }
+        Write-Success "NeMo Relay runtime installed"
+    }
+
     # Baseline-import gate. Even if a tier reported success above, the
     # actual deps may have landed somewhere other than $InstallDir\venv\
     # (e.g. uv 0.5+ syncing into a sibling .venv\ when UV_PROJECT_ENVIRONMENT
@@ -3091,7 +3133,11 @@ except Exception:
         # regardless of what was written to stderr).
         $prevEAP = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
-        & $venvPython -c "import dotenv, openai, rich, prompt_toolkit" 2>&1 | Out-Null
+        $requiredImports = "import dotenv, openai, rich, prompt_toolkit"
+        if ($isWindowsX64) {
+            $requiredImports += "; import nemo_relay"
+        }
+        & $venvPython -c $requiredImports 2>&1 | Out-Null
         $importExitCode = $LASTEXITCODE
         $ErrorActionPreference = $prevEAP
         if ($importExitCode -ne 0) {
@@ -3101,7 +3147,8 @@ except Exception:
             } else {
                 "Recover with: cd '$InstallDir'; `$env:UV_PROJECT_ENVIRONMENT='$InstallDir\venv'; uv sync --extra all --locked"
             }
-            throw "Baseline imports failed in $InstallDir\venv (dotenv/openai/rich/prompt_toolkit). The install completed but dependencies are not in the venv. $hint"
+            $importLabel = if ($isWindowsX64) { "dotenv/openai/rich/prompt_toolkit/nemo_relay" } else { "dotenv/openai/rich/prompt_toolkit" }
+            throw "Baseline imports failed in $InstallDir\venv ($importLabel). The install completed but dependencies are not in the venv. $hint"
         }
         Write-Success "Baseline imports verified in venv"
     }

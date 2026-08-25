@@ -10776,7 +10776,13 @@ async function spawnPoolBackend(profile, entry) {
         HERMES_WEB_DIST: webDist,
         ...(readyFile ? { HERMES_DESKTOP_READY_FILE: readyFile } : {})
       },
-      shell: backend.shell,
+      // The local backend is always a real Python executable. Do not route it
+      // through cmd.exe on Windows: a shell-backed spawn creates a visible
+      // console that users can close, which kills the backend and makes the
+      // renderer reconnect/spawn another console. Keep shell support for
+      // non-Windows external CLI candidates only.
+      shell: IS_WINDOWS ? false : backend.shell,
+      windowsHide: IS_WINDOWS,
       stdio: ['pipe', 'pipe', 'pipe']
     })
   )
@@ -11143,7 +11149,10 @@ async function startHermes() {
           HERMES_WEB_DIST: webDist,
           ...(readyFile ? { HERMES_DESKTOP_READY_FILE: readyFile } : {})
         },
-        shell: backend.shell,
+        // See the primary backend spawn above: profile pool children must not
+        // inherit a shell-backed Windows launch either.
+        shell: IS_WINDOWS ? false : backend.shell,
+        windowsHide: IS_WINDOWS,
         stdio: ['pipe', 'pipe', 'pipe']
       })
     )
