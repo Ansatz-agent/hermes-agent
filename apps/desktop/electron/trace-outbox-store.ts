@@ -1548,31 +1548,46 @@ export class TraceOutboxStore {
       return false
     }
 
-    const rewritten: Array<{ encoded: Buffer; record: StoredRecord }> = []
+    const temporaryPath = `${this.config.segmentPath}.compact-${randomUUID()}`
+    const rewritten: Array<{ offset: number; record: StoredRecord }> = []
+    let offset = 0
+    let temporaryExists = true
 
-    for (const record of live) {
-      const encoded = await this.config.fs.readRange(this.config.segmentPath, record.offset, record.encodedBytes)
+    await this.config.fs.writeFile(temporaryPath, Buffer.alloc(0), { exclusive: true })
 
-      if (encoded === null || encoded.length !== record.encodedBytes || decodeSegmentRecord(encoded, 0) === null) {
-        throw new Error('invalid_trace_outbox_segment_index')
+    try {
+      for (const record of live) {
+        if (this.config.isConversationStreaming()) {
+          return false
+        }
+
+        const encoded = await this.config.fs.readRange(this.config.segmentPath, record.offset, record.encodedBytes)
+
+        if (encoded === null || encoded.length !== record.encodedBytes || decodeSegmentRecord(encoded, 0) === null) {
+          throw new Error('invalid_trace_outbox_segment_index')
+        }
+
+        await this.config.fs.appendFile(temporaryPath, encoded)
+        rewritten.push({ offset, record })
+        offset += encoded.length
       }
 
-      rewritten.push({ encoded, record })
+      if (this.config.isConversationStreaming()) {
+        return false
+      }
+
+      await this.config.fs.syncFile(temporaryPath)
+      await this.config.fs.replaceFile(temporaryPath, this.config.segmentPath)
+      temporaryExists = false
+      await this.config.fs.syncDirectory(dirname(this.config.segmentPath))
+    } finally {
+      if (temporaryExists) {
+        await this.config.fs.unlink(temporaryPath).catch(() => {})
+      }
     }
 
-    const temporaryPath = `${this.config.segmentPath}.compact-${randomUUID()}`
-    await this.config.fs.writeFile(temporaryPath, Buffer.concat(rewritten.map(item => item.encoded)), {
-      exclusive: true
-    })
-    await this.config.fs.syncFile(temporaryPath)
-    await this.config.fs.replaceFile(temporaryPath, this.config.segmentPath)
-    await this.config.fs.syncDirectory(dirname(this.config.segmentPath))
-
-    let offset = 0
-
     for (const item of rewritten) {
-      item.record.offset = offset
-      offset += item.encoded.length
+      item.record.offset = item.offset
     }
 
     for (const [batchId, record] of this.records) {

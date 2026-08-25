@@ -689,6 +689,58 @@ class BlockingNativeAuthClient(FakeAuthClient):
         )
 
 
+def test_trace_token_waits_for_native_validation_client_call():
+    class ConcurrencyDetectingClient(BlockingNativeAuthClient):
+        def __init__(self):
+            super().__init__()
+            self.concurrent_trace_token = threading.Event()
+
+        def trace_token(self, credential):
+            assert isinstance(credential, NativeSessionCredential)
+            if self.validation_started.is_set() and not self.release_validation.is_set():
+                self.concurrent_trace_token.set()
+            return TraceCredential(
+                access_token="trace-token-sentinel-1234567890",
+                expires_at="2099-08-23T14:15:00+00:00",
+                expires_in=900,
+                installation_id=credential.installation_id,
+            )
+
+    client = ConcurrencyDetectingClient()
+    owner = MemoryOwner(
+        client,
+        hardener=RecordingHardener(),
+        secret_backend=FakeSecretBackend(),
+        clock=FakeClock(),
+        jitter=lambda _low, _high: 0.5,
+    )
+    owner.login(
+        "alice",
+        bytearray(b"secret"),
+        installation_id=INSTALLATION_ID,
+        client_version="0.17.0",
+    )
+    validation = threading.Thread(target=owner.validate_now)
+    trace = threading.Thread(
+        target=lambda: owner.trace_token(
+            installation_id=INSTALLATION_ID,
+            client_version="0.17.0",
+            telemetry_schema_version="1",
+        )
+    )
+    validation.start()
+    assert client.validation_started.wait(timeout=1)
+    trace.start()
+    try:
+        assert not client.concurrent_trace_token.wait(timeout=0.25)
+    finally:
+        client.release_validation.set()
+        validation.join(timeout=2)
+        trace.join(timeout=2)
+    assert not validation.is_alive()
+    assert not trace.is_alive()
+
+
 class BlockingBobWriteBackend(FakeSecretBackend):
     """Stops immediately after Bob's blob reaches the backend."""
 
@@ -1095,7 +1147,7 @@ def test_legacy_cookie_restores_offline_then_upgrades_atomically_online():
     assert json.loads(backend.raw)["kind"] == "native"
 
 
-def test_legacy_upgrade_readback_failure_restores_v1_and_keeps_cached_scope():
+def test_legacy_upgrade_readback_failure_restores_durable_legacy_record_and_keeps_cached_scope():
     class ReadbackFailBackend(FakeSecretBackend):
         def read(self) -> str | None:
             raw = super().read()
@@ -1113,13 +1165,17 @@ def test_legacy_upgrade_readback_failure_restores_v1_and_keeps_cached_scope():
         jitter=lambda *_: 1.0,
     )
     restored = owner.refresh()
+    migrated_raw = backend.raw
 
     degraded = owner.validate_now()
 
     assert degraded.scope == restored.scope
     assert degraded.legacy is True
     assert degraded.validation_state is ValidationState.DEGRADED
-    assert backend.raw == raw
+    assert migrated_raw is not None
+    assert migrated_raw != raw
+    assert json.loads(migrated_raw)["version"] == 2
+    assert backend.raw == migrated_raw
 
 
 class RecordingHardener:

@@ -1702,24 +1702,25 @@ class _OwnerCore:
                 raise AuthRequired("signed_out")
             self._last_authenticated_activity = self._clock()
         try:
-            if isinstance(record, NativeCredentialRecord):
-                credential = self._client.trace_token(record.credential)
-            elif isinstance(record, LegacyCredentialRecord):
-                credential = self._client.legacy_trace_token(
-                    record.cookie_record.cookies,
-                    installation_id=installation_id,
-                    client_version=client_version,
-                    telemetry_schema_version=telemetry_schema_version,
-                )
-            elif isinstance(record, CookieRecord):
-                credential = self._client.legacy_trace_token(
-                    record.cookies,
-                    installation_id=installation_id,
-                    client_version=client_version,
-                    telemetry_schema_version=telemetry_schema_version,
-                )
-            else:
-                raise AuthRequired("signed_out")
+            with self._refresh_lock:
+                if isinstance(record, NativeCredentialRecord):
+                    credential = self._client.trace_token(record.credential)
+                elif isinstance(record, LegacyCredentialRecord):
+                    credential = self._client.legacy_trace_token(
+                        record.cookie_record.cookies,
+                        installation_id=installation_id,
+                        client_version=client_version,
+                        telemetry_schema_version=telemetry_schema_version,
+                    )
+                elif isinstance(record, CookieRecord):
+                    credential = self._client.legacy_trace_token(
+                        record.cookies,
+                        installation_id=installation_id,
+                        client_version=client_version,
+                        telemetry_schema_version=telemetry_schema_version,
+                    )
+                else:
+                    raise AuthRequired("signed_out")
         except AuthServiceError as error:
             if isinstance(error, SessionRejected):
                 with self._lock:
@@ -1978,6 +1979,14 @@ class _OwnerCore:
 
     def validate_now(self) -> RuntimeSnapshot:
         """Validate a cached principal without making outages terminal locally."""
+        if not self._refresh_lock.acquire(blocking=False):
+            return self.snapshot()
+        try:
+            return self._validate_now_locked()
+        finally:
+            self._refresh_lock.release()
+
+    def _validate_now_locked(self) -> RuntimeSnapshot:
         record = self._load_record()
         if not isinstance(record, (NativeCredentialRecord, LegacyCredentialRecord)):
             return self.snapshot()

@@ -202,9 +202,7 @@ export class TraceForwarder {
     // its acknowledgement. A crashed or suspended producer can still hold an
     // incomplete body forever, so force-close any remaining local sockets
     // after a short bounded drain window.
-    const forceCloseTimer = server
-      ? setTimeout(() => server.closeAllConnections(), LOOPBACK_DRAIN_GRACE_MS)
-      : null
+    const forceCloseTimer = server ? setTimeout(() => server.closeAllConnections(), LOOPBACK_DRAIN_GRACE_MS) : null
     forceCloseTimer?.unref?.()
 
     for (const controller of this.upstreamControllers) {

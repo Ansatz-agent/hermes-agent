@@ -1208,17 +1208,16 @@ test('stop consumes only expected socket errors with oversized and held requests
   }
 })
 
-test('desktop lifecycle starts Trace before local spawn and flushes it before backend teardown', () => {
+test('desktop lifecycle starts local backend through degraded Trace recovery and stops Trace before teardown', () => {
   const source = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
   const prepareStart = source.indexOf('prepareLocalBackend: async () => {')
   const prepareEnd = source.indexOf('resolveRemote:', prepareStart)
   const prepare = source.slice(prepareStart, prepareEnd)
 
   assert.ok(prepareStart >= 0)
-  assert.ok(
-    prepare.indexOf('await ensureDesktopTraceForwarder(connectionScope, legacyTraceOwnerForScope(connectionScope))') <
-      prepare.indexOf('return resolveHermesBackend(backendArgs)')
-  )
+  assert.match(prepare, /return resolveLocalBackendWithTrace\(\{/)
+  assert.match(prepare, /resolveBackend: \(\) => resolveHermesBackend\(backendArgs\)/)
+  assert.match(prepare, /startEncryptedTrace: \(\) => ensureDesktopTraceForwarder\(connectionScope, owner\)/)
 
   const cleanupStart = source.indexOf("async function cleanupDesktopCapabilities(connectionId = 'local')")
   const cleanupEnd = source.indexOf('function enableDesktopCapabilityShell()', cleanupStart)

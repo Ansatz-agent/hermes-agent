@@ -79,16 +79,8 @@ test('failed preparation remains terminal and retryable', async () => {
   assert.equal(gate.state, 'ready')
 })
 
-test('local backend startup waits for capture setup but never a cloud Trace credential', () => {
+test('local backend startup coordinates encrypted capture but never waits for a cloud Trace credential', () => {
   const source = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
-
-  const traceStart = source.slice(
-    source.indexOf('async function ensureDesktopTraceForwarder(scope) {'),
-    source.indexOf(
-      'async function stopDesktopTraceForwarder',
-      source.indexOf('async function ensureDesktopTraceForwarder(scope) {')
-    )
-  )
 
   const primaryPreparation = source.slice(
     source.indexOf('prepareLocalBackend: async () => {'),
@@ -109,12 +101,15 @@ test('local backend startup waits for capture setup but never a cloud Trace cred
   )
 
   assert.doesNotMatch(source, /await provider\.current\(\)/)
-  assert.match(traceStart, /await desktopTraceCapture\.prepare\(scope\)/)
-  assert.match(source, /new LocalTraceCaptureController/)
-  assert.match(source, /const TRACE_CAPTURE_SETUP_TIMEOUT_MS = \d+/)
-  assert.match(primaryPreparation, /await prepareTraceCaptureForLocalScope\(connectionScope\)/)
-  assert.match(poolPreparation, /await prepareTraceCaptureForLocalScope\(connectionScope\)/)
-  assert.doesNotMatch(primaryPreparation, /await ensureDesktopTraceForwarder\(connectionScope\)/)
-  assert.doesNotMatch(poolPreparation, /await ensureDesktopTraceForwarder\(connectionScope\)/)
+  assert.match(source, /new TraceRuntimeStartupRecovery/)
+  assert.match(primaryPreparation, /return resolveLocalBackendWithTrace\(\{/)
+  assert.match(primaryPreparation, /startEncryptedTrace: \(\) => ensureDesktopTraceForwarder\(connectionScope, owner\)/)
+  assert.match(poolPreparation, /await prepareDesktopTraceForwarder\(connectionScope,/)
+  assert.match(source, /isConversationStreaming: isDesktopConversationStreaming/)
+  assert.match(source, /const store = await TraceOutboxStore\.open\([\s\S]*?void store\.compactIfIdle\(\)/)
+  assert.match(
+    source,
+    /activeWorkByWebContents\.set\(id, normalizeActiveWork\(payload\)\)[\s\S]*?compactDesktopTraceOutboxIfIdle\(\)/
+  )
   assert.doesNotMatch(authSubscription, /cleanupDesktopCapabilities|desktopRuntimeGate\.invalidate/)
 })

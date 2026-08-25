@@ -299,7 +299,7 @@ import { TraceBackendRegistry } from './trace-backend-registry'
 import { RefreshingTraceCredentialProvider, TraceForwarder } from './trace-forwarder'
 import { TraceIngressFacade } from './trace-ingress-facade'
 import {
-  legacyTraceOwnerForPrincipal,
+  localOnlyTraceOwnerForPrincipal,
   migratePreviousLegacyTraceNamespace,
   previousLegacyTraceAccountKey
 } from './trace-legacy-owner'
@@ -8884,6 +8884,7 @@ const desktopInstallationId = loadOrCreateInstallationId(DESKTOP_INSTALLATION_PA
 let desktopTraceContext = null
 let desktopTraceForwarder = null
 let desktopTraceLifecycle = null
+let desktopTraceOutboxStore: TraceOutboxStore | null = null
 let desktopTraceFacade: TraceIngressFacade | null = null
 let desktopTraceIngress = null
 let desktopTraceFacadeStartupPromise = null
@@ -9018,7 +9019,7 @@ function legacyTraceOwnerForScope(scope): TraceOwner {
   // This remains validator-enforced local-only. Task 19 replaces the legacy
   // principal with the trusted account/session owner without re-keying it from
   // runtime_instance_id, epoch, username, or installation ID.
-  return legacyTraceOwnerForPrincipal(status.principal_key, desktopInstallationId)
+  return localOnlyTraceOwnerForPrincipal(status.principal_key, desktopInstallationId)
 }
 
 async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
@@ -9045,6 +9046,7 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
 
     desktopTraceForwarder = null
     desktopTraceLifecycle = null
+    desktopTraceOutboxStore = null
     desktopTraceContext = null
     desktopTraceFacade?.detach()
 
@@ -9065,8 +9067,16 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
 
     const store = await TraceOutboxStore.open({
       expectedOwner: owner,
+      isConversationStreaming: isDesktopConversationStreaming,
       keyProtector: createSafeStorageTraceKeyProtector(safeStorage),
       root: path.join(traceOutboxRoot, owner.accountKey)
+    })
+    // Recovery only rebuilds the index. Start reclaim before the backend can
+    // accept the next turn without making a large outbox a backend-start
+    // prerequisite. Compaction rechecks the authoritative active-work counter
+    // between bounded record reads and aborts before replace if a turn starts.
+    void store.compactIfIdle().catch(error => {
+      rememberLog(`[trace] startup outbox maintenance failed: ${String((error as Error)?.message || error)}`)
     })
 
     const provider = new RefreshingTraceCredentialProvider({
@@ -9134,6 +9144,7 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
 
     desktopTraceForwarder = forwarder
     desktopTraceLifecycle = lifecycle
+    desktopTraceOutboxStore = store
     desktopTraceFacade?.install(started)
     desktopTraceContext = {
       scope: { ...scope }
@@ -9166,6 +9177,7 @@ async function stopDesktopTraceForwarder(flushMs = 3_000) {
 
   desktopTraceForwarder = null
   desktopTraceLifecycle = null
+  desktopTraceOutboxStore = null
   desktopTraceContext = null
   desktopTraceFacade?.detach()
 
@@ -13966,13 +13978,30 @@ guardedHandle('hermes:stopPreviewFileWatch', (_event, id) => stopPreviewFileWatc
 // merged picture. Keyed by webContents id so a closed window stops counting.
 const activeWorkByWebContents = new Map<number, ActiveWork>()
 
+function isDesktopConversationStreaming(): boolean {
+  return mergeActiveWork(activeWorkByWebContents.values()).count > 0
+}
+
+function compactDesktopTraceOutboxIfIdle(): void {
+  if (isDesktopConversationStreaming()) {
+    return
+  }
+
+  const store = desktopTraceOutboxStore
+  if (store) {
+    void store.compactIfIdle().catch(error => {
+      rememberLog(`[trace] idle outbox maintenance failed: ${String((error as Error)?.message || error)}`)
+    })
+  }
+}
+
 // The same merged picture drives background throttling: chat windows run
 // unthrottled while any turn is in flight (streaming must paint while hidden)
 // and fall back to Chromium's default throttling at idle. See stream-throttle.ts.
 const streamThrottle = createStreamThrottle()
 
 function updateStreamThrottleFromActiveWork() {
-  streamThrottle.update(mergeActiveWork(activeWorkByWebContents.values()).count > 0)
+  streamThrottle.update(isDesktopConversationStreaming())
 }
 
 guardedOn('hermes:active-work', (event, payload) => {
@@ -13982,11 +14011,13 @@ guardedOn('hermes:active-work', (event, payload) => {
     event.sender.once('destroyed', () => {
       activeWorkByWebContents.delete(id)
       updateStreamThrottleFromActiveWork()
+      compactDesktopTraceOutboxIfIdle()
     })
   }
 
   activeWorkByWebContents.set(id, normalizeActiveWork(payload))
   updateStreamThrottleFromActiveWork()
+  compactDesktopTraceOutboxIfIdle()
 })
 
 guardedOn('hermes:titlebar-theme', (_event, payload) => {

@@ -672,7 +672,7 @@ function isBridgeStatus(value: unknown): value is BridgeStatus {
   )
 }
 
-function hasConsistentBridgeIdentity(value: BridgeStatus): boolean {
+function hasConsistentBridgeIdentity(value: Record<string, any>): boolean {
   const emptyIdentity =
     value.account_id === null &&
     value.session_id === null &&

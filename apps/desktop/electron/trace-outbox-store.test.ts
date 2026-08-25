@@ -1151,6 +1151,60 @@ test('compacts mixed segments only when conversation streaming is idle', async (
   assert.equal((await store.peekEligible(Number.MAX_SAFE_INTEGER))?.batchId, second.batchId)
 })
 
+test('restart maintenance avoids segment reads while streaming and compacts the recovered backlog once idle', async () => {
+  const fs = new RangeOnlyTraceFileSystem()
+  let streaming = true
+  const storeOptions = options({ fs, isConversationStreaming: () => streaming })
+  const first = await TraceOutboxStore.open(storeOptions)
+  const acknowledged = await first.enqueue(envelope('restart-acknowledged'))
+  const pending = await first.enqueue(envelope('restart-pending'))
+  await first.acknowledge(acknowledged.batchId, receipt(acknowledged.batchId, 'accepted'))
+  await first.close()
+
+  const reopened = await TraceOutboxStore.open(storeOptions)
+  const segmentPath = '/outbox/segments/active.segment'
+  const before = fs.files.get(segmentPath)!.length
+  fs.rangeReads.length = 0
+  const eventCount = fs.allEvents.length
+  const compactWrites: number[] = []
+  const compactAppends: number[] = []
+  const originalWriteFile = fs.writeFile.bind(fs)
+  const originalAppendFile = fs.appendFile.bind(fs)
+  fs.writeFile = async (path, data, writeOptions) => {
+    if (path.includes('active.segment.compact-')) {
+      compactWrites.push(data.length)
+    }
+    await originalWriteFile(path, data, writeOptions)
+  }
+  fs.appendFile = async (path, data) => {
+    if (path.includes('active.segment.compact-')) {
+      compactAppends.push(data.length)
+    }
+    await originalAppendFile(path, data)
+  }
+
+  assert.equal(await reopened.compactIfIdle(), false)
+  assert.deepEqual(
+    fs.rangeReads.filter(read => read.path === segmentPath),
+    []
+  )
+  assert.equal(
+    fs.allEvents.slice(eventCount).some(event => event.startsWith('replace:') && event.endsWith(segmentPath)),
+    false
+  )
+
+  streaming = false
+  assert.equal(await reopened.compactIfIdle(), true)
+  assert.deepEqual(compactWrites, [0])
+  assert.equal(compactAppends.length, 1)
+  assert.ok(compactAppends[0] < before)
+  assert.ok(fs.files.get(segmentPath)!.length < before)
+  await reopened.close()
+
+  const verified = await TraceOutboxStore.open(storeOptions)
+  assert.equal((await verified.peekEligible(Number.MAX_SAFE_INTEGER))?.batchId, pending.batchId)
+})
+
 test('rejects malformed acknowledgements without writing a receipt and binds a root to one account', async () => {
   const fs = new FakeTraceFileSystem()
   const store = await TraceOutboxStore.open(options({ fs }))

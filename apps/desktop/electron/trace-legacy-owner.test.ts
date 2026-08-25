@@ -4,6 +4,7 @@ import { test } from 'vitest'
 
 import {
   legacyTraceOwnerForPrincipal,
+  localOnlyTraceOwnerForPrincipal,
   migratePreviousLegacyTraceNamespace,
   previousLegacyTraceAccountKey
 } from './trace-legacy-owner'
@@ -26,6 +27,18 @@ test('legacy Trace ownership rejects usernames, installation-only values, and ma
   for (const candidate of ['alice', installationId, `account:${'a'.repeat(64)}`, `legacy:${'a'.repeat(63)}`]) {
     assert.throws(() => legacyTraceOwnerForPrincipal(candidate, installationId), /invalid_legacy_principal_key/)
   }
+})
+
+test('native auth principals keep a stable local-only outbox seam until trusted Task 19 mapping', () => {
+  const accountPrincipal = 'account:22222222-2222-4222-8222-222222222222'
+  const first = localOnlyTraceOwnerForPrincipal(accountPrincipal, installationId)
+  const restarted = localOnlyTraceOwnerForPrincipal(accountPrincipal, installationId)
+  const other = localOnlyTraceOwnerForPrincipal('account:33333333-3333-4333-8333-333333333333', installationId)
+
+  assert.deepEqual(restarted, first)
+  assert.notEqual(other.accountKey, first.accountKey)
+  assert.equal(first.accountId, null)
+  assert.equal(first.sessionId, null)
 })
 
 test('the exact previous scope namespace is atomically retained under the stable principal owner', async () => {

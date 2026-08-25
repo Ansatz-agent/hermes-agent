@@ -530,6 +530,9 @@ function createInstrumentedRuntimeRoot(options: {
     tracePolicySource,
     `def ansatz_product_trace_requested() -> bool:
     """Return whether a Desktop/Voice child declared any product trace state."""
+    with _TRANSPORT_LOCK:
+        if _REGISTERED_PRODUCT_TRANSPORT is not None:
+            return True
     return any(`,
     `def ansatz_product_trace_requested() -> bool:
     """Disable product Trace activation only inside the auth-continuity sandbox."""
@@ -542,6 +545,11 @@ def _unused_original_ansatz_product_trace_requested() -> bool:
 
   const runtimePath = path.join(runtimeRoot, 'hermes_cli', 'client_auth', 'runtime.py')
   let runtimeSource = fs.readFileSync(runtimePath, 'utf8')
+  runtimeSource = replaceOnce(
+    runtimeSource,
+    '        self._next_refresh_at = now + float(delay)',
+    '        self._next_refresh_at = now + 0.5'
+  )
   runtimeSource = replaceOnce(
     runtimeSource,
     `        delay = self._jitter(57.0, 60.0)
