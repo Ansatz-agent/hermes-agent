@@ -85,6 +85,24 @@ export class TraceIngressFacade {
   }
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
+    let upstream: http.ClientRequest | null = null
+
+    // A producer can disconnect at any time. Its request/response streams
+    // emit 'error' (ECONNRESET/EPIPE); leaving those unhandled would crash
+    // the main process, and leaving the upstream request open would leak a
+    // socket and any buffered body.
+    const abortUpstream = () => {
+      upstream?.destroy()
+    }
+
+    request.once('error', abortUpstream)
+    response.once('error', abortUpstream)
+    response.once('close', () => {
+      if (!response.writableFinished) {
+        abortUpstream()
+      }
+    })
+
     if (!matchesBearer(request.headers.authorization, this.localBearer)) {
       request.resume()
       response.writeHead(401, { 'cache-control': 'no-store', 'content-length': '0' })
@@ -107,7 +125,15 @@ export class TraceIngressFacade {
       const target = new URL(delegate.endpoint)
       const headers = { ...request.headers, authorization: `Bearer ${delegate.localBearer}` }
 
-      const upstream = http.request(target, { headers, method: request.method }, delegateResponse => {
+      upstream = http.request(target, { headers, method: request.method }, delegateResponse => {
+        delegateResponse.once('error', () => {
+          if (!response.headersSent) {
+            respondUnavailable(response)
+          } else {
+            response.destroy()
+          }
+        })
+
         if (generation !== this.generation || delegate !== this.delegate) {
           delegateResponse.resume()
 
@@ -144,6 +170,10 @@ export function respondTraceUnavailable(response: ServerResponse): void {
 }
 
 function respondUnavailable(response: ServerResponse): void {
+  if (response.destroyed || response.writableEnded) {
+    return
+  }
+
   response.writeHead(503, {
     'cache-control': 'no-store',
     'content-length': String(UNAVAILABLE_STATUS.length),

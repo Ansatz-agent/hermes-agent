@@ -8,7 +8,7 @@ import { test } from 'vitest'
 
 import {
   DEFAULT_TRACE_UPSTREAM_URL,
-  isExpectedTraceShutdownError,
+  isExpectedTraceDisconnectError,
   RefreshingTraceCredentialProvider,
   type TraceCredentialSource,
   TraceForwarder
@@ -51,6 +51,7 @@ function keyProtector() {
 
 async function temporaryStore() {
   const root = await mkdtemp(join(process.cwd(), 'tmp', 'trace-forwarder-'))
+
   const store = await TraceOutboxStore.open({
     expectedOwner: validOwner(),
     groupCommitMs: 1,
@@ -130,12 +131,14 @@ test('product Trace uploads use the public same-origin Gateway API by default', 
 
 test('a matching Gateway receipt owns a trace before local fsync without retaining payload bytes', async () => {
   const root = await mkdtemp(join(process.cwd(), 'tmp', 'trace-forwarder-gateway-first-'))
+
   const store = await TraceOutboxStore.open({
     expectedOwner: validOwner(),
     groupCommitMs: 50,
     keyProtector: keyProtector(),
     root
   })
+
   const source = credentialSource()
   const upstream: Array<{ body: Buffer; headers: Headers }> = []
 
@@ -177,11 +180,13 @@ test('an unresolved migration barrier keeps capture durable and prevents direct 
   const { root, store } = await temporaryStore()
   const migration = deferred<void>()
   const upstream: string[] = []
+
   const forwarder = new TraceForwarder({
     credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
     fetchImpl: async (_input, init) => {
       upstream.push(Buffer.from(init?.body as Buffer).toString('hex'))
       const headers = new Headers(init?.headers)
+
       return new Response(Buffer.alloc(0), {
         status: 200,
         headers: { 'x-trace-batch-id': headers.get('idempotency-key') ?? '', 'x-trace-receipt': 'accepted' }
@@ -191,6 +196,7 @@ test('an unresolved migration barrier keeps capture durable and prevents direct 
     store,
     uploadBarrier: () => migration.promise
   })
+
   const started = await forwarder.start(validOwner())
 
   try {
@@ -1136,13 +1142,16 @@ test('HTTP boundary rejects remote peers, bad local auth, media drift, encoding,
 
 test('stop remains bounded when a local OTLP client holds an incomplete request open', async () => {
   const { root, store } = await temporaryStore()
+
   const forwarder = new TraceForwarder({
     credentialProvider: new RefreshingTraceCredentialProvider(credentialSource()),
     installationId,
     store
   })
+
   const started = await forwarder.start(validOwner())
   const target = new URL(started.endpoint)
+
   const request = http.request({
     hostname: target.hostname,
     port: target.port,
@@ -1154,7 +1163,9 @@ test('stop remains bounded when a local OTLP client holds an incomplete request 
       'content-type': 'application/x-protobuf'
     }
   })
+
   request.on('error', () => {})
+
   const connected = new Promise<void>(resolve => {
     request.on('socket', socket => {
       if (socket.readyState === 'open') {
@@ -1164,6 +1175,7 @@ test('stop remains bounded when a local OTLP client holds an incomplete request 
       }
     })
   })
+
   request.flushHeaders()
   await connected
 
@@ -1174,6 +1186,7 @@ test('stop remains bounded when a local OTLP client holds an incomplete request 
       stopping.then(() => true),
       new Promise<false>(resolve => setTimeout(() => resolve(false), 250))
     ])
+
     assert.equal(stoppedWithinBoundary, true)
   } finally {
     request.destroy()
@@ -1182,21 +1195,89 @@ test('stop remains bounded when a local OTLP client holds an incomplete request 
   }
 })
 
+test('a client disconnect mid-request while running never throws from loopback socket error listeners', async () => {
+  const { root, store } = await temporaryStore()
+
+  const forwarder = new TraceForwarder({
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource()),
+    installationId,
+    store,
+    uploadBarrier: async () => {}
+  })
+
+  const started = await forwarder.start(validOwner())
+  const target = new URL(started.endpoint)
+  const uncaught: unknown[] = []
+
+  const onUncaught = (error: unknown) => {
+    uncaught.push(error)
+  }
+
+  process.on('uncaughtException', onUncaught)
+
+  try {
+    const request = http.request({
+      hostname: target.hostname,
+      port: target.port,
+      path: target.pathname,
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${started.localBearer}`,
+        'content-length': '64',
+        'content-type': 'application/x-protobuf',
+        'x-hermes-session-id': 'session-abort',
+        'x-telemetry-schema-version': '1',
+        'x-trace-entrypoint': 'desktop',
+        'x-trace-run-id': 'run-abort'
+      }
+    })
+
+    request.on('error', () => {})
+
+    const connected = new Promise<void>(resolve => {
+      request.on('socket', socket => {
+        if (socket.readyState === 'open') {
+          resolve()
+        } else {
+          socket.once('connect', resolve)
+        }
+      })
+    })
+
+    request.write(Buffer.from([0x0a]))
+    request.flushHeaders()
+    await connected
+    await new Promise(resolve => setTimeout(resolve, 50))
+    request.destroy()
+    await new Promise(resolve => setTimeout(resolve, 100))
+
+    assert.deepEqual(uncaught, [])
+    assert.equal((await post(started.endpoint, started.localBearer)).status, 200)
+  } finally {
+    process.off('uncaughtException', onUncaught)
+    await forwarder.stop({ flushMs: 0 })
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
 test('stop consumes only expected socket errors with oversized and held requests', async () => {
-  assert.equal(isExpectedTraceShutdownError(Object.assign(new Error('reset'), { code: 'ECONNRESET' }), true), true)
-  assert.equal(isExpectedTraceShutdownError(Object.assign(new Error('pipe'), { code: 'EPIPE' }), true), true)
-  assert.equal(isExpectedTraceShutdownError(Object.assign(new Error('reset'), { code: 'ECONNRESET' }), false), false)
-  assert.equal(isExpectedTraceShutdownError(Object.assign(new Error('other'), { code: 'ENOSPC' }), true), false)
+  assert.equal(isExpectedTraceDisconnectError(Object.assign(new Error('reset'), { code: 'ECONNRESET' })), true)
+  assert.equal(isExpectedTraceDisconnectError(Object.assign(new Error('pipe'), { code: 'EPIPE' })), true)
+  assert.equal(isExpectedTraceDisconnectError(Object.assign(new Error('other'), { code: 'ENOSPC' })), false)
+  assert.equal(isExpectedTraceDisconnectError(new Error('plain')), false)
 
   const { root, store } = await temporaryStore()
+
   const forwarder = new TraceForwarder({
     credentialProvider: new RefreshingTraceCredentialProvider(credentialSource()),
     installationId,
     maxBodyBytes: 4,
     store
   })
+
   const started = await forwarder.start(validOwner())
   const target = new URL(started.endpoint)
+
   const requests = [Buffer.alloc(5), Buffer.from([0x0a])].map((body, index) => {
     const request = http.request({
       hostname: target.hostname,
@@ -1209,6 +1290,7 @@ test('stop consumes only expected socket errors with oversized and held requests
         'content-type': 'application/x-protobuf'
       }
     })
+
     request.on('error', error => {
       assert.ok(['ECONNRESET', 'EPIPE'].includes((error as NodeJS.ErrnoException).code ?? ''))
     })
@@ -1237,6 +1319,7 @@ test('stop consumes only expected socket errors with oversized and held requests
     for (const request of requests) {
       request.destroy()
     }
+
     await stopping
     await rm(root, { force: true, recursive: true })
   }
@@ -1286,12 +1369,14 @@ test('local backend preparation does not wait for Trace token acquisition', asyn
   )
 
   const root = await mkdtemp(join(process.cwd(), 'tmp', 'trace-forwarder-token-independent-'))
+
   const store = await TraceOutboxStore.open({
     expectedOwner: legacyOwner(),
     groupCommitMs: 1,
     keyProtector: keyProtector(),
     root
   })
+
   const forwarder = new TraceForwarder({ credentialProvider: provider, installationId, store })
 
   const controller = new TraceRecoveryController({

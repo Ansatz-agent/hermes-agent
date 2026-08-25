@@ -87,10 +87,10 @@ class UpstreamFailure extends Error {
   }
 }
 
-export function isExpectedTraceShutdownError(error: unknown, stopping: boolean): boolean {
+export function isExpectedTraceDisconnectError(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException | null)?.code
 
-  return stopping && (code === 'ECONNRESET' || code === 'EPIPE')
+  return code === 'ECONNRESET' || code === 'EPIPE'
 }
 
 export class TraceForwarder {
@@ -155,16 +155,10 @@ export class TraceForwarder {
     this.stopping = false
 
     const server = http.createServer((request, response) => {
-      request.on('error', error => {
-        if (!isExpectedTraceShutdownError(error, this.stopping)) {
-          throw error
-        }
-      })
-      response.on('error', error => {
-        if (!isExpectedTraceShutdownError(error, this.stopping)) {
-          throw error
-        }
-      })
+      // A loopback socket error must never escape the listener: a thrown
+      // error here is an uncaughtException that crashes the main process.
+      request.on('error', error => this.reportLoopbackSocketError(error))
+      response.on('error', error => this.reportLoopbackSocketError(error))
       void this.handle(request, response)
     })
     this.server = server
@@ -252,6 +246,12 @@ export class TraceForwarder {
     }
 
     return earliest
+  }
+
+  private reportLoopbackSocketError(error: unknown): void {
+    if (!isExpectedTraceDisconnectError(error)) {
+      console.error('[trace-forwarder] unexpected loopback socket error', error)
+    }
   }
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {

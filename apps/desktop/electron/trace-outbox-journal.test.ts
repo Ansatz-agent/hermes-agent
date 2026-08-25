@@ -59,6 +59,7 @@ class MemoryFileSystem implements TraceFileSystem {
     if (value === undefined) {
       throw new Error('missing_file')
     }
+
     this.files.set(path, value.subarray(0, length))
   }
 
@@ -137,6 +138,7 @@ test('accepts legacy receipts but requires canonical identity fields on extended
   const path = '/outbox/index.journal'
   const journal = await TraceJournal.open({ fs, path })
   const legacy = { op: 'receipt', batchId: 'legacy-batch', outcome: 'accepted', receivedAt: 2 } as const
+
   const extended = {
     op: 'receipt',
     accountKey: 'account-11111111-1111-4111-8111-111111111111',
@@ -158,6 +160,52 @@ test('accepts legacy receipts but requires canonical identity fields on extended
     fs.files.set(path, Buffer.from(`${canonicalJson({ checksum, operation: malformed })}\n`, 'utf8'))
     await assert.rejects(journal.recover(), /invalid_journal_line/)
   }
+})
+
+test('recovers a journal larger than 128 KiB whose lines cross chunk boundaries', async () => {
+  const fs = new MemoryFileSystem()
+  const path = '/outbox/index.journal'
+  const journal = await TraceJournal.open({ fs, path })
+
+  const operations = Array.from({ length: 900 }, (_, index) => ({
+    op: 'receipt' as const,
+    batchId: `batch-${'x'.repeat(120)}-${index}`,
+    outcome: 'accepted' as const,
+    receivedAt: index
+  }))
+
+  await journal.append(operations)
+  const size = fs.files.get(path)?.length ?? 0
+  assert.ok(size > 128 * 1024, `journal must exceed two recovery chunks, got ${size}`)
+
+  const recovered = await journal.recover()
+  assert.equal(recovered.recoveredTornTail, false)
+  assert.equal(recovered.operations.length, operations.length)
+  assert.deepEqual(recovered.operations, operations)
+})
+
+test('rejects an individual journal line larger than one recovery chunk', async () => {
+  const fs = new MemoryFileSystem()
+  const path = '/outbox/index.journal'
+  const journal = await TraceJournal.open({ fs, path })
+
+  const oversized = {
+    op: 'receipt' as const,
+    batchId: 'x'.repeat(66 * 1024),
+    outcome: 'accepted' as const,
+    receivedAt: 1
+  }
+
+  const checksum = createHash('sha256').update(canonicalJson(oversized)).digest('hex')
+
+  await fs.appendFile(path, Buffer.from(`${canonicalJson({ checksum, operation: oversized })}\n`, 'utf8'))
+  await journal.append([{ op: 'receipt', batchId: 'after-oversized', outcome: 'accepted', receivedAt: 2 }])
+  await assert.rejects(journal.recover(), /trace_outbox_journal_line_too_large/)
+
+  const torn = new MemoryFileSystem()
+  await torn.appendFile(path, Buffer.from('{'.repeat(70 * 1024), 'utf8'))
+  const tornJournal = await TraceJournal.open({ fs: torn, path })
+  await assert.rejects(tornJournal.recover(), /trace_outbox_journal_line_too_large/)
 })
 
 test('replays a strict persistent owner binding operation', async () => {

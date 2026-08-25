@@ -553,10 +553,6 @@ export class TraceJournal {
       }
       offset += length
       pending = Buffer.concat([pending, chunk])
-
-      if (pending.length > JOURNAL_CHUNK_BYTES) {
-        throw new Error('trace_outbox_journal_line_too_large')
-      }
       let newline: number
 
       while ((newline = pending.indexOf(0x0a)) !== -1) {
@@ -565,12 +561,18 @@ export class TraceJournal {
         if (line.length === 0) {
           throw new Error('invalid_journal_line')
         }
-        operations.push(parseLine(line))
-        pending = pending.subarray(newline + 1)
 
-        if (pending.length > JOURNAL_CHUNK_BYTES) {
+        if (line.length >= JOURNAL_CHUNK_BYTES) {
           throw new Error('trace_outbox_journal_line_too_large')
         }
+        operations.push(parseLine(line))
+        pending = pending.subarray(newline + 1)
+      }
+
+      // A partial line may span chunk boundaries, but a single encoded line
+      // (including its newline) must never exceed one recovery chunk.
+      if (pending.length >= JOURNAL_CHUNK_BYTES) {
+        throw new Error('trace_outbox_journal_line_too_large')
       }
     }
 

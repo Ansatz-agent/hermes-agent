@@ -564,6 +564,12 @@ export class TraceOutboxStore {
       return false
     }
 
+    // Fail closed: with the persistent target key unavailable, imported
+    // records would be encrypted under an ephemeral key and lost on restart.
+    if (this.config.keyLost || !this.segmentWritable) {
+      throw new Error('trace_namespace_migration_target_unavailable')
+    }
+
     const source = await TraceOutboxStore.open({
       expectedOwner: sourceOwner,
       fs,
@@ -1366,6 +1372,10 @@ export class TraceOutboxStore {
   private async importMigratedBatch(sourceBatch: DurableTraceBatch, state: 'pending' | 'quarantined'): Promise<void> {
     return this.withMutationGate(() =>
       this.withWriterLock(async () => {
+        if (this.config.keyLost || !this.segmentWritable) {
+          throw new Error('trace_outbox_segment_quarantined')
+        }
+
         const owner = this.targetOwner()
         const existing = this.records.get(sourceBatch.batchId)
         if (existing !== undefined) {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import http from 'node:http'
 import { join } from 'node:path'
 
@@ -107,12 +107,15 @@ class ControllableGateway {
   holdNextResponse(): { received: Promise<void>; release(): void } {
     let markReceived!: () => void
     let release!: () => void
+
     const received = new Promise<void>(resolve => {
       markReceived = resolve
     })
+
     const released = new Promise<void>(resolve => {
       release = resolve
     })
+
     this.heldResponse = { received: markReceived, release: released }
 
     return { received, release }
@@ -177,6 +180,7 @@ class ControllableGateway {
     this.logical.set(batchId, { body: Buffer.from(body), digest })
 
     const heldResponse = this.heldResponse
+
     if (heldResponse !== null) {
       this.heldResponse = null
       heldResponse.received()
@@ -492,12 +496,14 @@ test('offline accepted Trace survives quit and uploads FIFO only from the same-a
 
 test('native login migrates a same-principal local-only FIFO through a synced staging namespace without changing batch ids', async () => {
   const userData = await temporaryUserData()
+
   const sourceOwner: TraceOwner = {
     accountId: null,
     accountKey: `legacy-${'c'.repeat(64)}`,
     installationId,
     sessionId: null
   }
+
   const targetOwner = owner('a')
   const sourceRoot = join(userData, 'trace-outbox', sourceOwner.accountKey)
   const targetRoot = join(userData, 'trace-outbox', targetOwner.accountKey)
@@ -508,6 +514,7 @@ test('native login migrates a same-principal local-only FIFO through a synced st
       keyProtector: protector(),
       root: sourceRoot
     })
+
     const first = await source.enqueue(envelopeForOwner(sourceOwner, payload('migrate-one'), 1))
     const second = await source.enqueue(envelopeForOwner(sourceOwner, payload('migrate-two'), 2))
     await source.close()
@@ -530,6 +537,7 @@ test('native login migrates a same-principal local-only FIFO through a synced st
       keyProtector: protector(),
       root: targetRoot
     })
+
     const migratedFirst = await migrated.peekEligible(Number.MAX_SAFE_INTEGER)
     assert.equal(migratedFirst?.batchId, first.batchId)
     assert.deepEqual(migratedFirst?.owner, targetOwner)
@@ -557,26 +565,102 @@ test('native login migrates a same-principal local-only FIFO through a synced st
   }
 })
 
+test('trusted migration fails closed and preserves the source when the target key is lost on disk', async () => {
+  const userData = await temporaryUserData()
+
+  const sourceOwner: TraceOwner = {
+    accountId: null,
+    accountKey: `legacy-${'d'.repeat(64)}`,
+    installationId,
+    sessionId: null
+  }
+
+  const targetOwner = owner('a')
+  const sourceRoot = join(userData, 'trace-outbox', sourceOwner.accountKey)
+  const targetRoot = join(userData, 'trace-outbox', targetOwner.accountKey)
+
+  try {
+    const source = await TraceOutboxStore.open({
+      expectedOwner: sourceOwner,
+      keyProtector: protector(),
+      root: sourceRoot
+    })
+
+    const first = await source.enqueue(envelopeForOwner(sourceOwner, payload('key-loss-one'), 1))
+    const second = await source.enqueue(envelopeForOwner(sourceOwner, payload('key-loss-two'), 2))
+    await source.close()
+
+    const target = await TraceOutboxStore.open({
+      expectedOwner: targetOwner,
+      keyProtector: protector(),
+      root: targetRoot
+    })
+
+    await target.close()
+
+    // Simulate safeStorage losing the ability to unwrap only the persisted
+    // target key: the record still parses, but decryption fails.
+    const targetKeyPath = join(targetRoot, 'key.json')
+    const persisted = JSON.parse(await readFile(targetKeyPath, 'utf8')) as Record<string, unknown>
+    persisted.wrappedKey = Buffer.from('no-longer-decryptable').toString('base64')
+    await writeFile(targetKeyPath, JSON.stringify(persisted), { mode: 0o600 })
+
+    await assert.rejects(
+      TraceOutboxStore.migrateTrustedNamespace({
+        keyProtector: protector(),
+        removeSourceDirectory: path => rm(path, { force: false, recursive: true }),
+        sourceOwner,
+        sourceRoot,
+        targetOwner,
+        targetRoot
+      }),
+      /trace_namespace_migration_target_unavailable/
+    )
+
+    // The source namespace must survive intact: key present, FIFO preserved.
+    await readFile(join(sourceRoot, 'key.json'))
+
+    const reopened = await TraceOutboxStore.open({
+      expectedOwner: sourceOwner,
+      keyProtector: protector(),
+      root: sourceRoot
+    })
+
+    assert.equal((await reopened.peekEligible(Number.MAX_SAFE_INTEGER))?.batchId, first.batchId)
+    await reopened.acknowledge(first.batchId, { batchId: first.batchId, outcome: 'accepted', receivedAt: Date.now() })
+    assert.equal((await reopened.peekEligible(Number.MAX_SAFE_INTEGER))?.batchId, second.batchId)
+    assert.equal((await reopened.diagnostics()).keyLost, 0)
+    await reopened.close()
+  } finally {
+    await rm(userData, { force: true, recursive: true })
+  }
+})
+
 test('trusted migration streams records, merges an existing same-account target, preserves receipts, and drains source only after success', async () => {
   const userData = await temporaryUserData()
+
   const sourceOwner: TraceOwner = {
     accountId: null,
     accountKey: `legacy-${'e'.repeat(64)}`,
     installationId,
     sessionId: null
   }
+
   const targetOwner = owner('a')
   const sourceRoot = join(userData, 'trace-outbox', sourceOwner.accountKey)
   const targetRoot = join(userData, 'trace-outbox', targetOwner.accountKey)
   let readsInFlight = 0
   let maximumReadsInFlight = 0
+
   const streamingFs: TraceFileSystem = {
     ...nodeTraceFileSystem,
     readRange: async (path, offset, length) => {
       readsInFlight += 1
       maximumReadsInFlight = Math.max(maximumReadsInFlight, readsInFlight)
+
       try {
         await Promise.resolve()
+
         return await nodeTraceFileSystem.readRange(path, offset, length)
       } finally {
         readsInFlight -= 1
@@ -590,6 +674,7 @@ test('trusted migration streams records, merges an existing same-account target,
       keyProtector: protector(),
       root: sourceRoot
     })
+
     const accepted = await source.enqueue(envelopeForOwner(sourceOwner, payload('migrated-receipt'), 1))
     await source.acknowledge(accepted.batchId, {
       batchId: accepted.batchId,
@@ -604,6 +689,7 @@ test('trusted migration streams records, merges an existing same-account target,
       keyProtector: protector(),
       root: targetRoot
     })
+
     await target.enqueue(envelopeForOwner(targetOwner, payload('already-target'), 0))
     await target.close()
 
@@ -627,18 +713,23 @@ test('trusted migration streams records, merges an existing same-account target,
       keyProtector: protector(),
       root: targetRoot
     })
+
     const diagnostics = await merged.diagnostics()
     assert.equal(diagnostics.tombstones, 1)
     assert.equal((await merged.peekEligible(Number.MAX_SAFE_INTEGER))?.batchId, pending.batchId)
     const ids: string[] = []
+
     for (;;) {
       const batch = await merged.peekEligible(Number.MAX_SAFE_INTEGER)
+
       if (!batch) {
         break
       }
+
       ids.push(batch.batchId)
       await merged.acknowledge(batch.batchId, { batchId: batch.batchId, outcome: 'accepted', receivedAt: Date.now() })
     }
+
     assert.ok(ids.includes(pending.batchId))
     assert.equal(ids[0], pending.batchId)
     await merged.close()
@@ -649,12 +740,14 @@ test('trusted migration streams records, merges an existing same-account target,
 
 test('receipt-only migration recomputes target dedupe after source payload compaction', async () => {
   const userData = await temporaryUserData()
+
   const sourceOwner: TraceOwner = {
     accountId: null,
     accountKey: `legacy-${'f'.repeat(64)}`,
     installationId,
     sessionId: null
   }
+
   const targetOwner = owner('a')
   const sourceRoot = join(userData, 'trace-outbox', sourceOwner.accountKey)
   const targetRoot = join(userData, 'trace-outbox', targetOwner.accountKey)
@@ -666,6 +759,7 @@ test('receipt-only migration recomputes target dedupe after source payload compa
       keyProtector: protector(),
       root: sourceRoot
     })
+
     const accepted = await source.enqueue(sourceEnvelope)
     await source.acknowledge(accepted.batchId, {
       batchId: accepted.batchId,
@@ -694,6 +788,7 @@ test('receipt-only migration recomputes target dedupe after source payload compa
       keyProtector: protector(),
       root: targetRoot
     })
+
     const duplicate = await target.enqueue({ ...sourceEnvelope, owner: targetOwner })
     assert.equal(duplicate.batchId, accepted.batchId)
     assert.equal((await target.diagnostics()).tombstones, 1)
@@ -717,6 +812,7 @@ test('a durable online Gateway receipt leaves only a bounded payload-free tombst
       receiptCapacityBytes: 2_048,
       userData
     })
+
     harnesses.push(harness)
 
     assert.equal((await harness.post(body, 1)).status, 200)
@@ -739,6 +835,7 @@ test('a durable online Gateway receipt leaves only a bounded payload-free tombst
       keyProtector: protector(),
       root: harness.root
     })
+
     assert.equal((await reopened.diagnostics()).payloadBytes, 0)
     assert.equal((await reopened.diagnostics()).tombstones, 1)
     await reopened.close()
