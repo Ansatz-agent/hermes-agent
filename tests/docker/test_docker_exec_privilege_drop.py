@@ -28,6 +28,7 @@ import subprocess
 import time
 from pathlib import Path
 from collections.abc import Iterator
+import re
 
 import pytest
 
@@ -43,9 +44,20 @@ def test_canonical_docker_exec_uses_the_same_privilege_drop_shim():
     dockerfile = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
     shim = (REPO_ROOT / "docker" / "hermes-exec-shim.sh").read_text(encoding="utf-8")
 
-    assert "/opt/hermes/bin/ansatz" in dockerfile
-    assert "ln -s ansatz /opt/hermes/bin/hermes" in dockerfile
-    assert "REAL=/opt/hermes/.venv/bin/ansatz" in shim
+    install = re.search(
+        r"RUN mkdir -p /opt/hermes/bin && \\\n"
+        r"\s+cp /opt/hermes/docker/hermes-exec-shim\.sh /opt/hermes/bin/ansatz && \\\n"
+        r"\s+ln -s ansatz /opt/hermes/bin/hermes && \\\n"
+        r"\s+chmod 0755 /opt/hermes/bin/ansatz &&",
+        dockerfile,
+    )
+    assert install is not None
+    assert re.search(
+        r"^COPY --chmod=0755 docker/hermes-exec-shim\.sh /opt/hermes/bin/ansatz$",
+        dockerfile,
+        flags=re.MULTILINE,
+    )
+    assert re.search(r"^REAL=/opt/hermes/\.venv/bin/ansatz$", shim, flags=re.MULTILINE)
 
 
 def _wait_for_cont_init(container: str) -> None:

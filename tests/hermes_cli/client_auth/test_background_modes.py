@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import plistlib
+import re
 from pathlib import Path
 
 import pytest
@@ -150,8 +151,17 @@ def test_container_capability_scripts_wait_before_exec():
 def test_container_canonical_and_legacy_commands_share_auth_wait_dispatch():
     wrapper = (REPO_ROOT / "docker" / "main-wrapper.sh").read_text(encoding="utf-8")
 
-    dispatch = wrapper[wrapper.index("ansatz|hermes)"):]
-    assert "wait_for_auth\n        drop \"$@\"" in dispatch
+    command_case = re.search(
+        r"^    ansatz\|hermes\)\n(?P<body>.*?)^        ;;$",
+        wrapper,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    assert command_case is not None
+    assert re.search(
+        r"^        wait_for_auth\n        drop \"\$@\"$",
+        command_case.group("body"),
+        flags=re.MULTILINE,
+    )
 
 
 def test_runtime_service_waits_then_execs_fixed_gateway(monkeypatch):

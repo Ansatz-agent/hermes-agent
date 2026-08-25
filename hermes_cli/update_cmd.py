@@ -2345,11 +2345,10 @@ def _ensure_acp_launcher() -> None:
         return candidate if candidate.is_file() or candidate.is_symlink() else None
 
     def _write_launcher(path: Path, target: Path, *args: str) -> bool:
-        # ``exists`` alone misses a broken symlink. Never follow or replace
-        # either symlinks or existing files: they can belong to pipx, another
-        # install, or the user (#21454).
-        if path.exists() or path.is_symlink():
-            return False
+        # Exclusive creation closes the check-then-write race. O_EXCL (used by
+        # ``x`` mode) fails for an existing file *or symlink*, so an entry
+        # created by another process after this repair starts is never opened,
+        # followed, or overwritten (#21454).
         arguments = " ".join(f'"{arg}"' for arg in args)
         suffix = f" {arguments}" if arguments else ""
         shim = (
@@ -2357,39 +2356,76 @@ def _ensure_acp_launcher() -> None:
             "# Launcher repair written by `ansatz update`.\n"
             f'exec "{target}"{suffix} "$@"\n'
         )
-        path.write_text(shim, encoding="utf-8")
-        path.chmod(path.stat().st_mode | 0o755)
+        try:
+            with path.open("x", encoding="utf-8") as launcher:
+                launcher.write(shim)
+                # Operate on the descriptor while it still names the inode
+                # created exclusively above. A later path replacement cannot
+                # redirect this permission change to an attacker-controlled
+                # file or symlink.
+                os.fchmod(
+                    launcher.fileno(),
+                    os.fstat(launcher.fileno()).st_mode | 0o755,
+                )
+        except FileExistsError:
+            return False
         return True
 
     for bin_dir in (Path.home() / ".local" / "bin", Path("/usr/local/bin")):
         try:
-            ansatz_cmd = bin_dir / "ansatz"
             hermes_cmd = bin_dir / "hermes"
-            if ansatz_cmd.is_file() or ansatz_cmd.is_symlink():
-                primary = ansatz_cmd
-            elif hermes_cmd.is_file() or hermes_cmd.is_symlink():
-                primary = hermes_cmd
-            else:
+            # A current venv is trusted by the update process. An occupied
+            # PATH ``ansatz`` is not: it may belong to another tool, so never
+            # use it as a repair source or point a compatibility alias at it.
+            venv_scripts = {
+                name: _console_script(name)
+                for name in (
+                    "ansatz",
+                    "ansatz-agent",
+                    "ansatz-acp",
+                    "hermes",
+                    "hermes-agent",
+                    "hermes-acp",
+                )
+            }
+            legacy_fallback = (
+                hermes_cmd
+                if hermes_cmd.is_file() or hermes_cmd.is_symlink()
+                else None
+            )
+            if not any(venv_scripts.values()) and legacy_fallback is None:
                 continue
 
             repaired = []
-            # Prefer the real updated venv entry points. The fallback wrappers
-            # keep a legacy-only install usable until its next full reinstall.
+            # Prefer the verified current venv scripts. The legacy PATH
+            # launcher is a narrow fallback for installs that predate them.
+            ansatz_target = (
+                venv_scripts["ansatz"]
+                or venv_scripts["hermes"]
+                or legacy_fallback
+            )
+            if ansatz_target is None:
+                continue
             agent_target = (
-                _console_script("ansatz-agent")
-                or _console_script("hermes-agent")
-                or primary
+                venv_scripts["ansatz-agent"]
+                or venv_scripts["hermes-agent"]
+                or ansatz_target
             )
             acp_target = (
-                _console_script("ansatz-acp")
-                or _console_script("hermes-acp")
-                or primary
+                venv_scripts["ansatz-acp"]
+                or venv_scripts["hermes-acp"]
+                or ansatz_target
             )
             canonical = (
-                ("ansatz", _console_script("ansatz") or primary, ()),
+                ("ansatz", ansatz_target, ()),
                 ("ansatz-agent", agent_target, ()),
-                ("ansatz-acp", acp_target, () if acp_target != primary else ("acp",)),
+                (
+                    "ansatz-acp",
+                    acp_target,
+                    () if acp_target != legacy_fallback else ("acp",),
+                ),
             )
+            canonical_targets = {name: target for name, target, _args in canonical}
             for name, target, args in canonical:
                 if _write_launcher(bin_dir / name, target, *args):
                     repaired.append(name)
@@ -2401,7 +2437,8 @@ def _ensure_acp_launcher() -> None:
                 ("hermes-agent", "ansatz-agent"),
                 ("hermes-acp", "ansatz-acp"),
             ):
-                if _write_launcher(bin_dir / legacy, bin_dir / canonical_name):
+                target = venv_scripts[legacy] or canonical_targets[canonical_name]
+                if _write_launcher(bin_dir / legacy, target):
                     repaired.append(legacy)
         except OSError:
             continue
