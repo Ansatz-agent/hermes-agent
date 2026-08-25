@@ -34,6 +34,11 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Dict, List, Optional, Tuple
 
 from agent.skill_utils import is_excluded_skill_path
+from hermes_cli.cli_identity import (
+    CANONICAL_COMMAND,
+    CLI_DISCOVERY_ORDER,
+    executable_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -391,6 +396,17 @@ def profile_exists(name: str) -> bool:
 # Alias / wrapper script management
 # ---------------------------------------------------------------------------
 
+
+def _profile_wrapper_match(content: str) -> Optional[tuple[int, str]]:
+    """Locate a canonical or legacy profile-wrapper invocation."""
+    for command in CLI_DISCOVERY_ORDER:
+        prefix = f"{command} -p "
+        idx = content.find(prefix)
+        if idx != -1:
+            return idx, prefix
+    return None
+
+
 def check_alias_collision(name: str) -> Optional[str]:
     """Return a human-readable collision message, or None if the name is safe.
 
@@ -422,7 +438,7 @@ def check_alias_collision(name: str) -> Optional[str]:
             if existing_path == str(expected):
                 try:
                     content = expected.read_text(encoding="utf-8")
-                    if "hermes -p" in content:
+                    if _profile_wrapper_match(content) is not None:
                         return None  # it's our wrapper, safe to overwrite
                 except Exception:
                     pass
@@ -465,7 +481,10 @@ def create_wrapper_script(name: str, target: Optional[str] = None) -> Optional[P
     if is_windows:
         wrapper_path = wrapper_dir / f"{canon}.bat"
         try:
-            wrapper_path.write_text(f"@echo off\r\nhermes -p {profile} %*\r\n", encoding="utf-8")
+            wrapper_path.write_text(
+                f"@echo off\r\n{CANONICAL_COMMAND} -p {profile} %*\r\n",
+                encoding="utf-8",
+            )
             return wrapper_path
         except OSError as e:
             print(f"⚠ Could not create wrapper at {wrapper_path}: {e}")
@@ -473,8 +492,18 @@ def create_wrapper_script(name: str, target: Optional[str] = None) -> Optional[P
     else:
         wrapper_path = wrapper_dir / canon
         try:
-            hermes_exe = shutil.which("hermes") or "hermes"
-            wrapper_path.write_text(f'#!/bin/sh\nexec {shlex.quote(hermes_exe)} -p {profile} "$@"\n', encoding="utf-8")
+            cli_exe = next(
+                (
+                    resolved
+                    for command in CLI_DISCOVERY_ORDER
+                    if (resolved := shutil.which(command))
+                ),
+                CANONICAL_COMMAND,
+            )
+            wrapper_path.write_text(
+                f'#!/bin/sh\nexec {shlex.quote(cli_exe)} -p {profile} "$@"\n',
+                encoding="utf-8",
+            )
             wrapper_path.chmod(wrapper_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
             return wrapper_path
         except OSError as e:
@@ -504,7 +533,7 @@ def remove_wrapper_script(name: str) -> bool:
             try:
                 # Verify it's our wrapper before removing
                 content = wrapper_path.read_text(encoding="utf-8")
-                if "hermes -p" in content:
+                if _profile_wrapper_match(content) is not None:
                     wrapper_path.unlink()
                     return True
             except Exception:
@@ -587,8 +616,6 @@ def build_alias_map() -> dict[str, str]:
     if not wrapper_dir.is_dir():
         return result
     is_windows = sys.platform == "win32"
-    prefix = "hermes -p "
-
     for entry in sorted(wrapper_dir.iterdir()):
         if not entry.is_file():
             continue
@@ -603,9 +630,10 @@ def build_alias_map() -> dict[str, str]:
         except (OSError, UnicodeDecodeError):
             # UnicodeDecodeError = a binary on PATH (ffmpeg etc.) — not a wrapper.
             continue
-        idx = content.find(prefix)
-        if idx == -1:
+        match = _profile_wrapper_match(content)
+        if match is None:
             continue
+        idx, prefix = match
         rest = content[idx + len(prefix):]
         # Profile id is the first whitespace-delimited token after the flag.
         canon = rest.split(None, 1)[0].strip() if rest.strip() else ""
@@ -1382,11 +1410,10 @@ def _profile_bound_backend_pids(canon: str, profile_dir: Path) -> list[int]:
             # Must be a Hermes process: either an entrypoint marker in argv, or
             # a resolved executable named `hermes`.
             joined = " ".join(argv)
-            exe_name = os.path.basename(argv[0]).lower()
+            exe_name = executable_name(argv[0])
             is_hermes = (
                 any(marker in joined for marker in hermes_markers)
-                or exe_name == "hermes"
-                or exe_name.startswith("hermes")
+                or exe_name in CLI_DISCOVERY_ORDER
             )
             if not is_hermes:
                 continue

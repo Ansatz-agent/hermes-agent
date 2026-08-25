@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Optional
 
 from hermes_cli.config import get_hermes_home
+from hermes_cli.cli_identity import CLI_DISCOVERY_ORDER
 from hermes_constants import venv_python_path
 
 logger = logging.getLogger(__name__)
@@ -2254,10 +2255,10 @@ def _ensure_fhs_path_guard() -> None:
             return
     except AttributeError:
         return
-    # Only act when this is actually an FHS-layout install (command link at
-    # /usr/local/bin/hermes, code at /usr/local/lib/hermes-agent).
-    fhs_link = Path("/usr/local/bin/hermes")
-    if not fhs_link.is_symlink() and not fhs_link.exists():
+    # Only act when this is actually an FHS-layout install. Prefer the
+    # canonical launcher while accepting an older legacy-only install.
+    fhs_links = [Path("/usr/local/bin") / command for command in CLI_DISCOVERY_ORDER]
+    if not any(link.is_symlink() or link.exists() for link in fhs_links):
         return
 
     # Probe a fresh non-login interactive bash the way the user will use it.
@@ -2274,7 +2275,7 @@ def _ensure_fhs_path_guard() -> None:
                 "bash",
                 "-i",
                 "-c",
-                "command -v hermes",
+                "command -v ansatz >/dev/null 2>&1 || command -v hermes",
             ],
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",

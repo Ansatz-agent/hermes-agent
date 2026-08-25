@@ -1142,6 +1142,40 @@ def test_migrate_add_optional_columns_tolerates_concurrent_migration(kanban_home
 # ---------------------------------------------------------------------------
 
 
+def test_resolve_hermes_argv_prefers_ansatz_on_path(monkeypatch):
+    import shutil
+    import hermes_cli.kanban_db as kb
+
+    seen = []
+
+    def which(name):
+        seen.append(name)
+        return {"ansatz": "/usr/bin/ansatz", "hermes": "/usr/bin/hermes"}.get(name)
+
+    monkeypatch.delenv("HERMES_BIN", raising=False)
+    monkeypatch.setattr(shutil, "which", which)
+
+    assert kb._resolve_hermes_argv() == ["/usr/bin/ansatz"]
+    assert seen == ["ansatz"]
+
+
+def test_resolve_hermes_argv_falls_back_to_legacy_alias(monkeypatch):
+    import shutil
+    import hermes_cli.kanban_db as kb
+
+    seen = []
+
+    def which(name):
+        seen.append(name)
+        return "/usr/bin/hermes" if name == "hermes" else None
+
+    monkeypatch.delenv("HERMES_BIN", raising=False)
+    monkeypatch.setattr(shutil, "which", which)
+
+    assert kb._resolve_hermes_argv() == ["/usr/bin/hermes"]
+    assert seen == ["ansatz", "hermes"]
+
+
 def test_resolve_hermes_argv_falls_back_to_module_form_when_no_path_shim(monkeypatch):
     """When the shim is not on PATH, fall back to `python -m hermes_cli.main`.
 

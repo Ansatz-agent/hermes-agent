@@ -70,6 +70,7 @@ from agent.turn_context import (
     compression_made_progress,
 )
 from hermes_cli.config import _is_ssh_remote_tilde_cwd, cfg_get
+from hermes_cli.cli_identity import CLI_DISCOVERY_ORDER
 from hermes_cli.fallback_config import get_fallback_chain
 
 # --- Agent cache tuning ---------------------------------------------------
@@ -3518,21 +3519,23 @@ def _get_channel_override(
     return None
 
 
-def _resolve_hermes_bin() -> Optional[list[str]]:
-    """Resolve the Hermes update command as argv parts.
+def _resolve_cli_bin() -> Optional[list[str]]:
+    """Resolve the canonical CLI update command as argv parts.
 
     Tries in order:
-    1. ``shutil.which("hermes")`` — standard PATH lookup
-    2. ``sys.executable -m hermes_cli.main`` — fallback when Hermes is running
+    1. ``shutil.which("ansatz")`` — canonical PATH lookup
+    2. ``shutil.which("hermes")`` — compatibility fallback
+    3. ``sys.executable -m hermes_cli.main`` — fallback when Hermes is running
        from a venv/module invocation and the ``hermes`` shim is not on PATH
 
     Returns argv parts ready for quoting/joining, or ``None`` if neither works.
     """
     import shutil
 
-    hermes_bin = shutil.which("hermes")
-    if hermes_bin:
-        return [hermes_bin]
+    for command in CLI_DISCOVERY_ORDER:
+        cli_bin = shutil.which(command)
+        if cli_bin:
+            return [cli_bin]
 
     try:
         import importlib.util
@@ -10846,8 +10849,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         import shutil
         import subprocess
 
-        hermes_cmd = _resolve_hermes_bin()
-        if not hermes_cmd:
+        cli_cmd = _resolve_cli_bin()
+        if not cli_cmd:
             logger.error("Could not locate hermes binary for detached /restart")
             return
         if self._detached_restart_helper_started:
@@ -10869,7 +10872,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 windows_detach_popen_kwargs,
             )
 
-            cmd_argv = [*hermes_cmd, "gateway", "restart"]
+            cmd_argv = [*cli_cmd, "gateway", "restart"]
             watcher = textwrap.dedent(
                 """
                 import os, subprocess, sys, time
@@ -10997,7 +11000,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     )
             return
 
-        cmd = " ".join(shlex.quote(part) for part in hermes_cmd)
+        cmd = " ".join(shlex.quote(part) for part in cli_cmd)
         shell_cmd = (
             f"deadline=$(( $(date +%s) + {int(restart_after_s)} )); "
             f"while kill -0 {current_pid} 2>/dev/null && [ $(date +%s) -lt $deadline ]; do sleep 0.2; done; "

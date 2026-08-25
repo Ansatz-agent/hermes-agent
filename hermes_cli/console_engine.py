@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Literal, NoReturn, Sequence
 
 from tools.ansi_strip import strip_ansi as _strip_ansi
+from hermes_cli.cli_identity import CANONICAL_COMMAND, LEGACY_COMMAND
 
 
 ConsoleStatus = Literal["ok", "error", "confirm_required", "exit", "clear"]
@@ -162,7 +163,7 @@ def _format_job(job: dict, action: str) -> str:
 
 
 def _parser_root() -> tuple[_ArgumentParser, argparse._SubParsersAction]:
-    parser = _ArgumentParser(prog="hermes", add_help=False)
+    parser = _ArgumentParser(prog=CANONICAL_COMMAND, add_help=False)
     subparsers = parser.add_subparsers(dest="_console_command")
     return parser, subparsers
 
@@ -192,7 +193,10 @@ def _clean_summary(text: str | None) -> str:
     summary = " ".join(str(text).split())
     if not summary:
         return ""
-    if summary.startswith("Run `hermes "):
+    if any(
+        summary.startswith(f"Run `{command} ")
+        for command in (CANONICAL_COMMAND, LEGACY_COMMAND)
+    ):
         return ""
     return summary
 
@@ -482,14 +486,18 @@ def _register_command_family(
         child_key = tuple(child_path)
         full_path = (root, *tuple(child_path))
         usage = " ".join(full_path)
-        command_summary = summary or (summaries or {}).get(full_path) or f"Run `hermes {usage}`."
+        command_summary = (
+            summary
+            or (summaries or {}).get(full_path)
+            or f"Run `{CANONICAL_COMMAND} {usage}`."
+        )
         engine.register(
             full_path,
             usage,
             command_summary,
             handler_factory(tuple(child_path)),
             mutating=child_key in mutating_paths,
-            confirmation=confirmation or f"Run `hermes {usage}`?",
+            confirmation=confirmation or f"Run `{CANONICAL_COMMAND} {usage}`?",
         )
 
 
@@ -509,7 +517,7 @@ class HermesConsoleEngine:
 
         try:
             tokens = _split_line(raw_line)
-            if tokens and tokens[0] == "hermes":
+            if tokens and tokens[0] in (CANONICAL_COMMAND, LEGACY_COMMAND):
                 tokens = tokens[1:]
             if not tokens:
                 return self._help_result()
@@ -1212,7 +1220,7 @@ class HermesConsoleEngine:
             "whatsapp-cloud",
         }
         if first in blocked_top:
-            return f"`hermes {first}` is not available in Hermes Console."
+            return f"`{CANONICAL_COMMAND} {first}` is not available in Hermes Console."
         blocked_pairs = {
             ("config", "edit"): "`config edit` opens an editor and is not available in Hermes Console.",
             ("mcp", "serve"): "`mcp serve` starts a server and is not available in Hermes Console.",

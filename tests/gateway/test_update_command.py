@@ -91,15 +91,49 @@ class TestHandleUpdateCommand:
 
 
     @pytest.mark.asyncio
-    async def test_resolve_hermes_bin_fallback(self):
-        """_resolve_hermes_bin falls back to sys.executable argv when which fails."""
+    async def test_resolve_cli_bin_prefers_ansatz(self):
+        """_resolve_cli_bin uses the canonical executable when both aliases exist."""
+        from gateway.run import _resolve_cli_bin
+
+        seen = []
+
+        def which(name):
+            seen.append(name)
+            return {"ansatz": "/usr/bin/ansatz", "hermes": "/usr/bin/hermes"}.get(name)
+
+        with patch("shutil.which", side_effect=which):
+            result = _resolve_cli_bin()
+
+        assert result == ["/usr/bin/ansatz"]
+        assert seen == ["ansatz"]
+
+    @pytest.mark.asyncio
+    async def test_resolve_cli_bin_falls_back_to_legacy_alias(self):
+        """_resolve_cli_bin keeps old installations working during migration."""
+        from gateway.run import _resolve_cli_bin
+
+        seen = []
+
+        def which(name):
+            seen.append(name)
+            return "/usr/bin/hermes" if name == "hermes" else None
+
+        with patch("shutil.which", side_effect=which):
+            result = _resolve_cli_bin()
+
+        assert result == ["/usr/bin/hermes"]
+        assert seen == ["ansatz", "hermes"]
+
+    @pytest.mark.asyncio
+    async def test_resolve_cli_bin_module_fallback(self):
+        """_resolve_cli_bin falls back to sys.executable argv when which fails."""
         import sys
-        from gateway.run import _resolve_hermes_bin
+        from gateway.run import _resolve_cli_bin
 
         fake_spec = MagicMock()
         with patch("shutil.which", return_value=None), \
              patch("importlib.util.find_spec", return_value=fake_spec):
-            result = _resolve_hermes_bin()
+            result = _resolve_cli_bin()
 
         assert result == [sys.executable, "-m", "hermes_cli.main"]
 

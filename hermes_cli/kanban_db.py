@@ -89,6 +89,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
+from hermes_cli.cli_identity import CLI_DISCOVERY_ORDER
+
 from hermes_cli.sqlite_util import add_column_if_missing as _add_column_if_missing
 from toolsets import get_toolset_names
 
@@ -10227,7 +10229,7 @@ def _resolve_hermes_argv() -> list[str]:
        launchd jobs, detached processes, etc.). Goes through the running
        interpreter so the result is independent of ``$PATH``.
 
-    Mirrors ``gateway.run._resolve_hermes_bin`` for the same reason. Kept
+    Mirrors ``gateway.run._resolve_cli_bin`` for the same reason. Kept
     local (not imported from gateway) because ``hermes_cli`` sits below
     ``gateway`` in the dependency order.
     """
@@ -10242,9 +10244,10 @@ def _resolve_hermes_argv() -> list[str]:
             return _hermes_path_argv(resolved_env_bin)
         return _module_hermes_argv()
 
-    hermes_bin = _safe_which_no_cwd("hermes") if _IS_WINDOWS else shutil.which("hermes")
-    if hermes_bin:
-        return _hermes_path_argv(hermes_bin)
+    for command in CLI_DISCOVERY_ORDER:
+        cli_bin = _safe_which_no_cwd(command) if _IS_WINDOWS else shutil.which(command)
+        if cli_bin:
+            return _hermes_path_argv(cli_bin)
     return _module_hermes_argv()
 
 

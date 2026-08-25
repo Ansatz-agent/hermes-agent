@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from hermes_constants import get_hermes_home, _get_platform_default_hermes_home
+from hermes_cli.cli_identity import CANONICAL_COMMAND, LEGACY_COMMAND, executable_name
 from typing import Any, Callable, NamedTuple, Optional
 from utils import atomic_json_write
 
@@ -411,7 +412,10 @@ def _gateway_command_subcommand(command: str | None) -> str | None:
     has_gateway_entry = (
         "hermes_cli.main" in joined
         or "hermes_cli/main.py" in joined
-        or any(t.rsplit("/", 1)[-1] in ("hermes", "hermes.exe") for t in tokens)
+        or any(
+            executable_name(token) in (CANONICAL_COMMAND, LEGACY_COMMAND)
+            for token in tokens
+        )
     )
     if not has_gateway_entry:
         return None

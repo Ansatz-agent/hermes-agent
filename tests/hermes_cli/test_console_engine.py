@@ -232,6 +232,17 @@ MUTATING_CONFIRMATION_SMOKE_COMMANDS = [
 ]
 
 
+def test_execute_accepts_canonical_and_legacy_cli_prefixes():
+    engine = HermesConsoleEngine()
+
+    canonical = engine.execute("ansatz help")
+    legacy = engine.execute("hermes help")
+
+    assert canonical.status == "ok"
+    assert legacy.status == "ok"
+    assert canonical.output == legacy.output
+
+
 
 
 

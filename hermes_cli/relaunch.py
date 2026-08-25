@@ -17,6 +17,7 @@ from hermes_cli._parser import (
     PRE_ARGPARSE_INHERITED_FLAGS,
     build_top_level_parser,
 )
+from hermes_cli.cli_identity import CLI_DISCOVERY_ORDER, is_legacy_cli_executable
 
 
 def _build_inherited_flag_table() -> list[tuple[str, bool]]:
@@ -77,13 +78,14 @@ def _extract_inherited_flags(argv: Sequence[str]) -> list[str]:
     return flags
 
 
-def resolve_hermes_bin() -> Optional[str]:
-    """Find the hermes entry point.
+def resolve_cli_bin() -> Optional[str]:
+    """Find the canonical CLI entry point, with legacy fallback.
 
     Priority:
-      1. ``sys.argv[0]`` if it resolves to a real executable.
-      2. ``shutil.which("hermes")`` on PATH.
-      3. ``None`` → caller should fall back to ``python -m hermes_cli.main``.
+      1. ``sys.argv[0]`` if it resolves to a real non-legacy executable.
+      2. ``shutil.which("ansatz")`` on PATH.
+      3. ``shutil.which("hermes")`` on PATH for compatibility.
+      4. ``None`` → caller should fall back to ``python -m hermes_cli.main``.
 
     Windows note: ``os.access(path, os.X_OK)`` returns True for ``.py`` and
     ``.pyc`` files on Windows (the OS treats anything listed in PATHEXT as
@@ -103,20 +105,21 @@ def resolve_hermes_bin() -> Optional[str]:
 
     # Absolute path to an executable (covers nix store, venv wrappers, etc.)
     if os.path.isabs(argv0) and os.path.isfile(argv0) and os.access(argv0, os.X_OK):
-        if not (_is_windows and _is_python_script(argv0)):
+        if not (_is_windows and _is_python_script(argv0)) and not is_legacy_cli_executable(argv0):
             return argv0
 
     # Relative path — resolve against CWD
     if not argv0.startswith("-") and os.path.isfile(argv0):
         abs_path = os.path.abspath(argv0)
         if os.access(abs_path, os.X_OK):
-            if not (_is_windows and _is_python_script(abs_path)):
+            if not (_is_windows and _is_python_script(abs_path)) and not is_legacy_cli_executable(abs_path):
                 return abs_path
 
     # PATH lookup
-    path_bin = shutil.which("hermes")
-    if path_bin:
-        return path_bin
+    for command in CLI_DISCOVERY_ORDER:
+        path_bin = shutil.which(command)
+        if path_bin:
+            return path_bin
 
     return None
 
@@ -136,7 +139,7 @@ def build_relaunch_argv(
         original_argv: The original argv to scan for flags (defaults to
             ``sys.argv[1:]``).
     """
-    bin_path = resolve_hermes_bin()
+    bin_path = resolve_cli_bin()
 
     if bin_path:
         argv = [bin_path]

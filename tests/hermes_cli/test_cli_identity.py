@@ -5,6 +5,8 @@ from hermes_cli.cli_identity import (
     CANONICAL_AGENT_COMMAND,
     CANONICAL_COMMAND,
     LEGACY_TO_CANONICAL,
+    executable_name,
+    is_legacy_cli_executable,
     maybe_warn_legacy_invocation,
 )
 
@@ -40,3 +42,11 @@ def test_legacy_notice_is_interactive_only():
     piped_error = _Pipe()
     maybe_warn_legacy_invocation("hermes", stdin=_Pipe(), stderr=piped_error)
     assert piped_error.getvalue() == ""
+
+
+def test_cli_executable_names_normalize_packaging_shims():
+    assert executable_name("/usr/local/bin/ansatz") == "ansatz"
+    assert executable_name("Hermes.EXE") == "hermes"
+    assert executable_name("hermes.cmd") == "hermes"
+    assert is_legacy_cli_executable("hermes.exe") is True
+    assert is_legacy_cli_executable("ansatz.exe") is False
