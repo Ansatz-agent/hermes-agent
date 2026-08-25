@@ -9060,7 +9060,6 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
   const startup = (async () => {
     const previous = desktopTraceForwarder
     const previousLifecycle = desktopTraceLifecycle
-    const previousOwner = desktopTraceContext?.owner ?? null
 
     desktopTraceForwarder = null
     desktopTraceLifecycle = null
@@ -9075,9 +9074,11 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
 
     const owner = validateTraceOwner(requestedOwner).owner
 
-    if (previousOwner && !sameTraceOwnerIdentity(previousOwner, owner)) {
-      rotateDesktopTraceIngressBearer()
-    }
+    // A failed prior startup may have attached the current bearer to running
+    // backends without ever publishing a context, so there is no previous
+    // owner to compare against: every non-reused startup rotates the bearer
+    // before this owner's delegate can be installed.
+    rotateDesktopTraceIngressBearer()
 
     const traceOutboxRoot = path.join(app.getPath('userData'), 'trace-outbox')
     const status = desktopAuthCoordinator?.status('local')

@@ -1436,3 +1436,29 @@ test('desktop trace startup aborts settle the opened store and migration, rebind
   // surviving old backend cannot inject into a later account.
   assert.match(stop, /rotateDesktopTraceIngressBearer\(\)/)
 })
+
+test('every non-reused desktop trace startup rotates the ingress bearer after owner validation', () => {
+  const source = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
+  const ensureStart = source.indexOf('async function ensureDesktopTraceForwarder(')
+  const ensureEnd = source.indexOf('async function prepareDesktopTraceForwarder(')
+  assert.ok(ensureStart >= 0 && ensureEnd > ensureStart)
+  const ensure = source.slice(ensureStart, ensureEnd)
+
+  // A startup that failed before publishing desktopTraceContext leaves no
+  // previous owner to compare against, so the rotation must not be
+  // conditional on an observed owner change.
+  assert.doesNotMatch(ensure, /previousOwner/)
+  assert.match(
+    ensure,
+    /const owner = validateTraceOwner\(requestedOwner\)\.owner\n(?:\n| {4}\/\/[^\n]*\n)* {4}rotateDesktopTraceIngressBearer\(\)\n/,
+    'the startup path must rotate unconditionally right after owner validation'
+  )
+
+  // The rotation lives inside the startup closure (after the fast-path
+  // reuse returns) and appears exactly once, so reuse never rotates.
+  const startupIndex = ensure.indexOf('const startup = (async () => {')
+  const rotationIndex = ensure.indexOf('rotateDesktopTraceIngressBearer()')
+  assert.ok(startupIndex >= 0)
+  assert.ok(rotationIndex > startupIndex)
+  assert.equal(ensure.indexOf('rotateDesktopTraceIngressBearer()', rotationIndex + 1), -1)
+})
