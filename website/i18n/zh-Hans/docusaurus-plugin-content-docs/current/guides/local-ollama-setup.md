@@ -96,7 +96,7 @@ curl http://localhost:11434/v1/chat/completions \
 运行 Hermes 设置向导：
 
 ```bash
-hermes setup
+ansatz setup
 ```
 
 当提示选择提供商时，选择 **Custom Endpoint**，并输入：
@@ -222,7 +222,7 @@ platforms:
 3. 启动 gateway：
 
 ```bash
-hermes gateway
+ansatz gateway
 ```
 
 现在在 Telegram 上给你的机器人发消息——它将使用你的本地模型进行响应。
@@ -239,7 +239,7 @@ platforms:
     token: "YOUR_DISCORD_BOT_TOKEN"
 ```
 
-3. 启动：`hermes gateway`
+3. 启动：`ansatz gateway`
 
 ## 第八步：设置回退方案（可选）
 

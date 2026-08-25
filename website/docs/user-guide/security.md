@@ -62,7 +62,7 @@ Setting `approvals.mode: off` disables all safety prompts. Use only in trusted e
 
 YOLO mode bypasses **all** dangerous command approval prompts for the current session. It can be activated three ways:
 
-1. **CLI flag**: Start a session with `hermes --yolo` or `hermes chat --yolo`
+1. **CLI flag**: Start a session with `ansatz --yolo` or `ansatz chat --yolo`
 2. **Slash command**: Type `/yolo` during a session to toggle it on/off
 3. **Environment variable**: Set `HERMES_YOLO_MODE=1`
 
@@ -234,18 +234,18 @@ command_allowlist:
 These patterns are loaded at startup and silently approved in all future sessions.
 
 :::tip
-Use `hermes config edit` to review or remove patterns from your permanent allowlist.
+Use `ansatz config edit` to review or remove patterns from your permanent allowlist.
 :::
 
-### Mining Approval History (`hermes approvals suggest`)
+### Mining Approval History (`ansatz approvals suggest`)
 
 Instead of answering the same prompt session after session, you can mine your
 past approval decisions into allowlist proposals:
 
 ```bash
-hermes approvals suggest            # dry run — prints a numbered proposal
-hermes approvals suggest --apply 1,3  # merge picks into command_allowlist
-hermes approvals suggest --json     # machine-readable output
+ansatz approvals suggest            # dry run — prints a numbered proposal
+ansatz approvals suggest --apply 1,3  # merge picks into command_allowlist
+ansatz approvals suggest --json     # machine-readable output
 ```
 
 The command scans the session database (`~/.hermes/state.db`) for
@@ -320,7 +320,7 @@ Unset the variable to restore unrestricted writes (subject to the protected-path
 
 ### Cron and other Hermes state
 
-Do not ask the agent to `patch` `~/.hermes/cron/jobs.json` directly. Use the `cronjob` tool, [`hermes cron`](./features/cron.md), or `/cron` — they update the job store through the supported API. The same applies to other Hermes control files when write safety blocks direct edits.
+Do not ask the agent to `patch` `~/.hermes/cron/jobs.json` directly. Use the `cronjob` tool, [`ansatz cron`](./features/cron.md), or `/cron` — they update the job store through the supported API. The same applies to other Hermes control files when write safety blocks direct edits.
 
 :::note Defense-in-depth, not a hard boundary
 Write guards apply to `write_file` and `patch` only. The `terminal` tool runs as the same OS user and can still `cat` or overwrite denied paths via shell commands. The denylist reduces accidental damage and gives models a clear stop signal; it does not sandbox a hostile or compromised agent.
@@ -380,7 +380,7 @@ For more flexible authorization, Hermes includes a code-based pairing system. In
 
 1. An unknown user sends a DM to the bot
 2. The bot replies with an 8-character pairing code
-3. The bot owner runs `hermes pairing approve <platform> <code>` on the CLI
+3. The bot owner runs `ansatz pairing approve <platform> <code>` on the CLI
 4. The user is permanently approved for that platform
 
 Control how unauthorized direct messages are handled in `~/.hermes/config.yaml`:
@@ -414,16 +414,16 @@ whatsapp:
 
 ```bash
 # List pending and approved users
-hermes pairing list
+ansatz pairing list
 
 # Approve a pairing code
-hermes pairing approve telegram ABC12DEF
+ansatz pairing approve telegram ABC12DEF
 
 # Revoke a user's access
-hermes pairing revoke telegram 123456789
+ansatz pairing revoke telegram 123456789
 
 # Clear all pending codes
-hermes pairing clear-pending
+ansatz pairing clear-pending
 ```
 
 :::tip Docker users: run pairing commands as the `hermes` user
@@ -435,7 +435,7 @@ cannot read them — the approval is silently ignored ([#10270][i10270]).
 Always pass `-u hermes`:
 
 ```bash
-docker exec -u hermes hermes-agent hermes pairing approve telegram ABC12DEF
+docker exec -u hermes hermes-agent ansatz pairing approve telegram ABC12DEF
 ```
 
 If you already ran the command as root and the user is still unauthorized,
@@ -730,7 +730,7 @@ Blocked files show a warning:
 7. **Set `terminal.cwd`** — don't let the agent operate from sensitive directories
 8. **Run as non-root** — never run the gateway as root
 9. **Monitor logs** — check `~/.hermes/logs/` for unauthorized access attempts
-10. **Keep updated** — run `hermes update` regularly for security patches
+10. **Keep updated** — run `ansatz update` regularly for security patches
 
 ### Securing API Keys
 
@@ -767,14 +767,14 @@ Hermes ships with a built-in advisory scanner that flags Python packages in the 
 
 How it runs:
 
-- **CLI startup banner.** A one-line warning is printed if any advisory matches, with a pointer to `hermes doctor` for the full remediation.
-- **`hermes doctor`.** Surfaces every active advisory with version specifics and 2-4 step remediation instructions.
+- **CLI startup banner.** A one-line warning is printed if any advisory matches, with a pointer to `ansatz doctor` for the full remediation.
+- **`ansatz doctor`.** Surfaces every active advisory with version specifics and 2-4 step remediation instructions.
 - **Gateway startup.** Logged to `gateway.log`; the first interactive message gets a short operator banner.
 
 Each advisory carries a stable id. Once you have read and acted on it you can dismiss it for good:
 
 ```bash
-hermes doctor --ack <advisory-id>
+ansatz doctor --ack <advisory-id>
 ```
 
 The ack is persisted to `config.security.acked_advisories` and survives restart. Old advisories are intentionally **not** removed from the catalog — leaving them in place keeps fresh installs warned about historically poisoned versions that might still be cached in a private mirror.
@@ -794,7 +794,7 @@ How it works:
 
 1. A backend module calls `ensure("feature.name")` at the top of its first-import path.
 2. If the deps are missing, `ensure` checks `security.allow_lazy_installs` in `config.yaml` (default `true`) and runs a venv-scoped `pip install` for the allowlisted specs.
-3. If the install fails or the user has disabled lazy installs, the call raises `FeatureUnavailable` with the actual pip stderr and a pointer at `hermes tools`.
+3. If the install fails or the user has disabled lazy installs, the call raises `FeatureUnavailable` with the actual pip stderr and a pointer at `ansatz tools`.
 
 Security guarantees enforced by `tools/lazy_deps.py`:
 
@@ -814,4 +814,4 @@ security:
   allow_lazy_installs: false
 ```
 
-When disabled, backends that need optional deps will tell the user to run the install manually (`pip install …`) or pick a different backend via `hermes tools`.
+When disabled, backends that need optional deps will tell the user to run the install manually (`pip install …`) or pick a different backend via `ansatz tools`.

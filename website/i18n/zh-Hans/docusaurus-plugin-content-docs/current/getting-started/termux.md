@@ -118,8 +118,8 @@ ln -sf "$PWD/venv/bin/hermes" "$PREFIX/bin/hermes"
 ### 6. 验证安装
 
 ```bash
-hermes version
-hermes doctor
+ansatz version
+ansatz doctor
 ```
 
 ### 7. 启动 Hermes
@@ -135,7 +135,7 @@ hermes
 ### 配置模型
 
 ```bash
-hermes model
+ansatz model
 ```
 
 或直接在 `~/.hermes/.env` 中设置密钥。
@@ -143,7 +143,7 @@ hermes model
 ### 稍后重新运行完整的交互式设置向导
 
 ```bash
-hermes setup
+ansatz setup
 ```
 
 ### 手动安装可选的 Node 依赖
@@ -197,7 +197,7 @@ export ANDROID_API_LEVEL="$(getprop ro.build.version.sdk)"
 python -m pip install -e '.[termux]' -c constraints-termux.txt
 ```
 
-### `hermes doctor` 提示缺少 ripgrep 或 Node
+### `ansatz doctor` 提示缺少 ripgrep 或 Node
 
 使用 Termux 包安装：
 
@@ -232,5 +232,5 @@ python -m pip install -e '.[termux]' -c constraints-termux.txt
 - 你的 Android 版本
 - `termux-info`
 - `python --version`
-- `hermes doctor`
+- `ansatz doctor`
 - 确切的安装命令及完整错误输出

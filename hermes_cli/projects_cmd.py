@@ -1,4 +1,4 @@
-"""``hermes project`` CLI — manage first-class, multi-folder Projects.
+"""``ansatz project`` CLI — manage first-class, multi-folder Projects.
 
 A Project is a human-named workspace spanning one or more folders, with one
 designated primary repo. Projects anchor desktop session grouping and (when
@@ -106,7 +106,7 @@ def build_parser(
 
 
 def projects_command(args: argparse.Namespace) -> int:
-    """Entry point from ``hermes project …`` argparse dispatch."""
+    """Entry point from ``ansatz project …`` argparse dispatch."""
     action = getattr(args, "project_action", None)
     if not action:
         parser = getattr(args, "_project_parser", None)
@@ -114,8 +114,8 @@ def projects_command(args: argparse.Namespace) -> int:
             parser.print_help()
         else:
             print(
-                "usage: hermes project <action> [options]\n"
-                "Run 'hermes project --help' for the full list.",
+                "usage: ansatz project <action> [options]\n"
+                "Run 'ansatz project --help' for the full list.",
                 file=sys.stderr,
             )
         return 0
@@ -223,7 +223,7 @@ def _cmd_list(args: argparse.Namespace) -> int:
             conn, include_archived=getattr(args, "include_archived", False)
         )
     if not projs:
-        print("No projects yet. Create one with `hermes project create <name>`.")
+        print("No projects yet. Create one with `ansatz project create <name>`.")
         return 0
     for p in projs:
         marker = "*" if p.id == active else " "
@@ -267,7 +267,7 @@ def _cmd_set_primary(args, conn, proj) -> int:
     if not pdb.set_primary(conn, proj.id, args.path):
         print(
             f"project: '{args.path}' is not a folder of {proj.slug}; "
-            f"add it first with `hermes project add-folder`.",
+            f"add it first with `ansatz project add-folder`.",
             file=sys.stderr,
         )
         return 1

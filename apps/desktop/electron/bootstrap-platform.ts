@@ -115,7 +115,7 @@ const LINUX_PASSWORD_STORES = new Set(['gnome-libsecret', 'kwallet', 'kwallet5',
  * Without the switch Chromium often fails to pick a keychain backend when the
  * app is launched outside a full desktop session, safeStorage reports
  * encryption as unavailable, and hardening.ts refuses to persist remote
- * gateway tokens. The `hermes desktop` launcher detects the session keychain
+ * gateway tokens. The `ansatz desktop` launcher detects the session keychain
  * (or reads `desktop.password_store` from config.yaml) and bridges the value
  * in via HERMES_DESKTOP_PASSWORD_STORE.
  *

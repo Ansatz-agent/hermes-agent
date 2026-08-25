@@ -32,7 +32,7 @@ The following is the complete skill definition that Hermes loads when this skill
 
 Use this skill whenever the user asks about Microsoft Teams meeting summaries, transcripts, recordings, action items, Graph subscriptions, or any operational question about the Teams meeting pipeline. Works in any language — the triggers below are examples, not an exhaustive list.
 
-Everything operator-facing is a `hermes teams-pipeline` subcommand run via the terminal tool. There are no new model tools for this pipeline — the CLI is the surface.
+Everything operator-facing is a `ansatz teams-pipeline` subcommand run via the terminal tool. There are no new model tools for this pipeline — the CLI is the surface.
 
 ## When to use this skill
 
@@ -66,35 +66,35 @@ If any are missing, direct the user to the Azure app registration guide at `/doc
 ### Status and inspection (start here)
 
 ```bash
-hermes teams-pipeline validate              # config snapshot — run first after any change
-hermes teams-pipeline token-health          # Graph token status
-hermes teams-pipeline token-health --force-refresh   # force a fresh token acquisition
-hermes teams-pipeline list                  # recent meeting jobs
-hermes teams-pipeline list --status failed  # only failed jobs
-hermes teams-pipeline show <job-id>         # full detail of one job
-hermes teams-pipeline subscriptions         # current Graph webhook subscriptions
+ansatz teams-pipeline validate              # config snapshot — run first after any change
+ansatz teams-pipeline token-health          # Graph token status
+ansatz teams-pipeline token-health --force-refresh   # force a fresh token acquisition
+ansatz teams-pipeline list                  # recent meeting jobs
+ansatz teams-pipeline list --status failed  # only failed jobs
+ansatz teams-pipeline show <job-id>         # full detail of one job
+ansatz teams-pipeline subscriptions         # current Graph webhook subscriptions
 ```
 
 ### Re-running / debugging
 
 ```bash
-hermes teams-pipeline run <job-id>          # replay a stored job (re-summarize, re-deliver)
-hermes teams-pipeline fetch --meeting-id <id>   # dry-run: resolve meeting + transcript without persisting
-hermes teams-pipeline fetch --join-web-url "<url>"   # dry-run by join URL
+ansatz teams-pipeline run <job-id>          # replay a stored job (re-summarize, re-deliver)
+ansatz teams-pipeline fetch --meeting-id <id>   # dry-run: resolve meeting + transcript without persisting
+ansatz teams-pipeline fetch --join-web-url "<url>"   # dry-run by join URL
 ```
 
 ### Subscription management
 
 ```bash
-hermes teams-pipeline subscribe \
+ansatz teams-pipeline subscribe \
   --resource communications/onlineMeetings/getAllTranscripts \
   --notification-url https://<your-public-host>/msgraph/webhook \
   --client-state "$MSGRAPH_WEBHOOK_CLIENT_STATE"
 
-hermes teams-pipeline renew-subscription <sub-id> --expiration <iso-8601>
-hermes teams-pipeline delete-subscription <sub-id>
-hermes teams-pipeline maintain-subscriptions            # renew near-expiry ones
-hermes teams-pipeline maintain-subscriptions --dry-run  # show what would be renewed
+ansatz teams-pipeline renew-subscription <sub-id> --expiration <iso-8601>
+ansatz teams-pipeline delete-subscription <sub-id>
+ansatz teams-pipeline maintain-subscriptions            # renew near-expiry ones
+ansatz teams-pipeline maintain-subscriptions --dry-run  # show what would be renewed
 ```
 
 ## Decision tree for common asks
@@ -109,9 +109,9 @@ hermes teams-pipeline maintain-subscriptions --dry-run  # show what would be ren
 Microsoft Graph caps webhook subscriptions at 72 hours and **will not auto-renew them**. If `maintain-subscriptions` is not scheduled, meeting notifications silently stop arriving 3 days after any manual subscription creation.
 
 When the user reports "the pipeline worked yesterday but nothing is arriving today":
-1. Run `hermes teams-pipeline subscriptions` — if it's empty or all entries show `expirationDateTime` in the past, that's the cause.
+1. Run `ansatz teams-pipeline subscriptions` — if it's empty or all entries show `expirationDateTime` in the past, that's the cause.
 2. Recreate with `subscribe` as shown above.
-3. **Set up automated renewal immediately** via `hermes cron add`, a systemd timer, or plain crontab. The operator runbook at `/docs/guides/operate-teams-meeting-pipeline#automating-subscription-renewal-required-for-production` has all three options. 12-hour interval is safe (6x headroom against the 72h limit).
+3. **Set up automated renewal immediately** via `ansatz cron add`, a systemd timer, or plain crontab. The operator runbook at `/docs/guides/operate-teams-meeting-pipeline#automating-subscription-renewal-required-for-production` has all three options. 12-hour interval is safe (6x headroom against the 72h limit).
 
 ## Other pitfalls
 

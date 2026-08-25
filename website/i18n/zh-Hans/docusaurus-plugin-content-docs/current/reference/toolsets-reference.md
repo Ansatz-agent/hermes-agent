@@ -21,9 +21,9 @@ description: "Hermes 核心、复合、平台及动态工具集参考"
 ### 按会话（CLI）
 
 ```bash
-hermes chat --toolsets web,file,terminal
-hermes chat --toolsets debugging        # composite — expands to file + terminal + web
-hermes chat --toolsets all              # everything
+ansatz chat --toolsets web,file,terminal
+ansatz chat --toolsets debugging        # composite — expands to file + terminal + web
+ansatz chat --toolsets all              # everything
 ```
 
 ### 按平台（config.yaml）
@@ -37,7 +37,7 @@ toolsets:
 ### 交互式管理
 
 ```bash
-hermes tools                            # curses UI to enable/disable per platform
+ansatz tools                            # curses UI to enable/disable per platform
 ```
 
 或在会话中：
@@ -81,7 +81,7 @@ hermes tools                            # curses UI to enable/disable per platfo
 | `vision` | `vision_analyze` | 通过视觉能力模型进行图像分析。 |
 | `video` | `video_analyze` | 视频分析与理解工具（需手动启用，不在默认工具集中——通过 `--toolsets` 显式添加）。 |
 | `web` | `web_extract`, `web_search` | 网页搜索和页面内容提取。 |
-| `x_search` | `x_search` | 通过 xAI 内置的 `x_search` Responses 工具搜索 X（Twitter）帖子和话题。默认关闭；通过 `hermes tools` 启用。仅在配置了 xAI 凭据（SuperGrok OAuth 或 `XAI_API_KEY`）时注册 schema。 |
+| `x_search` | `x_search` | 通过 xAI 内置的 `x_search` Responses 工具搜索 X（Twitter）帖子和话题。默认关闭；通过 `ansatz tools` 启用。仅在配置了 xAI 凭据（SuperGrok OAuth 或 `XAI_API_KEY`）时注册 schema。 |
 | `yuanbao` | `yb_query_group_info`, `yb_query_group_members`, `yb_search_sticker`, `yb_send_dm`, `yb_send_sticker` | 元宝私信/群组操作和表情包搜索。仅在 `hermes-yuanbao` 上注册。 |
 
 ## 平台工具集
@@ -155,8 +155,8 @@ custom_toolsets:
 
 - `all` 或 `*` — 展开为所有已注册的工具集（内置 + 动态 + 插件）
 
-## 与 `hermes tools` 的关系
+## 与 `ansatz tools` 的关系
 
-`hermes tools` 命令提供基于 curses 的 UI，用于按平台切换单个工具的启用/禁用状态。该操作在工具级别进行（比工具集更细粒度），并持久化到 `config.yaml`。即使工具集已启用，被禁用的工具也会被过滤掉。
+`ansatz tools` 命令提供基于 curses 的 UI，用于按平台切换单个工具的启用/禁用状态。该操作在工具级别进行（比工具集更细粒度），并持久化到 `config.yaml`。即使工具集已启用，被禁用的工具也会被过滤掉。
 
 另请参阅：[工具参考](./tools-reference.md)，获取所有单个工具及其参数的完整列表。

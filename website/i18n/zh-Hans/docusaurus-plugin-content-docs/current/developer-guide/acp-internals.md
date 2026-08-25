@@ -21,7 +21,7 @@ ACP 适配器将 Hermes 的同步 `AIAgent` 封装为异步 JSON-RPC stdio 服�
 ## 启动流程
 
 ```text
-hermes acp / hermes-acp / python -m acp_adapter
+ansatz acp / hermes-acp / python -m acp_adapter
   -> acp_adapter.entry.main()
   -> parse --version / --check / --setup before server startup
   -> load ~/.hermes/.env
@@ -177,5 +177,5 @@ ACP 在 prompt 执行期间临时在终端工具上安装审批回调，执行�
 
 - `tests/acp/` — ACP 测试套件
 - `toolsets.py` — `hermes-acp` toolset 定义
-- `hermes_cli/main.py` — `hermes acp` CLI 子命令
+- `hermes_cli/main.py` — `ansatz acp` CLI 子命令
 - `pyproject.toml` — `[acp]` 可选依赖 + `hermes-acp` 脚本

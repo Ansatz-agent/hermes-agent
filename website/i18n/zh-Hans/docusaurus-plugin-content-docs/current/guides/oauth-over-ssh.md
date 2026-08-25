@@ -21,7 +21,7 @@ description: "当 Hermes 运行在远程机器、容器或跳板机后面时，�
 ssh -N -L 43827:127.0.0.1:43827 user@remote-host
 
 # 在远程机器的现有 SSH 会话中：
-hermes auth add spotify --no-browser
+ansatz auth add spotify --no-browser
 # → Hermes 打印授权 URL，在笔记本的浏览器中打开。
 # → 浏览器重定向到 127.0.0.1:43827/callback，隧道转发到远程监听器，登录完成。
 ```
@@ -60,7 +60,7 @@ ssh -N -L 43827:127.0.0.1:43827 user@remote-host
 
 ```bash
 ssh user@remote-host
-hermes auth add spotify --no-browser
+ansatz auth add spotify --no-browser
 ```
 
 Hermes 检测到 SSH 会话，跳过自动打开浏览器，并打印授权 URL 以及 `Waiting for callback on http://127.0.0.1:<port>/callback`。

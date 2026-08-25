@@ -200,7 +200,7 @@ metadata:
 - `key`（必需）——配置项的点路径（例如 `myplugin.path`）
 - `description`（必需）——说明该配置项的作用
 - `default`（可选）——用户未配置时的默认值
-- `prompt`（可选）——`hermes config migrate` 时显示的提示文本；若未设置则回退到 `description`
+- `prompt`（可选）——`ansatz config migrate` 时显示的提示文本；若未设置则回退到 `description`
 
 **工作原理：**
 
@@ -212,7 +212,7 @@ metadata:
          path: ~/my-data
    ```
 
-2. **发现：** `hermes config migrate` 扫描所有已启用的 skill，找出未配置的项并提示用户。配置项也会在 `hermes config show` 的"Skill Settings"部分显示。
+2. **发现：** `ansatz config migrate` 扫描所有已启用的 skill，找出未配置的项并提示用户。配置项也会在 `ansatz config show` 的"Skill Settings"部分显示。
 
 3. **运行时注入：** Skill 加载时，其 config 值会被解析并追加到 skill 消息中：
    ```
@@ -224,7 +224,7 @@ metadata:
 
 4. **手动配置：** 用户也可直接设置值：
    ```bash
-   hermes config set skills.config.myplugin.path ~/my-data
+   ansatz config set skills.config.myplugin.path ~/my-data
    ```
 
 :::tip 如何选择
@@ -320,7 +320,7 @@ skills:
 运行 skill 并验证 agent 是否正确遵循指令：
 
 ```bash
-hermes chat --toolsets skills -q "Use the X skill to do Y"
+ansatz chat --toolsets skills -q "Use the X skill to do Y"
 ```
 
 ## Skill 应放在哪里？
@@ -330,16 +330,16 @@ hermes chat --toolsets skills -q "Use the X skill to do Y"
 - 文档处理、网页研究、常见开发工作流、系统管理
 - 被广泛人群定期使用
 
-如果你的 skill 是官方的且有用，但并非所有人都需要（例如付费服务集成、重量级依赖），请放入 **`optional-skills/`**——它随仓库一起发布，可通过 `hermes skills browse` 发现（标记为"official"），并以内置信任级别安装。
+如果你的 skill 是官方的且有用，但并非所有人都需要（例如付费服务集成、重量级依赖），请放入 **`optional-skills/`**——它随仓库一起发布，可通过 `ansatz skills browse` 发现（标记为"official"），并以内置信任级别安装。
 
-如果你的 skill 是专业化的、社区贡献的或小众的，更适合放在 **Skills Hub**——将其上传到注册表并通过 `hermes skills install` 分享。
+如果你的 skill 是专业化的、社区贡献的或小众的，更适合放在 **Skills Hub**——将其上传到注册表并通过 `ansatz skills install` 分享。
 
 ## 发布 Skill
 
 ### 发布到 Skills Hub
 
 ```bash
-hermes skills publish skills/my-skill --to github --repo owner/repo
+ansatz skills publish skills/my-skill --to github --repo owner/repo
 ```
 
 ### 发布到自定义仓库
@@ -347,7 +347,7 @@ hermes skills publish skills/my-skill --to github --repo owner/repo
 将你的仓库添加为 tap：
 
 ```bash
-hermes skills tap add owner/repo
+ansatz skills tap add owner/repo
 ```
 
 用户随后可从你的仓库搜索并安装。

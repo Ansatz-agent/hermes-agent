@@ -1,6 +1,6 @@
-"""``hermes import-agent`` subcommand parser.
+"""``ansatz import-agent`` subcommand parser.
 
-Follows the ``hermes claw`` pattern (see ``hermes_cli/subcommands/claw.py``):
+Follows the ``ansatz claw`` pattern (see ``hermes_cli/subcommands/claw.py``):
 parser building lives here, the handler is injected to avoid importing
 ``main``, and the import logic itself lives in ``hermes_cli/agent_import.py``.
 """
@@ -20,7 +20,7 @@ def build_import_agent_parser(subparsers, *, cmd_import_agent: Callable) -> None
             "Maps CLAUDE.md/AGENTS.md instructions, permission allowlists, MCP "
             "servers, skills, and memories into their Hermes equivalents. "
             "Always shows a preview before making changes. API keys and "
-            "credentials are never imported — run 'hermes setup' for those."
+            "credentials are never imported — run 'ansatz setup' for those."
         ),
     )
     parser.add_argument(

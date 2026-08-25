@@ -97,7 +97,7 @@ function getServers(config: HermesConfigRecord | null): McpServers {
   return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as McpServers) : {}
 }
 
-// The runtime gate is `enabled: false` — the same flag `hermes mcp` and the
+// The runtime gate is `enabled: false` — the same flag `ansatz mcp` and the
 // agent's MCP loader read.
 const serverEnabled = (server: Record<string, unknown>) => server.enabled !== false
 

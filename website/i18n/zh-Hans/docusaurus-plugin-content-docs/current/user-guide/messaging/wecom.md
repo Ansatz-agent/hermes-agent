@@ -22,7 +22,7 @@ description: "通过 AI Bot WebSocket 网关将 Hermes Agent 连接到 WeCom"
 #### 推荐方式：扫码创建（一条命令）
 
 ```bash
-hermes gateway setup
+ansatz gateway setup
 ```
 
 选择 **WeCom**，用企业微信手机端扫描二维码。Hermes 将自动创建具有正确权限的机器人应用并保存凭据。
@@ -41,7 +41,7 @@ hermes gateway setup
 2. 导航至 **应用管理** → **创建应用** → **AI Bot**
 3. 配置机器人名称和描述
 4. 从凭据页面复制 **Bot ID** 和 **Secret**
-5. 运行 `hermes gateway setup`，选择 **WeCom**，并在提示时输入凭据
+5. 运行 `ansatz gateway setup`，选择 **WeCom**，并在提示时输入凭据
 
 :::warning
 请妥善保管 Bot Secret。任何持有它的人都可以冒充你的机器人。
@@ -52,7 +52,7 @@ hermes gateway setup
 #### 方式 A：交互式设置（推荐）
 
 ```bash
-hermes gateway setup
+ansatz gateway setup
 ```
 
 选择 **WeCom** 并按照提示操作。向导将引导你完成：
@@ -78,7 +78,7 @@ WECOM_HOME_CHANNEL=chat_id
 ### 第三步：启动网关
 
 ```bash
-hermes gateway
+ansatz gateway
 ```
 
 ## 功能特性

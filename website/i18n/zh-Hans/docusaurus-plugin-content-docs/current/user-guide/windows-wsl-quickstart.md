@@ -186,7 +186,7 @@ dos2unix path/to/script.sh
 
 ### "在 WSL 内 clone 还是在 `/mnt/c` 上 clone？"
 
-在 WSL 内 clone。始终如此，除非有特殊原因。典型的 Hermes 工作流（`hermes chat`、调用 `rg`/`ripgrep` 搜索仓库的工具、文件监听器、后台 gateway）在 `~/code/myrepo` 下会比在 `/mnt/c/Users/you/myrepo` 下快得多，也更可靠。
+在 WSL 内 clone。始终如此，除非有特殊原因。典型的 Hermes 工作流（`ansatz chat`、调用 `rg`/`ripgrep` 搜索仓库的工具、文件监听器、后台 gateway）在 `~/code/myrepo` 下会比在 `/mnt/c/Users/you/myrepo` 下快得多，也更可靠。
 
 一个例外：**启动 Windows 二进制文件的 MCP bridge。** 如果你通过 `cmd.exe` 使用 `chrome-devtools-mcp`（参见 [MCP 指南：WSL → Windows Chrome](/guides/use-mcp-with-hermes#wsl2-bridge-hermes-in-wsl-to-windows-chrome)），当 Hermes 的当前工作目录是 `~` 时，Windows 可能会报 `UNC` 警告。此时请从 `/mnt/c/` 下的某个目录启动 Hermes，以便 Windows 进程拥有一个带盘符的工作目录。
 
@@ -214,7 +214,7 @@ WSL2 在轻量级虚拟机中运行，拥有独立的网络栈。这意味着 WS
 这是反向情况，其他地方较少记录，但以下场景需要用到：
 
 - 从 Windows 浏览器使用 Hermes **Web Dashboard**。
-- 从 Windows 侧工具使用 **OpenAI 兼容 API 服务器**（当 `API_SERVER_ENABLED=true` 时由 `hermes gateway` 暴露）。参见 [API Server 功能页](/user-guide/features/api-server)。
+- 从 Windows 侧工具使用 **OpenAI 兼容 API 服务器**（当 `API_SERVER_ENABLED=true` 时由 `ansatz gateway` 暴露）。参见 [API Server 功能页](/user-guide/features/api-server)。
 - 测试**消息 gateway**（Telegram、Discord 等），平台会向本地 webhook URL 发送请求 —— 通常建议使用 `cloudflared`/`ngrok` 而非原始端口转发。
 
 #### 子情况 2a：从 Windows 宿主机本身访问
@@ -262,10 +262,10 @@ Hermes 的 [Tool Gateway](/user-guide/features/tool-gateway) 和 API 服务器�
 
 ### 在 WSL 内使用 systemd（推荐）
 
-如果你按照上面的安装步骤启用了 systemd，`hermes gateway` 和 API 服务器的使用方式与任何 Linux 机器上完全相同。使用 gateway 设置向导：
+如果你按照上面的安装步骤启用了 systemd，`ansatz gateway` 和 API 服务器的使用方式与任何 Linux 机器上完全相同。使用 gateway 设置向导：
 
 ```bash
-hermes gateway setup
+ansatz gateway setup
 ```
 
 它会提示是否安装 systemd 用户单元，以便在 WSL 启动时自动拉起 gateway。
@@ -294,7 +294,7 @@ AMD ROCm 和 Intel Arc 在 WSL2 内的支持仍在发展中，不在 Hermes 的�
 **连接 Windows 上的 Ollama / LM Studio 时报"Connection refused"。**
 参见 [WSL2 网络配置](/integrations/providers#wsl2-networking-windows-users)。九成情况是服务绑定在 `127.0.0.1` 上，需要改为 `0.0.0.0`（Ollama：`OLLAMA_HOST=0.0.0.0`），或者缺少防火墙规则。
 
-**`git status` / `hermes chat` 在仓库中极慢。**
+**`git status` / `ansatz chat` 在仓库中极慢。**
 你很可能在 `/mnt/c/...` 下工作。将仓库移到 `~/code/...`（Linux 侧），速度会有数量级的提升。
 
 **脚本报错 `bad interpreter: /bin/bash^M`。**

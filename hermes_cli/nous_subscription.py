@@ -31,7 +31,7 @@ _DEFAULT_PLATFORM_TOOLSETS = {
 
 # Maps a tools_config provider's ``managed_nous_feature`` to the tool-pool
 # coverage category (hermes_cli.nous_account.TOOL_COVERAGE_CATEGORIES). Lets the
-# `hermes tools` picker scope its entitlement gate to the selected backend, so a
+# `ansatz tools` picker scope its entitlement gate to the selected backend, so a
 # free-tool-pool user is allowed image gen but denied video gen at select time —
 # consistent with the per-category feature gates in get_nous_subscription_features.
 MANAGED_FEATURE_COVERAGE_CATEGORY: Dict[str, str] = {
@@ -436,7 +436,7 @@ def get_nous_subscription_features(
     )
 
     # use_gateway flags — when True, the user explicitly opted into the
-    # Tool Gateway via `hermes model`, so direct credentials should NOT
+    # Tool Gateway via `ansatz model`, so direct credentials should NOT
     # prevent gateway routing.
     web_use_gateway = _uses_gateway(web_cfg)
     tts_use_gateway = _uses_gateway(tts_cfg)
@@ -1172,7 +1172,7 @@ def prompt_enable_tool_gateway(
 
 
 # ---------------------------------------------------------------------------
-# Inline Nous Portal login for the Tool Gateway picker (`hermes tools`)
+# Inline Nous Portal login for the Tool Gateway picker (`ansatz tools`)
 # ---------------------------------------------------------------------------
 
 
@@ -1184,8 +1184,8 @@ def ensure_nous_portal_access(
     """Make sure the user is entitled to the Nous Tool Gateway, logging in if
     needed.
 
-    Used by ``hermes tools`` when a user selects a Nous-managed Tool Gateway
-    backend (e.g. "Firecrawl (Nous Portal)").  Unlike ``hermes model``'s Nous
+    Used by ``ansatz tools`` when a user selects a Nous-managed Tool Gateway
+    backend (e.g. "Firecrawl (Nous Portal)").  Unlike ``ansatz model``'s Nous
     login, this:
 
     - does NOT change the inference provider (``model.provider`` is untouched),

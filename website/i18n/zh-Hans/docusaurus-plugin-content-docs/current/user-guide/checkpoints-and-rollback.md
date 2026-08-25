@@ -12,7 +12,7 @@ Hermes Agent 可以在**破坏性操作**之前自动为你的项目创建快照
 在会话中通过 `--checkpoints` 启用检查点：
 
 ```bash
-hermes chat --checkpoints
+ansatz chat --checkpoints
 ```
 
 或在 `~/.hermes/config.yaml` 中全局启用：
@@ -48,12 +48,12 @@ Agent 每个目录每轮**最多创建一个检查点**，因此长时间运行�
 
 | 命令 | 说明 |
 |---------|-------------|
-| `hermes checkpoints` | 显示总大小、项目数量及各项目明细 |
-| `hermes checkpoints status` | 与裸 `checkpoints` 相同 |
-| `hermes checkpoints list` | `status` 的别名 |
-| `hermes checkpoints prune` | 强制执行清理：删除孤立/过期条目、GC、强制大小上限 |
-| `hermes checkpoints clear` | 清除整个检查点库（会先询问确认） |
-| `hermes checkpoints clear-legacy` | 仅删除 v1 迁移留下的 `legacy-*` 归档 |
+| `ansatz checkpoints` | 显示总大小、项目数量及各项目明细 |
+| `ansatz checkpoints status` | 与裸 `checkpoints` 相同 |
+| `ansatz checkpoints list` | `status` 的别名 |
+| `ansatz checkpoints prune` | 强制执行清理：删除孤立/过期条目、GC、强制大小上限 |
+| `ansatz checkpoints clear` | 清除整个检查点库（会先询问确认） |
+| `ansatz checkpoints clear-legacy` | 仅删除 v1 迁移留下的 `legacy-*` 归档 |
 
 ## 检查点的工作原理
 
@@ -98,7 +98,7 @@ checkpoints:
   # 标记控制，最多每 min_interval_hours 运行一次。此扫描不会删除
   # “孤立”条目（工作目录未找到）——启动时工作目录缺失含义模糊
   # （项目被删除，还是外部卷/网络共享/VPN 尚未挂载），因此孤立项
-  # 清理只能通过下方的 `hermes checkpoints prune` 命令显式触发，
+  # 清理只能通过下方的 `ansatz checkpoints prune` 命令显式触发，
   # 并会要求确认。
   auto_prune: true
   retention_days: 7
@@ -113,7 +113,7 @@ checkpoints:
   auto_prune: false
 ```
 
-当 `enabled: false` 时，检查点管理器为空操作，不会尝试任何 git 操作。当 `auto_prune: false` 时，存储持续增长，直到你手动运行 `hermes checkpoints prune`。
+当 `enabled: false` 时，检查点管理器为空操作，不会尝试任何 git 操作。当 `auto_prune: false` 时，存储持续增长，直到你手动运行 `ansatz checkpoints prune`。
 
 ## 列出检查点
 
@@ -140,7 +140,7 @@ Hermes 返回带有变更统计的格式化列表：
 ## 从 Shell 检查存储
 
 ```bash
-hermes checkpoints
+ansatz checkpoints
 ```
 
 示例输出：
@@ -161,13 +161,13 @@ Projects:        12
 Legacy archives (1):
   legacy-20260506-050616                           4.2 MB
 
-Clear with: hermes checkpoints clear-legacy
+Clear with: ansatz checkpoints clear-legacy
 ```
 
 强制执行完整清理（忽略 24h 幂等性标记）：
 
 ```bash
-hermes checkpoints prune --retention-days 3 --max-size-mb 200
+ansatz checkpoints prune --retention-days 3 --max-size-mb 200
 ```
 
 ## 使用 `/rollback diff` 预览变更
@@ -226,7 +226,7 @@ Hermes 在后台执行：
   └── legacy-<ts>/           # 归档的 v2 之前每项目影子仓库
 ```
 
-每个 `<hash>` 由工作目录的绝对路径派生。通常无需手动操作这些文件——使用 `hermes checkpoints status` / `prune` / `clear` 即可。
+每个 `<hash>` 由工作目录的绝对路径派生。通常无需手动操作这些文件——使用 `ansatz checkpoints status` / `prune` / `clear` 即可。
 
 ### 从 v1 迁移
 
@@ -235,17 +235,17 @@ Hermes 在后台执行：
 首次运行 v2 时，所有 v2 之前的影子仓库将被移入 `~/.hermes/checkpoints/legacy-<timestamp>/`，使新的单存储布局从干净状态开始。旧的 `/rollback` 历史仍可通过 `git` 手动检查 legacy 归档访问；确认不再需要后，运行：
 
 ```bash
-hermes checkpoints clear-legacy
+ansatz checkpoints clear-legacy
 ```
 
 以回收空间。Legacy 归档也会在 `retention_days` 到期后由 `auto_prune` 清理。
 
 ## 最佳实践
 
-- **仅在需要时启用检查点** — 使用 `hermes chat --checkpoints` 或在配置文件中设置 `enabled: true`。
+- **仅在需要时启用检查点** — 使用 `ansatz chat --checkpoints` 或在配置文件中设置 `enabled: true`。
 - **恢复前使用 `/rollback diff` 预览** — 查看将发生的变更，选择正确的检查点。
 - **使用 `/rollback` 而非 `git reset`** 来撤销 Agent 驱动的变更。
-- **定期检查 `hermes checkpoints status`**（如果你经常使用检查点）——显示哪些项目处于活跃状态以及存储占用情况。
+- **定期检查 `ansatz checkpoints status`**（如果你经常使用检查点）——显示哪些项目处于活跃状态以及存储占用情况。
 - **结合 Git worktree 使用以获得最高安全性** — 将每个 Hermes 会话保持在独立的 worktree/分支中，以检查点作为额外保障层。
 
 关于在同一仓库中并行运行多个 Agent，请参阅 [Git worktrees](./git-worktrees.md) 指南。

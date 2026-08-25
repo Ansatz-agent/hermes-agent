@@ -66,7 +66,7 @@ mcp_servers:
 然后启动 Hermes：
 
 ```bash
-hermes chat
+ansatz chat
 ```
 
 现在提出一个具体问题：
@@ -143,13 +143,13 @@ Hermes (WSL) -> MCP stdio bridge -> Windows Chrome
 如果你的 Windows Chrome 已通过 `chrome://inspect/#remote-debugging` 启用了实时远程调试，在 WSL 中按如下方式添加：
 
 ```bash
-hermes mcp add chrome-devtools-win --command cmd.exe --args /c npx -y chrome-devtools-mcp@latest --autoConnect --no-usage-statistics
+ansatz mcp add chrome-devtools-win --command cmd.exe --args /c npx -y chrome-devtools-mcp@latest --autoConnect --no-usage-statistics
 ```
 
 保存服务器后：
 
 ```bash
-hermes mcp test chrome-devtools-win
+ansatz mcp test chrome-devtools-win
 ```
 
 然后启动一个新的 Hermes 会话或运行：

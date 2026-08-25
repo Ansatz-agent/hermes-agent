@@ -14,7 +14,7 @@ description: "用于 RAG 和语义搜索的高性能向量相似度搜索引擎"
 
 | | |
 |---|---|
-| 来源 | 可选 — 使用 `hermes skills install official/mlops/qdrant` 安装 |
+| 来源 | 可选 — 使用 `ansatz skills install official/mlops/qdrant` 安装 |
 | 路径 | `optional-skills/mlops/qdrant` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |

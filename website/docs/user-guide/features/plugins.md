@@ -102,11 +102,11 @@ Every `ctx.*` API below is available inside a plugin's `register(ctx)` function.
 | Add hooks | `ctx.register_hook("post_tool_call", callback)` |
 | Add slash commands | `ctx.register_command(name, handler, description)` — adds `/name` in CLI and gateway sessions |
 | Dispatch tools from commands | `ctx.dispatch_tool(name, args)` — invokes a registered tool with parent-agent context auto-wired |
-| Add CLI commands | `ctx.register_cli_command(name, help, setup_fn, handler_fn)` — adds `hermes <plugin> <subcommand>` |
+| Add CLI commands | `ctx.register_cli_command(name, help, setup_fn, handler_fn)` — adds `ansatz <plugin> <subcommand>` |
 | Inject messages | `ctx.inject_message(content, role="user", session_key=...)` - see [Injecting Messages](#injecting-messages) |
 | Ship data files | `Path(__file__).parent / "data" / "file.yaml"` |
 | Bundle skills | `ctx.register_skill(name, path)` — namespaced as `plugin:skill`, loaded via `skill_view("plugin:skill")` |
-| Gate on env vars | `requires_env: [API_KEY]` in plugin.yaml — prompted during `hermes plugins install` |
+| Gate on env vars | `requires_env: [API_KEY]` in plugin.yaml — prompted during `ansatz plugins install` |
 | Distribute via pip | `[project.entry-points."hermes_agent.plugins"]` |
 | Register a gateway platform (Discord, Telegram, IRC, …) | `ctx.register_platform(name, label, adapter_factory, check_fn, ...)` — see [Adding Platform Adapters](/developer-guide/adding-platform-adapters) |
 | Register an image-generation backend | `ctx.register_image_gen_provider(provider)` — see [Image Generation Provider Plugins](/developer-guide/image-gen-provider-plugin) |
@@ -147,7 +147,7 @@ User plugins at `~/.hermes/plugins/model-providers/<name>/` and `~/.hermes/plugi
 
 ## Plugins are opt-in (with a few exceptions)
 
-**General plugins and user-installed backends are disabled by default** — discovery finds them (so they show up in `hermes plugins` and `/plugins`), but nothing with hooks or tools loads until you add the plugin's name to `plugins.enabled` in `~/.hermes/config.yaml`. This stops third-party code from running without your explicit consent.
+**General plugins and user-installed backends are disabled by default** — discovery finds them (so they show up in `ansatz plugins` and `/plugins`), but nothing with hooks or tools loads until you add the plugin's name to `plugins.enabled` in `~/.hermes/config.yaml`. This stops third-party code from running without your explicit consent.
 
 ```yaml
 plugins:
@@ -161,25 +161,25 @@ plugins:
 Three ways to flip state:
 
 ```bash
-hermes plugins                    # interactive toggle (space to check/uncheck)
-hermes plugins enable <name>      # add to allow-list
-hermes plugins disable <name>     # remove from allow-list + add to disabled
+ansatz plugins                    # interactive toggle (space to check/uncheck)
+ansatz plugins enable <name>      # add to allow-list
+ansatz plugins disable <name>     # remove from allow-list + add to disabled
 ```
 
-After `hermes plugins install owner/repo`, you're asked `Enable 'name' now? [y/N]` — defaults to no. Skip the prompt for scripted installs with `--enable` or `--no-enable`.
+After `ansatz plugins install owner/repo`, you're asked `Enable 'name' now? [y/N]` — defaults to no. Skip the prompt for scripted installs with `--enable` or `--no-enable`.
 
 For a reproducible install, pin a full immutable commit (tags, branches, and
 abbreviated SHAs are not accepted):
 
 ```bash
-hermes plugins install owner/repo --ref 0123456789abcdef0123456789abcdef01234567
+ansatz plugins install owner/repo --ref 0123456789abcdef0123456789abcdef01234567
 ```
 
 Hermes checks out the commit detached, verifies that `HEAD` exactly matches the
 requested SHA, and records the canonical source, installed revision, and pin
-status in the current profile. `hermes plugins update` refuses to move a pinned
+status in the current profile. `ansatz plugins update` refuses to move a pinned
 plugin; choose a new exact commit explicitly with
-`hermes plugins install <source> --force --ref <new-commit>`. The
+`ansatz plugins install <source> --force --ref <new-commit>`. The
 profile-local install metadata contains no config values, environment values,
 secrets, or capability grants.
 
@@ -291,7 +291,7 @@ The table above shows the four plugin categories, but within "General plugins" t
 | A **tool** the LLM can call | Python plugin — `ctx.register_tool()` | [Build a Hermes Plugin](/developer-guide/plugins) · [Adding Tools](/developer-guide/adding-tools) |
 | A **lifecycle hook** (pre/post LLM, session start/end, tool filter) | Python plugin — `ctx.register_hook()` | [Hooks reference](/user-guide/features/hooks) · [Build a Hermes Plugin](/developer-guide/plugins) |
 | A **slash command** for the CLI / gateway | Python plugin — `ctx.register_command()` | [Build a Hermes Plugin](/developer-guide/plugins) · [Extending the CLI](/developer-guide/extending-the-cli) |
-| A **subcommand** for `hermes <thing>` | Python plugin — `ctx.register_cli_command()` | [Extending the CLI](/developer-guide/extending-the-cli) |
+| A **subcommand** for `ansatz <thing>` | Python plugin — `ctx.register_cli_command()` | [Extending the CLI](/developer-guide/extending-the-cli) |
 | A bundled **skill** that your plugin ships | Python plugin — `ctx.register_skill()` | [Creating Skills](/developer-guide/creating-skills) |
 | An **inference backend** (LLM provider: OpenAI-compat, Codex, Anthropic-Messages, Bedrock) | Provider plugin — `register_provider(ProviderProfile(...))` in `plugins/model-providers/<name>/` | **[Model Provider Plugins](/developer-guide/model-provider-plugin)** · [Adding Providers](/developer-guide/adding-providers) |
 | A **gateway channel** (Discord / Telegram / IRC / Teams / etc.) | Platform plugin — `ctx.register_platform()` in `plugins/platforms/<name>/` | [Adding Platform Adapters](/developer-guide/adding-platform-adapters) |
@@ -302,7 +302,7 @@ The table above shows the four plugin categories, but within "General plugins" t
 | A **TTS backend** (any CLI — Piper, VoxCPM, Kokoro, xtts, voice-cloning scripts, …) | Config-driven (recommended) — declare under `tts.providers.<name>` with `type: command` in `config.yaml`. OR Python backend plugin — `ctx.register_tts_provider()` for Python-SDK / streaming engines that need more than a shell template. | [TTS Setup](/user-guide/features/tts#custom-command-providers) · [Python plugin guide](/user-guide/features/tts#python-plugin-providers) |
 | An **STT backend** (any CLI — whisper.cpp, custom whisper binary, local ASR CLI) | Config-driven (recommended) — declare under `stt.providers.<name>` with `type: command` in `config.yaml`, or set `HERMES_LOCAL_STT_COMMAND` for the legacy single-command escape hatch. OR Python backend plugin — `ctx.register_transcription_provider()` for Python-SDK engines (OpenRouter, SenseAudio, Gemini-STT, etc.). | [STT Setup](/user-guide/features/tts#stt-custom-command-providers) · [Python plugin guide](/user-guide/features/tts#python-plugin-providers-stt) |
 | **External tools via MCP** (filesystem, GitHub, Linear, Notion, any MCP server) | Config-driven — declare `mcp_servers.<name>` with `command:` / `url:` in `config.yaml`. Hermes auto-discovers the server's tools and registers them alongside built-ins. | [MCP](/user-guide/features/mcp) |
-| **Additional skill sources** (custom GitHub repos, private skill indexes) | CLI — `hermes skills tap add <repo>` | [Skills Hub](/user-guide/features/skills#skills-hub) · [Publishing a custom tap](/user-guide/features/skills#publishing-a-custom-skill-tap) |
+| **Additional skill sources** (custom GitHub repos, private skill indexes) | CLI — `ansatz skills tap add <repo>` | [Skills Hub](/user-guide/features/skills#skills-hub) · [Publishing a custom tap](/user-guide/features/skills#publishing-a-custom-skill-tap) |
 | **Gateway event hooks** (fire on `gateway:startup`, `session:start`, `agent:end`, `command:*`) | Drop `HOOK.yaml` + `handler.py` into `~/.hermes/hooks/<name>/` | [Event Hooks](/user-guide/features/hooks#gateway-event-hooks) |
 | **Shell hooks** (run a shell command on events — notifications, audit logs, desktop alerts) | Config-driven — declare under `hooks:` in `config.yaml` | [Shell Hooks](/user-guide/features/hooks#shell-hooks) |
 
@@ -312,7 +312,7 @@ Not everything is a Python plugin. Some extension surfaces intentionally use **c
 
 ## NixOS declarative plugins
 
-On NixOS, plugins can be installed declaratively via the module options — no `hermes plugins install` needed. See the **[Nix Setup guide](/getting-started/nix-setup#plugins)** for full details.
+On NixOS, plugins can be installed declaratively via the module options — no `ansatz plugins install` needed. See the **[Nix Setup guide](/getting-started/nix-setup#plugins)** for full details.
 
 ```nix
 services.hermes-agent = {
@@ -330,18 +330,18 @@ Declarative plugins are symlinked with a `nix-managed-` prefix — they coexist 
 ## Managing plugins
 
 ```bash
-hermes plugins                               # unified interactive UI
-hermes plugins list                          # table: enabled / disabled / not enabled
-hermes plugins search <term>                 # search the community plugin index
-hermes plugins install <name>                # install by index name (resolved to repo @ pinned ref)
-hermes plugins install user/repo             # install from Git, then prompt Enable? [y/N]
-hermes plugins install user/repo --enable    # install AND enable (no prompt)
-hermes plugins install user/repo --no-enable # install but leave disabled (no prompt)
-hermes plugins update my-plugin              # pull latest (local edits are autostashed and re-applied)
-hermes plugins remove my-plugin              # uninstall
-hermes plugins enable my-plugin              # add to allow-list
-hermes plugins disable my-plugin             # remove from allow-list + add to disabled
-hermes plugins capabilities [my-plugin]      # declared vs granted capabilities
+ansatz plugins                               # unified interactive UI
+ansatz plugins list                          # table: enabled / disabled / not enabled
+ansatz plugins search <term>                 # search the community plugin index
+ansatz plugins install <name>                # install by index name (resolved to repo @ pinned ref)
+ansatz plugins install user/repo             # install from Git, then prompt Enable? [y/N]
+ansatz plugins install user/repo --enable    # install AND enable (no prompt)
+ansatz plugins install user/repo --no-enable # install but leave disabled (no prompt)
+ansatz plugins update my-plugin              # pull latest (local edits are autostashed and re-applied)
+ansatz plugins remove my-plugin              # uninstall
+ansatz plugins enable my-plugin              # add to allow-list
+ansatz plugins disable my-plugin             # remove from allow-list + add to disabled
+ansatz plugins capabilities [my-plugin]      # declared vs granted capabilities
 ```
 
 ### Plugin capabilities and consent
@@ -356,8 +356,8 @@ capabilities:
   - llm.model_override    # pick the model for host-owned LLM calls
 ```
 
-When a plugin declares capabilities, `hermes plugins install` (and
-`hermes plugins enable`) shows the list with one-line risk descriptions and
+When a plugin declares capabilities, `ansatz plugins install` (and
+`ansatz plugins enable`) shows the list with one-line risk descriptions and
 asks once. Consenting records the grant under
 `plugins.entries.<id>.granted_capabilities` together with a consent hash and
 timestamp. Declining leaves the plugin enabled with those capabilities off —
@@ -365,19 +365,19 @@ a well-behaved plugin probes with `ctx.has_capability()` and degrades
 gracefully.
 
 **Update re-consent:** if a plugin update declares capabilities you haven't
-granted, `hermes plugins update` surfaces the additions and asks again. New
+granted, `ansatz plugins update` surfaces the additions and asks again. New
 capabilities stay off until you consent — a plugin update can never silently
 widen its access.
 
 **Non-interactive sessions fail closed:** installing or updating without a
 TTY completes the install, but declared capabilities are *not* granted. Run
-`hermes plugins enable <id>` interactively to grant them later.
+`ansatz plugins enable <id>` interactively to grant them later.
 
 Inspect the state at any time:
 
 ```bash
-hermes plugins capabilities             # all plugins with declared/granted capabilities
-hermes plugins capabilities my-plugin   # one plugin, declared vs granted
+ansatz plugins capabilities             # all plugins with declared/granted capabilities
+ansatz plugins capabilities my-plugin   # one plugin, declared vs granted
 ```
 
 Capability ids map 1:1 to the older per-feature config gates, which keep
@@ -453,23 +453,23 @@ separate design, and has not shipped.
 
 ### Discovering community plugins
 
-`hermes plugins search <term>` searches the **community plugin index** — a
+`ansatz plugins search <term>` searches the **community plugin index** — a
 static, machine-readable JSON catalog of community plugins. Matching is fuzzy
 across name, description, and tags:
 
 ```bash
-hermes plugins search telegram               # fuzzy search
-hermes plugins search                        # browse the whole index
-hermes plugins search --capability platform  # filter by declared capability
-hermes plugins search media --json           # machine-readable output
-hermes plugins search --refresh              # bypass the 24h local cache
+ansatz plugins search telegram               # fuzzy search
+ansatz plugins search                        # browse the whole index
+ansatz plugins search --capability platform  # filter by declared capability
+ansatz plugins search media --json           # machine-readable output
+ansatz plugins search --refresh              # bypass the 24h local cache
 ```
 
 Once you've found a plugin, install it by bare name — the name is resolved
 through the index to its `owner/repo` plus the index-pinned commit:
 
 ```bash
-hermes plugins install hermes-media-studio
+ansatz plugins install hermes-media-studio
 ```
 
 If a name matches more than one entry, the candidates are listed and nothing
@@ -479,7 +479,7 @@ overrides the index pin.
 
 **How the index is fetched.** The index lives at a canonical URL
 (`https://raw.githubusercontent.com/NousResearch/hermes-plugin-index/main/index.json`,
-overridable via `hermes config set plugins.index_url <url>`). Fetches are
+overridable via `ansatz config set plugins.index_url <url>`). Fetches are
 cached under `~/.hermes/cache/plugin_index.json` for 24 hours; when the
 remote is unreachable the stale cache is used, and when there is no cache at
 all a bundled seed copy ships with Hermes — so search works fully offline.
@@ -544,16 +544,16 @@ skills: []                               # declared list only (not auto-installe
 ```
 
 ```bash
-hermes plugins pack show ./hermes-pack.yaml     # dry-run review
-hermes plugins pack install ./hermes-pack.yaml  # review → confirm → install
-hermes plugins pack export > hermes-pack.yaml   # snapshot the current install
-hermes plugins pack export --enabled-only       # only plugins.enabled
+ansatz plugins pack show ./hermes-pack.yaml     # dry-run review
+ansatz plugins pack install ./hermes-pack.yaml  # review → confirm → install
+ansatz plugins pack export > hermes-pack.yaml   # snapshot the current install
+ansatz plugins pack export --enabled-only       # only plugins.enabled
 ```
 
 **Supply-chain posture.** Every entry's `ref` must be an exact 40-character
 commit SHA — tags and branch names are rejected with an error naming the
 entry, the same rule as the community index. Pack installs ride the exact
-same pinned install path as `hermes plugins install --ref <sha>` and record
+same pinned install path as `ansatz plugins install --ref <sha>` and record
 the same provenance in `plugins/.install-metadata.json`, so two installs of
 the same pack resolve identically. Packs build on the
 [manifest v2 fields](/developer-guide/plugins) (`manifest_version`,
@@ -564,7 +564,7 @@ validates through the normal install path.
 screen (every plugin, source, pinned ref, and the capabilities it declares),
 then asks **one** confirmation for the pack contents. After that, each
 plugin's declared capabilities go through the standard per-plugin
-capability-consent prompt — identical to a single `hermes plugins install`.
+capability-consent prompt — identical to a single `ansatz plugins install`.
 There is no `--yes`, and non-interactive sessions cannot install packs.
 
 **Secrets never travel in packs.** `config:` seeds are limited to
@@ -580,16 +580,16 @@ reported per plugin, the rest continue, and the command exits non-zero if
 any plugin failed.
 
 **Export caveats.** `pack export` only includes plugins with known Git
-provenance (installed via `hermes plugins install`). Local-only plugins are
+provenance (installed via `ansatz plugins install`). Local-only plugins are
 listed as warning comments in the emitted YAML, not as installable entries.
 
 The `skills:` list is parsed and displayed at install time but not yet
-auto-installed — install those manually for now (`hermes skills`). Wiring
+auto-installed — install those manually for now (`ansatz skills`). Wiring
 skill-hub ids into pack install is a documented follow-up seam.
 
 ### Interactive UI
 
-Running `hermes plugins` with no arguments opens a composite interactive screen:
+Running `ansatz plugins` with no arguments opens a composite interactive screen:
 
 ```
 Plugins
@@ -629,7 +629,7 @@ Plugins occupy one of three states:
 | `disabled` | Explicitly off — won't load even if also in `enabled` | (irrelevant) | Yes |
 | `not enabled` | Discovered but never opted in | No | No |
 
-The default for a newly-installed or bundled plugin is `not enabled`. `hermes plugins list` shows all three distinct states so you can tell what's been explicitly turned off vs. what's just waiting to be enabled.
+The default for a newly-installed or bundled plugin is `not enabled`. `ansatz plugins list` shows all three distinct states so you can tell what's been explicitly turned off vs. what's just waiting to be enabled.
 
 In a running session, `/plugins` shows which plugins are currently loaded.
 

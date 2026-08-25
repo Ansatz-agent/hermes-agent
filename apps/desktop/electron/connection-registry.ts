@@ -263,7 +263,7 @@ export interface UpdateEligibility {
 
 /**
  * Whether "Update all instances" may drive this connection. Hermes Cloud
- * instances are platform-managed — we never run `hermes update` against them.
+ * instances are platform-managed — we never run `ansatz update` against them.
  * Local, remote, and ssh sources are all eligible (reachability and busy
  * checks happen at dispatch time, not here).
  */

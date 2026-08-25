@@ -34,7 +34,7 @@ context:
 
 插件引擎**永远不会自动激活**——用户必须在 `context.engine` 中显式设置插件名称。默认的 `"compressor"` 始终使用内置实现。
 
-通过 `hermes plugins` → Provider Plugins → Context Engine 进行配置，或直接编辑 `config.yaml`。
+通过 `ansatz plugins` → Provider Plugins → Context Engine 进行配置，或直接编辑 `config.yaml`。
 
 关于构建上下文引擎插件，请参阅 [Context Engine 插件](/developer-guide/context-engine-plugin)。
 

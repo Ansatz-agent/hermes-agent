@@ -45,7 +45,7 @@ Stored under the plugin's config entry::
 
 The hash records *what the user saw* when they consented. When an update
 declares capabilities whose set hash differs, the additions stay ungranted
-until the user re-consents (``hermes plugins update`` surfaces the diff).
+until the user re-consents (``ansatz plugins update`` surfaces the diff).
 
 Ground rule: everything defaults OFF. Any failure to read consent state
 (missing config, corrupt YAML, wrong types) means **not granted**.

@@ -715,7 +715,7 @@ async function connect(deps) {
   const hermesVersion = await probeHermesVersion(ssh, hermesPath)
 
   if (hermesVersion) {
-    log(`remote hermes version: ${hermesVersion}`)
+    log(`remote ansatz version: ${hermesVersion}`)
   }
 
   const reuseToken = deps.reuseToken || ''

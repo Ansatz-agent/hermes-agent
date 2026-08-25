@@ -147,7 +147,7 @@ python -m plugins.platforms.google_chat.oauth --install-deps
 启动 gateway（网关）：
 
 ```bash
-hermes gateway
+ansatz gateway
 ```
 
 你应该会看到如下日志：
@@ -237,7 +237,7 @@ token 保存在 `~/.hermes/google_chat_user_tokens/<sanitized_email>.json`。该
 
 1. 在控制台检查 Pub/Sub 订阅是否有未投递消息。如果有，说明 Hermes 未通过认证——验证 `GOOGLE_CHAT_SERVICE_ACCOUNT_JSON`，并确认 SA 在订阅上具有 `Pub/Sub Subscriber` 角色。
 2. 如果订阅中消息数为零，说明 Google Chat 没有发布消息。再次检查 **topic** 上的 IAM 绑定：`chat-api-push@system.gserviceaccount.com` 必须具有 `Pub/Sub Publisher` 角色。
-3. 检查 `hermes gateway` 日志中是否有 `[GoogleChat] Connected`。如果看到 `[GoogleChat] Config validation failed`，错误信息会告诉你需要修复哪个环境变量。
+3. 检查 `ansatz gateway` 日志中是否有 `[GoogleChat] Connected`。如果看到 `[GoogleChat] Config validation failed`，错误信息会告诉你需要修复哪个环境变量。
 
 **机器人有回复，但显示的是错误信息而非 agent 的答案。**
 

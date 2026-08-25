@@ -40,7 +40,7 @@ Hermes 存储 session 历史以便恢复对话，但不会在每次对话时重�
 上下文增长最常见的原因不是媒体文件本身，而是冗长的文本：粘贴的转录、完整日志、大型工具输出、长 diff、重复的状态报告以及详细的证明转储。优先使用摘要、文件路径、重点摘录和工具支持的查找，而不是将大型内容复制到聊天中。
 
 :::tip
-当 session 变长时使用 `/compress`，用 `/new` 开启新线程，仅在需要从存储中删除旧的已结束 session 时才使用 `hermes sessions prune`。压缩会减少活跃上下文，而不是隐私删除。向 `/new` 传入名称（例如 `/new payments-refactor`）可以预先设置新 session 的初始标题——便于之后通过 `/resume <name>` 或 `/sessions` 选择器找到它。
+当 session 变长时使用 `/compress`，用 `/new` 开启新线程，仅在需要从存储中删除旧的已结束 session 时才使用 `ansatz sessions prune`。压缩会减少活跃上下文，而不是隐私删除。向 `/new` 传入名称（例如 `/new payments-refactor`）可以预先设置新 session 的初始标题——便于之后通过 `/resume <name>` 或 `/sessions` 选择器找到它。
 :::
 
 ### Session 来源
@@ -49,7 +49,7 @@ Hermes 存储 session 历史以便恢复对话，但不会在每次对话时重�
 
 | 来源 | 描述 |
 |--------|-------------|
-| `cli` | 交互式 CLI（`hermes` 或 `hermes chat`） |
+| `cli` | 交互式 CLI（`hermes` 或 `ansatz chat`） |
 | `telegram` | Telegram 消息 |
 | `discord` | Discord 服务器/私信 |
 | `slack` | Slack 工作区 |
@@ -80,12 +80,12 @@ Hermes 存储 session 历史以便恢复对话，但不会在每次对话时重�
 
 ```bash
 # 恢复最近的 CLI session
-hermes --continue
-hermes -c
+ansatz --continue
+ansatz -c
 
 # 或使用 chat 子命令
-hermes chat --continue
-hermes chat -c
+ansatz chat --continue
+ansatz chat -c
 ```
 
 这会从 SQLite 数据库中查找最近的 `cli` session 并加载其完整对话历史。
@@ -96,28 +96,28 @@ hermes chat -c
 
 ```bash
 # 恢复一个命名 session
-hermes -c "my project"
+ansatz -c "my project"
 
 # 如果存在谱系变体（my project、my project #2、my project #3），
 # 会自动恢复最新的一个
-hermes -c "my project"   # → 恢复 "my project #3"
+ansatz -c "my project"   # → 恢复 "my project #3"
 ```
 
 ### 恢复特定 Session
 
 ```bash
 # 按 ID 恢复特定 session
-hermes --resume 20250305_091523_a1b2c3d4
-hermes -r 20250305_091523_a1b2c3d4
+ansatz --resume 20250305_091523_a1b2c3d4
+ansatz -r 20250305_091523_a1b2c3d4
 
 # 按标题恢复
-hermes --resume "refactoring auth"
+ansatz --resume "refactoring auth"
 
 # 或使用 chat 子命令
-hermes chat --resume 20250305_091523_a1b2c3d4
+ansatz chat --resume 20250305_091523_a1b2c3d4
 ```
 
-Session ID 在退出 CLI session 时显示，也可通过 `hermes sessions list` 查找。
+Session ID 在退出 CLI session 时显示，也可通过 `ansatz sessions list` 查找。
 
 ### 恢复时的对话摘要
 
@@ -173,7 +173,7 @@ Session ID 格式为 `YYYYMMDD_HHMMSS_<hex>`——CLI/TUI session 使用 6 位�
 
 6. 从此时起，对话在该平台上继续。在新线程中回复——该频道中任何已授权的用户共享同一 session，之后线程中任何真实用户消息都能无缝加入，因为线程 session 的键不含 `user_id`。
 
-**恢复到 CLI：** 当你想回到桌面时，只需运行 `/resume <title>`（或在 shell 中运行 `hermes -r "<title>"`），从平台停止的地方继续。
+**恢复到 CLI：** 当你想回到桌面时，只需运行 `/resume <title>`（或在 shell 中运行 `ansatz -r "<title>"`），从平台停止的地方继续。
 
 **故障模式：**
 - 未配置主频道 → CLI 拒绝并提示 `/sethome`。
@@ -189,7 +189,7 @@ Session ID 格式为 `YYYYMMDD_HHMMSS_<hex>`——CLI/TUI session 使用 6 位�
 
 ### 自动生成标题
 
-Hermes 在第一次交换后自动为每个 session 生成简短的描述性标题（3–7 个词）。这在后台线程中使用快速辅助模型运行，不增加延迟。浏览 `hermes sessions list` 或 `hermes sessions browse` 时可以看到自动生成的标题。
+Hermes 在第一次交换后自动为每个 session 生成简短的描述性标题（3–7 个词）。这在后台线程中使用快速辅助模型运行，不增加延迟。浏览 `ansatz sessions list` 或 `ansatz sessions browse` 时可以看到自动生成的标题。
 
 自动命名每个 session 只触发一次，如果你已手动设置标题则跳过。
 
@@ -206,7 +206,7 @@ Hermes 在第一次交换后自动为每个 session 生成简短的描述性标�
 也可以从命令行重命名现有 session：
 
 ```bash
-hermes sessions rename 20250305_091523_a1b2c3d4 "refactoring auth module"
+ansatz sessions rename 20250305_091523_a1b2c3d4 "refactoring auth module"
 ```
 
 ### 标题规则
@@ -224,7 +224,7 @@ hermes sessions rename 20250305_091523_a1b2c3d4 "refactoring auth module"
 "my project" → "my project #2" → "my project #3"
 ```
 
-按名称恢复时（`hermes -c "my project"`），会自动选取谱系中最新的 session。
+按名称恢复时（`ansatz -c "my project"`），会自动选取谱系中最新的 session。
 
 ### 在消息平台中使用 /title
 
@@ -235,19 +235,19 @@ hermes sessions rename 20250305_091523_a1b2c3d4 "refactoring auth module"
 
 ## Session 管理命令
 
-Hermes 通过 `hermes sessions` 提供完整的 session 管理命令集：
+Hermes 通过 `ansatz sessions` 提供完整的 session 管理命令集：
 
 ### 列出 Session
 
 ```bash
 # 列出最近的 session（默认：最近 20 个）
-hermes sessions list
+ansatz sessions list
 
 # 按平台过滤
-hermes sessions list --source telegram
+ansatz sessions list --source telegram
 
 # 显示更多 session
-hermes sessions list --limit 50
+ansatz sessions list --limit 50
 ```
 
 当 session 有标题时，输出显示标题、预览和相对时间戳：
@@ -271,7 +271,7 @@ What's the weather in Las Vegas?                    3d ago        tele   2025030
 
 ### 导出 Session
 
-`hermes sessions export` 是所有导出格式的统一入口，用 `--format` 选择：
+`ansatz sessions export` 是所有导出格式的统一入口，用 `--format` 选择：
 
 | 格式 | 输出 | 适用场景 |
 |------|------|----------|
@@ -288,16 +288,16 @@ What's the weather in Las Vegas?                    3d ago        tele   2025030
 
 ```bash
 # 将所有 session 导出到 JSONL 文件
-hermes sessions export backup.jsonl
+ansatz sessions export backup.jsonl
 
 # 导出特定平台的 session
-hermes sessions export telegram-history.jsonl --source telegram
+ansatz sessions export telegram-history.jsonl --source telegram
 
 # 导出单个 session
-hermes sessions export session.jsonl --session-id 20250305_091523_a1b2c3d4
+ansatz sessions export session.jsonl --session-id 20250305_091523_a1b2c3d4
 
 # 从导出内容中脱敏 API key/token/凭据
-hermes sessions export backup.jsonl --redact
+ansatz sessions export backup.jsonl --redact
 ```
 
 导出文件每行包含一个 JSON 对象，包含完整的 session 元数据和所有消息。
@@ -308,10 +308,10 @@ hermes sessions export backup.jsonl --redact
 
 ```bash
 # 将一个 session 导出为独立 HTML 页面
-hermes sessions export --format html --session-id 20250305_091523_a1b2c3d4 transcript.html
+ansatz sessions export --format html --session-id 20250305_091523_a1b2c3d4 transcript.html
 
 # 将最近一周的所有 Telegram session 导出到一个文件，并脱敏
-hermes sessions export --format html --newer-than 1w --source telegram --redact archive.html
+ansatz sessions export --format html --newer-than 1w --source telegram --redact archive.html
 ```
 
 #### 只导出 Prompt
@@ -320,10 +320,10 @@ hermes sessions export --format html --newer-than 1w --source telegram --redact 
 
 ```bash
 # 每个 prompt 一条 JSONL 记录（session id、序号、时间戳、文本）
-hermes sessions export prompts.jsonl --session-id 20250305_091523_a1b2c3d4 --only user-prompts
+ansatz sessions export prompts.jsonl --session-id 20250305_091523_a1b2c3d4 --only user-prompts
 
 # Markdown 格式，直接输出到 stdout
-hermes sessions export - --session-id 20250305_091523_a1b2c3d4 --only user-prompts --format md
+ansatz sessions export - --session-id 20250305_091523_a1b2c3d4 --only user-prompts --format md
 ```
 
 支持 `--format jsonl`（默认）或 `md`，批量导出时同样支持全部过滤器，也可与 `--redact` 组合。
@@ -334,13 +334,13 @@ hermes sessions export - --session-id 20250305_091523_a1b2c3d4 --only user-promp
 
 ```bash
 # 最近一个 session 的 trace，输出到 stdout
-hermes sessions export --format trace
+ansatz sessions export --format trace
 
 # 将一个 session 导出为本地 trace 文件
-hermes sessions export --format trace --session-id 20250305_091523_a1b2c3d4 trace.jsonl
+ansatz sessions export --format trace --session-id 20250305_091523_a1b2c3d4 trace.jsonl
 
 # 直接上传到你的私有 HF traces 数据集
-hermes sessions export --format trace --session-id 20250305_091523_a1b2c3d4 --upload
+ansatz sessions export --format trace --session-id 20250305_091523_a1b2c3d4 --upload
 ```
 
 Trace 导出默认强制脱敏（它们本来就是要离开本机的）；`--no-redact` 需人工审查后才建议使用。`--upload` 默认私有，除非加 `--public`。带过滤器的批量 trace 导出会为每个 session 写一个 `<id>.trace.jsonl`。
@@ -351,22 +351,22 @@ Trace 导出默认强制脱敏（它们本来就是要离开本机的）；`--no
 
 ```bash
 # 将单个 session 导出为 Markdown
-hermes sessions export --format md --session-id 20250305_091523_a1b2c3d4
+ansatz sessions export --format md --session-id 20250305_091523_a1b2c3d4
 
 # 将压缩链（compression lineage）导出为一个逻辑文档
-hermes sessions export --format md --session-id 20250305_091523_a1b2c3d4 --lineage logical
+ansatz sessions export --format md --session-id 20250305_091523_a1b2c3d4 --lineage logical
 
 # 预览 90 天前已结束的 session，不写入文件
-hermes sessions export --format md --older-than 90 --dry-run
+ansatz sessions export --format md --older-than 90 --dry-run
 
 # 将 2 周前已结束的 Telegram session 导出为 QMD 文件
-hermes sessions export --format qmd --older-than 2w --source telegram
+ansatz sessions export --format qmd --older-than 2w --source telegram
 
 # 导出长的 Claude session，并脱敏
-hermes sessions export --format md --model sonnet --min-messages 50 --redact
+ansatz sessions export --format md --model sonnet --min-messages 50 --redact
 
 # 导出并在校验通过后删除一个明确指定的 session
-hermes sessions export --format md --session-id 20250305_091523_a1b2c3d4 --delete-after-verified --yes
+ansatz sessions export --format md --session-id 20250305_091523_a1b2c3d4 --delete-after-verified --yes
 ```
 
 Markdown/QMD 导出为每个 session 写入一个 `.md` 或 `.qmd` 文件，并附带一个 `manifest.jsonl`，记录文件路径、消息数量、lineage id 和 SHA-256。批量导出必须带至少一个过滤条件，不带过滤条件的批量导出会被拒绝。`--delete-after-verified` 仅限与 `--session-id` 搭配使用，且必须加 `--yes`。`--redact` 会在写入前从消息内容和工具输出中清除密钥（API key、token、凭据）— 任何打算分享的导出都建议加上。
@@ -375,20 +375,20 @@ Markdown/QMD 导出为每个 session 写入一个 `.md` 或 `.qmd` 文件，并�
 
 ```bash
 # 删除特定 session（需确认）
-hermes sessions delete 20250305_091523_a1b2c3d4
+ansatz sessions delete 20250305_091523_a1b2c3d4
 
 # 不需确认直接删除
-hermes sessions delete 20250305_091523_a1b2c3d4 --yes
+ansatz sessions delete 20250305_091523_a1b2c3d4 --yes
 ```
 
 ### 重命名 Session
 
 ```bash
 # 设置或更改 session 的标题
-hermes sessions rename 20250305_091523_a1b2c3d4 "debugging auth flow"
+ansatz sessions rename 20250305_091523_a1b2c3d4 "debugging auth flow"
 
 # 多词标题在 CLI 中不需要引号
-hermes sessions rename 20250305_091523_a1b2c3d4 debugging auth flow
+ansatz sessions rename 20250305_091523_a1b2c3d4 debugging auth flow
 ```
 
 如果标题已被另一个 session 使用，则显示错误。
@@ -397,16 +397,16 @@ hermes sessions rename 20250305_091523_a1b2c3d4 debugging auth flow
 
 ```bash
 # 删除 90 天前已结束的 session（默认）
-hermes sessions prune
+ansatz sessions prune
 
 # 自定义时间阈值
-hermes sessions prune --older-than 30
+ansatz sessions prune --older-than 30
 
 # 仅清理特定平台的 session
-hermes sessions prune --source telegram --older-than 60
+ansatz sessions prune --source telegram --older-than 60
 
 # 跳过确认
-hermes sessions prune --older-than 30 --yes
+ansatz sessions prune --older-than 30 --yes
 ```
 
 :::info
@@ -416,7 +416,7 @@ hermes sessions prune --older-than 30 --yes
 ### Session 统计
 
 ```bash
-hermes sessions stats
+ansatz sessions stats
 ```
 
 输出：
@@ -430,7 +430,7 @@ Total messages: 3847
 Database size: 12.4 MB
 ```
 
-如需更深入的分析——token 用量、费用估算、工具分解和活动模式——请使用 [`hermes insights`](/reference/cli-commands#hermes-insights)。
+如需更深入的分析——token 用量、费用估算、工具分解和活动模式——请使用 [`ansatz insights`](/reference/cli-commands#hermes-insights)。
 
 ## Session 搜索工具
 
@@ -599,16 +599,16 @@ sessions:
 
 ```bash
 # 清理 90 天前的 session
-hermes sessions prune
+ansatz sessions prune
 
 # 删除特定 session
-hermes sessions delete <session_id>
+ansatz sessions delete <session_id>
 
 # 清理前先导出（备份）
-hermes sessions export backup.jsonl
-hermes sessions prune --older-than 30 --yes
+ansatz sessions export backup.jsonl
+ansatz sessions prune --older-than 30 --yes
 ```
 
 :::tip
-数据库增长缓慢（典型情况：数百个 session 约 10–15 MB），session 历史为跨历史对话的 `session_search` 召回提供支持，因此自动清理默认关闭。如果你运行繁重的 gateway/cron 工作负载且 `state.db` 明显影响性能（已观察到的故障模式：约 1000 个 session 的 384 MB state.db 导致 FTS5 插入和 `/resume` 列表变慢），则启用它。使用 `hermes sessions prune` 进行一次性清理，无需开启自动清理。
+数据库增长缓慢（典型情况：数百个 session 约 10–15 MB），session 历史为跨历史对话的 `session_search` 召回提供支持，因此自动清理默认关闭。如果你运行繁重的 gateway/cron 工作负载且 `state.db` 明显影响性能（已观察到的故障模式：约 1000 个 session 的 384 MB state.db 导致 FTS5 插入和 `/resume` 列表变慢），则启用它。使用 `ansatz sessions prune` 进行一次性清理，无需开启自动清理。
 :::

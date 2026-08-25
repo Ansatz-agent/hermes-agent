@@ -52,34 +52,34 @@ from **Settings → Appearance**.
 
 ```bash
 # Browse the gallery (filter by substring)
-hermes pets list
-hermes pets list cat
+ansatz pets list
+ansatz pets list cat
 
 # Install a pet and make it active in one step
-hermes pets install boba --select
+ansatz pets install boba --select
 
 # Preview / animate it in your terminal (Ctrl+C to stop)
-hermes pets show
+ansatz pets show
 
 # Check your setup
-hermes pets doctor
+ansatz pets doctor
 ```
 
-## `hermes pets` commands
+## `ansatz pets` commands
 
 | Goal | Command |
 | --- | --- |
-| Browse the gallery | `hermes pets list [query] [--limit N]` |
-| List installed pets | `hermes pets list --installed` |
-| Install a pet | `hermes pets install <slug> [--select] [--force]` |
-| Set the active pet | `hermes pets select [slug]` (omit slug for a picker) |
-| Resize the pet everywhere | `hermes pets scale <factor>` (e.g. `0.5`, clamped 0.1–3.0) |
-| Preview/animate | `hermes pets show [slug] [--state <s>] [--cycle] [--once] [--mode <m>] [--scale <f>]` |
-| Disable the pet | `hermes pets off` |
-| Remove an installed pet | `hermes pets remove <slug>` |
-| Diagnose setup | `hermes pets doctor` |
+| Browse the gallery | `ansatz pets list [query] [--limit N]` |
+| List installed pets | `ansatz pets list --installed` |
+| Install a pet | `ansatz pets install <slug> [--select] [--force]` |
+| Set the active pet | `ansatz pets select [slug]` (omit slug for a picker) |
+| Resize the pet everywhere | `ansatz pets scale <factor>` (e.g. `0.5`, clamped 0.1–3.0) |
+| Preview/animate | `ansatz pets show [slug] [--state <s>] [--cycle] [--once] [--mode <m>] [--scale <f>]` |
+| Disable the pet | `ansatz pets off` |
+| Remove an installed pet | `ansatz pets remove <slug>` |
+| Diagnose setup | `ansatz pets doctor` |
 
-`hermes pets show` flags:
+`ansatz pets show` flags:
 
 - `--state` — play a single state (`idle`, `wave`, `run`, `failed`, `review`,
   `jump`).
@@ -107,7 +107,7 @@ it opens the Cmd+K pet palette.
 
 Beyond installing pre-made pets from the gallery, Hermes can **generate a brand-new pet** from a text description — its own AI sprite-generation pipeline.
 
-- CLI/TUI: `/hatch <description>` (alias `/generate-pet`), or `hermes pets` → the generate flow.
+- CLI/TUI: `/hatch <description>` (alias `/generate-pet`), or `ansatz pets` → the generate flow.
 - Desktop app: the Pokédex-style **generate** UI — an animated egg, hatch FX, and a draft picker.
 
 How generation works (a two-step, cost-bounded flow):
@@ -120,7 +120,7 @@ How generation works (a two-step, cost-bounded flow):
 Generation uses the active [image-generation provider](/user-guide/features/image-generation), but it requires **reference-image grounding** so each animation row stays the same character as the base. Reference-capable backends: **Nous Portal**, **OpenRouter**, **OpenAI** (`gpt-image-2`), and **Krea**. OpenRouter/Nous run a quality-first model chain by default.
 
 - Resolution order prefers Nous Portal → OpenAI → OpenRouter.
-- If no reference-capable backend is configured, generation surfaces an actionable error pointing you to `hermes tools` → Image Generation. (Installing/adopting existing gallery pets needs no image backend.)
+- If no reference-capable backend is configured, generation surfaces an actionable error pointing you to `ansatz tools` → Image Generation. (Installing/adopting existing gallery pets needs no image backend.)
 - Override the backend with the `HERMES_PET_IMAGE_PROVIDER` env var (e.g. `HERMES_PET_IMAGE_PROVIDER=openrouter`).
 
 ## Desktop app
@@ -211,7 +211,7 @@ display:
 
 ## Troubleshooting
 
-Run `hermes pets doctor` — it reports:
+Run `ansatz pets doctor` — it reports:
 
 - the pets directory and which pets are installed,
 - `display.pet.enabled`, `display.pet.slug`, and the resolved active pet,
@@ -227,7 +227,7 @@ Common gotchas:
 - A pet only shows once one is **installed AND selected** (`enabled: true`).
 - Inside a pipe/redirect (no TTY), terminal rendering is disabled by design.
 - The petdex npm CLI installs to `~/.codex/pets`; Hermes uses its own
-  profile-scoped `<HERMES_HOME>/pets/` instead — install through `hermes pets`.
+  profile-scoped `<HERMES_HOME>/pets/` instead — install through `ansatz pets`.
 
 ## See also
 

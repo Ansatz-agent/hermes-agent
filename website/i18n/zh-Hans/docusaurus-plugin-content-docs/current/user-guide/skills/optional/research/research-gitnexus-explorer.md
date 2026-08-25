@@ -14,7 +14,7 @@ description: "使用 GitNexus 为代码库建立索引，并通过 Web UI + Clou
 
 | | |
 |---|---|
-| 来源 | 可选 — 使用 `hermes skills install official/research/gitnexus-explorer` 安装 |
+| 来源 | 可选 — 使用 `ansatz skills install official/research/gitnexus-explorer` 安装 |
 | 路径 | `optional-skills/research/gitnexus-explorer` |
 | 版本 | `1.0.0` |
 | 作者 | Hermes Agent + Teknium |

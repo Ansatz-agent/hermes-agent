@@ -31,7 +31,7 @@ description: "使用 Socket Mode 将 Hermes Agent 设置为 Slack 机器人"
 
 1. 生成 manifest：
    ```bash
-   hermes slack manifest --write
+   ansatz slack manifest --write
    ```
    此命令会将 `~/.hermes/slack-manifest.json` 写入磁盘并打印粘贴说明。
 2. 前往 [https://api.slack.com/apps](https://api.slack.com/apps) →
@@ -187,15 +187,15 @@ SLACK_HOME_CHANNEL_NAME=general              # 主频道的可读名称（可选
 或运行交互式设置：
 
 ```bash
-hermes gateway setup    # 提示时选择 Slack
+ansatz gateway setup    # 提示时选择 Slack
 ```
 
 然后启动 gateway：
 
 ```bash
-hermes gateway              # 前台运行
-hermes gateway install      # 安装为用户服务
-sudo hermes gateway install --system   # 仅 Linux：开机启动系统服务
+ansatz gateway              # 前台运行
+ansatz gateway install      # 安装为用户服务
+sudo ansatz gateway install --system   # 仅 Linux：开机启动系统服务
 ```
 
 ---
@@ -220,10 +220,10 @@ sudo hermes gateway install --system   # 仅 Linux：开机启动系统服务
 
 ### 更新后刷新斜杠命令
 
-当 Hermes 添加新命令时（例如执行 `hermes update` 后），重新生成 manifest 并更新你的 Slack 应用：
+当 Hermes 添加新命令时（例如执行 `ansatz update` 后），重新生成 manifest 并更新你的 Slack 应用：
 
 ```bash
-hermes slack manifest --write
+ansatz slack manifest --write
 ```
 
 然后在 Slack 中：
@@ -250,7 +250,7 @@ Slack 本身会阻止在话题回复中使用原生斜杠命令——在话题�
 如果你手动维护 Slack manifest 并只需要斜杠命令列表：
 
 ```bash
-hermes slack manifest --slashes-only > /tmp/slashes.json
+ansatz slack manifest --slashes-only > /tmp/slashes.json
 ```
 
 将该数组粘贴到现有 manifest 的 `features.slash_commands` 键中。

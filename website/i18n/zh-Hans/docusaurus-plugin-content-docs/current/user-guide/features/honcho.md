@@ -33,7 +33,7 @@ Honcho 已集成到 [Memory Providers](./memory-providers.md) 系统中。以下
 ## 设置
 
 ```bash
-hermes memory setup    # 从 provider 列表中选择 "honcho"
+ansatz memory setup    # 从 provider 列表中选择 "honcho"
 ```
 
 或手动配置：
@@ -199,34 +199,34 @@ Honcho 将对话建模为 peer 之间的消息交换。每个 peer 有两个观�
 
 ## CLI 命令
 
-`hermes honcho` 子命令**仅在 Honcho 为当前活跃 memory provider 时注册**（`config.yaml` 中 `memory.provider: honcho`）。先运行 `hermes memory setup` 并选择 Honcho，子命令将在下次调用时出现。
+`ansatz honcho` 子命令**仅在 Honcho 为当前活跃 memory provider 时注册**（`config.yaml` 中 `memory.provider: honcho`）。先运行 `ansatz memory setup` 并选择 Honcho，子命令将在下次调用时出现。
 
 ```bash
-hermes honcho status          # 连接状态、配置及关键设置
-hermes honcho setup           # 重定向到 `hermes memory setup`
-hermes honcho strategy        # 查看或设置会话策略（per-session/per-directory/per-repo/global）
-hermes honcho peer            # 查看或更新 peer 名称及辩证推理级别
-hermes honcho mode            # 查看或设置 recall 模式（hybrid/context/tools）
-hermes honcho tokens          # 查看或设置上下文和辩证的 token 预算
-hermes honcho identity        # 初始化或查看 AI peer 的 Honcho 身份
-hermes honcho sync            # 将 Honcho 配置同步到所有现有 profile
-hermes honcho peers           # 查看所有 profile 中的 peer 身份
-hermes honcho sessions        # 列出已知的 Honcho 会话映射
-hermes honcho map             # 将当前目录映射到 Honcho 会话名称
-hermes honcho enable          # 为当前 profile 启用 Honcho
-hermes honcho disable         # 为当前 profile 禁用 Honcho
-hermes honcho migrate         # 从 openclaw-honcho 迁移的分步指南
+ansatz honcho status          # 连接状态、配置及关键设置
+ansatz honcho setup           # 重定向到 `ansatz memory setup`
+ansatz honcho strategy        # 查看或设置会话策略（per-session/per-directory/per-repo/global）
+ansatz honcho peer            # 查看或更新 peer 名称及辩证推理级别
+ansatz honcho mode            # 查看或设置 recall 模式（hybrid/context/tools）
+ansatz honcho tokens          # 查看或设置上下文和辩证的 token 预算
+ansatz honcho identity        # 初始化或查看 AI peer 的 Honcho 身份
+ansatz honcho sync            # 将 Honcho 配置同步到所有现有 profile
+ansatz honcho peers           # 查看所有 profile 中的 peer 身份
+ansatz honcho sessions        # 列出已知的 Honcho 会话映射
+ansatz honcho map             # 将当前目录映射到 Honcho 会话名称
+ansatz honcho enable          # 为当前 profile 启用 Honcho
+ansatz honcho disable         # 为当前 profile 禁用 Honcho
+ansatz honcho migrate         # 从 openclaw-honcho 迁移的分步指南
 ```
 
-## 从 `hermes honcho` 迁移
+## 从 `ansatz honcho` 迁移
 
-如果你之前使用了独立的 `hermes honcho setup`：
+如果你之前使用了独立的 `ansatz honcho setup`：
 
 1. 你的现有配置（`honcho.json` 或 `~/.honcho/config.json`）已保留
 2. 你的服务端数据（记忆、结论、用户画像）完好无损
 3. 在 config.yaml 中设置 `memory.provider: honcho` 即可重新激活
 
-无需重新登录或重新设置。运行 `hermes memory setup` 并选择"honcho"——向导会自动检测你的现有配置。
+无需重新登录或重新设置。运行 `ansatz memory setup` 并选择"honcho"——向导会自动检测你的现有配置。
 
 ## 完整文档
 

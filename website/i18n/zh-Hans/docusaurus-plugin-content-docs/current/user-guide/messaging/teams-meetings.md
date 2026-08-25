@@ -25,12 +25,12 @@ description: "使用 Microsoft Graph webhook 配置 Microsoft Teams 会议摘要
 4. 在本地存储持久化任务状态和 sink 记录
 5. 可将摘要写入 Notion、Linear 和 Microsoft Teams
 
-运维操作通过 CLI 完成（`teams-pipeline` 子命令由 `teams_pipeline` 插件注册——通过 `hermes plugins enable teams_pipeline` 启用，或在 `config.yaml` 中设置 `plugins.enabled: [teams_pipeline]`）：
+运维操作通过 CLI 完成（`teams-pipeline` 子命令由 `teams_pipeline` 插件注册——通过 `ansatz plugins enable teams_pipeline` 启用，或在 `config.yaml` 中设置 `plugins.enabled: [teams_pipeline]`）：
 
 ```bash
-hermes teams-pipeline validate
-hermes teams-pipeline list
-hermes teams-pipeline maintain-subscriptions
+ansatz teams-pipeline validate
+ansatz teams-pipeline list
+ansatz teams-pipeline maintain-subscriptions
 ```
 
 ## 前提条件
@@ -165,7 +165,7 @@ platforms:
 更新配置后正常启动 Hermes：
 
 ```bash
-hermes gateway run
+ansatz gateway run
 ```
 
 若你在 Docker 中运行 Hermes，按现有部署方式启动 gateway 即可。
@@ -183,12 +183,12 @@ curl http://localhost:8646/health
 示例：
 
 ```bash
-hermes teams-pipeline subscribe \
+ansatz teams-pipeline subscribe \
   --resource communications/onlineMeetings/getAllTranscripts \
   --notification-url https://ops.example.com/msgraph/webhook \
   --client-state "$MSGRAPH_WEBHOOK_CLIENT_STATE"
 
-hermes teams-pipeline subscribe \
+ansatz teams-pipeline subscribe \
   --resource communications/onlineMeetings/getAllRecordings \
   --notification-url https://ops.example.com/msgraph/webhook \
   --client-state "$MSGRAPH_WEBHOOK_CLIENT_STATE"
@@ -196,7 +196,7 @@ hermes teams-pipeline subscribe \
 
 :::warning Graph 订阅在 72 小时后过期
 
-Microsoft Graph 将 webhook 订阅上限设为 72 小时，且不会自动续期。你**必须**在上线前调度 `hermes teams-pipeline maintain-subscriptions`，否则通知将在手动创建订阅三天后静默停止。请参阅运维手册中的[自动化订阅续期](/guides/operate-teams-meeting-pipeline#automating-subscription-renewal-required-for-production)——提供三种方案（Hermes cron、systemd timer、普通 crontab）。
+Microsoft Graph 将 webhook 订阅上限设为 72 小时，且不会自动续期。你**必须**在上线前调度 `ansatz teams-pipeline maintain-subscriptions`，否则通知将在手动创建订阅三天后静默停止。请参阅运维手册中的[自动化订阅续期](/guides/operate-teams-meeting-pipeline#automating-subscription-renewal-required-for-production)——提供三种方案（Hermes cron、systemd timer、普通 crontab）。
 
 :::
 
@@ -207,14 +207,14 @@ Microsoft Graph 将 webhook 订阅上限设为 72 小时，且不会自动续期
 运行内置验证快照：
 
 ```bash
-hermes teams-pipeline validate
+ansatz teams-pipeline validate
 ```
 
 常用辅助检查：
 
 ```bash
-hermes teams-pipeline token-health
-hermes teams-pipeline subscriptions
+ansatz teams-pipeline token-health
+ansatz teams-pipeline subscriptions
 ```
 
 ## 故障排查
@@ -222,7 +222,7 @@ hermes teams-pipeline subscriptions
 | 问题 | 检查项 |
 |---------|---------------|
 | Graph webhook 验证失败 | 确认公网 URL 正确且可访问，并确认 Graph 调用的路径为 `/msgraph/webhook` |
-| `hermes teams-pipeline list` 中未出现任务 | 确认 `msgraph_webhook` 已启用，且订阅指向正确的通知 URL |
+| `ansatz teams-pipeline list` 中未出现任务 | 确认 `msgraph_webhook` 已启用，且订阅指向正确的通知 URL |
 | 转录优先从未成功 | 检查转录资源的 Graph 权限，以及该会议是否存在转录文件 |
 | 录音回退失败 | 确认已安装 `ffmpeg`，且 Graph 应用可访问录音文件 |
 | Teams 摘要投递失败 | 重新检查 `delivery_mode`、目标 ID 及 Teams 认证配置 |

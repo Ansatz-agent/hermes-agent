@@ -17,7 +17,7 @@ GitHub 仓库的供应链调查、证据恢复与取证分析。
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/security/oss-forensics` 安装 |
+| 来源 | 可选 — 通过 `ansatz skills install official/security/oss-forensics` 安装 |
 | 路径 | `optional-skills/security/oss-forensics` |
 | 平台 | linux, macos, windows |
 

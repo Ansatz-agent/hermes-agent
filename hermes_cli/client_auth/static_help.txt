@@ -39,7 +39,7 @@ positional arguments:
     status              Show status of all components
     pause               Emergency stop: pause cron/kanban dispatch and new
                         gateway turns
-    resume              Lift the emergency stop set by `hermes pause`
+    resume              Lift the emergency stop set by `ansatz pause`
     cron                Cron job management
     sync                Skill Sync — sync your skills across devices and with
                         your team

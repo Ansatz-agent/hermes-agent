@@ -29,7 +29,7 @@ proxy when you just want **the model** through your subscription.
 ### 1. Log into your provider (one-time)
 
 ```bash
-hermes portal
+ansatz portal
 ```
 
 This opens your browser for the Nous Portal OAuth flow. Hermes stores
@@ -39,7 +39,7 @@ provider logins live.
 ### 2. Start the proxy
 
 ```bash
-hermes proxy start
+ansatz proxy start
 ```
 
 ```
@@ -69,7 +69,7 @@ automatically when the bearer approaches expiry.
 ## Available providers
 
 ```bash
-hermes proxy providers
+ansatz proxy providers
 ```
 
 Currently shipped: `nous` (Nous Portal) and `xai` (xAI / Grok). More
@@ -79,7 +79,7 @@ interface in `hermes_cli/proxy/adapters/`.
 ## Check status
 
 ```bash
-hermes proxy status
+ansatz proxy status
 ```
 
 ```
@@ -88,10 +88,10 @@ Hermes proxy upstream adapters
   [nous    ] Nous Portal — ready (bearer expires 2026-05-15T06:43:21Z)
 ```
 
-If you see `not logged in`, run `hermes portal`. If you see
+If you see `not logged in`, run `ansatz portal`. If you see
 `credentials need attention`, your refresh token was revoked (rare —
 happens if you signed out from the Portal web UI) — just re-run
-`hermes portal`.
+`ansatz portal`.
 
 ## Allowed paths
 
@@ -133,7 +133,7 @@ Then start your proxy in a terminal alongside `openviking-server`:
 
 ```bash
 # Terminal 1
-hermes proxy start
+ansatz proxy start
 
 # Terminal 2
 openviking-server
@@ -165,7 +165,7 @@ By default the proxy binds `127.0.0.1` (localhost only). To let other
 machines on your network use it:
 
 ```bash
-hermes proxy start --host 0.0.0.0 --port 8645
+ansatz proxy start --host 0.0.0.0 --port 8645
 ```
 
 ⚠ **Be aware:** anyone on your network can now use your Portal

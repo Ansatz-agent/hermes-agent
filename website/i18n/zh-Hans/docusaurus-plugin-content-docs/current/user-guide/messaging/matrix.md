@@ -173,7 +173,7 @@ Matrix 用户 ID 始终以 `@` 开头，并包含 `:` 后跟服务器名称。�
 运行引导式设置命令：
 
 ```bash
-hermes gateway setup
+ansatz gateway setup
 ```
 
 在提示时选择 **Matrix**，然后按提示提供你的 homeserver URL、访问令牌（或用户 ID + 密码）以及允许的用户 ID。
@@ -224,13 +224,13 @@ group_sessions_per_user: true
 配置完成后，启动 Matrix gateway：
 
 ```bash
-hermes gateway
+ansatz gateway
 ```
 
 机器人应在几秒内连接到你的 homeserver 并开始同步。发送一条消息——DM 或机器人已加入的房间——进行测试。
 
 :::tip
-你可以在后台运行 `hermes gateway`，或将其作为 systemd 服务以持续运行。详情请参阅部署文档。
+你可以在后台运行 `ansatz gateway`，或将其作为 systemd 服务以持续运行。详情请参阅部署文档。
 :::
 
 ## 端对端加密（E2EE）
@@ -489,7 +489,7 @@ cd ~/.hermes/hermes-agent && uv pip install -e ".[matrix]"
 5. **重启 gateway**：
 
    ```bash
-   hermes gateway run
+   ansatz gateway run
    ```
 
    如果设置了 `MATRIX_RECOVERY_KEY`，你应在日志中看到 `Matrix: cross-signing verified via recovery key`。
@@ -514,14 +514,14 @@ Matrix E2EE 需要 `libolm`，而该库无法在 macOS ARM64（Apple Silicon）�
 
 ```
 macOS（主机）：
-  └─ hermes gateway
+  └─ ansatz gateway
        ├─ api_server 适配器 ← 监听 0.0.0.0:8642
        ├─ AIAgent ← 单一数据源
        ├─ 会话、记忆、技能
        └─ 本地文件访问（Obsidian、项目等）
 
 Linux 虚拟机（Docker）：
-  └─ hermes gateway（代理模式）
+  └─ ansatz gateway（代理模式）
        ├─ Matrix 适配器 ← E2EE 解密/加密
        └─ HTTP 转发 → macOS:8642/v1/chat/completions
            （无 LLM API 密钥，无 agent，无推理）
@@ -548,7 +548,7 @@ API_SERVER_HOST=0.0.0.0
 启动 gateway：
 
 ```bash
-hermes gateway
+ansatz gateway
 ```
 
 你应该看到 API 服务器与其他已配置的平台一起启动。从虚拟机验证其可达性：
@@ -600,7 +600,7 @@ CMD ["hermes", "gateway"]
 
 1. 先启动主机 gateway：
    ```bash
-   hermes gateway
+   ansatz gateway
    ```
 
 2. 启动 Docker 容器：
@@ -651,7 +651,7 @@ CMD ["hermes", "gateway"]
 
 **原因**：Hermes gateway 未运行，或连接失败。
 
-**解决方法**：检查 `hermes gateway` 是否正在运行。查看终端输出中的错误消息。常见问题：homeserver URL 错误、访问令牌过期、homeserver 不可达。
+**解决方法**：检查 `ansatz gateway` 是否正在运行。查看终端输出中的错误消息。常见问题：homeserver URL 错误、访问令牌过期、homeserver 不可达。
 
 ### "用户不被允许"/机器人忽略你
 

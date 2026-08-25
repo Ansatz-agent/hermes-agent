@@ -92,7 +92,7 @@ See [Persistent Memory](/user-guide/features/memory#how-memory-appears-in-the-sy
 
 **Symptom:** Hermes doesn't recall a detail from a session last week, even though you discussed it at length.
 
-**Check:** Memory capacity and contents. The system prompt memory header shows usage (e.g., `[67% — 1,474/2,200 chars]`), and `hermes journey list` shows every saved memory entry and skill.
+**Check:** Memory capacity and contents. The system prompt memory header shows usage (e.g., `[67% — 1,474/2,200 chars]`), and `ansatz journey list` shows every saved memory entry and skill.
 
 **What it means:** Persistent memory is intentionally bounded — 2,200 chars (~800 tokens) for MEMORY.md and 1,375 chars (~500 tokens) for USER.md. It holds curated key facts, not conversation transcripts. Things worth saving are preferences, environment facts, conventions, and corrections; raw discussion detail is not stored there by design.
 
@@ -111,7 +111,7 @@ You can also help directly: say "remember this for next time" after a productive
 - `/tools list` — see available tools; a tool disabled earlier with `/tools disable` stays out of the agent's toolset for the session.
 - `/context all` — per-skill and per-toolset cost listing, which doubles as an inventory of what's actually loaded.
 
-**What it means:** Skills are the agent's procedural knowledge — multi-step workflows and tool-specific instructions. If a skill is missing or a toolset was trimmed (e.g., a session started with `hermes chat -t "terminal"` to reduce prompt weight), the agent genuinely has less to work with in that session. Re-enable tools with `/tools enable`, or invoke the skill explicitly by name (`/github-pr-workflow`) to confirm it loads.
+**What it means:** Skills are the agent's procedural knowledge — multi-step workflows and tool-specific instructions. If a skill is missing or a toolset was trimmed (e.g., a session started with `ansatz chat -t "terminal"` to reduce prompt weight), the agent genuinely has less to work with in that session. Re-enable tools with `/tools enable`, or invoke the skill explicitly by name (`/github-pr-workflow`) to confirm it loads.
 
 ## 7. Compression side-effects
 
@@ -123,7 +123,7 @@ You can also help directly: say "remember this for next time" after a productive
 
 - Recent messages are protected: by default the last 20 messages stay uncompressed (`protect_last_n`) and the opening exchange is pinned (`protect_first_n: 3`) so the original goal stays visible.
 - Compaction is non-destructive: with the default `compression.in_place: true`, the session keeps one durable id and pre-compaction turns are soft-archived — still searchable via `session_search` and recoverable, not deleted.
-- With `in_place: false` (legacy behavior), each compaction rotates to a **new session linked to the old one** — a titled session becomes `"my project" → "my project #2" → "my project #3"`. If you resume by title, `hermes -c "my project"` automatically picks the most recent variant.
+- With `in_place: false` (legacy behavior), each compaction rotates to a **new session linked to the old one** — a titled session becomes `"my project" → "my project #2" → "my project #3"`. If you resume by title, `ansatz -c "my project"` automatically picks the most recent variant.
 - A focus topic narrows what a full summary preserves: `/compress focus auth-refactor` keeps that thread's detail at the expense of the rest.
 
 If a compressed-away detail matters, ask the agent to search for it (`session_search` reaches the archived turns), or re-paste the key facts into the conversation.

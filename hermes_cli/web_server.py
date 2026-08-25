@@ -122,7 +122,7 @@ try:
     from starlette.concurrency import run_in_threadpool
 except ImportError:
     # First try lazy-installing the dashboard extras. Only the user actually
-    # running `hermes dashboard` needs fastapi+uvicorn; lazy install keeps
+    # running `ansatz dashboard` needs fastapi+uvicorn; lazy install keeps
     # them out of every other install path. After install, re-import.
     try:
         from tools.lazy_deps import ensure as _lazy_ensure
@@ -248,8 +248,8 @@ def _valid_parent_start_marker(marker: str) -> bool:
 def _start_desktop_cron_ticker(stop_event: "threading.Event", interval: int = 60) -> None:
     """Tick the cron scheduler from inside the desktop dashboard backend.
 
-    The scheduler tick loop normally lives in ``hermes gateway run`` — but the
-    desktop app spawns a ``hermes dashboard`` backend, not a gateway, so a cron
+    The scheduler tick loop normally lives in ``ansatz gateway run`` — but the
+    desktop app spawns a ``ansatz dashboard`` backend, not a gateway, so a cron
     a user creates in the app would never fire. We run the resolved cron
     scheduler provider here (no live adapters; delivery falls back to the
     per-platform send path).
@@ -316,7 +316,7 @@ def _eager_reconcile_own_session_db() -> None:
     """One writable open of this process's own state.db at startup.
 
     ``SessionDB.__init__`` runs ``_init_schema`` → ``_reconcile_columns``,
-    bringing a store left behind by `hermes update` current before the
+    bringing a store left behind by `ansatz update` current before the
     dashboard's first session-list poll, with the open-time lock patience
     (jittered retries) absorbing transient contention. Never raises: a
     store this cannot fix is still served through the read-probe heal in
@@ -355,7 +355,7 @@ async def _lifespan(app: "FastAPI"):
     # Bring this profile's state.db schema current BEFORE the first
     # session-list poll (#79531/#80037). Migrations used to run lazily on
     # the first writable open — typically the user's first new session —
-    # so a store left behind by `hermes update` kept 500ing every
+    # so a store left behind by `ansatz update` kept 500ing every
     # /api/sessions poll (and the read-probe heal, while it retries per
     # poll, can lose repeatedly to lock contention from orphaned sibling
     # backends). One writable open here runs _init_schema →
@@ -1088,8 +1088,8 @@ _SCHEMA_OVERRIDES: Dict[str, Dict[str, Any]] = {
     "proxy.enabled": {
         "type": "boolean",
         "description": (
-            "Docker-only egress credential firewall. Requires `hermes egress setup` "
-            "and `hermes egress start`; Modal/SSH/Daytona are not wired yet."
+            "Docker-only egress credential firewall. Requires `ansatz egress setup` "
+            "and `ansatz egress start`; Modal/SSH/Daytona are not wired yet."
         ),
         "category": "security",
     },
@@ -1204,7 +1204,7 @@ _SCHEMA_OVERRIDES: Dict[str, Dict[str, Any]] = {
     "updates.refresh_cua_driver": {
         "type": "boolean",
         "description": (
-            "Refresh an already-installed cua-driver during hermes update. "
+            "Refresh an already-installed cua-driver during ansatz update. "
             "Disable this on non-admin macOS accounts where /Applications is "
             "not writable."
         ),
@@ -2344,7 +2344,7 @@ def _default_hermes_root_is_opt_data() -> bool:
 
 
 def _dashboard_local_update_managed_externally() -> bool:
-    """Return true when the dashboard should not offer ``hermes update``.
+    """Return true when the dashboard should not offer ``ansatz update``.
 
     Containerized dashboards are updated by the outer launcher/image, not by an
     in-browser local update action. Keep this dashboard capability separate
@@ -2353,7 +2353,7 @@ def _dashboard_local_update_managed_externally() -> bool:
 
     However, when the install method is ``git`` (a bind-mounted checkout inside
     a container — e.g. the hermes-webui image sharing the Hermes source tree),
-    the dashboard's ``hermes update`` button is the correct update path and
+    the dashboard's ``ansatz update`` button is the correct update path and
     should not be suppressed. Other containerized install methods remain
     externally managed unless their apply path is proven safe inside the
     running container filesystem.
@@ -3472,7 +3472,7 @@ async def get_status(profile: Optional[str] = None):
         )
 
         # Dashboard auth gate (Phase 7): surface whether the gate is engaged
-        # and which providers are registered so ``hermes status`` and the
+        # and which providers are registered so ``ansatz status`` and the
         # SPA's StatusPage can show "OAuth gate ON via Nous Research" or
         # "loopback only — no auth gate" with no extra round trips.
         auth_required = bool(getattr(app.state, "auth_required", False))
@@ -3826,7 +3826,7 @@ async def get_system_stats():
 #
 # The curator periodically reviews skills (archive stale, prune, pin).  The
 # dashboard surfaces its state and the pause/resume/run-now controls that
-# `hermes curator` exposes.
+# `ansatz curator` exposes.
 # ---------------------------------------------------------------------------
 
 
@@ -4168,7 +4168,7 @@ def _spawn_hermes_action(
     *,
     env_overrides: Optional[Dict[str, str]] = None,
 ) -> subprocess.Popen:
-    """Spawn ``hermes <subcommand>`` detached and record the Popen handle.
+    """Spawn ``ansatz <subcommand>`` detached and record the Popen handle.
 
     Uses the running interpreter's ``hermes_cli.main`` module so the action
     inherits the same venv/PYTHONPATH the web server is using.
@@ -4184,7 +4184,7 @@ def _spawn_hermes_action(
     cmd = [_dashboard_spawn_executable(), "-m", "hermes_cli.main", *subcommand]
 
     # The dashboard runs *inside* the gateway process, so os.environ carries
-    # _HERMES_GATEWAY=1. Inheriting it makes a spawned `hermes gateway restart`
+    # _HERMES_GATEWAY=1. Inheriting it makes a spawned `ansatz gateway restart`
     # trip the in-process restart-loop guard and exit 1 — silently failing the
     # dashboard's auto-restart paths. The gateway's own restart watcher already
     # drops it (gateway/run.py); mirror that here (#52470).
@@ -4331,12 +4331,12 @@ def _validate_messaging_env_value(platform_id: str, key: str, value: str) -> Non
 
 
 def _spawn_gateway_restart(profile: Optional[str] = None) -> Tuple[subprocess.Popen, bool]:
-    """Spawn ``hermes gateway restart``, reusing an in-flight restart.
+    """Spawn ``ansatz gateway restart``, reusing an in-flight restart.
 
     Multiple dashboard paths can request a restart in quick succession
     (restart button double-click, or a stale cached frontend firing its own
     restart after the server already auto-restarted post-onboarding). Two
-    concurrent ``hermes gateway restart`` children race each other on the
+    concurrent ``ansatz gateway restart`` children race each other on the
     manual kill-and-start path, so reuse the live one instead.
 
     Before spawning, sweep for orphaned gateway processes whose parent has
@@ -4388,7 +4388,7 @@ def _restart_gateway_after_webhook_enable(profile: Optional[str] = None) -> dict
 
 @app.post("/api/gateway/restart")
 async def restart_gateway(profile: Optional[str] = None):
-    """Kick off a ``hermes gateway restart`` in the background."""
+    """Kick off a ``ansatz gateway restart`` in the background."""
     try:
         proc, _reused = _spawn_gateway_restart(profile)
     except HTTPException:
@@ -4478,7 +4478,7 @@ async def gateway_drain(request: Request):
 
 @app.post("/api/hermes/update")
 async def update_hermes():
-    """Kick off ``hermes update`` in the background."""
+    """Kick off ``ansatz update`` in the background."""
     if _dashboard_local_update_managed_externally():
         message = (
             "Hermes updates are managed outside this dashboard in "
@@ -4553,7 +4553,7 @@ async def update_hermes():
             env_overrides={"HERMES_ACTION_ID": action_id},
         )
     except Exception as exc:
-        _log.exception("Failed to spawn hermes update")
+        _log.exception("Failed to spawn ansatz update")
         raise HTTPException(status_code=500, detail=f"Failed to start update: {exc}")
     return {
         "ok": True,
@@ -4623,7 +4623,7 @@ async def check_hermes_update(force: bool = False):
 
     Powers the dashboard's "check before you update" flow: the System page
     shows the commit-behind count and asks the user to confirm before
-    ``POST /api/hermes/update`` actually runs ``hermes update``.
+    ``POST /api/hermes/update`` actually runs ``ansatz update``.
 
     Returns:
         install_method: 'git' | 'docker' | 'nix' | 'nixos' | 'unknown'
@@ -6765,7 +6765,7 @@ async def get_model_options(
 def get_recommended_default_model(provider: str = ""):
     """Return the recommended default model for a freshly-authenticated provider.
 
-    Mirrors the model-curation `hermes model` does so GUI onboarding lands on a
+    Mirrors the model-curation `ansatz model` does so GUI onboarding lands on a
     sensible default instead of blindly taking the first curated entry. For
     Nous this honors the user's free/paid tier: free users get a free model,
     paid users get the full curated default. For any other provider it falls
@@ -7098,7 +7098,7 @@ def _apply_model_assignment_sync(
         save_config(cfg)
 
         # Register a named ``custom_providers`` entry for a custom/local
-        # endpoint, mirroring the ``hermes model`` custom flow
+        # endpoint, mirroring the ``ansatz model`` custom flow
         # (_save_custom_provider). Without this the endpoint only lives in
         # ``model.*`` and the picker has no proper ready row for it — the
         # GUI then surfaces a "needs setup" dead-end on the bare ``custom``
@@ -7393,7 +7393,7 @@ def _catalog_provider_env_metadata() -> dict:
 
     Returns ``{env_var: {provider, provider_label, description, url, is_password,
     advanced}}`` for every API-key provider in the unified ``provider_catalog()``
-    (i.e. the ``hermes model`` universe). This is what lets the desktop Keys tab
+    (i.e. the ``ansatz model`` universe). This is what lets the desktop Keys tab
     render a card for a provider even when its env var was never hand-added to
     ``OPTIONAL_ENV_VARS`` — closing the drift where CLI-configurable providers
     (openai-api, kilocode, novita, tencent-tokenhub, copilot, …) were missing
@@ -7459,7 +7459,7 @@ def _catalog_provider_env_metadata() -> dict:
         # AWS-SDK providers (Bedrock) authenticate via the AWS credential chain
         # rather than a pasted API key, so they have no api_key_env_vars. Tag
         # their AWS_* settings to the provider card so they still appear on the
-        # Keys tab (otherwise Bedrock — a `hermes model` provider — would be
+        # Keys tab (otherwise Bedrock — a `ansatz model` provider — would be
         # invisible in the desktop app).
         if d.auth_type == "aws_sdk":
             for aws_var in ("AWS_REGION", "AWS_PROFILE"):
@@ -7477,7 +7477,7 @@ def _catalog_provider_env_metadata() -> dict:
         # Vertex AI authenticates via OAuth2 (service-account JSON or ADC), not a
         # pasted API key, so it also has no api_key_env_vars. Tag its credential
         # env var to the provider card so it appears on the Keys tab (otherwise
-        # Vertex — a `hermes model` provider — would be invisible in the desktop
+        # Vertex — a `ansatz model` provider — would be invisible in the desktop
         # app). The value is a filesystem path, not a secret string, so it is
         # not a password field.
         if d.auth_type == "vertex":
@@ -7528,7 +7528,7 @@ def _get_env_vars_sync(profile: Optional[str] = None):
             "channel_managed": var_name in channel_keys,
             # Provider grouping hints derived from the unified provider catalog
             # so the desktop Keys tab groups by the SAME provider identity the
-            # CLI `hermes model` picker uses (not desktop-only prefix guesses).
+            # CLI `ansatz model` picker uses (not desktop-only prefix guesses).
             "provider": cat_meta.get("provider", ""),
             "provider_label": cat_meta.get("provider_label", ""),
             # True when this key exists in the user's .env but is NOT in any
@@ -8488,11 +8488,11 @@ _MESSAGING_ENV_FALLBACKS: dict[str, dict[str, Any]] = {
         "password": True,
     },
     "WEIXIN_ACCOUNT_ID": {
-        "description": "iLink Bot account ID obtained through QR login in hermes gateway setup",
+        "description": "iLink Bot account ID obtained through QR login in ansatz gateway setup",
         "prompt": "iLink Bot account ID",
     },
     "WEIXIN_TOKEN": {
-        "description": "iLink Bot token obtained through QR login in hermes gateway setup",
+        "description": "iLink Bot token obtained through QR login in ansatz gateway setup",
         "prompt": "iLink Bot token",
         "password": True,
     },
@@ -8633,7 +8633,7 @@ def _platform_env_prefixes(platform_id: str) -> tuple[str, ...]:
 
 
 # Which per-platform knobs the setup UI hides, and why: see
-# hermes_cli/setup_hidden_env.py. Shared with the `hermes setup gateway`
+# hermes_cli/setup_hidden_env.py. Shared with the `ansatz setup gateway`
 # wizard so the surfaces ask for the same things.
 from hermes_cli.setup_hidden_env import (  # noqa: E402
     is_setup_hidden_env as _is_setup_hidden_env,
@@ -10008,7 +10008,7 @@ async def test_messaging_platform(platform_id: str, profile: Optional[str] = Non
 # connected, plus a disconnect button. The actual login flow (PKCE for
 # Anthropic, device-code for Nous/Codex) still runs in the CLI for now;
 # Phase 2 will add in-browser flows. For unconnected providers we return
-# the canonical ``hermes provider add <provider>`` command so the dashboard
+# the canonical ``ansatz provider add <provider>`` command so the dashboard
 # can surface a one-click copy.
 
 
@@ -10387,14 +10387,14 @@ def _build_oauth_catalog() -> list[Dict[str, Any]]:
          PKCE card and the synthetic claude-code subscription row, which are not
          catalog providers), and
       2. every accounts-tab provider in the unified ``provider_catalog()`` (the
-         ``hermes model`` universe) — so any OAuth/external provider added as a
+         ``ansatz model`` universe) — so any OAuth/external provider added as a
          plugin appears automatically, with sensible defaults, even if no
          explicit card was written for it.
 
     The explicit catalog wins on metadata; the unified catalog guarantees we
     never silently drop a provider the CLI picker offers. Order: explicit cards
     first (their curated order), then any catalog-only providers appended in
-    ``hermes model`` order.
+    ``ansatz model`` order.
     """
     rows: list[Dict[str, Any]] = []
     seen: set[str] = set()
@@ -10407,7 +10407,7 @@ def _build_oauth_catalog() -> list[Dict[str, Any]]:
         rows.append(dict(entry))
 
     # 2. Catalog accounts-providers not already covered — keeps the Accounts tab
-    #    in lockstep with the `hermes model` universe (zero-edit for new plugins).
+    #    in lockstep with the `ansatz model` universe (zero-edit for new plugins).
     try:
         from hermes_cli.provider_catalog import provider_catalog
         for d in provider_catalog():
@@ -10449,7 +10449,7 @@ async def list_oauth_providers(profile: Optional[str] = None):
           has_refresh_token bool
 
     Membership is derived from the unified provider_catalog() so this stays in
-    sync with the `hermes model` picker; _OAUTH_OVERRIDES supplies per-provider
+    sync with the `ansatz model` picker; _OAUTH_OVERRIDES supplies per-provider
     flow/status/cli metadata.
     """
     def _run():
@@ -10662,7 +10662,7 @@ def _save_anthropic_oauth_creds(access_token: str, refresh_token: str, expires_a
     """Persist Anthropic PKCE creds to both Hermes file AND credential pool.
 
     Mirrors what auth_commands.add_command does so the dashboard flow leaves
-    the system in the same state as ``hermes provider add anthropic``.
+    the system in the same state as ``ansatz provider add anthropic``.
     """
     from agent.anthropic_adapter import _get_hermes_oauth_file
     oauth_file = _get_hermes_oauth_file()
@@ -11107,7 +11107,7 @@ def _minimax_poller(session_id: str) -> None:
     auth_state dict that ``_minimax_oauth_login`` (the CLI flow) builds
     and persists via ``_minimax_save_auth_state`` — so the dashboard
     path leaves the system in the same state as
-    ``hermes provider add minimax-oauth``.
+    ``ansatz provider add minimax-oauth``.
     """
     from hermes_cli.auth import (
         _minimax_poll_token,
@@ -11230,7 +11230,7 @@ def _xai_device_poller(session_id: str) -> None:
                 # chat provider.
                 set_active=False,
             )
-            # Mirror `hermes provider add xai-oauth`: first credential may become
+            # Mirror `ansatz provider add xai-oauth`: first credential may become
             # active when none is set yet; never overwrite an existing choice.
             mark_provider_active_if_unset("xai-oauth")
             # The singleton write above is the single source of truth: the
@@ -11240,8 +11240,8 @@ def _xai_device_poller(session_id: str) -> None:
             # entries and triggers rotation churn / ``refresh_token_reused``.
             # An interactive dashboard login is also an explicit re-enable
             # signal, so clear any ``device_code`` suppression left by a
-            # prior ``hermes provider remove xai-oauth`` (mirrors auth_add_command
-            # and the ``hermes model`` re-login path in _login_xai_oauth).
+            # prior ``ansatz provider remove xai-oauth`` (mirrors auth_add_command
+            # and the ``ansatz model`` re-login path in _login_xai_oauth).
             unsuppress_credential_source("xai-oauth", "device_code")
         with _oauth_sessions_lock:
             sess["status"] = "approved"
@@ -11710,7 +11710,7 @@ def _session_db_read_probe_statements() -> tuple:
     added there is probed here automatically — the previous hand-written
     probe listed four columns and went stale the first time a new column
     (sessions.last_activity_at) shipped, leaving the desktop sidebar empty
-    after `hermes update` until the first message forced a writable open.
+    after `ansatz update` until the first message forced a writable open.
     """
     from hermes_state_schema import schema_read_probe_statements
 
@@ -11840,7 +11840,7 @@ _last_auto_archive_check: Dict[str, float] = {}
 def _maybe_auto_archive_for_profile(profile: Optional[str]) -> None:
     """Run the config-gated stale-session auto-archive for ``profile``.
 
-    The Desktop backend is spawned as ``hermes serve`` — it runs neither the
+    The Desktop backend is spawned as ``ansatz serve`` — it runs neither the
     interactive CLI nor the messaging gateway, so neither of those startup
     hooks fire for Desktop users. Triggering the (double-throttled, config-off
     by default) sweep from the session-list path is what makes
@@ -11907,7 +11907,7 @@ async def _auto_archive_ticker_loop(
 
 
 def _prune_sessions(body: SessionPrune):
-    """Delete ended sessions matching filters (mirrors `hermes sessions prune`)."""
+    """Delete ended sessions matching filters (mirrors `ansatz sessions prune`)."""
     has_window = (
         body.started_before is not None or body.started_after is not None
     )
@@ -12831,7 +12831,7 @@ async def _forward_cron_fire_to_gateway(
 # MCP server endpoints — list / add / remove / test.
 #
 # Wraps the same config data layer the CLI uses (hermes_cli.mcp_config), so
-# servers managed here show up under `hermes mcp list` and vice versa.  Secrets
+# servers managed here show up under `ansatz mcp list` and vice versa.  Secrets
 # in stdio `env` blocks are redacted on read; the agent picks them up from
 # config.yaml at session start exactly as with CLI-added servers.
 # ---------------------------------------------------------------------------
@@ -13380,7 +13380,7 @@ async def set_webhook_enabled(name: str, body: WebhookEnabledToggle):
 #
 # restart + update already exist above; these complete the lifecycle so a
 # remote admin can bring the gateway up or down without shell access.  Both
-# spawn the real `hermes gateway <verb>` so behaviour matches the CLI exactly.
+# spawn the real `ansatz gateway <verb>` so behaviour matches the CLI exactly.
 # Status is already surfaced by /api/status (gateway_running/state/platforms).
 # ---------------------------------------------------------------------------
 
@@ -13496,8 +13496,8 @@ async def add_credential_pool_entry(body: CredentialPoolAdd):
         pool.add_entry(entry)
         # Re-adding a credential is an explicit re-engagement signal: lift
         # every suppression for this provider so a source deleted earlier
-        # (via DELETE below or `hermes provider remove`) can seed again.
-        # Mirrors the `hermes provider add` behaviour in auth_commands.py.
+        # (via DELETE below or `ansatz provider remove`) can seed again.
+        # Mirrors the `ansatz provider add` behaviour in auth_commands.py.
         if not provider.startswith(CUSTOM_POOL_PREFIX):
             try:
                 from hermes_cli.auth import (
@@ -13525,7 +13525,7 @@ async def remove_credential_pool_entry(provider: str, index: int):
     their backing source (.env var, OAuth singleton file, custom-provider
     config) on every call, so deleting only the pool row silently reverts on
     the next dashboard refresh.  We dispatch through the same RemovalStep
-    registry the CLI ``hermes provider remove`` uses: each source cleans up its
+    registry the CLI ``ansatz provider remove`` uses: each source cleans up its
     external state and suppresses ``(provider, source)`` so the seeders skip
     it.  Manual entries have no registered step — nothing external to clean,
     no suppression needed (they aren't re-seeded).
@@ -14110,7 +14110,7 @@ from hermes_cli.web_routers.skills import (  # noqa: E402,F401 — legacy re-exp
 
 
 
-# Human-readable labels for each hub source id (matches `hermes skills search`
+# Human-readable labels for each hub source id (matches `ansatz skills search`
 # provenance).  Keep in sync with create_source_router()'s source list.
 _SKILL_HUB_SOURCE_LABELS = {
     "official": "Official (Nous)",
@@ -15276,7 +15276,7 @@ async def get_models_analytics(
 # ---------------------------------------------------------------------------
 # /api/pty — PTY-over-WebSocket bridge for the dashboard "Chat" tab.
 #
-# The endpoint spawns the same ``hermes --tui`` binary the CLI uses, behind
+# The endpoint spawns the same ``ansatz --tui`` binary the CLI uses, behind
 # a POSIX pseudo-terminal, and forwards bytes + resize escapes across a
 # WebSocket.  The browser renders the ANSI through xterm.js (see
 # web/src/pages/ChatPage.tsx).
@@ -15721,7 +15721,7 @@ def _resolve_chat_argv(
 ) -> tuple[list[str], Optional[str], Optional[dict]]:
     """Resolve the argv + cwd + env for the chat PTY.
 
-    Default: whatever ``hermes --tui`` would run.  Tests monkeypatch this
+    Default: whatever ``ansatz --tui`` would run.  Tests monkeypatch this
     function to inject a tiny fake command (``cat``, ``sh -c 'printf …'``)
     so nothing has to build Node or the TUI bundle.
 
@@ -15749,7 +15749,7 @@ def _resolve_chat_argv(
     process (the TUI and the ``tui_gateway.entry`` it launches) resolves
     ``get_hermes_home()`` from that env var at its own import, so the child
     binds the profile's config, skills, memory, and state.db from the start
-    — the same propagation ``hermes -p <name>`` performs. The in-process
+    — the same propagation ``ansatz -p <name>`` performs. The in-process
     ``HERMES_TUI_GATEWAY_URL`` attach is SKIPPED for scoped chats: the
     dashboard's in-memory gateway runs under the dashboard's own profile,
     so a profile-scoped chat must spawn its own gateway subprocess.
@@ -17022,14 +17022,14 @@ def mount_spa(application: FastAPI):
     and the SPA's runtime ``__HERMES_BASE_PATH__`` honour that prefix
     without rebuilding the bundle.
     """
-    # `hermes serve` is the headless backend: it must NEVER serve the browser
+    # `ansatz serve` is the headless backend: it must NEVER serve the browser
     # SPA, even if a dist is lying around from a prior `dashboard`/build. Take
     # the no-frontend path so only the JSON-RPC/WS/API surface is reachable.
     _headless = os.environ.get("HERMES_SERVE_HEADLESS") == "1"
     if _headless or not WEB_DIST.exists():
         _msg = (
-            "Headless backend (hermes serve): web UI disabled — use "
-            "`hermes dashboard` for the browser UI."
+            "Headless backend (ansatz serve): web UI disabled — use "
+            "`ansatz dashboard` for the browser UI."
             if _headless
             else "Frontend not built. Run: cd web && npm run build"
         )
@@ -17906,7 +17906,7 @@ def _merged_plugins_hub(force_refresh: bool = False) -> Dict[str, Any]:
                         continue
                     if cached_result is False:
                         auth_required = True
-                        auth_command = f"hermes auth {name}"
+                        auth_command = f"ansatz auth {name}"
                         break
             except Exception:
                 pass
@@ -18602,7 +18602,7 @@ def start_server(
                 "    (hash with: python -c \"from "
                 "plugins.dashboard_auth.basic import hash_password; "
                 "print(hash_password('your-password'))\")\n"
-                "  • OAuth: run `hermes dashboard register` (Nous Portal) or "
+                "  • OAuth: run `ansatz dashboard register` (Nous Portal) or "
                 "install a DashboardAuthProvider plugin.\n"
                 "There is no unauthenticated public-bind option — to keep it "
                 "local, bind 127.0.0.1 and tunnel in (SSH / Tailscale)."
@@ -18628,7 +18628,7 @@ def start_server(
                         "plugins.disabled but dashboard.basic_auth is "
                         "configured.\n"
                         "Remove 'basic' from plugins.disabled (or run "
-                        "`hermes plugins enable basic`), then restart the "
+                        "`ansatz plugins enable basic`), then restart the "
                         "dashboard.\n\n"
                     ) + _fix_hint
             except Exception:
@@ -18742,7 +18742,7 @@ def start_server(
                     _log.debug("orphan desktop-local serve reap skipped: %s", exc)
 
             # tui_gateway/slash_worker.py::_start_parent_death_watchdog. No-op
-            # for standalone `hermes serve` (no HERMES_PARENT_PID env).
+            # for standalone `ansatz serve` (no HERMES_PARENT_PID env).
             _start_parent_death_watchdog()
 
             actual_port = _read_bound_port(server, fallback=port)

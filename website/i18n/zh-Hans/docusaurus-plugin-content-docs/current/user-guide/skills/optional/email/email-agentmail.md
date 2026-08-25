@@ -14,7 +14,7 @@ description: "通过 AgentMail 为 Agent 提供专属电子邮件收件箱"
 
 | | |
 |---|---|
-| 来源 | 可选 — 使用 `hermes skills install official/email/agentmail` 安装 |
+| 来源 | 可选 — 使用 `ansatz skills install official/email/agentmail` 安装 |
 | 路径 | `optional-skills/email/agentmail` |
 | 版本 | `1.0.0` |
 | 平台 | linux, macos, windows |
@@ -132,7 +132,7 @@ hermes
 ## 验证
 配置完成后，使用以下命令测试：
 ```
-hermes --toolsets mcp -q "Create an AgentMail inbox called test-agent and tell me its email address"
+ansatz --toolsets mcp -q "Create an AgentMail inbox called test-agent and tell me its email address"
 ```
 应返回新收件箱的地址。
 

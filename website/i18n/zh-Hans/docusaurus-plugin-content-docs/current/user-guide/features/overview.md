@@ -30,7 +30,7 @@ Hermes Agent 包含一套丰富的能力，远超基础聊天范畴。从持久�
 - **[语音模式](voice-mode.md)** — 跨 CLI 和消息平台的完整语音交互。使用麦克风与 Agent 对话，收听语音回复，并在 Discord 语音频道中进行实时语音对话。
 - **[浏览器自动化](browser.md)** — 支持多种后端的完整浏览器自动化：Browserbase 云端、Browser Use 云端、通过 CDP 连接的本地 Chrome/Brave/Chromium/Edge，或本地 Chromium。可导航网站、填写表单并提取信息。
 - **[视觉与图片粘贴](vision.md)** — 多模态视觉支持。将剪贴板中的图片粘贴到 CLI，并使用任意支持视觉的模型请求 Agent 分析、描述或处理图片。
-- **[图像生成](image-generation.md)** — 使用 FAL.ai 从文本 prompt 生成图像。支持九种模型（FLUX 2 Klein/Pro、GPT-Image 1.5/2、Nano Banana Pro、Ideogram V3、Recraft V4 Pro、Qwen、Z-Image Turbo）；可通过 `hermes tools` 选择。
+- **[图像生成](image-generation.md)** — 使用 FAL.ai 从文本 prompt 生成图像。支持九种模型（FLUX 2 Klein/Pro、GPT-Image 1.5/2、Nano Banana Pro、Ideogram V3、Recraft V4 Pro、Qwen、Z-Image Turbo）；可通过 `ansatz tools` 选择。
 - **[语音与 TTS](tts.md)** — 跨所有消息平台的文字转语音输出和语音消息转录，提供十种原生提供商选项：Edge TTS（免费）、ElevenLabs、OpenAI TTS、MiniMax、Mistral Voxtral、Google Gemini、xAI、NeuTTS、KittenTTS 和 Piper——以及支持任意本地 TTS CLI 的自定义命令提供商。
 
 ## 集成
@@ -49,4 +49,4 @@ Hermes Agent 包含一套丰富的能力，远超基础聊天范畴。从持久�
 
 - **[个性与 SOUL.md](personality.md)** — 完全可自定义的 Agent 个性。`SOUL.md` 是主要身份文件——系统提示词中的第一项——你可以在每个会话中切换内置或自定义的 `/personality` 预设。
 - **[皮肤与主题](skins.md)** — 自定义 CLI 的视觉呈现：横幅颜色、加载动画图标和动词、响应框标签、品牌文字，以及工具活动前缀。
-- **[插件](plugins.md)** — 无需修改核心代码即可添加自定义工具、hook 和集成。三种插件类型：通用插件（工具/hook）、记忆提供商（跨会话知识）和上下文引擎（替代上下文管理）。通过统一的 `hermes plugins` 交互式界面管理。
+- **[插件](plugins.md)** — 无需修改核心代码即可添加自定义工具、hook 和集成。三种插件类型：通用插件（工具/hook）、记忆提供商（跨会话知识）和上下文引擎（替代上下文管理）。通过统一的 `ansatz plugins` 交互式界面管理。

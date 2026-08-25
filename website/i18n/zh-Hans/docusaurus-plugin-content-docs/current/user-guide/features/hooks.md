@@ -202,7 +202,7 @@ async def handle(event_type: str, context: dict):
 ```markdown
 # Startup Checklist
 
-1. Run `hermes cron list` and check if any scheduled jobs failed overnight.
+1. Run `ansatz cron list` and check if any scheduled jobs failed overnight.
 2. If any failed, send a summary to Discord #ops using the `send_message` tool.
 3. Check if `/opt/app/deploy.log` has any ERROR lines from the last 24 hours. If yes, summarize them and include in the same Discord message.
 4. If nothing went wrong, reply with only `[SILENT]` so no message is sent.
@@ -315,13 +315,13 @@ async def handle(event_type: str, context: dict) -> None:
 重启 gateway：
 
 ```bash
-hermes gateway restart
+ansatz gateway restart
 ```
 
 查看日志：
 
 ```bash
-hermes logs --follow --level INFO | grep boot-md
+ansatz logs --follow --level INFO | grep boot-md
 ```
 
 你应该看到 `Running BOOT.md (N chars)`，随后是 `boot-md completed: ...`（agent 执行内容的摘要）或 `boot-md completed (nothing to report)`（agent 回复了 `[SILENT]`）。
@@ -370,7 +370,7 @@ def register(ctx):
 - 回调异常会被记录并跳过，后续回调仍会继续。
 - 下表分类仅描述当前行为：**观察者**忽略返回值，**Transform** 接受第一个有效字符串替换，**指令/控制**消费已说明的返回结构。Plugin middleware 是独立的 registry/surface，不属于另一类 hook。
 - `turn_id`、`api_request_id`、`task_id`、`session_id`、`api_call_count` 等关联字段因 hook 而异，可能不存在；应将这些 ID 视为 opaque 值。
-- 运行时事件名以 `hermes_cli.plugins.VALID_HOOKS` 为准。`hermes hooks list` 只列出已配置的 shell/outbound hook，并非可用事件目录；只有 `hermes hooks test <event>` 收到无效事件时才会打印有效集合。
+- 运行时事件名以 `hermes_cli.plugins.VALID_HOOKS` 为准。`ansatz hooks list` 只列出已配置的 shell/outbound hook，并非可用事件目录；只有 `ansatz hooks test <event>` 收到无效事件时才会打印有效集合。
 
 ### 已发布的 plugin-hook 目录
 
@@ -1343,22 +1343,22 @@ printf '{}\n'
 
 三种方式可绕过交互式提示——满足其一即可：
 
-1. CLI 上的 `--accept-hooks` 标志（如 `hermes --accept-hooks chat`）
+1. CLI 上的 `--accept-hooks` 标志（如 `ansatz --accept-hooks chat`）
 2. `HERMES_ACCEPT_HOOKS=1` 环境变量
 3. `cli-config.yaml` 中的 `hooks_auto_accept: true`
 
 非 TTY 运行（gateway、cron、CI）需要这三种方式之一——否则任何新添加的 hook 会静默保持未注册状态并记录警告。
 
-**脚本编辑被静默信任。** 允许列表以精确的命令字符串为键，而非脚本的哈希值，因此编辑磁盘上的脚本不会使授权失效。`hermes hooks doctor` 会标记 mtime 漂移，以便你发现编辑并决定是否重新审批。
+**脚本编辑被静默信任。** 允许列表以精确的命令字符串为键，而非脚本的哈希值，因此编辑磁盘上的脚本不会使授权失效。`ansatz hooks doctor` 会标记 mtime 漂移，以便你发现编辑并决定是否重新审批。
 
-### `hermes hooks` CLI
+### `ansatz hooks` CLI
 
 | 命令 | 功能 |
 |------|------|
-| `hermes hooks list` | 列出已配置的 hook，包含 matcher、超时和授权状态 |
-| `hermes hooks test <event> [--for-tool X] [--payload-file F]` | 对合成载荷触发所有匹配的 hook 并打印解析后的响应 |
-| `hermes hooks revoke <command>` | 删除所有匹配 `<command>` 的允许列表条目（下次重启后生效） |
-| `hermes hooks doctor` | 对每个已配置的 hook 检查：执行位、允许列表状态、mtime 漂移、JSON 输出有效性和大致执行时间 |
+| `ansatz hooks list` | 列出已配置的 hook，包含 matcher、超时和授权状态 |
+| `ansatz hooks test <event> [--for-tool X] [--payload-file F]` | 对合成载荷触发所有匹配的 hook 并打印解析后的响应 |
+| `ansatz hooks revoke <command>` | 删除所有匹配 `<command>` 的允许列表条目（下次重启后生效） |
+| `ansatz hooks doctor` | 对每个已配置的 hook 检查：执行位、允许列表状态、mtime 漂移、JSON 输出有效性和大致执行时间 |
 
 ### 安全性
 
@@ -1366,7 +1366,7 @@ Shell hooks 以**你的完整用户凭据**运行——与 cron 条目或 shell 
 
 - 只引用你自己编写或完整审查过的脚本。
 - 将脚本保存在 `~/.hermes/agent-hooks/` 内，便于审计路径。
-- 拉取共享配置后重新运行 `hermes hooks doctor`，在新添加的 hook 注册前发现它们。
+- 拉取共享配置后重新运行 `ansatz hooks doctor`，在新添加的 hook 注册前发现它们。
 - 如果你的 config.yaml 在团队中进行版本控制，审查修改 `hooks:` 部分的 PR 时应与审查 CI 配置一样严格。
 
 ### 顺序与优先级
@@ -1385,4 +1385,4 @@ hooks:
       secret_env: HERMES_WEBHOOK_SECRET
 ```
 
-配置中的事件名同样以 `hermes_cli.plugins.VALID_HOOKS` 为准。`hermes hooks list` 会列出这些已配置 target，但不会输出完整的可用事件目录。
+配置中的事件名同样以 `hermes_cli.plugins.VALID_HOOKS` 为准。`ansatz hooks list` 会列出这些已配置 target，但不会输出完整的可用事件目录。

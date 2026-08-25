@@ -37,9 +37,9 @@ description: "构建一个自动化 AI 代码审查器，监控你的仓库、�
 - **已安装 Hermes Agent** — 参见[安装指南](/getting-started/installation)
 - **Gateway 已运行**（用于 cron 任务）：
   ```bash
-  hermes gateway install   # Install as a service
+  ansatz gateway install   # Install as a service
   # or
-  hermes gateway           # Run in foreground
+  ansatz gateway           # Run in foreground
   ```
 - **已安装并认证 GitHub CLI（`gh`）**：
   ```bash
@@ -167,7 +167,7 @@ We use React Query for data fetching, never useEffect for API calls.
 现在把所有内容串联起来。创建一个每 2 小时运行一次的 cron 任务：
 
 ```bash
-hermes cron create "0 */2 * * *" \
+ansatz cron create "0 */2 * * *" \
   "Check for new open PRs and review them.
 
 Repos to monitor:
@@ -196,7 +196,7 @@ If no new PRs found, say: No new PRs to review." \
 验证任务已调度：
 
 ```bash
-hermes cron list
+ansatz cron list
 ```
 
 ### 其他常用调度计划
@@ -215,7 +215,7 @@ hermes cron list
 不想等待调度？手动触发：
 
 ```bash
-hermes cron run pr-review
+ansatz cron run pr-review
 ```
 
 或在对话会话中：
@@ -250,7 +250,7 @@ After reviewing, post your review:
 创建一个每周一早上的仓库概览：
 
 ```bash
-hermes cron create "0 9 * * 1" \
+ansatz cron create "0 9 * * 1" \
   "Generate a weekly PR dashboard:
 - myorg/backend-api
 - myorg/frontend-app
@@ -285,8 +285,8 @@ Gateway 在精简环境中运行。请确保 `gh` 在系统 PATH 中，然后重
 
 ### Cron 任务未运行
 ```bash
-hermes gateway status    # Is the gateway running?
-hermes cron list         # Is the job enabled?
+ansatz gateway status    # Is the gateway running?
+ansatz cron list         # Is the job enabled?
 ```
 
 ### 速率限制

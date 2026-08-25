@@ -530,7 +530,7 @@ export function useTerminalSession({
       // handler; without it xterm shows a raw confirm() and then a window.open
       // Electron denies.
       linkHandler: terminalLinkHandler,
-      // Full-screen TUIs (hermes --tui, vim) grab the mouse, so a plain drag
+      // Full-screen TUIs (ansatz --tui, vim) grab the mouse, so a plain drag
       // can't select — ⌥-drag (macOS) / Shift-drag (else) forces a native
       // selection over mouse-mode apps, which ⌘/Ctrl+L then sends to chat.
       macOptionClickForcesSelection: true,

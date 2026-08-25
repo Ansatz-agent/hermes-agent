@@ -159,7 +159,7 @@ contextBridge.exposeInMainWorld('hermesDesktop', {
     remove: id => ipcRenderer.invoke('hermes:connections:remove', id),
     setPrimary: id => ipcRenderer.invoke('hermes:connections:set-primary', id),
     test: id => ipcRenderer.invoke('hermes:connections:test', id),
-    // Fan out `hermes update` to every eligible registered connection.
+    // Fan out `ansatz update` to every eligible registered connection.
     updateAll: () => ipcRenderer.invoke('hermes:connections:update-all')
   },
   sshConfigHosts: () => ipcRenderer.invoke('hermes:ssh-config:hosts'),

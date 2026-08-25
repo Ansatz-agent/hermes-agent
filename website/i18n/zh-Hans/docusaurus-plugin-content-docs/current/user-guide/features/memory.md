@@ -182,7 +182,7 @@ located at ~/code/api. I discovered it uses Go version 1.22 and...
 - Agent 还可以在找到的任意会话中向前或向后滚动
 
 ```bash
-hermes sessions list    # 浏览过去的会话
+ansatz sessions list    # 浏览过去的会话
 ```
 
 有关三种调用形式（发现 / 滚动 / 浏览）和响应格式，请参阅[会话搜索工具](/user-guide/sessions#session-search-tool)。
@@ -218,8 +218,8 @@ memory:
 外部提供商与内置记忆**并行**运行（而非替代），并增加了知识图谱、语义搜索、自动事实提取和跨会话用户建模等能力。
 
 ```bash
-hermes memory setup      # 选择并配置提供商
-hermes memory status     # 查看当前激活状态
+ansatz memory setup      # 选择并配置提供商
+ansatz memory status     # 查看当前激活状态
 ```
 
 有关每个提供商的完整详情、设置说明和对比，请参阅[记忆提供商](./memory-providers.md)指南。

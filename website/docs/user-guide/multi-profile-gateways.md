@@ -33,9 +33,9 @@ them collectively.
 
 ```bash
 # Create profiles (once)
-hermes profile create coder
-hermes profile create personal-bot
-hermes profile create research
+ansatz profile create coder
+ansatz profile create personal-bot
+ansatz profile create research
 
 # Configure each
 coder setup
@@ -85,8 +85,8 @@ Set the flag on the **default profile** (it owns the multiplexer) and restart
 its gateway:
 
 ```bash
-hermes config set gateway.multiplex_profiles true
-hermes gateway restart
+ansatz config set gateway.multiplex_profiles true
+ansatz gateway restart
 ```
 
 Equivalently, in the default profile's `~/.hermes/config.yaml`:
@@ -103,7 +103,7 @@ credentials, and routes each inbound message to the profile it belongs to. Each
 turn resolves the routed profile's config, skills, memory, SOUL, **and provider
 keys** — credentials are never shared across profiles.
 
-You do **not** run `hermes gateway start` for the secondary profiles — the
+You do **not** run `ansatz gateway start` for the secondary profiles — the
 default gateway serves them. See the contract changes below.
 
 ### What changes when multiplexing is on
@@ -113,7 +113,7 @@ moment the flag is off.
 
 #### 1. Secondary profiles must not start their own gateway
 
-With a multiplexer running, a named-profile `hermes gateway start` / `run` is a
+With a multiplexer running, a named-profile `ansatz gateway start` / `run` is a
 **hard error**, pointing you back at the multiplexer:
 
 ```
@@ -201,8 +201,8 @@ migration, no orphaned history.
 #### 5. One PID/lock and one status surface
 
 There is a single process-level PID and lock (the multiplexer, under the default
-home). `hermes status` reports the multiplexer and the profiles it serves;
-`hermes status -p <name>` slices to one profile. Each profile still writes its
+home). `ansatz status` reports the multiplexer and the profiles it serves;
+`ansatz status -p <name>` slices to one profile. Each profile still writes its
 own `runtime_status.json` under its own home, so existing per-profile readers
 keep working.
 
@@ -307,9 +307,9 @@ run_for_profile() {
   profile="$1"
   action="$2"
   if [ "$profile" = "default" ]; then
-    hermes gateway "$action"
+    ansatz gateway "$action"
   else
-    hermes -p "$profile" gateway "$action"
+    ansatz -p "$profile" gateway "$action"
   fi
 }
 
@@ -322,7 +322,7 @@ case "$action" in
     done
     ;;
   list)
-    hermes gateway list
+    ansatz gateway list
     ;;
   *)
     usage
@@ -338,12 +338,12 @@ hermes-gateways start      # start every configured profile
 hermes-gateways stop       # stop every configured profile
 hermes-gateways restart    # restart all
 hermes-gateways status     # status across all
-hermes-gateways list       # delegates to `hermes gateway list`
+hermes-gateways list       # delegates to `ansatz gateway list`
 ```
 
 :::tip
-The `default` profile is targeted with `hermes gateway <action>` (no `-p`),
-not `hermes -p default gateway <action>`. The wrapper above handles both forms.
+The `default` profile is targeted with `ansatz gateway <action>` (no `-p`),
+not `ansatz -p default gateway <action>`. The wrapper above handles both forms.
 :::
 
 ## Manage one profile
@@ -360,7 +360,7 @@ coder gateway install    # create the LaunchAgent / systemd unit
 coder gateway uninstall  # remove the service file
 ```
 
-These are equivalent to `hermes -p coder gateway <action>` — useful if a
+These are equivalent to `ansatz -p coder gateway <action>` — useful if a
 profile alias is not on `PATH` or if you target profiles dynamically from a
 script.
 
@@ -400,15 +400,15 @@ tail -f ~/.hermes/logs/gateway.log ~/.hermes/profiles/*/logs/gateway.log
 The CLI also has a structured log viewer:
 
 ```bash
-hermes logs -f                  # follow default profile
-hermes -p coder logs -f         # follow one profile
-hermes logs --help              # filters, levels, JSON output
+ansatz logs -f                  # follow default profile
+ansatz -p coder logs -f         # follow one profile
+ansatz logs --help              # filters, levels, JSON output
 ```
 
 ## Identify what's actually running
 
 ```bash
-hermes profile list             # profiles + model + gateway state
+ansatz profile list             # profiles + model + gateway state
 hermes-gateways status          # full status across every profile
 launchctl list | grep hermes    # macOS — PIDs and labels
 systemctl --user list-units 'hermes-gateway-*'   # Linux — units
@@ -430,7 +430,7 @@ The default profile uses `~/.hermes/` directly with the same three files.
 Edit them with any editor or via the CLI:
 
 ```bash
-hermes config set model.model anthropic/claude-sonnet-4    # default profile
+ansatz config set model.model anthropic/claude-sonnet-4    # default profile
 coder config set model.model openai/gpt-5                  # named profile
 ```
 
@@ -485,7 +485,7 @@ use a third-party tool.
 
 ```bash
 # Inhibit suspend while a command runs
-systemd-inhibit --what=idle:sleep --who=hermes --why="gateways running" \
+systemd-inhibit --what=idle:sleep --who=ansatz --why="gateways running" \
   sleep infinity &
 
 # Allow user services to keep running after logout (recommended)
@@ -511,11 +511,11 @@ grep -H 'TELEGRAM_BOT_TOKEN\|DISCORD_BOT_TOKEN' \
 
 ## Updating the code
 
-`hermes update` pulls the latest code once and syncs new bundled skills into
+`ansatz update` pulls the latest code once and syncs new bundled skills into
 every profile:
 
 ```bash
-hermes update
+ansatz update
 hermes-gateways restart
 ```
 
@@ -525,7 +525,7 @@ User-modified skills are never overwritten.
 
 ### "Could not find service in domain for user gui: 501"
 
-You ran `hermes gateway start` after a previous `hermes gateway stop`. The
+You ran `ansatz gateway start` after a previous `ansatz gateway stop`. The
 CLI's `stop` does a full `launchctl unload`, which removes the service from
 launchd's registry. The CLI catches this specific error on `start` and
 automatically re-loads the plist (`↻ launchd job was unloaded; reloading
@@ -557,6 +557,6 @@ systemctl --user restart hermes-gateway-<profile>.service
 ### Health check
 
 ```bash
-hermes doctor                  # default profile
-hermes -p <profile> doctor     # one profile
+ansatz doctor                  # default profile
+ansatz -p <profile> doctor     # one profile
 ```

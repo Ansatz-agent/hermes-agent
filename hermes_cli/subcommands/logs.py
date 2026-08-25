@@ -1,4 +1,4 @@
-"""``hermes logs`` subcommand parser.
+"""``ansatz logs`` subcommand parser.
 
 Extracted verbatim from ``hermes_cli/main.py:main()`` (god-file Phase 2).
 Handler injected to avoid importing ``main``.
@@ -22,18 +22,18 @@ def build_logs_parser(subparsers, *, cmd_logs: Callable) -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 Examples:
-    hermes logs                    Show last 50 lines of agent.log
-    hermes logs -f                 Follow agent.log in real time
-    hermes logs errors             Show last 50 lines of errors.log
-    hermes logs gateway -n 100     Show last 100 lines of gateway.log
-    hermes logs gui -f             Follow gui.log in real time
-    hermes logs desktop -f         Follow desktop.log (Electron app boot/backend)
-    hermes logs --level WARNING    Only show WARNING and above
-    hermes logs --session abc123   Filter by session ID
-    hermes logs --component tools  Only show tool-related lines
-    hermes logs --since 1h         Lines from the last hour
-    hermes logs --since 30m -f     Follow, starting from 30 min ago
-    hermes logs list               List available log files with sizes
+    ansatz logs                    Show last 50 lines of agent.log
+    ansatz logs -f                 Follow agent.log in real time
+    ansatz logs errors             Show last 50 lines of errors.log
+    ansatz logs gateway -n 100     Show last 100 lines of gateway.log
+    ansatz logs gui -f             Follow gui.log in real time
+    ansatz logs desktop -f         Follow desktop.log (Electron app boot/backend)
+    ansatz logs --level WARNING    Only show WARNING and above
+    ansatz logs --session abc123   Filter by session ID
+    ansatz logs --component tools  Only show tool-related lines
+    ansatz logs --since 1h         Lines from the last hour
+    ansatz logs --since 30m -f     Follow, starting from 30 min ago
+    ansatz logs list               List available log files with sizes
 """,
     )
     logs_parser.add_argument(

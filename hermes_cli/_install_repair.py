@@ -54,7 +54,7 @@ def _is_termux_env(env: dict | None = None) -> bool:
 def _stdout_to_stderr():
     """Route fd 1 (and sys.stdout) to stderr for the duration of an install.
 
-    ``hermes acp`` speaks JSON-RPC on stdout; an inherited-fd install child
+    ``ansatz acp`` speaks JSON-RPC on stdout; an inherited-fd install child
     writing there would corrupt the protocol. Mirrors
     ``main.py::_recover_from_interrupted_install``.
     """

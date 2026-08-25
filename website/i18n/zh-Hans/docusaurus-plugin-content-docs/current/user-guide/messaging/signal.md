@@ -83,7 +83,7 @@ curl http://127.0.0.1:8080/api/v1/check
 最简单的方式：
 
 ```bash
-hermes gateway setup
+ansatz gateway setup
 ```
 
 从平台菜单中选择 **Signal**。向导将：
@@ -114,9 +114,9 @@ SIGNAL_HOME_CHANNEL=+1234567890                  # cron 任务的默认投递目
 然后启动 gateway：
 
 ```bash
-hermes gateway              # 前台运行
-hermes gateway install      # 安装为用户服务
-sudo hermes gateway install --system   # 仅 Linux：开机自启系统服务
+ansatz gateway              # 前台运行
+ansatz gateway install      # 安装为用户服务
+sudo ansatz gateway install --system   # 仅 Linux：开机自启系统服务
 ```
 
 ---
@@ -128,7 +128,7 @@ sudo hermes gateway install --system   # 仅 Linux：开机自启系统服务
 私信访问遵循与其他 Hermes 平台相同的模式：
 
 1. **已设置 `SIGNAL_ALLOWED_USERS`** → 仅允许这些用户发送消息
-2. **未设置白名单** → 未知用户会收到私信配对码（通过 `hermes pairing approve signal CODE` 审批）
+2. **未设置白名单** → 未知用户会收到私信配对码（通过 `ansatz pairing approve signal CODE` 审批）
 3. **`SIGNAL_ALLOW_ALL_USERS=true`** → 任何人均可发送消息（谨慎使用）
 
 ### 群组访问

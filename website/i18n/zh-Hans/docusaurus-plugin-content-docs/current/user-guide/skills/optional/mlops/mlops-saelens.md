@@ -14,7 +14,7 @@ description: "提供使用 SAELens 训练和分析稀疏自编码器（SAE）的
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/mlops/saelens` 安装 |
+| 来源 | 可选 — 通过 `ansatz skills install official/mlops/saelens` 安装 |
 | 路径 | `optional-skills/mlops/saelens` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |

@@ -1,10 +1,10 @@
-"""``hermes doctor --live`` — opt-in bounded real-call tool-backend probes.
+"""``ansatz doctor --live`` — opt-in bounded real-call tool-backend probes.
 
 Design invariants:
 
 - **Opt-in only.** These probes make real (cheap, metadata/read-only) network
   calls and may spend a trivial amount of quota. They run ONLY when the user
-  passes ``hermes doctor --live``.
+  passes ``ansatz doctor --live``.
 - **Bounded.** One probe per configured backend, sequential, each with a
   ~10s timeout (configurable via ``doctor.live_probe_timeout`` in
   config.yaml).
@@ -135,7 +135,7 @@ def _launch_browser_probe(timeout: float) -> tuple:
 def _probe_mcp_server(name: str, config: dict, timeout: float):
     """initialize + tools/list against one configured MCP server.
 
-    Reuses the exact machinery behind ``hermes mcp test``.
+    Reuses the exact machinery behind ``ansatz mcp test``.
     """
     from hermes_cli.mcp_config import _probe_single_server
 

@@ -1,6 +1,6 @@
 """Last-resort page-level salvage for an unreadable session database schema.
 
-``hermes sessions recover --allow-partial`` normally copies rows through SQL,
+``ansatz sessions recover --allow-partial`` normally copies rows through SQL,
 which requires the ``sessions`` and ``messages`` table *schemas* to be
 readable. When the schema page itself is damaged, SQL-level salvage is
 impossible — but the row payloads frequently survive on their b-tree pages.

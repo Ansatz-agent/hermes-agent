@@ -1,6 +1,6 @@
 """Profile describer — auto-generate ``description`` for a profile.
 
-Used by ``hermes profile describe <name> --auto`` and the dashboard's
+Used by ``ansatz profile describe <name> --auto`` and the dashboard's
 "auto-generate description" button. Reads the profile's installed
 skills, model+provider, name, and optionally a small slice of memory,
 then asks the auxiliary LLM to produce a 1-2 sentence description of

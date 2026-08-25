@@ -145,7 +145,7 @@ def _report_runtime_repair_failure(repair: RuntimeRepairResult) -> None:
         )
         print(
             "    Sessions stay protected meanwhile: Hermes keeps databases "
-            "out of WAL mode on this SQLite build. The next `hermes update` "
+            "out of WAL mode on this SQLite build. The next `ansatz update` "
             "will retry."
         )
         return
@@ -157,7 +157,7 @@ class _UvResult(str):
     """``ensure_uv()`` return value that survives an update boundary.
 
     ``ensure_uv()``'s arity has flipped between a single path string and a
-    ``(path, fresh_bootstrap)`` tuple across releases. ``hermes update`` runs
+    ``(path, fresh_bootstrap)`` tuple across releases. ``ansatz update`` runs
     the call site from the *old*, already-imported ``hermes_cli.main`` against
     this *freshly pulled* module, so the two can disagree on how many values
     ``ensure_uv()`` returns. An install parked on a 2-tuple release runs
@@ -227,7 +227,7 @@ def _ensure_uv_path(
         # Compatibility boundary: an older, already-imported updater calls the
         # freshly pulled ``ensure_uv()`` after bootstrapping uv.  Repair here so
         # that first update can migrate a vulnerable runtime without requiring
-        # a second ``hermes update``.
+        # a second ``ansatz update``.
         try:
             repair = repair_vulnerable_runtime(result)
             if repair_observer is not None:
@@ -279,7 +279,7 @@ def ensure_uv(
 def _uv_self_update_is_fresh(now: float | None = None) -> bool:
     """Return True when ``uv self update`` ran recently enough to skip.
 
-    uv releases roughly weekly while many users run ``hermes update`` daily;
+    uv releases roughly weekly while many users run ``ansatz update`` daily;
     re-running a blocking network self-update on every invocation is waste
     and, offline, an unbounded hang risk. A stamp file under HERMES_HOME
     caches the last successful self-update time.
@@ -319,7 +319,7 @@ def update_managed_uv(
 ) -> Optional[str]:
     """Run ``uv self update`` on the managed uv binary.
 
-    Call this during ``hermes update`` so the managed copy stays current.
+    Call this during ``ansatz update`` so the managed copy stays current.
     Returns the managed path when uv is available and ``None`` otherwise.
     A self-update failure is non-fatal because the old version still works.
     ``repair_observer``, when provided, receives the runtime repair result.
@@ -387,7 +387,7 @@ def update_managed_uv(
 def _reload_hermes_constants():
     """Re-execute ``hermes_constants`` from disk and return the fresh module.
 
-    ``hermes update`` imports ``hermes_constants`` from the OLD checkout,
+    ``ansatz update`` imports ``hermes_constants`` from the OLD checkout,
     ``git pull`` then replaces that file, and this freshly-pulled module runs
     its lazy imports against the module object Python already cached in
     ``sys.modules`` — the pre-upgrade one. A symbol added by the update is
@@ -698,7 +698,7 @@ def _install_safe_python_generation(
 
     # All patches on the current minor line are vulnerable or rejected.
     # Fall forward to the next supported minor (e.g. 3.11 → 3.12) so the
-    # user isn't stuck on every `hermes update` with no path to a fixed
+    # user isn't stuck on every `ansatz update` with no path to a fixed
     # runtime (issue #76106).  The requires-python constraint
     # (>=3.11,<3.14) and the downstream import smoke-test gate
     # compatibility; we only need to stay inside that window.
@@ -1092,9 +1092,9 @@ def _default_live_venv(root: Path) -> Path:
     Managed installs create ``<checkout>/venv``, but uv-default and dev
     checkouts use ``<checkout>/.venv``.  Historically only ``venv`` was
     probed, so a ``.venv`` install linking a vulnerable SQLite returned
-    ``not-applicable`` on every ``hermes update`` and stayed on
+    ``not-applicable`` on every ``ansatz update`` and stayed on
     journal_mode=DELETE forever — even though the WAL fallback warning
-    promises that ``hermes update`` repairs the runtime (issue class:
+    promises that ``ansatz update`` repairs the runtime (issue class:
     2,600x slower ``state.db`` appends under DELETE).
 
     ``venv`` wins when it holds an interpreter (managed layout takes

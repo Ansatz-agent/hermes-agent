@@ -285,7 +285,7 @@ def _check_via_local_git(repo_dir: Path) -> Optional[int]:
         # Passive probe via HTTPS ls-remote (never SSH — no hardware-key
         # prompts). Tip SHAs alone can't distinguish "behind" from a local
         # carried commit sitting AHEAD of origin/main, and misreporting an
-        # ahead checkout as behind nudges the user into `hermes update`,
+        # ahead checkout as behind nudges the user into `ansatz update`,
         # which can wipe their carried work.
         upstream_rev = _upstream_main_sha()
         if upstream_rev is None:
@@ -1005,7 +1005,7 @@ def build_welcome_banner(console: "Console", model: str, cwd: str,
             # is wrong and how to fix it.
             left_lines.append(
                 f"[bold red]no model configured[/] "
-                f"[dim {dim}]— run /model or hermes setup[/]"
+                f"[dim {dim}]— run /model or ansatz setup[/]"
             )
         else:
             model_short = model.split("/")[-1] if "/" in model else model

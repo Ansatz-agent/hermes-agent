@@ -186,7 +186,7 @@ def _base_interpreter_is_externally_managed() -> bool:
 def _run_repair_install(specs: list[str], project_root: Path) -> bool:
     """``uv pip`` (or stdlib ``pip``) force-reinstall of the given specs.
 
-    Streams nothing to stdout (``hermes acp`` speaks JSON-RPC on stdout);
+    Streams nothing to stdout (``ansatz acp`` speaks JSON-RPC on stdout);
     output is captured and replayed to stderr only on failure.  Never raises.
 
     Two installer paths, in priority order:
@@ -283,7 +283,7 @@ def recover_if_needed(
     """Repair wiped core packages so ``hermes_cli.main`` can import at all.
 
     Fast path (no marker present) is two ``lstat`` calls.  Only acts when a
-    recovery marker from a prior ``hermes update`` exists AND an import probe
+    recovery marker from a prior ``ansatz update`` exists AND an import probe
     confirms a core package is actually broken.  Markers are intentionally
     NOT cleared here — ``_recover_from_interrupted_install()`` in main.py owns
     the confirmed marker lifecycle and runs immediately after import succeeds.
@@ -416,7 +416,7 @@ def _complete_pending_core_install(root: Path, core_marker: Path) -> None:
     """Run the pending core install BEFORE main.py can import native modules.
 
     ``recover_if_needed`` invokes this when ``.update-incomplete`` exists —
-    a prior ``hermes update`` (or the self-lock preflight, #83569) left the
+    a prior ``ansatz update`` (or the self-lock preflight, #83569) left the
     dependency sync deliberately unfinished.  Completing it here matters on
     Windows: the deferral exists precisely because the process that wrote the
     marker had a native venv extension mapped; this process, running before
@@ -426,7 +426,7 @@ def _complete_pending_core_install(root: Path, core_marker: Path) -> None:
     Marker lifecycle: cleared on success; kept (attempts counter bumped) on
     failure for the next launch or main.py's post-import recovery.  An
     attempts ceiling caps automatic retries so a persistent installer
-    failure does not block every launch (``hermes acp`` included).
+    failure does not block every launch (``ansatz acp`` included).
 
     Never raises: any failure leaves the marker for the post-import path.
     """
@@ -463,7 +463,7 @@ def _complete_pending_core_install(root: Path, core_marker: Path) -> None:
 
         try:
             print(
-                "⚠ A previous `hermes update` was interrupted mid-install — "
+                "⚠ A previous `ansatz update` was interrupted mid-install — "
                 "finishing dependency installation now (before any native "
                 "extensions load)...",
                 file=sys.stderr,

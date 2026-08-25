@@ -129,7 +129,7 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
 运行引导式配置命令：
 
 ```bash
-hermes gateway setup
+ansatz gateway setup
 ```
 
 在提示时选择 **Mattermost**，然后按提示粘贴你的服务器 URL、机器人 token 和用户 ID。
@@ -170,13 +170,13 @@ group_sessions_per_user: true
 配置完成后，启动 Mattermost gateway：
 
 ```bash
-hermes gateway
+ansatz gateway
 ```
 
 机器人应在几秒内连接到你的 Mattermost 服务器。发送一条消息——私信或在已添加机器人的频道中——进行测试。
 
 :::tip
-你可以在后台运行 `hermes gateway`，或将其配置为 systemd 服务以持续运行。详情参见部署文档。
+你可以在后台运行 `ansatz gateway`，或将其配置为 systemd 服务以持续运行。详情参见部署文档。
 :::
 
 ## 主频道
@@ -300,7 +300,7 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
 
 **原因**：Hermes gateway 未运行，或连接失败。
 
-**解决方法**：检查 `hermes gateway` 是否正在运行。查看终端输出中的错误信息。常见问题：URL 错误、token 过期、Mattermost 服务器无法访问。
+**解决方法**：检查 `ansatz gateway` 是否正在运行。查看终端输出中的错误信息。常见问题：URL 错误、token 过期、Mattermost 服务器无法访问。
 
 ### "User not allowed"/机器人忽略你
 

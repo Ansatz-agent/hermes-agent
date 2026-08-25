@@ -14,7 +14,7 @@ Spaced-repetition flashcards: create, review, quiz, export.
 
 | | |
 |---|---|
-| Source | Optional — install with `hermes skills install official/productivity/memento-flashcards` |
+| Source | Optional — install with `ansatz skills install official/productivity/memento-flashcards` |
 | Path | `optional-skills/productivity/memento-flashcards` |
 | Version | `1.0.0` |
 | Author | Memento AI |

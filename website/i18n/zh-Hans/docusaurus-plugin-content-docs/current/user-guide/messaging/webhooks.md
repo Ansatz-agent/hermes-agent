@@ -26,8 +26,8 @@ agent 处理事件后，可通过在 PR 上发布评论、向 Telegram/Discord �
 
 ## 快速开始
 
-1. 通过 `hermes gateway setup` 或环境变量启用
-2. 在 `config.yaml` 中定义路由，**或**使用 `hermes webhook subscribe` 动态创建
+1. 通过 `ansatz gateway setup` 或环境变量启用
+2. 在 `config.yaml` 中定义路由，**或**使用 `ansatz webhook subscribe` 动态创建
 3. 将你的服务指向 `http://your-server:8644/webhooks/<route-name>`
 
 ---
@@ -39,7 +39,7 @@ agent 处理事件后，可通过在 PR 上发布评论、向 Telegram/Discord �
 ### 通过设置向导
 
 ```bash
-hermes gateway setup
+ansatz gateway setup
 ```
 
 按照提示启用 webhooks、设置端口和全局 HMAC secret。
@@ -365,7 +365,7 @@ platforms:
 ### 示例：通过 CLI 动态订阅
 
 ```bash
-hermes webhook subscribe antenna-matches \
+ansatz webhook subscribe antenna-matches \
   --deliver telegram \
   --deliver-chat-id "123456789" \
   --deliver-only \
@@ -397,12 +397,12 @@ hermes webhook subscribe antenna-matches \
 
 ## 动态订阅（CLI） {#dynamic-subscriptions}
 
-除了 `config.yaml` 中的静态路由，还可以使用 `hermes webhook` CLI 命令动态创建 webhook 订阅。当 agent 本身需要设置事件驱动触发器时，这尤为有用。
+除了 `config.yaml` 中的静态路由，还可以使用 `ansatz webhook` CLI 命令动态创建 webhook 订阅。当 agent 本身需要设置事件驱动触发器时，这尤为有用。
 
 ### 创建订阅
 
 ```bash
-hermes webhook subscribe github-issues \
+ansatz webhook subscribe github-issues \
   --events "issues" \
   --prompt "New issue #{issue.number}: {issue.title}\nBy: {issue.user.login}\n\n{issue.body}" \
   --deliver telegram \
@@ -415,20 +415,20 @@ hermes webhook subscribe github-issues \
 ### 列出订阅
 
 ```bash
-hermes webhook list
+ansatz webhook list
 ```
 
 ### 删除订阅
 
 ```bash
-hermes webhook remove github-issues
+ansatz webhook remove github-issues
 ```
 
 ### 测试订阅
 
 ```bash
-hermes webhook test github-issues
-hermes webhook test github-issues --payload '{"issue": {"number": 42, "title": "Test"}}'
+ansatz webhook test github-issues
+ansatz webhook test github-issues --payload '{"issue": {"number": 42, "title": "Test"}}'
 ```
 
 ### 动态订阅的工作原理
@@ -441,7 +441,7 @@ hermes webhook test github-issues --payload '{"issue": {"number": 42, "title": "
 
 ### agent 驱动的订阅
 
-agent 可通过 terminal 工具在 `webhook-subscriptions` skill 的引导下创建订阅。向 agent 请求"为 GitHub issues 设置 webhook"，它将运行相应的 `hermes webhook subscribe` 命令。
+agent 可通过 terminal 工具在 `webhook-subscriptions` skill 的引导下创建订阅。向 agent 请求"为 GitHub issues 设置 webhook"，它将运行相应的 `ansatz webhook subscribe` 命令。
 
 ---
 
@@ -526,7 +526,7 @@ Webhook payload 包含攻击者可控的数据——PR 标题、commit 消息、
 
 ### Agent 未响应
 
-- 在前台运行 gateway 以查看日志：`hermes gateway run`
+- 在前台运行 gateway 以查看日志：`ansatz gateway run`
 - 检查 prompt 模板是否正确渲染
 - 验证投递目标已配置并连接
 

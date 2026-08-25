@@ -60,7 +60,7 @@ def support_floor_message() -> str:
     return (
         f"This config predates version {SUPPORT_FLOOR_VERSION} (~2 years old) "
         "and can no longer be auto-migrated. Back up "
-        f"{display_hermes_home()}/config.yaml and run `hermes setup` to "
+        f"{display_hermes_home()}/config.yaml and run `ansatz setup` to "
         f"regenerate, or manually set _config_version: {SUPPORT_FLOOR_VERSION} "
         "after reviewing the changelog."
     )
@@ -376,7 +376,7 @@ def _migrate_to_21(results: Dict[str, Any], quiet: bool) -> None:
             else:
                 print(
                     "  ✓ Plugins now opt-in: no existing plugins to grandfather. "
-                    "Use `hermes plugins enable <name>` to activate."
+                    "Use `ansatz plugins enable <name>` to activate."
                 )
 
 
@@ -387,7 +387,7 @@ def _migrate_to_23(results: Dict[str, Any], quiet: bool) -> None:
     # unification under `auxiliary.curator`) never wrote the curator section
     # to disk. The runtime deep-merge in `load_config()` fills defaults at
     # read time, so the curator *functions*; but users can't see/edit the
-    # settings in their `config.yaml`, and `hermes curator status` has no
+    # settings in their `config.yaml`, and `ansatz curator status` has no
     # stable logs dir to point at until the first run mkdir's it.
     #
     # This migration:
@@ -458,7 +458,7 @@ def _migrate_to_23(results: Dict[str, Any], quiet: bool) -> None:
             if not quiet:
                 print(
                     "  ✓ Curator settings now available "
-                    f"({', '.join(added_curator)}) — edit via `hermes config set`"
+                    f"({', '.join(added_curator)}) — edit via `ansatz config set`"
                 )
         if added_aux:
             results["config_added"].append(
@@ -467,7 +467,7 @@ def _migrate_to_23(results: Dict[str, Any], quiet: bool) -> None:
             if not quiet:
                 print(
                     "  ✓ auxiliary.curator settings now available "
-                    f"({', '.join(added_aux)}) — edit via `hermes config set`"
+                    f"({', '.join(added_aux)}) — edit via `ansatz config set`"
                 )
 
 
@@ -532,7 +532,7 @@ def _migrate_to_29(results: Dict[str, Any], quiet: bool) -> None:
 # is supplied by load_config()'s deep-merge at read time, and persisting a
 # default-valued key would only bloat a lean config (it gets stripped on
 # save anyway). Existing installs that WANT the old always-consolidate
-# behavior set it to true explicitly via `hermes config set`.
+# behavior set it to true explicitly via `ansatz config set`.
 # (No registry entry: this version bump has no migration step.)
 
 

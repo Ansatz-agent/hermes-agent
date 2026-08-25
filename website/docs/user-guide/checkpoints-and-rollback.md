@@ -12,7 +12,7 @@ Hermes Agent can automatically snapshot your project before **destructive operat
 Enable checkpoints per-session with `--checkpoints`:
 
 ```bash
-hermes chat --checkpoints
+ansatz chat --checkpoints
 ```
 
 Or enable globally in `~/.hermes/config.yaml`:
@@ -48,12 +48,12 @@ CLI for inspecting and managing the store outside a session:
 
 | Command | Description |
 |---------|-------------|
-| `hermes checkpoints` | Show total size, project count, per-project breakdown |
-| `hermes checkpoints status` | Same as bare `checkpoints` |
-| `hermes checkpoints list` | Alias for `status` |
-| `hermes checkpoints prune` | Force a sweep: delete orphans/stale, GC, enforce size cap |
-| `hermes checkpoints clear` | Nuke the entire checkpoint base (asks first) |
-| `hermes checkpoints clear-legacy` | Delete only the `legacy-*` archives from v1 migration |
+| `ansatz checkpoints` | Show total size, project count, per-project breakdown |
+| `ansatz checkpoints status` | Same as bare `checkpoints` |
+| `ansatz checkpoints list` | Alias for `status` |
+| `ansatz checkpoints prune` | Force a sweep: delete orphans/stale, GC, enforce size cap |
+| `ansatz checkpoints clear` | Nuke the entire checkpoint base (asks first) |
+| `ansatz checkpoints clear-legacy` | Delete only the `legacy-*` archives from v1 migration |
 
 ## How Checkpoints Work
 
@@ -100,7 +100,7 @@ checkpoints:
   # found) — a missing workdir at startup is ambiguous (deleted project vs.
   # an unmounted external volume / network share / VPN not yet up), so
   # orphan cleanup is only ever done via the explicit
-  # `hermes checkpoints prune` command below, with a confirmation prompt.
+  # `ansatz checkpoints prune` command below, with a confirmation prompt.
   auto_prune: true
   retention_days: 7
   min_interval_hours: 24
@@ -114,7 +114,7 @@ checkpoints:
   auto_prune: false
 ```
 
-When `enabled: false`, the Checkpoint Manager is a no-op and never attempts git operations. When `auto_prune: false`, the store grows until you run `hermes checkpoints prune` manually.
+When `enabled: false`, the Checkpoint Manager is a no-op and never attempts git operations. When `auto_prune: false`, the store grows until you run `ansatz checkpoints prune` manually.
 
 ## Listing Checkpoints
 
@@ -141,7 +141,7 @@ Hermes responds with a formatted list showing change statistics:
 ## Inspecting the Store from the Shell
 
 ```bash
-hermes checkpoints
+ansatz checkpoints
 ```
 
 Sample output:
@@ -162,13 +162,13 @@ Projects:        12
 Legacy archives (1):
   legacy-20260506-050616                           4.2 MB
 
-Clear with: hermes checkpoints clear-legacy
+Clear with: ansatz checkpoints clear-legacy
 ```
 
 Force a full sweep (ignores the 24h idempotency marker):
 
 ```bash
-hermes checkpoints prune --retention-days 3 --max-size-mb 200
+ansatz checkpoints prune --retention-days 3 --max-size-mb 200
 ```
 
 ## Previewing Changes with `/rollback diff`
@@ -227,7 +227,7 @@ Restore just one file from a checkpoint without affecting the rest of the direct
   └── legacy-<ts>/           # archived pre-v2 per-project shadow repos
 ```
 
-Each `<hash>` is derived from the absolute path of the working directory. You normally never need to touch these manually — use `hermes checkpoints status` / `prune` / `clear` instead.
+Each `<hash>` is derived from the absolute path of the working directory. You normally never need to touch these manually — use `ansatz checkpoints status` / `prune` / `clear` instead.
 
 ### Migration from v1
 
@@ -236,17 +236,17 @@ Before the v2 rewrite, each working directory got its own complete shadow git re
 On first v2 run, any pre-v2 shadow repos are moved into `~/.hermes/checkpoints/legacy-<timestamp>/` so the new single-store layout starts clean. Old `/rollback` history is still reachable by manually inspecting the legacy archive with `git`; once you're confident you don't need it, run:
 
 ```bash
-hermes checkpoints clear-legacy
+ansatz checkpoints clear-legacy
 ```
 
 to reclaim the space. Legacy archives are also swept by `auto_prune` after `retention_days`.
 
 ## Best Practices
 
-- **Enable checkpoints only when you need them** — `hermes chat --checkpoints` or per-profile `enabled: true`.
+- **Enable checkpoints only when you need them** — `ansatz chat --checkpoints` or per-profile `enabled: true`.
 - **Use `/rollback diff` before restoring** — preview what will change to pick the right checkpoint.
 - **Use `/rollback` instead of `git reset`** when you want to undo agent-driven changes only.
-- **Check `hermes checkpoints status` occasionally** if you use checkpoints regularly — shows which projects are active and what the store costs you.
+- **Check `ansatz checkpoints status` occasionally** if you use checkpoints regularly — shows which projects are active and what the store costs you.
 - **Combine with Git worktrees** for maximum safety — keep each Hermes session in its own worktree/branch, with checkpoints as an extra layer.
 
 For running multiple agents in parallel on the same repo, see the guide on [Git worktrees](./git-worktrees.md).

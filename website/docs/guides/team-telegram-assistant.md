@@ -86,7 +86,7 @@ You have two options: the interactive setup wizard (recommended) or manual confi
 ### Option A: Interactive Setup (Recommended)
 
 ```bash
-hermes gateway setup
+ansatz gateway setup
 ```
 
 This walks you through everything with arrow-key selection. Pick **Telegram**, paste your bot token, and enter your user ID when prompted.
@@ -124,7 +124,7 @@ Telegram user IDs are permanent numbers like `123456789`. They're different from
 Run the gateway in the foreground first to make sure everything works:
 
 ```bash
-hermes gateway
+ansatz gateway
 ```
 
 You should see output like:
@@ -142,17 +142,17 @@ Open Telegram, find your bot, and send it a message. If it replies, you're in bu
 For a persistent deployment that survives reboots:
 
 ```bash
-hermes gateway install
-sudo hermes gateway install --system   # Linux only: boot-time system service
+ansatz gateway install
+sudo ansatz gateway install --system   # Linux only: boot-time system service
 ```
 
 This creates a background service: a user-level **systemd** service on Linux by default, a **launchd** service on macOS, or a boot-time Linux system service if you pass `--system`.
 
 ```bash
 # Linux — manage the default user service
-hermes gateway start
-hermes gateway stop
-hermes gateway status
+ansatz gateway start
+ansatz gateway stop
+ansatz gateway status
 
 # View live logs
 journalctl --user -u hermes-gateway -f
@@ -161,26 +161,26 @@ journalctl --user -u hermes-gateway -f
 sudo loginctl enable-linger $USER
 
 # Linux servers — explicit system-service commands
-sudo hermes gateway start --system
-sudo hermes gateway status --system
+sudo ansatz gateway start --system
+sudo ansatz gateway status --system
 journalctl -u hermes-gateway -f
 ```
 
 ```bash
 # macOS — manage the service
-hermes gateway start
-hermes gateway stop
+ansatz gateway start
+ansatz gateway stop
 tail -f ~/.hermes/logs/gateway.log
 ```
 
 :::tip macOS PATH
-The launchd plist captures your shell PATH at install time so gateway subprocesses can find tools like Node.js and ffmpeg. If you install new tools later, re-run `hermes gateway install` to update the plist.
+The launchd plist captures your shell PATH at install time so gateway subprocesses can find tools like Node.js and ffmpeg. If you install new tools later, re-run `ansatz gateway install` to update the plist.
 :::
 
 ### Verify It's Running
 
 ```bash
-hermes gateway status
+ansatz gateway status
 ```
 
 Then send a test message to your bot on Telegram. You should get a response within a few seconds.
@@ -203,7 +203,7 @@ TELEGRAM_ALLOWED_USERS=123456789,987654321,555555555
 Restart the gateway after changes:
 
 ```bash
-hermes gateway stop && hermes gateway start
+ansatz gateway stop && ansatz gateway start
 ```
 
 ### Approach B: DM Pairing (Recommended for Teams)
@@ -220,7 +220,7 @@ DM pairing is more flexible — you don't need to collect user IDs upfront. Here
 
 3. **You approve it** on the server:
    ```bash
-   hermes pairing approve telegram XKGH5N7P
+   ansatz pairing approve telegram XKGH5N7P
    ```
 
 4. **They're in** — the bot immediately starts responding to their messages
@@ -229,13 +229,13 @@ DM pairing is more flexible — you don't need to collect user IDs upfront. Here
 
 ```bash
 # See all pending and approved users
-hermes pairing list
+ansatz pairing list
 
 # Revoke someone's access
-hermes pairing revoke telegram 987654321
+ansatz pairing revoke telegram 987654321
 
 # Clear expired pending codes
-hermes pairing clear-pending
+ansatz pairing clear-pending
 ```
 
 :::tip
@@ -352,8 +352,8 @@ partitions above 80%, containers that have restarted, or high memory usage.
 
 ```bash
 # From the CLI
-hermes cron list          # View all scheduled jobs
-hermes cron status        # Check if scheduler is running
+ansatz cron list          # View all scheduled jobs
+ansatz cron status        # Check if scheduler is running
 
 # From Telegram chat
 /cron list                # View jobs
@@ -394,7 +394,7 @@ This way, even if someone asks the bot to run something destructive, your host s
 
 ```bash
 # Check if the gateway is running
-hermes gateway status
+ansatz gateway status
 
 # Watch live logs (Linux)
 journalctl --user -u hermes-gateway -f
@@ -408,8 +408,8 @@ tail -f ~/.hermes/logs/gateway.log
 From Telegram, send `/update` to the bot — it will pull the latest version and restart. Or from the server:
 
 ```bash
-hermes update
-hermes gateway stop && hermes gateway start
+ansatz update
+ansatz gateway stop && ansatz gateway start
 ```
 
 ### Log Locations

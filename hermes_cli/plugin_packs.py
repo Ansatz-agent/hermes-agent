@@ -32,7 +32,7 @@ Supply-chain posture:
   capability-grant keys (a pack cannot pre-consent capabilities).
 * Capability consent is NEVER bulk-granted: after each plugin installs,
   its declared capabilities ride the exact same per-plugin consent flow
-  as a normal ``hermes plugins install`` (#64228).
+  as a normal ``ansatz plugins install`` (#64228).
 
 ``skills:`` is parsed and displayed but not installed — wiring skill-hub
 ids into the skills installer is a documented follow-up seam.
@@ -389,7 +389,7 @@ def render_pack_review(console, pack: PluginPack, resolved: List[ResolvedPackPlu
             + ", ".join(pack.skills)
         )
         console.print(
-            "[dim]Install them manually, e.g. `hermes skills install <id>`.[/dim]"
+            "[dim]Install them manually, e.g. `ansatz skills install <id>`.[/dim]"
         )
     console.print(
         "\n[dim]Installing a pack runs third-party code × "
@@ -630,7 +630,7 @@ def export_pack(*, enabled_only: bool = False, pack_name: str = "my-hermes-pack"
 
     doc: dict[str, Any] = {
         "name": pack_name,
-        "description": "Exported by `hermes plugins pack export`.",
+        "description": "Exported by `ansatz plugins pack export`.",
         "version": "1.0.0",
         "plugins": entries,
     }
@@ -651,7 +651,7 @@ def export_pack(*, enabled_only: bool = False, pack_name: str = "my-hermes-pack"
 # ---------------------------------------------------------------------------
 
 def cmd_pack_show(source: str) -> None:
-    """``hermes plugins pack show <path-or-url>`` — dry-run review."""
+    """``ansatz plugins pack show <path-or-url>`` — dry-run review."""
     from rich.console import Console
 
     console = Console()
@@ -668,11 +668,11 @@ def cmd_pack_show(source: str) -> None:
             f"\n[yellow]{len(unresolved)} entr{'y' if len(unresolved) == 1 else 'ies'} "
             "could not be resolved — install would skip them and exit non-zero.[/yellow]"
         )
-    console.print("\n[dim]Dry run only. Install with `hermes plugins pack install ...`.[/dim]")
+    console.print("\n[dim]Dry run only. Install with `ansatz plugins pack install ...`.[/dim]")
 
 
 def cmd_pack_install(source: str, *, force: bool = False) -> None:
-    """``hermes plugins pack install <path-or-url>``.
+    """``ansatz plugins pack install <path-or-url>``.
 
     Mandatory review screen → one summary consent for the pack contents →
     fan-out installs with pinned refs → per-plugin capability consent via
@@ -721,13 +721,13 @@ def cmd_pack_install(source: str, *, force: bool = False) -> None:
         console.print(f"  [red]✗[/red] {r.display}: {r.error}")
     if ok:
         console.print("[dim]Restart the gateway for the plugins to take effect:[/dim]")
-        console.print("[dim]  hermes gateway restart[/dim]")
+        console.print("[dim]  ansatz gateway restart[/dim]")
     if failed:
         sys.exit(1)
 
 
 def cmd_pack_export(*, enabled_only: bool = False, name: str = "my-hermes-pack") -> None:
-    """``hermes plugins pack export [--enabled-only]`` — pack YAML on stdout."""
+    """``ansatz plugins pack export [--enabled-only]`` — pack YAML on stdout."""
     from rich.console import Console
 
     console = Console(stderr=True)
@@ -742,7 +742,7 @@ def cmd_pack_export(*, enabled_only: bool = False, name: str = "my-hermes-pack")
 
 
 def pack_command(args) -> None:
-    """Dispatch ``hermes plugins pack <action>``."""
+    """Dispatch ``ansatz plugins pack <action>``."""
     action = getattr(args, "pack_action", None)
     if action == "install":
         cmd_pack_install(args.source, force=getattr(args, "force", False))
@@ -757,6 +757,6 @@ def pack_command(args) -> None:
         from rich.console import Console
 
         Console().print(
-            "[red]Error:[/red] Usage: hermes plugins pack {install|export|show}"
+            "[red]Error:[/red] Usage: ansatz plugins pack {install|export|show}"
         )
         sys.exit(1)
