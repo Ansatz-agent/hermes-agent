@@ -2321,53 +2321,92 @@ def _ensure_fhs_path_guard() -> None:
         print("    (reload your shell or run 'source ~/.bashrc' to pick it up)")
 
 def _ensure_acp_launcher() -> None:
-    """Self-heal: install a ``hermes-acp`` launcher next to the ``hermes`` one.
+    """Self-heal the complete public launcher family next to an existing one.
 
-    Mirrors the launcher block in ``scripts/install.sh`` so existing installs
-    gain the ACP command on ``ansatz update`` without a reinstall.  ACP hosts
-    (Zed, JetBrains, Buzz Desktop) spawn the agent by resolving the
-    ``hermes-acp`` command name against the login-shell PATH; the console
-    script of that name lives inside the install's venv, which is not on that
-    PATH, so those hosts report Hermes as not installed even when it is.
+    Fresh POSIX installs publish the six console-script names declared in
+    ``pyproject.toml``. Older installations may expose only ``hermes`` (or
+    only its ACP sibling) from their login-shell PATH, even after an update
+    has placed all real entry points in the venv. Repair missing names without
+    replacing a file or symlink we do not own.
 
-    The shim simply delegates to the sibling ``hermes`` launcher with the
-    ``acp`` subcommand, which makes it correct for every install layout
-    (venv wrapper, FHS symlink, pipx/pip console script) without having to
-    reconstruct interpreter/entrypoint paths.
-
-    No-op on Windows (install.ps1 copies ``hermes.exe`` + ``hermes-acp.exe``
-    into ``$InstallDir\bin`` and puts THAT on the user PATH — never the whole
-    ``venv\Scripts`` dir, which would shadow the user's ``python`` (#83797) —
-    so ``hermes-acp.exe`` already resolves) and wherever a ``hermes-acp`` is
-    already present next to the ``hermes`` command.  Unwritable directories
-    (e.g. ``/usr/local/bin`` as non-root) are skipped silently.  Idempotent.
+    The historical name is retained because ``hermes_cli.main`` lazily exports
+    it for older callers and tests. No-op on Windows: install.ps1 owns the
+    Windows shim family. Unwritable directories are skipped silently.
     """
     if _m().sys.platform == "win32":
         return
+
+    # Do not resolve this path: venv Python is commonly a symlink to a base
+    # interpreter, while its sibling console scripts remain in the venv bin.
+    console_bin = Path(_m().sys.executable).parent
+
+    def _console_script(name: str) -> Path | None:
+        candidate = console_bin / name
+        return candidate if candidate.is_file() or candidate.is_symlink() else None
+
+    def _write_launcher(path: Path, target: Path, *args: str) -> bool:
+        # ``exists`` alone misses a broken symlink. Never follow or replace
+        # either symlinks or existing files: they can belong to pipx, another
+        # install, or the user (#21454).
+        if path.exists() or path.is_symlink():
+            return False
+        arguments = " ".join(f'"{arg}"' for arg in args)
+        suffix = f" {arguments}" if arguments else ""
+        shim = (
+            "#!/usr/bin/env bash\n"
+            "# Launcher repair written by `ansatz update`.\n"
+            f'exec "{target}"{suffix} "$@"\n'
+        )
+        path.write_text(shim, encoding="utf-8")
+        path.chmod(path.stat().st_mode | 0o755)
+        return True
+
     for bin_dir in (Path.home() / ".local" / "bin", Path("/usr/local/bin")):
-        hermes_cmd = bin_dir / "hermes"
-        acp_cmd = bin_dir / "hermes-acp"
         try:
-            if not (hermes_cmd.is_file() or hermes_cmd.is_symlink()):
+            ansatz_cmd = bin_dir / "ansatz"
+            hermes_cmd = bin_dir / "hermes"
+            if ansatz_cmd.is_file() or ansatz_cmd.is_symlink():
+                primary = ansatz_cmd
+            elif hermes_cmd.is_file() or hermes_cmd.is_symlink():
+                primary = hermes_cmd
+            else:
                 continue
-            # Already present — a console script (pip/pipx install), an
-            # earlier shim, or a symlink. is_symlink() catches broken
-            # symlinks that exists() would miss; never follow-and-overwrite
-            # (the #21454 failure mode).
-            if acp_cmd.exists() or acp_cmd.is_symlink():
-                continue
-            shim = (
-                "#!/usr/bin/env bash\n"
-                "# Hermes Agent — ACP launcher (written by `ansatz update`).\n"
-                "# ACP hosts (Zed, JetBrains, Buzz) resolve the agent by this\n"
-                "# command name on the login-shell PATH.\n"
-                f'exec "{hermes_cmd}" acp "$@"\n'
+
+            repaired = []
+            # Prefer the real updated venv entry points. The fallback wrappers
+            # keep a legacy-only install usable until its next full reinstall.
+            agent_target = (
+                _console_script("ansatz-agent")
+                or _console_script("hermes-agent")
+                or primary
             )
-            acp_cmd.write_text(shim, encoding="utf-8")
-            acp_cmd.chmod(acp_cmd.stat().st_mode | 0o755)
+            acp_target = (
+                _console_script("ansatz-acp")
+                or _console_script("hermes-acp")
+                or primary
+            )
+            canonical = (
+                ("ansatz", _console_script("ansatz") or primary, ()),
+                ("ansatz-agent", agent_target, ()),
+                ("ansatz-acp", acp_target, () if acp_target != primary else ("acp",)),
+            )
+            for name, target, args in canonical:
+                if _write_launcher(bin_dir / name, target, *args):
+                    repaired.append(name)
+
+            # The compatibility aliases intentionally delegate to their
+            # canonical sibling, preserving the one-way migration boundary.
+            for legacy, canonical_name in (
+                ("hermes", "ansatz"),
+                ("hermes-agent", "ansatz-agent"),
+                ("hermes-acp", "ansatz-acp"),
+            ):
+                if _write_launcher(bin_dir / legacy, bin_dir / canonical_name):
+                    repaired.append(legacy)
         except OSError:
             continue
-        print(f"  ✓ Installed hermes-acp launcher → {acp_cmd}")
+        if repaired:
+            print(f"  ✓ Repaired launchers in {bin_dir}: {', '.join(repaired)}")
 
 _PRE_UPDATE_SNAPSHOT_KEEP = 1
 

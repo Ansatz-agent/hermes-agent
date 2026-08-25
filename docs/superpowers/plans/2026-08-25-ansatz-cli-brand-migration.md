@@ -685,3 +685,78 @@ Expected: diff check exits 0. Remaining matches are confined to the explicit com
 If verification exposes a defect, return to the task that owns that behavior,
 add a failing regression test there, and repeat its red-green-commit sequence.
 Do not create an empty verification commit.
+
+### Task 8: Close cross-platform canonical-launcher gaps found during merge review
+
+**Files:**
+- Modify: `scripts/install.ps1`
+- Test: `tests/test_install_ps1_ansatz_auth_launcher.py`
+- Modify: `hermes_cli/update_cmd.py`
+- Modify: `tests/hermes_cli/test_ensure_acp_launcher.py`
+- Modify: `docker/main-wrapper.sh`
+- Modify: `docker/hermes-exec-shim.sh`
+- Modify: `Dockerfile`
+- Modify: `tests/docker/test_docker_exec_privilege_drop.py`
+- Modify: `tests/hermes_cli/client_auth/test_background_modes.py`
+- Modify: `nix/hermes-agent.nix`
+- Modify: `nix/checks.nix`
+- Create: `tests/hermes_cli/test_nix_ansatz_launchers.py`
+
+**Interfaces:**
+- Consumes: the six-script family declared by `pyproject.toml`: `ansatz`,
+  `ansatz-agent`, `ansatz-acp`, `hermes`, `hermes-agent`, and `hermes-acp`.
+- Produces: the same six public commands on normal Windows installs, upgraded
+  POSIX installs, Docker images, and Nix packages. Canonical and legacy Docker
+  commands share auth waiting and privilege dropping.
+
+- [ ] **Step 1: Add failing cross-platform launcher contracts**
+
+Extend the PowerShell installer test to assert that the normal PATH-install
+stage copies all six `.exe` launchers. Extend the update launcher test with a
+legacy-only install containing only `hermes`, then require the update repair to
+publish all three canonical launchers without replacing unrelated or symlinked
+files. Extend Docker contracts to require both `ansatz` and `hermes` to enter
+the same auth-wait dispatch and require `/opt/hermes/bin/ansatz` to use the
+privilege-drop shim. Add a Nix static contract requiring all six launchers in
+both the package wrapper loop and `nix/checks.nix`.
+
+- [ ] **Step 2: Run the focused tests and verify RED**
+
+Run:
+
+~~~bash
+scripts/run_tests.sh tests/test_install_ps1_ansatz_auth_launcher.py tests/hermes_cli/test_ensure_acp_launcher.py tests/docker/test_docker_exec_privilege_drop.py tests/hermes_cli/client_auth/test_background_modes.py tests/hermes_cli/test_nix_ansatz_launchers.py -q
+~~~
+
+Expected: assertions fail because the four packaging/update surfaces expose or
+route only the legacy command family.
+
+- [ ] **Step 3: Implement the minimal launcher-family fixes**
+
+In `install.ps1`, derive or enumerate the exact six console scripts and copy
+their `.exe` shims into the PATH directory. Replace `_ensure_acp_launcher()`
+with an ownership-safe launcher-family repair that publishes the three
+canonical POSIX launchers plus missing compatibility aliases but never writes
+through symlinks or overwrites unrelated files. Route `ansatz` and `hermes`
+through identical auth-wait logic in `docker/main-wrapper.sh`, install the
+privilege-drop shim as canonical `ansatz` with `hermes` as a compatibility
+alias, and wrap all six scripts in the Nix derivation and checks.
+
+- [ ] **Step 4: Run focused verification and confirm GREEN**
+
+Run the Step 2 command again, then run:
+
+~~~bash
+bash -n docker/main-wrapper.sh
+bash -n docker/hermes-exec-shim.sh
+scripts/run_tests.sh tests/hermes_cli/client_auth/ tests/hermes_cli/test_cli_identity.py tests/hermes_cli/test_verify_console_scripts.py tests/test_install_sh_ansatz_launchers.py tests/test_install_sh_acp_launcher.py -q
+~~~
+
+Expected: all selected tests pass with no failures; shell syntax checks exit 0.
+
+- [ ] **Step 5: Commit**
+
+~~~bash
+git add scripts/install.ps1 hermes_cli/update_cmd.py docker/main-wrapper.sh docker/hermes-exec-shim.sh Dockerfile nix/hermes-agent.nix nix/checks.nix tests/test_install_ps1_ansatz_auth_launcher.py tests/hermes_cli/test_ensure_acp_launcher.py tests/docker/test_docker_exec_privilege_drop.py tests/hermes_cli/client_auth/test_background_modes.py tests/hermes_cli/test_nix_ansatz_launchers.py docs/superpowers/plans/2026-08-25-ansatz-cli-brand-migration.md
+git commit -m "fix(cli): publish canonical launchers across platforms"
+~~~

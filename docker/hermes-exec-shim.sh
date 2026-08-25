@@ -1,6 +1,6 @@
 #!/bin/sh
 # shellcheck shell=sh
-# /opt/hermes/bin/hermes — `docker exec` privilege-drop shim.
+# /opt/hermes/bin/ansatz — `docker exec` privilege-drop shim.
 #
 # Background
 # ----------
@@ -40,7 +40,7 @@
 
 set -e
 
-REAL=/opt/hermes/.venv/bin/hermes
+REAL=/opt/hermes/.venv/bin/ansatz
 
 # Defensive: if the venv binary is missing (corrupted image, partial
 # install), fail loudly rather than silently masking it.

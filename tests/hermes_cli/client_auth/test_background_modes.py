@@ -144,7 +144,14 @@ def test_container_capability_scripts_wait_before_exec():
     assert "runtime wait container.dashboard.start" in dashboard
     assert dashboard.index("runtime wait") < dashboard.index("hermes dashboard")
     assert "runtime wait container.main.start" in wrapper
-    assert wrapper.index("runtime wait") < wrapper.index("drop hermes")
+    assert wrapper.index("runtime wait") < wrapper.index("drop ansatz")
+
+
+def test_container_canonical_and_legacy_commands_share_auth_wait_dispatch():
+    wrapper = (REPO_ROOT / "docker" / "main-wrapper.sh").read_text(encoding="utf-8")
+
+    dispatch = wrapper[wrapper.index("ansatz|hermes)"):]
+    assert "wait_for_auth\n        drop \"$@\"" in dispatch
 
 
 def test_runtime_service_waits_then_execs_fixed_gateway(monkeypatch):
