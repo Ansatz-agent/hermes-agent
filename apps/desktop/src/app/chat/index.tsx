@@ -258,18 +258,29 @@ function ChatRuntimeBoundary({
 
   const transcriptWindow = useMemo(() => ({ olderAvailable: windowed, expandWindow }), [expandWindow, windowed])
 
-  const runtime = useIncrementalExternalStoreRuntime<ThreadMessage>({
-    messageRepository: runtimeMessageRepository,
-    isRunning: busy,
-    setMessages: onThreadMessagesChange,
-    onNew: async () => {
-      // Submission is handled explicitly by ChatBar.
-      // Keeping this no-op avoids duplicate prompt.submit calls.
-    },
-    onEdit,
-    onCancel: async () => onCancel(),
-    onReload
-  })
+  // The adapter is an external-store identity boundary. Recreating this
+  // object on every render makes assistant-ui call __internal_setAdapter on
+  // every effect pass; that publishes a new snapshot, which immediately
+  // schedules another render and can trip React's "getSnapshot should be
+  // cached" / maximum-update-depth guard (especially while auth status polls).
+  // Keep it stable until one of its actual inputs changes.
+  const runtimeAdapter = useMemo(
+    () => ({
+      messageRepository: runtimeMessageRepository,
+      isRunning: busy,
+      setMessages: onThreadMessagesChange,
+      onNew: async () => {
+        // Submission is handled explicitly by ChatBar.
+        // Keeping this no-op avoids duplicate prompt.submit calls.
+      },
+      onEdit,
+      onCancel: async () => onCancel(),
+      onReload
+    }),
+    [busy, onCancel, onEdit, onReload, onThreadMessagesChange, runtimeMessageRepository]
+  )
+
+  const runtime = useIncrementalExternalStoreRuntime<ThreadMessage>(runtimeAdapter)
 
   return (
     <TranscriptWindowProvider value={transcriptWindow}>

@@ -717,10 +717,18 @@ const AUTH_BOOTSTRAP_COMPLETE_MARKER = path.join(ACTIVE_HERMES_ROOT, '.hermes-au
 let desktopAuthBridge: DesktopAuthBridge | null = null
 let desktopAuthCoordinator: AuthCoordinator | null = null
 let desktopAuthStartupPromise: Promise<void> | null = null
+// Auth status is polled independently of backend startup. Keep the two
+// lifecycles separate so an unchanged `authenticated` poll result cannot
+// launch a second backend while the first one is still resolving.
+let desktopAuthBackendStartInFlight = false
 const desktopRuntimeGate = new DesktopRuntimeGate()
 let desktopCapabilityShellEnabled = false
 let desktopDisplayListenersRegistered = false
 const desktopBackendScopeTokens = new Map<string, any>()
+const DESKTOP_SCOPE_TOKEN_REFRESH_INTERVAL_MS = 15_000
+const DESKTOP_SCOPE_TOKEN_REFRESH_MARGIN_SECONDS = 30
+let desktopScopeTokenRefreshTimer: ReturnType<typeof setInterval> | null = null
+let desktopScopeTokenRefreshInFlight = false
 
 async function writeBackendScopeToken(child, token) {
   if (!child?.stdin || child.stdin.destroyed || !child.stdin.writable) {
@@ -799,6 +807,77 @@ async function ensureFreshDesktopScopeToken(descriptor) {
   return descriptor
 }
 
+function stopDesktopScopeTokenRefreshTimer() {
+  if (desktopScopeTokenRefreshTimer) {
+    clearInterval(desktopScopeTokenRefreshTimer)
+    desktopScopeTokenRefreshTimer = null
+  }
+}
+
+async function refreshDesktopScopeTokens() {
+  if (desktopScopeTokenRefreshInFlight || desktopBackendScopeTokens.size === 0) {
+    if (desktopBackendScopeTokens.size === 0) {
+      stopDesktopScopeTokenRefreshTimer()
+    }
+
+    return
+  }
+
+  desktopScopeTokenRefreshInFlight = true
+
+  try {
+    for (const [baseUrl, state] of [...desktopBackendScopeTokens]) {
+      const child = state?.child
+
+      // Exit handlers normally remove these entries during teardown. This
+      // defensive check also covers a child that disappears before teardown
+      // can run, preventing the timer from retaining a dead process forever.
+      if (!child || child.exitCode !== null || child.killed) {
+        desktopBackendScopeTokens.delete(baseUrl)
+        continue
+      }
+
+      const scope = desktopAuthCoordinator?.scope(state.scope?.connection_id || 'local')
+
+      // A changed/removed auth epoch is handled by AuthCoordinator cleanup.
+      // Do not mint a token for a stale scope while that cleanup is in flight.
+      if (!sameConnectionScope(state.scope, scope)) {
+        continue
+      }
+
+      if (state.token?.validUntil - os.uptime() > DESKTOP_SCOPE_TOKEN_REFRESH_MARGIN_SECONDS) {
+        continue
+      }
+
+      try {
+        const token = issueAuthScopeToken(scope)
+        await writeBackendScopeToken(child, token)
+        state.token = token
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        rememberLog(`[auth] scope token refresh failed for ${baseUrl}: ${message}`)
+      }
+    }
+  } finally {
+    desktopScopeTokenRefreshInFlight = false
+
+    if (desktopBackendScopeTokens.size === 0) {
+      stopDesktopScopeTokenRefreshTimer()
+    }
+  }
+}
+
+function ensureDesktopScopeTokenRefreshTimer() {
+  if (desktopScopeTokenRefreshTimer || desktopBackendScopeTokens.size === 0) {
+    return
+  }
+
+  desktopScopeTokenRefreshTimer = setInterval(() => {
+    void refreshDesktopScopeTokens()
+  }, DESKTOP_SCOPE_TOKEN_REFRESH_INTERVAL_MS)
+  desktopScopeTokenRefreshTimer.unref?.()
+}
+
 function forgetDesktopBackendScopeTokens(child) {
   for (const [baseUrl, state] of desktopBackendScopeTokens) {
     if (state.child === child) {
@@ -813,6 +892,10 @@ function forgetDesktopBackendScopeTokens(child) {
     child?.stdin?.end()
   } catch {
     // The pipe may already be gone; process teardown remains authoritative.
+  }
+
+  if (desktopBackendScopeTokens.size === 0) {
+    stopDesktopScopeTokenRefreshTimer()
   }
 }
 
@@ -939,11 +1022,22 @@ async function startDesktopAuthRuntime() {
         if (connectionId === 'local' && status.state === 'authenticated') {
           enableDesktopCapabilityShell()
 
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            void startHermes().catch(error => {
-              const failureCode = error?.code || 'backend-start-failed'
-              rememberLog(`[runtime] authenticated backend start failed: ${failureCode}`)
-            })
+          const backendAlreadyStartingOrRunning = Boolean(
+            desktopAuthBackendStartInFlight ||
+              backendConnectionState.getPromise() ||
+              backendConnectionState.getProcess()
+          )
+
+          if (mainWindow && !mainWindow.isDestroyed() && !backendAlreadyStartingOrRunning) {
+            desktopAuthBackendStartInFlight = true
+            void startHermes()
+              .catch(error => {
+                const failureCode = error?.code || 'backend-start-failed'
+                rememberLog(`[runtime] authenticated backend start failed: ${failureCode}`)
+              })
+              .finally(() => {
+                desktopAuthBackendStartInFlight = false
+              })
           }
         }
       })
@@ -10749,6 +10843,7 @@ async function spawnPoolBackend(profile, entry) {
     scope: connectionScope,
     token: scopeToken
   })
+  ensureDesktopScopeTokenRefreshTimer()
   await Promise.race([waitForHermes(baseUrl, scopeToken.bearer, undefined, 'scope'), startFailed])
   ready = true
 
@@ -11165,6 +11260,7 @@ async function startHermes() {
       scope: connectionScope,
       token: scopeToken
     })
+    ensureDesktopScopeTokenRefreshTimer()
     await Promise.race([waitForHermes(baseUrl, scopeToken.bearer, undefined, 'scope'), backendStartFailed])
     backendReady = true
     backendStartFailure = null
