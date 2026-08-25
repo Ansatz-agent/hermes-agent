@@ -7,12 +7,13 @@ import { splitOtlpExportTraceRequest } from './otlp-split'
 import type { TraceCredentialProvider } from './trace-credential-provider'
 import type { PendingLocalCommit, TraceOutboxStoreDiagnostics } from './trace-outbox-store'
 import type { DurableReceipt, DurableTraceBatch, TraceEnvelopeInput, TraceOwner } from './trace-outbox-types'
-import { validateTraceOwner } from './trace-outbox-types'
+import { isCanonicalUuidV4, validateTraceOwner } from './trace-outbox-types'
 import { nextTraceRetry, parseTraceRetryAfterMs } from './trace-retry-policy'
 
 export const DEFAULT_TRACE_UPSTREAM_URL = 'https://c2sml.cn/trace-ingest/v1/traces'
 const MAX_LOOPBACK_BODY_BYTES = 64 * 1024 * 1024
 const MAX_LOGICAL_BATCH_BYTES = 8 * 1024 * 1024
+const LOOPBACK_DRAIN_GRACE_MS = 100
 const UPSTREAM_TIMEOUT_MS = 15_000
 const CORRELATION_ID = /^[0-9A-Za-z][0-9A-Za-z._:-]{0,127}$/
 const ENTRYPOINTS = new Set(['desktop', 'voice', 'cli', 'dashboard'])
@@ -33,7 +34,6 @@ export type TraceRecoveryReason =
   | 'token-ready'
   | 'token-near-expiry'
   | 'upload-401'
-  | 'upload-403'
 
 export type RecoveryTrigger = { trigger(reason: TraceRecoveryReason): void }
 
@@ -55,11 +55,19 @@ type TraceForwarderOptions = {
   fetchImpl?: FetchLike
   installationId: string
   maxBodyBytes?: number
+  onTerminalRevocation?: (revocation: TerminalTraceRevocation) => void
   random?: () => number
   recovery?: RecoveryTrigger
   remoteAddressForRequest?: (request: IncomingMessage) => string | undefined
   store?: TraceOutbox
   upstreamUrl?: string
+}
+
+export type TerminalTraceRevocation = {
+  accountId: string
+  code: 'account_disabled' | 'account_revoked' | 'session_revoked'
+  revokedAt: string
+  sessionId: string
 }
 
 export type TraceForwarderSummary = TraceOutboxStoreDiagnostics & { reason: 'stopped' }
@@ -89,6 +97,7 @@ export class TraceForwarder {
   private readonly fetchImpl: FetchLike
   private readonly installationId: string
   private readonly maxBodyBytes: number
+  private readonly onTerminalRevocation: (revocation: TerminalTraceRevocation) => void
   private readonly random: () => number
   private readonly recovery: RecoveryTrigger
   private readonly remoteAddressForRequest: (request: IncomingMessage) => string | undefined
@@ -98,12 +107,14 @@ export class TraceForwarder {
   private admissionRequests = 0
   private admissionTail: Promise<void> = Promise.resolve()
   private admissionOpen = false
+  private generation = 0
   private localBearer = ''
   private owner: TraceOwner | null = null
   private recoveryPump: Promise<void> | null = null
   private readonly retryByBatch = new Map<string, { attempt: number; nextRetryAt: number }>()
   private server: http.Server | null = null
   private stopping = false
+  private terminalRevoked = false
 
   constructor(options: TraceForwarderOptions) {
     this.clock = options.clock ?? Date.now
@@ -111,6 +122,7 @@ export class TraceForwarder {
     this.fetchImpl = options.fetchImpl ?? fetch
     this.installationId = options.installationId
     this.maxBodyBytes = Math.min(options.maxBodyBytes ?? MAX_LOOPBACK_BODY_BYTES, MAX_LOOPBACK_BODY_BYTES)
+    this.onTerminalRevocation = options.onTerminalRevocation ?? (() => {})
     this.random = options.random ?? Math.random
     this.recovery = options.recovery ?? { trigger: () => {} }
     this.remoteAddressForRequest = options.remoteAddressForRequest ?? (request => request.socket.remoteAddress)
@@ -132,6 +144,8 @@ export class TraceForwarder {
     }
 
     this.owner = validateTraceOwner(owner).owner
+    this.generation += 1
+    this.terminalRevoked = false
     this.localBearer = randomBytes(32).toString('base64url')
     this.admissionOpen = true
     this.stopping = false
@@ -178,23 +192,28 @@ export class TraceForwarder {
   async stop({ flushMs: _flushMs }: { flushMs: number }): Promise<TraceForwarderSummary> {
     this.stopping = true
     this.admissionOpen = false
+    this.generation += 1
     const server = this.server
     this.server = null
     const closed = server ? new Promise<void>(resolve => server.close(() => resolve())) : Promise.resolve()
 
-    // `server.close()` waits for active requests. A crashed or suspended OTLP
-    // producer can leave an incomplete loopback request open forever, which
-    // would otherwise block terminal auth cleanup before the backend is
-    // stopped. Admission is already closed, so terminate those local sockets;
-    // complete batches are in the queue and still receive the bounded flush
-    // below.
-    server?.closeAllConnections()
+    // Let a body that has already reached durable admission finish and receive
+    // its acknowledgement. A crashed or suspended producer can still hold an
+    // incomplete body forever, so force-close any remaining local sockets
+    // after a short bounded drain window.
+    const forceCloseTimer = server
+      ? setTimeout(() => server.closeAllConnections(), LOOPBACK_DRAIN_GRACE_MS)
+      : null
+    forceCloseTimer?.unref?.()
 
     for (const controller of this.upstreamControllers) {
       controller.abort()
     }
 
     await closed
+    if (forceCloseTimer) {
+      clearTimeout(forceCloseTimer)
+    }
     await this.admissionTail
     await this.store?.close?.()
     this.credentialProvider.clear()
@@ -315,6 +334,7 @@ export class TraceForwarder {
 
   private admitBatch(input: TraceEnvelopeInput): Promise<void> {
     const directCandidate = this.admissionRequests === 0
+    const generation = this.generation
     this.admissionRequests += 1
 
     return this.withAdmission(async () => {
@@ -323,16 +343,18 @@ export class TraceForwarder {
       }
 
       const backlog = (await this.store.diagnostics()).pending > 0
+      this.requireActiveOwner(input.owner, generation)
       const pending = this.store.beginEnqueue(input)
 
       const cloud =
         directCandidate && !backlog && validateTraceOwner(this.owner).uploadable
-          ? this.sendForReceipt({ ...input, batchId: pending.batchId })
+          ? this.sendForReceipt({ ...input, batchId: pending.batchId }, generation)
           : null
 
       const winner = await firstDurableOwner(pending.durable, cloud)
 
       if (winner.kind === 'gateway') {
+        this.requireActiveOwner(input.owner, generation)
         void pending.durable.catch(() => undefined)
 
         try {
@@ -348,21 +370,30 @@ export class TraceForwarder {
 
       if (cloud !== null) {
         void cloud
-          .then(receipt => this.store?.acknowledge(winner.batch.batchId, receipt))
-          .catch(error => this.handleCloudFailure(winner.batch, error))
+          .then(async receipt => {
+            this.requireActiveOwner(winner.batch.owner, generation)
+            await this.store?.acknowledge(winner.batch.batchId, receipt)
+          })
+          .catch(error => this.handleCloudFailure(winner.batch, error, generation))
       }
     }).finally(() => {
       this.admissionRequests -= 1
     })
   }
 
-  private async handleCloudFailure(batch: DurableTraceBatch, error: unknown): Promise<void> {
+  private async handleCloudFailure(batch: DurableTraceBatch, error: unknown, generation: number): Promise<void> {
     if (!(error instanceof UpstreamFailure) || this.store === null) {
       return
     }
 
-    if (error.status === 403) {
-      this.recovery.trigger('upload-403')
+    try {
+      this.requireActiveOwner(batch.owner, generation)
+    } catch {
+      return
+    }
+
+    if (error.status === 403 && !this.terminalRevoked) {
+      this.deferRetry(batch.batchId, error.retryAfterMs, 1_000)
     }
 
     if (error.status === 400 || error.status === 409 || error.status === 413 || error.status === 415) {
@@ -375,13 +406,17 @@ export class TraceForwarder {
       return
     }
 
-    if (!validateTraceOwner(this.owner).uploadable) {
+    if (!validateTraceOwner(this.owner).uploadable || this.terminalRevoked) {
       return
     }
+
+    const owner = this.owner
+    const generation = this.generation
 
     while (this.admissionOpen && this.owner !== null && this.store !== null) {
       const now = this.clock()
       const batch = await this.store.peekEligible(now)
+      this.requireActiveOwner(owner, generation)
 
       if (batch === undefined) {
         this.retryByBatch.clear()
@@ -402,7 +437,8 @@ export class TraceForwarder {
       }
 
       try {
-        const receipt = await this.sendForReceipt(batch)
+        const receipt = await this.sendForReceipt(batch, generation)
+        this.requireActiveOwner(owner, generation)
         await this.store.acknowledge(batch.batchId, receipt)
         this.retryByBatch.delete(batch.batchId)
       } catch (error) {
@@ -413,12 +449,15 @@ export class TraceForwarder {
         }
 
         if (error.status === 403) {
-          this.recovery.trigger('upload-403')
+          if (!this.terminalRevoked) {
+            this.deferRetry(batch.batchId, error.retryAfterMs, 1_000)
+          }
 
           return
         }
 
         if (error.status === 400 || error.status === 409 || error.status === 413 || error.status === 415) {
+          this.requireActiveOwner(owner, generation)
           await this.store.quarantine(batch.batchId, `gateway_${error.status}`)
           this.retryByBatch.delete(batch.batchId)
 
@@ -432,32 +471,44 @@ export class TraceForwarder {
     }
   }
 
-  private deferRetry(batchId: string, retryAfterMs: number | null): void {
+  private deferRetry(batchId: string, retryAfterMs: number | null, minimumDelayMs = 0): void {
     const previous = this.retryByBatch.get(batchId)
     const attempt = previous === undefined ? 0 : previous.attempt + 1
-    const nextRetryAt = nextTraceRetry({ attempt, now: this.clock(), random: this.random, retryAfterMs })
+    const now = this.clock()
+
+    const nextRetryAt = Math.max(
+      nextTraceRetry({ attempt, now, random: this.random, retryAfterMs }),
+      now + minimumDelayMs
+    )
 
     this.retryByBatch.set(batchId, { attempt, nextRetryAt })
   }
 
-  private async sendForReceipt(batch: TraceEnvelopeInput & { batchId: string }): Promise<DurableReceipt> {
+  private async sendForReceipt(
+    batch: TraceEnvelopeInput & { batchId: string },
+    generation: number
+  ): Promise<DurableReceipt> {
     try {
-      this.requireActiveOwner(batch.owner)
+      this.requireActiveOwner(batch.owner, generation)
       const initial = await this.credentialProvider.current()
-      this.requireActiveOwner(batch.owner)
+      this.requireActiveOwner(batch.owner, generation)
       const response = await this.fetchUpstream(batch, initial)
+      this.requireActiveOwner(batch.owner, generation)
 
       if (response.status !== 401) {
-        return requireGatewayReceipt(response, batch.batchId, this.clock())
+        return await this.requireGatewayReceipt(response, batch, generation)
       }
 
       this.credentialProvider.invalidate()
       this.recovery.trigger('upload-401')
       const refreshed = await this.credentialProvider.current({ forceRefresh: true })
-      this.requireActiveOwner(batch.owner)
+      this.requireActiveOwner(batch.owner, generation)
       this.recovery.trigger('token-ready')
 
-      return requireGatewayReceipt(await this.fetchUpstream(batch, refreshed), batch.batchId, this.clock())
+      const retried = await this.fetchUpstream(batch, refreshed)
+      this.requireActiveOwner(batch.owner, generation)
+
+      return await this.requireGatewayReceipt(retried, batch, generation)
     } catch (error) {
       if (error instanceof UpstreamFailure) {
         throw error
@@ -467,8 +518,37 @@ export class TraceForwarder {
     }
   }
 
-  private requireActiveOwner(owner: TraceOwner): void {
-    if (!this.admissionOpen || this.owner?.accountKey !== owner.accountKey) {
+  private async requireGatewayReceipt(
+    response: Response,
+    batch: TraceEnvelopeInput & { batchId: string },
+    generation: number
+  ): Promise<DurableReceipt> {
+    if (response.status === 403) {
+      const revocation = await parseTerminalRevocation(response)
+      this.requireActiveOwner(batch.owner, generation)
+
+      if (
+        !this.terminalRevoked &&
+        revocation !== null &&
+        revocation.accountId === batch.owner.accountId &&
+        revocation.sessionId === batch.owner.sessionId
+      ) {
+        this.terminalRevoked = true
+
+        try {
+          this.onTerminalRevocation(revocation)
+        } catch {
+          // Upload admission is already paused. Notification is deliberately
+          // isolated from durable outbox state.
+        }
+      }
+    }
+
+    return requireGatewayReceipt(response, batch.batchId, this.clock())
+  }
+
+  private requireActiveOwner(owner: TraceOwner, generation: number): void {
+    if (!this.admissionOpen || this.generation !== generation || this.owner?.accountKey !== owner.accountKey) {
       throw new UpstreamFailure(null)
     }
   }
@@ -606,6 +686,64 @@ function requireGatewayReceipt(response: Response, batchId: string, now: number)
   }
 
   return { batchId, outcome, receivedAt: now }
+}
+
+const TERMINAL_REVOCATION_CODES = new Set<TerminalTraceRevocation['code']>([
+  'account_disabled',
+  'account_revoked',
+  'session_revoked'
+])
+
+const RFC3339_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
+
+async function parseTerminalRevocation(response: Response): Promise<TerminalTraceRevocation | null> {
+  const contentLength = Number(response.headers.get('content-length'))
+
+  if (Number.isFinite(contentLength) && contentLength > 4_096) {
+    return null
+  }
+
+  let value: unknown
+
+  try {
+    const text = await response.text()
+
+    if (Buffer.byteLength(text) > 4_096) {
+      return null
+    }
+
+    value = JSON.parse(text)
+  } catch {
+    return null
+  }
+
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return null
+  }
+
+  const body = value as Record<string, unknown>
+
+  if (
+    Object.keys(body).sort().join(',') !== 'account_id,code,retryable,revoked_at,session_id,state' ||
+    body.state !== 'revoked' ||
+    body.retryable !== false ||
+    !isCanonicalUuidV4(body.account_id) ||
+    !isCanonicalUuidV4(body.session_id) ||
+    typeof body.code !== 'string' ||
+    !TERMINAL_REVOCATION_CODES.has(body.code as TerminalTraceRevocation['code']) ||
+    typeof body.revoked_at !== 'string' ||
+    !RFC3339_TIMESTAMP.test(body.revoked_at) ||
+    !Number.isFinite(Date.parse(body.revoked_at))
+  ) {
+    return null
+  }
+
+  return {
+    accountId: body.account_id,
+    code: body.code as TerminalTraceRevocation['code'],
+    revokedAt: body.revoked_at,
+    sessionId: body.session_id
+  }
 }
 
 function singleHeader(value: string | string[] | undefined): string | null {

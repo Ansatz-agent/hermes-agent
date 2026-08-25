@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, stat } from 'node:fs/promises'
 import http from 'node:http'
 import { join } from 'node:path'
 
@@ -348,6 +348,104 @@ test('recovery pump honors retry backoff without dropping the durable FIFO head'
   }
 })
 
+test('a matching structured terminal 403 pauses its owner exactly once without a recovery hot loop', async () => {
+  const { root, store } = await temporaryStore()
+  await store.enqueue(envelope('revoked'))
+  const revocations: unknown[] = []
+  let calls = 0
+
+  const forwarder = new TraceForwarder({
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
+    fetchImpl: async () => {
+      calls += 1
+
+      return new Response(
+        JSON.stringify({
+          account_id: validOwner().accountId,
+          code: 'session_revoked',
+          retryable: false,
+          revoked_at: '2099-08-23T14:00:00Z',
+          session_id: validOwner().sessionId,
+          state: 'revoked'
+        }),
+        { status: 403, headers: { 'content-type': 'application/json' } }
+      )
+    },
+    installationId,
+    onTerminalRevocation: revocation => revocations.push(revocation),
+    store
+  })
+
+  await forwarder.start(validOwner())
+
+  try {
+    await forwarder.pump()
+    await forwarder.pump()
+
+    assert.equal(calls, 1)
+    assert.equal((await store.diagnostics()).pending, 1)
+    assert.deepEqual(revocations, [
+      {
+        accountId: validOwner().accountId,
+        code: 'session_revoked',
+        revokedAt: '2099-08-23T14:00:00Z',
+        sessionId: validOwner().sessionId
+      }
+    ])
+  } finally {
+    await forwarder.stop({ flushMs: 0 })
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test.each([
+  ['unstructured', { error: 'forbidden' }],
+  [
+    'owner-mismatched',
+    {
+      account_id: '33333333-3333-4333-8333-333333333333',
+      code: 'account_revoked',
+      retryable: false,
+      revoked_at: '2099-08-23T14:00:00Z',
+      session_id: validOwner().sessionId,
+      state: 'revoked'
+    }
+  ]
+])('an %s 403 is transient and retains the FIFO head behind backoff', async (_label, body) => {
+  const { root, store } = await temporaryStore()
+  await store.enqueue(envelope('ordinary-403'))
+  const revocations: unknown[] = []
+  let calls = 0
+
+  const forwarder = new TraceForwarder({
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
+    fetchImpl: async () => {
+      calls += 1
+
+      return new Response(JSON.stringify(body), { status: 403 })
+    },
+    installationId,
+    onTerminalRevocation: revocation => revocations.push(revocation),
+    random: () => 0,
+    store
+  })
+
+  await forwarder.start(validOwner())
+
+  try {
+    await forwarder.pump()
+    await forwarder.pump()
+
+    assert.equal(calls, 1)
+    assert.notEqual(forwarder.nextRecoveryAt(), null)
+    assert.equal((await store.diagnostics()).pending, 1)
+    assert.deepEqual(revocations, [])
+  } finally {
+    await forwarder.stop({ flushMs: 0 })
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
 test('recovery drops an obsolete retry timer after its durable FIFO head becomes terminal', async () => {
   const { root, store } = await temporaryStore()
   const batch = await store.enqueue(envelope('terminal-during-retry'))
@@ -427,6 +525,166 @@ test('stopping an owner prevents a late Trace credential from uploading its dura
     assert.equal(upstreamCalls, 0)
     assert.equal((await store.diagnostics()).pending, 1)
   } finally {
+    await forwarder.stop({ flushMs: 0 })
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('stop fences a late Gateway response before it can mutate the closed owner outbox', async () => {
+  const { root, store } = await temporaryStore()
+  await store.enqueue(envelope('late-response'))
+  const gateway = deferred<Response>()
+  let batchId = ''
+
+  const forwarder = new TraceForwarder({
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
+    fetchImpl: async (_input, init) => {
+      batchId = new Headers(init?.headers).get('idempotency-key') ?? ''
+
+      return gateway.promise
+    },
+    installationId,
+    store
+  })
+
+  await forwarder.start(validOwner())
+  const pump = forwarder.pump()
+
+  try {
+    await waitFor(() => batchId.length > 0)
+    await forwarder.stop({ flushMs: 0 })
+    const journalBefore = (await stat(join(root, 'index.journal'))).size
+
+    gateway.resolve(
+      new Response(Buffer.alloc(0), {
+        status: 202,
+        headers: { 'x-trace-batch-id': batchId, 'x-trace-receipt': 'accepted' }
+      })
+    )
+    await pump
+
+    assert.equal((await stat(join(root, 'index.journal'))).size, journalBefore)
+    assert.equal((await store.diagnostics()).pending, 1)
+  } finally {
+    gateway.resolve(new Response(Buffer.alloc(0), { status: 503 }))
+    await forwarder.stop({ flushMs: 0 })
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('stop fences a late forced 401 refresh before retrying or mutating the closed owner outbox', async () => {
+  const { root, store } = await temporaryStore()
+  await store.enqueue(envelope('late-401-refresh'))
+
+  const refreshed = deferred<{
+    access_token: string
+    expires_at: string
+    expires_in: number
+    installation_id: string
+  }>()
+
+  const forceRefreshCalls: boolean[] = []
+  let upstreamCalls = 0
+
+  const provider = new RefreshingTraceCredentialProvider(
+    {
+      async load(forceRefresh) {
+        forceRefreshCalls.push(forceRefresh)
+
+        if (forceRefresh) {
+          return refreshed.promise
+        }
+
+        return {
+          access_token: 'public-trace-token-initial-1234567890',
+          expires_at: '2099-08-23T14:15:00+00:00',
+          expires_in: 900,
+          installation_id: installationId
+        }
+      }
+    },
+    { clock: () => traceCredentialNow }
+  )
+
+  const forwarder = new TraceForwarder({
+    credentialProvider: provider,
+    fetchImpl: async () => {
+      upstreamCalls += 1
+
+      return new Response(Buffer.alloc(0), { status: 401 })
+    },
+    installationId,
+    store
+  })
+
+  await forwarder.start(validOwner())
+  const pump = forwarder.pump()
+
+  try {
+    await waitFor(() => forceRefreshCalls.length === 2)
+    await forwarder.stop({ flushMs: 0 })
+    const journalBefore = (await stat(join(root, 'index.journal'))).size
+
+    refreshed.resolve({
+      access_token: 'public-trace-token-refreshed-1234567890',
+      expires_at: '2099-08-23T14:15:00+00:00',
+      expires_in: 900,
+      installation_id: installationId
+    })
+    await pump
+
+    assert.deepEqual(forceRefreshCalls, [false, true])
+    assert.equal(upstreamCalls, 1)
+    assert.equal((await stat(join(root, 'index.journal'))).size, journalBefore)
+    assert.equal((await store.diagnostics()).pending, 1)
+  } finally {
+    refreshed.resolve({
+      access_token: 'public-trace-token-refreshed-1234567890',
+      expires_at: '2099-08-23T14:15:00+00:00',
+      expires_in: 900,
+      installation_id: installationId
+    })
+    await forwarder.stop({ flushMs: 0 })
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('stop fences the detached direct-upload receipt continuation from the closed owner outbox', async () => {
+  const { root, store } = await temporaryStore()
+  const gateway = deferred<Response>()
+  let batchId = ''
+
+  const forwarder = new TraceForwarder({
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
+    fetchImpl: async (_input, init) => {
+      batchId = new Headers(init?.headers).get('idempotency-key') ?? ''
+
+      return gateway.promise
+    },
+    installationId,
+    store
+  })
+
+  const started = await forwarder.start(validOwner())
+
+  try {
+    assert.equal((await post(started.endpoint, started.localBearer)).status, 200)
+    await waitFor(() => batchId.length > 0)
+    await forwarder.stop({ flushMs: 0 })
+    const journalBefore = (await stat(join(root, 'index.journal'))).size
+
+    gateway.resolve(
+      new Response(Buffer.alloc(0), {
+        status: 202,
+        headers: { 'x-trace-batch-id': batchId, 'x-trace-receipt': 'accepted' }
+      })
+    )
+    await new Promise(resolve => setTimeout(resolve, 25))
+
+    assert.equal((await stat(join(root, 'index.journal'))).size, journalBefore)
+    assert.equal((await store.diagnostics()).pending, 1)
+  } finally {
+    gateway.resolve(new Response(Buffer.alloc(0), { status: 503 }))
     await forwarder.stop({ flushMs: 0 })
     await rm(root, { force: true, recursive: true })
   }
