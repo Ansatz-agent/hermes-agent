@@ -1,4 +1,4 @@
-"""``hermes cron`` subcommand parser.
+"""``ansatz cron`` subcommand parser.
 
 Extracted verbatim from ``hermes_cli/main.py:main()`` — same arguments, same
 ``func=cmd_cron`` dispatch. The handler is injected so this module does not
@@ -169,7 +169,7 @@ def build_cron_parser(subparsers, *, cmd_cron: Callable) -> None:
         "--monitor-script",
         dest="monitor_script",
         help=(
-            "Set/replace the monitor source script (see `hermes cron create "
+            "Set/replace the monitor source script (see `ansatz cron create "
             "--monitor-script`). Pass empty string to clear."
         ),
     )

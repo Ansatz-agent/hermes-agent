@@ -209,6 +209,6 @@ export function formatProbeFailedMessage(): string {
     'Update aborted: Desktop could not verify the Hermes installation is free.\n' +
     '\n' +
     'Close other Hermes windows and terminals, then retry.  If the problem\n' +
-    'persists, run `hermes update` in a terminal for detailed diagnostics.'
+    'persists, run `ansatz update` in a terminal for detailed diagnostics.'
   )
 }

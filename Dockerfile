@@ -297,8 +297,9 @@ RUN uv pip install --no-cache-dir --no-deps -e "."
 
 USER root
 RUN mkdir -p /opt/hermes/bin && \
-    cp /opt/hermes/docker/hermes-exec-shim.sh /opt/hermes/bin/hermes && \
-    chmod 0755 /opt/hermes/bin/hermes && \
+    cp /opt/hermes/docker/hermes-exec-shim.sh /opt/hermes/bin/ansatz && \
+    ln -s ansatz /opt/hermes/bin/hermes && \
+    chmod 0755 /opt/hermes/bin/ansatz && \
     printf 'docker\n' > /opt/hermes/.install_method
 # The ``.install_method`` stamp is baked next to the running code (the install
 # tree), NOT into $HERMES_HOME. $HERMES_HOME (/opt/data) is a shared data
@@ -393,25 +394,27 @@ ENV HERMES_DISABLE_LAZY_INSTALLS=1
 ENV HERMES_LAZY_INSTALL_TARGET=/opt/data/lazy-packages
 
 # `docker exec` privilege-drop shim. When operators run
-# `docker exec <c> hermes ...` they default to root, and any file the
+# `docker exec <c> ansatz ...` (or its hermes compatibility alias) they
+# default to root, and any file the
 # command writes under $HERMES_HOME (auth.json, .env, config.yaml) ends
 # up root-owned and unreadable to the supervised gateway (UID 10000).
-# The shim lives at /opt/hermes/bin/hermes, sits earliest on PATH, and
+# The shim lives at /opt/hermes/bin/ansatz, sits earliest on PATH, and
 # transparently re-exec's the real venv binary via `s6-setuidgid hermes`
 # when invoked as root. Non-root callers (supervised processes,
 # `--user hermes`, etc.) hit the short-circuit path with no overhead.
 # Recursion is impossible because the shim exec's the venv binary by
-# absolute path (/opt/hermes/.venv/bin/hermes). See the shim source for
+# absolute path (/opt/hermes/.venv/bin/ansatz). See the shim source for
 # the opt-out env var (HERMES_DOCKER_EXEC_AS_ROOT=1).
-COPY --chmod=0755 docker/hermes-exec-shim.sh /opt/hermes/bin/hermes
+COPY --chmod=0755 docker/hermes-exec-shim.sh /opt/hermes/bin/ansatz
 COPY --chmod=0755 docker/entrypoint-dispatch.sh /opt/hermes/docker/entrypoint-dispatch.sh
 
 # Pre-s6 entrypoint.sh did `source .venv/bin/activate` which exported
 # the venv bin onto PATH; Architecture B's main-wrapper.sh does the
 # same for the container's main process, but `docker exec` and our
 # cont-init.d scripts don't pass through the wrapper. Expose the venv
-# bin globally so `docker exec <container> hermes ...` and any
-# subprocess that doesn't activate the venv first still find hermes.
+# bin globally so `docker exec <container> ansatz ...` resolves the canonical
+# privilege-drop shim; `hermes` remains its compatibility alias. Subprocesses
+# that do not activate the venv still find the complete console-script family.
 #
 # /opt/hermes/bin is prepended ahead of the venv so the privilege-drop
 # shim wins PATH resolution. The shim's last act is to exec the venv

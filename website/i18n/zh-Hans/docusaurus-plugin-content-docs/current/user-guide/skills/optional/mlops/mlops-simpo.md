@@ -14,7 +14,7 @@ description: "用于 LLM 对齐的简单偏好优化"
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/mlops/simpo` 安装 |
+| 来源 | 可选 — 通过 `ansatz skills install official/mlops/simpo` 安装 |
 | 路径 | `optional-skills/mlops/simpo` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |

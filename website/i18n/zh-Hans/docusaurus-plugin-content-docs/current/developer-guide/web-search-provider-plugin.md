@@ -17,7 +17,7 @@ description: "如何为 Hermes Agent 构建网页搜索/提取/爬取后端插�
 Hermes 在三个位置扫描网页搜索后端：
 
 1. **内置** — `<repo>/plugins/web/<name>/`（以 `kind: backend` 自动加载，始终可用）
-2. **用户** — `~/.hermes/plugins/web/<name>/`（通过 `plugins.enabled` 或 `hermes plugins enable <name>` 按需启用）
+2. **用户** — `~/.hermes/plugins/web/<name>/`（通过 `plugins.enabled` 或 `ansatz plugins enable <name>` 按需启用）
 3. **Pip** — 声明了 `hermes_agent.plugins` 入口点的包
 
 每个插件的 `register(ctx)` 函数调用 `ctx.register_web_search_provider(...)` ——将实例注册到 `agent/web_search_registry.py` 中的注册表。各能力的活跃提供商由配置决定：
@@ -28,7 +28,7 @@ Hermes 在三个位置扫描网页搜索后端：
 | `web_extract` | `web.extract_backend` | `web.backend` |
 | `web_extract` 内的深度爬取模式 | `web.extract_backend` | `web.backend` |
 
-若两个键均未设置，Hermes 将根据环境中存在的 API key/URL 自动检测后端。`hermes tools` 会引导用户完成选择。
+若两个键均未设置，Hermes 将根据环境中存在的 API key/URL 自动检测后端。`ansatz tools` 会引导用户完成选择。
 
 ## 目录结构
 
@@ -66,12 +66,12 @@ class MyBackendWebSearchProvider(WebSearchProvider):
 
     @property
     def display_name(self) -> str:
-        # Human label shown in `hermes tools`. Defaults to `name`.
+        # Human label shown in `ansatz tools`. Defaults to `name`.
         return "My Backend"
 
     def is_available(self) -> bool:
         # Cheap check — env var present, optional dep importable, etc.
-        # MUST NOT make network calls (runs on every `hermes tools` paint).
+        # MUST NOT make network calls (runs on every `ansatz tools` paint).
         return bool(os.getenv("MY_BACKEND_API_KEY", "").strip())
 
     def supports_search(self) -> bool:
@@ -140,8 +140,8 @@ requires_env:
 | 键 | 用途 |
 |---|---|
 | `kind: backend` | 将插件路由至后端加载路径 |
-| `provides_web_providers` | 该插件注册的提供商 `name` 列表——在 `register()` 运行之前，加载器即可通过此字段在 `hermes tools` 中公示插件 |
-| `requires_env` | 在 `hermes plugins install` 期间进行交互式凭据提示（富格式说明参见[构建 Hermes 插件](/developer-guide/plugins#gate-on-environment-variables)） |
+| `provides_web_providers` | 该插件注册的提供商 `name` 列表——在 `register()` 运行之前，加载器即可通过此字段在 `ansatz tools` 中公示插件 |
+| `requires_env` | 在 `ansatz plugins install` 期间进行交互式凭据提示（富格式说明参见[构建 Hermes 插件](/developer-guide/plugins#gate-on-environment-variables)） |
 
 ## ABC 参考
 
@@ -150,7 +150,7 @@ requires_env:
 | 成员 | 必须 | 默认值 | 用途 |
 |---|---|---|---|
 | `name` | ✅ | — | 在 `web.*_backend` 配置中使用的稳定 id |
-| `display_name` | — | `name` | 在 `hermes tools` 中显示的标签 |
+| `display_name` | — | `name` | 在 `ansatz tools` 中显示的标签 |
 | `is_available()` | ✅ | — | 轻量可用性检查——环境变量、可选依赖等 |
 | `supports_search()` | — | `True` | `web_search` 路由的能力标志 |
 | `supports_extract()` | — | `False` | `web_extract` 路由的能力标志 |
@@ -229,7 +229,7 @@ web:
 4. 调度至 `search()` / `extract()` / `crawl()`，若方法为协程则进行 await
 5. 将响应信封 JSON 序列化后返回给 LLM
 
-错误以工具结果的形式呈现；LLM 决定如何解释。若没有提供商被注册（或所有可用提供商均未通过能力检查），工具将返回一条指向 `hermes tools` 的友好错误信息。
+错误以工具结果的形式呈现；LLM 决定如何解释。若没有提供商被注册（或所有可用提供商均未通过能力检查），工具将返回一条指向 `ansatz tools` 的友好错误信息。
 
 ## 懒加载可选依赖
 

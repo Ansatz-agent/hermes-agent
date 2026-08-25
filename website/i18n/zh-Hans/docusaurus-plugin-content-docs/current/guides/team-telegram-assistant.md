@@ -86,7 +86,7 @@ description: "逐步指南：为整个团队搭建一个 Telegram 机器人，�
 ### 方式 A：交互式设置（推荐）
 
 ```bash
-hermes gateway setup
+ansatz gateway setup
 ```
 
 通过方向键选择完成所有配置。选择 **Telegram**，粘贴你的机器人 token，并在提示时输入你的用户 ID。
@@ -124,7 +124,7 @@ Telegram 用户 ID 是永久性数字，例如 `123456789`。它与可以更改�
 先在前台运行 gateway，确认一切正常：
 
 ```bash
-hermes gateway
+ansatz gateway
 ```
 
 你应该看到类似输出：
@@ -142,17 +142,17 @@ hermes gateway
 若要持久部署并在重启后自动恢复：
 
 ```bash
-hermes gateway install
-sudo hermes gateway install --system   # 仅 Linux：开机启动的系统服务
+ansatz gateway install
+sudo ansatz gateway install --system   # 仅 Linux：开机启动的系统服务
 ```
 
 这会创建一个后台服务：Linux 上默认为用户级 **systemd** 服务，macOS 上为 **launchd** 服务，传入 `--system` 则创建开机启动的 Linux 系统服务。
 
 ```bash
 # Linux——管理默认用户服务
-hermes gateway start
-hermes gateway stop
-hermes gateway status
+ansatz gateway start
+ansatz gateway stop
+ansatz gateway status
 
 # 查看实时日志
 journalctl --user -u hermes-gateway -f
@@ -161,26 +161,26 @@ journalctl --user -u hermes-gateway -f
 sudo loginctl enable-linger $USER
 
 # Linux 服务器——显式系统服务命令
-sudo hermes gateway start --system
-sudo hermes gateway status --system
+sudo ansatz gateway start --system
+sudo ansatz gateway status --system
 journalctl -u hermes-gateway -f
 ```
 
 ```bash
 # macOS——管理服务
-hermes gateway start
-hermes gateway stop
+ansatz gateway start
+ansatz gateway stop
 tail -f ~/.hermes/logs/gateway.log
 ```
 
 :::tip macOS PATH
-launchd plist 在安装时捕获你的 Shell PATH，以便 gateway 子进程能找到 Node.js 和 ffmpeg 等工具。如果之后安装了新工具，请重新运行 `hermes gateway install` 以更新 plist。
+launchd plist 在安装时捕获你的 Shell PATH，以便 gateway 子进程能找到 Node.js 和 ffmpeg 等工具。如果之后安装了新工具，请重新运行 `ansatz gateway install` 以更新 plist。
 :::
 
 ### 验证运行状态
 
 ```bash
-hermes gateway status
+ansatz gateway status
 ```
 
 然后在 Telegram 上向你的机器人发送测试消息。几秒内应收到回复。
@@ -203,7 +203,7 @@ TELEGRAM_ALLOWED_USERS=123456789,987654321,555555555
 修改后重启 gateway：
 
 ```bash
-hermes gateway stop && hermes gateway start
+ansatz gateway stop && ansatz gateway start
 ```
 
 ### 方式 B：私信配对（推荐用于团队）
@@ -220,7 +220,7 @@ hermes gateway stop && hermes gateway start
 
 3. **你在服务器上审批**：
    ```bash
-   hermes pairing approve telegram XKGH5N7P
+   ansatz pairing approve telegram XKGH5N7P
    ```
 
 4. **他们即可使用**——机器人立即开始响应他们的消息
@@ -229,13 +229,13 @@ hermes gateway stop && hermes gateway start
 
 ```bash
 # 查看所有待审批和已审批用户
-hermes pairing list
+ansatz pairing list
 
 # 撤销某人的访问权限
-hermes pairing revoke telegram 987654321
+ansatz pairing revoke telegram 987654321
 
 # 清除已过期的待审批码
-hermes pairing clear-pending
+ansatz pairing clear-pending
 ```
 
 :::tip
@@ -352,8 +352,8 @@ partitions above 80%, containers that have restarted, or high memory usage.
 
 ```bash
 # 通过 CLI
-hermes cron list          # 查看所有定时任务
-hermes cron status        # 检查调度器是否运行
+ansatz cron list          # 查看所有定时任务
+ansatz cron status        # 检查调度器是否运行
 
 # 通过 Telegram 聊天
 /cron list                # 查看任务
@@ -394,7 +394,7 @@ terminal:
 
 ```bash
 # 检查 gateway 是否运行
-hermes gateway status
+ansatz gateway status
 
 # 查看实时日志（Linux）
 journalctl --user -u hermes-gateway -f
@@ -408,8 +408,8 @@ tail -f ~/.hermes/logs/gateway.log
 在 Telegram 中向机器人发送 `/update`——它会拉取最新版本并重启。或在服务器上执行：
 
 ```bash
-hermes update
-hermes gateway stop && hermes gateway start
+ansatz update
+ansatz gateway stop && ansatz gateway start
 ```
 
 ### 日志位置

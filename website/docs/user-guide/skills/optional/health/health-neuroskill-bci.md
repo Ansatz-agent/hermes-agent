@@ -14,7 +14,7 @@ Use live BCI cognitive and mood state from NeuroSkill.
 
 | | |
 |---|---|
-| Source | Optional — install with `hermes skills install official/health/neuroskill-bci` |
+| Source | Optional — install with `ansatz skills install official/health/neuroskill-bci` |
 | Path | `optional-skills/health/neuroskill-bci` |
 | Version | `1.0.0` |
 | Author | Hermes Agent + Nous Research |

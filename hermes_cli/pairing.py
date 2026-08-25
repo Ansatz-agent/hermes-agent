@@ -2,14 +2,14 @@
 CLI commands for the DM pairing system.
 
 Usage:
-    hermes pairing list              # Show all pending + approved users
-    hermes pairing approve <platform> <request-id|code>  # Approve a pairing request
-    hermes pairing revoke <platform> <user_id> # Revoke user access
-    hermes pairing clear-pending     # Clear all expired/pending codes
+    ansatz pairing list              # Show all pending + approved users
+    ansatz pairing approve <platform> <request-id|code>  # Approve a pairing request
+    ansatz pairing revoke <platform> <user_id> # Revoke user access
+    ansatz pairing clear-pending     # Clear all expired/pending codes
 """
 
 def pairing_command(args):
-    """Handle hermes pairing subcommands."""
+    """Handle ansatz pairing subcommands."""
     from gateway.pairing import PairingStore
 
     store = PairingStore()
@@ -24,8 +24,8 @@ def pairing_command(args):
     elif action == "clear-pending":
         _cmd_clear_pending(store)
     else:
-        print("Usage: hermes pairing {list|approve|revoke|clear-pending}")
-        print("Run 'hermes pairing --help' for details.")
+        print("Usage: ansatz pairing {list|approve|revoke|clear-pending}")
+        print("Run 'ansatz pairing --help' for details.")
 
 
 def _cmd_list(store):
@@ -46,7 +46,7 @@ def _cmd_list(store):
                 f"  {p['platform']:<12} {(p.get('request_id') or '-'):<18} {p['user_id']:<20} "
                 f"{(p.get('user_name') or ''):<20} {p['age_minutes']}m ago"
             )
-        print("\n  Approve with: hermes pairing approve <platform> <request-id>")
+        print("\n  Approve with: ansatz pairing approve <platform> <request-id>")
         print("  The code the bot DM'd the user also works if they relay it.")
     else:
         print("\n  No pending pairing requests.")
@@ -98,7 +98,7 @@ def _cmd_approve(store, platform: str, code: str):
         )
     else:
         print(f"\n  Pairing request or code '{code}' not found or expired for platform '{platform}'.")
-        print("  Run 'hermes pairing list' to see pending requests.\n")
+        print("  Run 'ansatz pairing list' to see pending requests.\n")
 
 
 def _cmd_revoke(store, platform: str, user_id: str):

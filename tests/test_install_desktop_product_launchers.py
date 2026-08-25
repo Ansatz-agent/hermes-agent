@@ -14,6 +14,7 @@ ANSATZ_LAUNCHERS = (
     "ansatz-voice-trace-agent",
     "ansatz-voice-trace-acp",
 )
+CANONICAL_LAUNCHERS = ("ansatz", "ansatz-agent", "ansatz-acp")
 LEGACY_LAUNCHERS = ("hermes", "hermes-agent", "hermes-acp")
 
 
@@ -30,10 +31,11 @@ def _installer_fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
         encoding="utf-8",
     )
     venv_python.chmod(0o755)
-    install_dir.joinpath("hermes").write_text(
-        "#!/usr/bin/env python3\nraise SystemExit(0)\n",
-        encoding="utf-8",
-    )
+    for entrypoint in ("ansatz", "hermes"):
+        install_dir.joinpath(entrypoint).write_text(
+            "#!/usr/bin/env python3\nraise SystemExit(0)\n",
+            encoding="utf-8",
+        )
 
     return install_dir, hermes_home, shell_home
 
@@ -93,7 +95,7 @@ print(json.dumps({
     interpreter.chmod(0o755)
 
 
-def test_desktop_product_publishes_only_ansatz_launchers_and_removes_owned_legacy_wrappers(
+def test_desktop_product_publishes_product_and_canonical_launchers_and_removes_owned_legacy_wrappers(
     tmp_path: Path,
 ) -> None:
     install_dir, hermes_home, shell_home = _installer_fixture(tmp_path)
@@ -119,7 +121,7 @@ def test_desktop_product_publishes_only_ansatz_launchers_and_removes_owned_legac
     )
 
     assert result.returncode == 0, result.stderr
-    for launcher_name in ANSATZ_LAUNCHERS:
+    for launcher_name in (*CANONICAL_LAUNCHERS, *ANSATZ_LAUNCHERS):
         launcher = command_dir / launcher_name
         assert launcher.is_file(), f"missing {launcher_name}"
         assert launcher.stat().st_mode & stat.S_IXUSR
@@ -139,7 +141,7 @@ def test_desktop_product_publishes_only_ansatz_launchers_and_removes_owned_legac
     assert independent.read_text(encoding="utf-8").startswith("#!/usr/bin/env bash")
 
 
-def test_default_installer_profile_keeps_publishing_hermes_launchers(tmp_path: Path) -> None:
+def test_default_installer_profile_publishes_canonical_and_compat_launchers(tmp_path: Path) -> None:
     install_dir, hermes_home, shell_home = _installer_fixture(tmp_path)
 
     result = _run_path_stage(
@@ -151,7 +153,10 @@ def test_default_installer_profile_keeps_publishing_hermes_launchers(tmp_path: P
 
     assert result.returncode == 0, result.stderr
     command_dir = shell_home / ".local" / "bin"
-    assert all(command_dir.joinpath(name).is_file() for name in LEGACY_LAUNCHERS)
+    assert all(
+        command_dir.joinpath(name).is_file()
+        for name in (*CANONICAL_LAUNCHERS, *LEGACY_LAUNCHERS)
+    )
     assert all(not command_dir.joinpath(name).exists() for name in ANSATZ_LAUNCHERS)
 
 
@@ -177,9 +182,9 @@ def test_ansatz_launchers_pin_the_installer_selected_runtime_home(tmp_path: Path
     assert not backtick_sentinel.exists()
 
     expected_prefixes = {
-        "ansatz-voice-trace": [str(install_dir / "hermes")],
+        "ansatz-voice-trace": [str(install_dir / "ansatz")],
         "ansatz-voice-trace-agent": [str(install_dir / "run_agent.py")],
-        "ansatz-voice-trace-acp": [str(install_dir / "hermes"), "acp"],
+        "ansatz-voice-trace-acp": [str(install_dir / "ansatz"), "acp"],
     }
     caller_env = os.environ.copy()
     caller_env.update(

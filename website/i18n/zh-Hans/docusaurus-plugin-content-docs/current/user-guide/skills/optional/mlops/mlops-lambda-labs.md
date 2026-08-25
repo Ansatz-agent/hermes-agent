@@ -14,7 +14,7 @@ description: "用于 ML 训练和推理的预留及按需 GPU 云实例"
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/mlops/lambda-labs` 安装 |
+| 来源 | 可选 — 通过 `ansatz skills install official/mlops/lambda-labs` 安装 |
 | 路径 | `optional-skills/mlops/lambda-labs` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |

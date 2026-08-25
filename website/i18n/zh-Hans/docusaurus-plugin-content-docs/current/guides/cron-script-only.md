@@ -97,7 +97,7 @@ agent 可以用与创建任务相同的方式暂停、恢复、编辑和删除�
 >
 > **Hermes：** *（调用 `cronjob(action='pause', job_id='abc123')`）*
 >
-> 已暂停。说"重新开启"或执行 `hermes cron resume abc123` 可恢复。
+> 已暂停。说"重新开启"或执行 `ansatz cron resume abc123` 可恢复。
 
 > **你：** 改成每 15 分钟一次
 >
@@ -123,15 +123,15 @@ EOF
 chmod +x ~/.hermes/scripts/memory-watchdog.sh
 
 # 2. 调度任务
-hermes cron create "every 5m" \
+ansatz cron create "every 5m" \
   --no-agent \
   --script memory-watchdog.sh \
   --deliver telegram \
   --name "memory-watchdog"
 
 # 3. 验证
-hermes cron list
-hermes cron run <job_id>    # 触发一次以测试
+ansatz cron list
+ansatz cron run <job_id>    # 触发一次以测试
 ```
 
 就这些。无 prompt（提示词），无技能，无模型。
@@ -167,10 +167,10 @@ hermes cron run <job_id>    # 触发一次以测试
 与所有其他 cron 任务相同：
 
 ```bash
-hermes cron create "every 5m"        # 间隔
-hermes cron create "every 2h"
-hermes cron create "0 9 * * *"       # 标准 cron：每天上午 9 点
-hermes cron create "30m"             # 单次：30 分钟后运行一次
+ansatz cron create "every 5m"        # 间隔
+ansatz cron create "every 2h"
+ansatz cron create "0 9 * * *"       # 标准 cron：每天上午 9 点
+ansatz cron create "30m"             # 单次：30 分钟后运行一次
 ```
 
 完整语法请参阅 [cron 功能参考](/user-guide/features/cron)。
@@ -194,13 +194,13 @@ hermes cron create "30m"             # 单次：30 分钟后运行一次
 ## 编辑与生命周期
 
 ```bash
-hermes cron list                                    # 查看所有任务
-hermes cron pause <job_id>                          # 停止触发，保留定义
-hermes cron resume <job_id>
-hermes cron edit <job_id> --schedule "every 10m"    # 调整频率
-hermes cron edit <job_id> --agent                   # 切换为 LLM 模式
-hermes cron edit <job_id> --no-agent --script …     # 切换回无 agent 模式
-hermes cron remove <job_id>                         # 删除任务
+ansatz cron list                                    # 查看所有任务
+ansatz cron pause <job_id>                          # 停止触发，保留定义
+ansatz cron resume <job_id>
+ansatz cron edit <job_id> --schedule "every 10m"    # 调整频率
+ansatz cron edit <job_id> --agent                   # 切换为 LLM 模式
+ansatz cron edit <job_id> --no-agent --script …     # 切换回无 agent 模式
+ansatz cron remove <job_id>                         # 删除任务
 ```
 
 所有适用于 LLM 任务的操作（暂停、恢复、手动触发、投递目标变更）同样适用于无 agent 任务。
@@ -220,7 +220,7 @@ df -h / /home 2>/dev/null | awk -v t="$THRESHOLD" '
 EOF
 chmod +x ~/.hermes/scripts/disk-alert.sh
 
-hermes cron create "*/15 * * * *" \
+ansatz cron create "*/15 * * * *" \
   --no-agent \
   --script disk-alert.sh \
   --deliver telegram \

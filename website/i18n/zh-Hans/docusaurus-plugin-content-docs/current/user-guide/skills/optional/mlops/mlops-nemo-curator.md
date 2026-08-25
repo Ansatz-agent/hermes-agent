@@ -14,7 +14,7 @@ description: "用于 LLM 训练的 GPU 加速数据整理工具"
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/mlops/nemo-curator` 安装 |
+| 来源 | 可选 — 通过 `ansatz skills install official/mlops/nemo-curator` 安装 |
 | 路径 | `optional-skills/mlops/nemo-curator` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |

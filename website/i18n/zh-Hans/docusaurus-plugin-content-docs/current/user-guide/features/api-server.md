@@ -11,7 +11,7 @@ API 服务器将 hermes-agent 作为 OpenAI 兼容的 HTTP 端点暴露出来。
 你的 agent 使用完整工具集（终端、文件操作、网络搜索、记忆、技能）处理请求，并返回最终响应。在流式传输时，工具进度指示器会内联显示，让前端能够展示 agent 正在执行的操作。
 
 :::tip 一个后端同时覆盖模型与工具
-Hermes 本身需要配置好 provider（提供商）和工具后端，API 服务器才能发挥作用。[Nous Portal](/user-guide/features/tool-gateway) 订阅同时处理两者——300+ 个模型，以及通过 Tool Gateway 提供的网络/图像/TTS/浏览器功能。在启动 API 服务器之前运行一次 `hermes setup --portal`，Open WebUI 或 LobeChat 等前端即可获得一个完整配备工具的后端。
+Hermes 本身需要配置好 provider（提供商）和工具后端，API 服务器才能发挥作用。[Nous Portal](/user-guide/features/tool-gateway) 订阅同时处理两者——300+ 个模型，以及通过 Tool Gateway 提供的网络/图像/TTS/浏览器功能。在启动 API 服务器之前运行一次 `ansatz setup --portal`，Open WebUI 或 LobeChat 等前端即可获得一个完整配备工具的后端。
 :::
 
 ## 快速开始
@@ -30,7 +30,7 @@ API_SERVER_KEY=change-me-local-dev
 ### 2. 启动 gateway
 
 ```bash
-hermes gateway
+ansatz gateway
 ```
 
 你将看到：
@@ -287,7 +287,7 @@ run 会保持 `stopping` 并继续被跟踪，直到 executor 支持的工作退
 
 ### POST /api/jobs
 
-创建新的计划任务。请求体接受与 `hermes cron` 相同的结构——prompt（提示词）、schedule（计划）、skills（技能）、provider 覆盖、投递目标。
+创建新的计划任务。请求体接受与 `ansatz cron` 相同的结构——prompt（提示词）、schedule（计划）、skills（技能）、provider 覆盖、投递目标。
 
 ### GET /api/jobs/\{job_id\}
 
@@ -414,8 +414,8 @@ API_SERVER_CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 
 ```bash
 # 为每个用户创建 profile
-hermes profile create alice
-hermes profile create bob
+ansatz profile create alice
+ansatz profile create bob
 
 # 在不同端口上配置每个 profile 的 API 服务器。API_SERVER_* 是环境变量
 # （不是 config.yaml 键），因此将它们写入每个 profile 的 .env：
@@ -432,8 +432,8 @@ API_SERVER_KEY=bob-secret
 EOF
 
 # 启动每个 profile 的 gateway
-hermes -p alice gateway &
-hermes -p bob gateway &
+ansatz -p alice gateway &
+ansatz -p bob gateway &
 ```
 
 每个 profile 的 API 服务器自动将 profile 名称作为模型 ID 广播：

@@ -37,7 +37,7 @@ SMS gateway（网关）与可选的 [telephony skill](/reference/skills-catalog)
 ### 交互式设置（推荐）
 
 ```bash
-hermes gateway setup
+ansatz gateway setup
 ```
 
 从平台列表中选择 **SMS (Twilio)**，向导将提示你输入凭据。
@@ -102,7 +102,7 @@ SMS_WEBHOOK_PORT=3000
 ## 第四步：启动 Gateway
 
 ```bash
-hermes gateway
+ansatz gateway
 ```
 
 你应该看到：

@@ -6,7 +6,7 @@ description: "How the iron-proxy egress firewall integrates with Hermes — modu
 
 # Egress proxy internals
 
-This page covers the architecture of the egress credential-injection firewall (`hermes egress` / iron-proxy) from a contributor / plugin author's perspective. End-user setup + usage docs live at [Egress proxy](../user-guide/egress/iron-proxy.md).
+This page covers the architecture of the egress credential-injection firewall (`ansatz egress` / iron-proxy) from a contributor / plugin author's perspective. End-user setup + usage docs live at [Egress proxy](../user-guide/egress/iron-proxy.md).
 
 The threat model and high-level design are summarised on the user page; this page is about *how* it's wired, where the security-relevant code lives, and what invariants you have to preserve if you touch it.
 
@@ -18,14 +18,14 @@ agent/proxy_sources/iron_proxy.py     Core: binary install, CA gen, config build
                                        defense.  Pure-function surface where possible.
 
 hermes_cli/proxy_cli.py               Wizard + slash command handlers.
-                                       `hermes egress {install,setup,start,stop,
+                                       `ansatz egress {install,setup,start,stop,
                                        status,disable,config}`.  Wires the
                                        core module into argparse.
 
 hermes_cli/main.py:_dispatch_egress   Top-level subparser dispatcher.
                                        dest='egress_command' (intentionally
                                        disjoint from the inbound OAuth
-                                       `hermes proxy` subparser, which uses
+                                       `ansatz proxy` subparser, which uses
                                        dest='proxy_command').
 
 hermes_cli/config.py: proxy schema    The `proxy:` block in DEFAULT_CONFIG.
@@ -64,7 +64,7 @@ tests/test_iron_proxy_e2e.py          Live E2E (gated on HERMES_RUN_E2E=1).
 ## Lifecycle
 
 ```text
-hermes egress install
+ansatz egress install
   -> agent.proxy_sources.iron_proxy.install_iron_proxy(force=...)
        Downloads pinned tarball + checksums.txt from GitHub Releases.
        SHA-256 verification before extraction.
@@ -76,7 +76,7 @@ hermes egress install
        _VERSION_CACHE.pop(target) so a forced reinstall re-probes
          --version on next call.
 
-hermes egress setup [--from-bitwarden | --no-bitwarden] [--rotate-tokens]
+ansatz egress setup [--from-bitwarden | --no-bitwarden] [--rotate-tokens]
   -> proxy_cli.cmd_setup
        Step 1. find_iron_proxy(install_if_missing=False) -> install if absent.
        Step 2. ensure_ca_cert()
@@ -99,7 +99,7 @@ hermes egress setup [--from-bitwarden | --no-bitwarden] [--rotate-tokens]
                (do NOT silently downgrade bitwarden -> env on re-run);
                save_config(cfg).
 
-hermes egress start
+ansatz egress start
   -> proxy_cli.cmd_start
        Pre-checks (refuse-start path):
          - credential_source=bitwarden? -> pre-validate access_token_env + project_id
@@ -128,7 +128,7 @@ hermes egress start
                 time.sleep(0.1)
             If not listening at exit: _kill_and_wait(proc) + unlink pidfile + raise.
 
-hermes egress stop
+ansatz egress stop
   -> iron_proxy.stop_proxy
        _read_pid + _pid_alive guard.
        starttime_before = _pid_proc_starttime(pid)   # Linux only; None elsewhere
@@ -223,13 +223,13 @@ Regression: `test_stop_proxy_suppresses_sigkill_on_pid_recycle`, `test_pid_proc_
 
 ### Token preservation on re-setup
 
-`merge_mappings(existing, discovered, rotate=False)` MUST return prior tokens for providers that overlap.  Re-running `hermes egress setup` cannot silently 401 running sandboxes.  `--rotate-tokens` is the explicit opt-in.
+`merge_mappings(existing, discovered, rotate=False)` MUST return prior tokens for providers that overlap.  Re-running `ansatz egress setup` cannot silently 401 running sandboxes.  `--rotate-tokens` is the explicit opt-in.
 
 Regression: `test_merge_mappings_preserves_existing_tokens`, `test_merge_mappings_rotate_mints_fresh_tokens`.
 
 ### `credential_source` preservation
 
-`cmd_setup` MUST NOT downgrade `credential_source: bitwarden` to `env` on re-run without an explicit `--no-bitwarden` flag.  Running `hermes egress setup` (no flag) preserves whatever was previously configured.
+`cmd_setup` MUST NOT downgrade `credential_source: bitwarden` to `env` on re-run without an explicit `--no-bitwarden` flag.  Running `ansatz egress setup` (no flag) preserves whatever was previously configured.
 
 Tested via the `cmd_setup` flow in CLI tests (the bitwarden-preservation path is exercised when `--from-bitwarden` is followed by a plain `setup` re-run).
 
@@ -267,7 +267,7 @@ Use `aliases` ONLY for interchangeable env-var names of the *same* credential (e
 
 ### Adding a new signature-auth provider (uncovered)
 
-If the provider uses SigV4 / SDK-minted OAuth / request signatures, a static header swap cannot cover it.  Add the env var to `_NON_BEARER_PROVIDERS` so the wizard and `hermes egress status` warn about it:
+If the provider uses SigV4 / SDK-minted OAuth / request signatures, a static header swap cannot cover it.  Add the env var to `_NON_BEARER_PROVIDERS` so the wizard and `ansatz egress status` warn about it:
 
 ```python
 _NON_BEARER_PROVIDERS: Tuple[str, ...] = (
@@ -302,7 +302,7 @@ scripts/run_tests.sh tests/test_iron_proxy.py tests/test_iron_proxy_cli.py
 # Live E2E (real binary, real curl, real CONNECT tunnel)
 HERMES_RUN_E2E=1 scripts/run_tests.sh tests/test_iron_proxy_e2e.py
 
-# Live PTY smoke against `hermes egress`
+# Live PTY smoke against `ansatz egress`
 HERMES_HOME=/tmp/hermes-egress-test python3 -m hermes_cli.main egress --help
 HERMES_HOME=/tmp/hermes-egress-test python3 -m hermes_cli.main egress setup --help
 ```
@@ -313,6 +313,6 @@ The CLI uses argparse, so `--help` is a good first probe for "did my new flag re
 
 - User-facing setup + troubleshooting: [Egress proxy](https://hermes-agent.nousresearch.com/docs/user-guide/egress/iron-proxy)
 - Docker backend internals: [Docker](https://hermes-agent.nousresearch.com/docs/user-guide/docker)
-- Bitwarden Secrets Manager integration: [`hermes secrets bitwarden`](https://hermes-agent.nousresearch.com/docs/user-guide/secrets/bitwarden)
-- CLI command reference: [`hermes egress`](https://hermes-agent.nousresearch.com/docs/reference/cli-commands#hermes-egress)
+- Bitwarden Secrets Manager integration: [`ansatz secrets bitwarden`](https://hermes-agent.nousresearch.com/docs/user-guide/secrets/bitwarden)
+- CLI command reference: [`ansatz egress`](https://hermes-agent.nousresearch.com/docs/reference/cli-commands#hermes-egress)
 - Sandbox-injected environment variables: [Egress proxy (sandbox-injected)](https://hermes-agent.nousresearch.com/docs/reference/environment-variables#egress-proxy-sandbox-injected)

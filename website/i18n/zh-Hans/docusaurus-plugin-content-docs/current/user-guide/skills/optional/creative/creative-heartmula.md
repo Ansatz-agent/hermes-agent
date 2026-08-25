@@ -14,7 +14,7 @@ HeartMuLa：基于歌词与标签的类 Suno 歌曲生成。
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/creative/heartmula` 安装 |
+| 来源 | 可选 — 通过 `ansatz skills install official/creative/heartmula` 安装 |
 | 路径 | `optional-skills/creative/heartmula` |
 | 版本 | `1.0.0` |
 | 平台 | linux, macos, windows |

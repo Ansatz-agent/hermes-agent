@@ -12,6 +12,8 @@ because its dispatch is tightly coupled to module-level ``cmd_*`` functions.
 
 import argparse
 
+from hermes_cli.cli_identity import CANONICAL_COMMAND
+
 
 # `--profile` / `-p` is consumed by ``main._apply_profile_override`` before
 # argparse runs (it sets ``HERMES_HOME`` and strips itself from ``sys.argv``),
@@ -37,52 +39,52 @@ def _inherited_flag(parser, *args, **kwargs):
     return action
 
 
-_EPILOGUE = """
+_EPILOGUE = f"""
 Examples:
-    hermes                        Start interactive chat
-    hermes chat -q "Hello"        Single query mode
-    hermes --tui                  Launch the modern TUI (or set display.interface: tui)
-    hermes --cli                  Force the classic REPL (overrides display.interface: tui)
-    hermes -c                     Resume the most recent session
-    hermes -c "my project"        Resume a session by name (latest in lineage)
-    hermes --resume <session_id>  Resume a specific session by ID
-    hermes --resume latest        Resume the most recent session (same as -c)
-    hermes --tui --resume latest --in ./dir   Resume ./dir's latest session in the TUI
-    hermes setup                  Run setup wizard
-    hermes login                  Sign in to the Hermes remote account
-    hermes logout                 Sign out of the Hermes remote account
-    hermes auth status            Show Hermes remote account status
-    hermes provider add <p>       Add a pooled provider credential
-    hermes provider list          List provider credentials
-    hermes provider remove <p> <t> Remove provider credential by index, id, or label
-    hermes provider reset <p>     Clear provider exhaustion status
-    hermes model                  Select default model
-    hermes fallback [list]        Show fallback provider chain
-    hermes fallback add           Add a fallback provider (same picker as `hermes model`)
-    hermes fallback remove        Remove a fallback provider from the chain
-    hermes config                 View configuration
-    hermes config edit            Edit config in $EDITOR
-    hermes config set model gpt-4 Set a config value
-    hermes gateway                Run messaging gateway
-    hermes -s hermes-agent-dev,github-auth
-    hermes -w                     Start in isolated git worktree
-    hermes gateway install        Install gateway background service
-    hermes sessions list          List past sessions
-    hermes sessions browse        Interactive session picker
-    hermes sessions rename ID T   Rename/title a session
-    hermes logs                   View agent.log (last 50 lines)
-    hermes logs -f                Follow agent.log in real time
-    hermes logs errors            View errors.log
-    hermes logs --since 1h        Lines from the last hour
-    hermes debug share             Upload debug report for support
-    hermes console                Open the safe Hermes command console
-    hermes update                 Update to latest version
-    hermes dashboard              Start web UI dashboard (port 9119)
-    hermes dashboard --stop       Stop running dashboard processes
-    hermes dashboard --status     List running dashboard processes
+    {CANONICAL_COMMAND}                        Start interactive chat
+    {CANONICAL_COMMAND} chat -q "Hello"        Single query mode
+    {CANONICAL_COMMAND} --tui                  Launch the modern TUI (or set display.interface: tui)
+    {CANONICAL_COMMAND} --cli                  Force the classic REPL (overrides display.interface: tui)
+    {CANONICAL_COMMAND} -c                     Resume the most recent session
+    {CANONICAL_COMMAND} -c "my project"        Resume a session by name (latest in lineage)
+    {CANONICAL_COMMAND} --resume <session_id>  Resume a specific session by ID
+    {CANONICAL_COMMAND} --resume latest        Resume the most recent session (same as -c)
+    {CANONICAL_COMMAND} --tui --resume latest --in ./dir   Resume ./dir's latest session in the TUI
+    {CANONICAL_COMMAND} setup                  Run setup wizard
+    {CANONICAL_COMMAND} login                  Sign in to the Ansatz remote account
+    {CANONICAL_COMMAND} logout                 Sign out of the Ansatz remote account
+    {CANONICAL_COMMAND} auth status            Show Ansatz remote account status
+    {CANONICAL_COMMAND} provider add <p>       Add a pooled provider credential
+    {CANONICAL_COMMAND} provider list          List provider credentials
+    {CANONICAL_COMMAND} provider remove <p> <t> Remove provider credential by index, id, or label
+    {CANONICAL_COMMAND} provider reset <p>     Clear provider exhaustion status
+    {CANONICAL_COMMAND} model                  Select default model
+    {CANONICAL_COMMAND} fallback [list]        Show fallback provider chain
+    {CANONICAL_COMMAND} fallback add           Add a fallback provider (same picker as `{CANONICAL_COMMAND} model`)
+    {CANONICAL_COMMAND} fallback remove        Remove a fallback provider from the chain
+    {CANONICAL_COMMAND} config                 View configuration
+    {CANONICAL_COMMAND} config edit            Edit config in $EDITOR
+    {CANONICAL_COMMAND} config set model gpt-4 Set a config value
+    {CANONICAL_COMMAND} gateway                Run messaging gateway
+    {CANONICAL_COMMAND} -s hermes-agent-dev,github-auth
+    {CANONICAL_COMMAND} -w                     Start in isolated git worktree
+    {CANONICAL_COMMAND} gateway install        Install gateway background service
+    {CANONICAL_COMMAND} sessions list          List past sessions
+    {CANONICAL_COMMAND} sessions browse        Interactive session picker
+    {CANONICAL_COMMAND} sessions rename ID T   Rename/title a session
+    {CANONICAL_COMMAND} logs                   View agent.log (last 50 lines)
+    {CANONICAL_COMMAND} logs -f                Follow agent.log in real time
+    {CANONICAL_COMMAND} logs errors            View errors.log
+    {CANONICAL_COMMAND} logs --since 1h        Lines from the last hour
+    {CANONICAL_COMMAND} debug share             Upload debug report for support
+    {CANONICAL_COMMAND} console                Open the safe Ansatz command console
+    {CANONICAL_COMMAND} update                 Update to latest version
+    {CANONICAL_COMMAND} dashboard              Start web UI dashboard (port 9119)
+    {CANONICAL_COMMAND} dashboard --stop       Stop running dashboard processes
+    {CANONICAL_COMMAND} dashboard --status     List running dashboard processes
 
 For more help on a command:
-    hermes <command> --help
+    {CANONICAL_COMMAND} <command> --help
 """
 
 
@@ -94,8 +96,8 @@ def build_top_level_parser():
     other subparsers via ``subparsers.add_parser(...)``.
     """
     parser = argparse.ArgumentParser(
-        prog="hermes",
-        description="Hermes Agent - AI assistant with tool-calling capabilities",
+        prog=CANONICAL_COMMAND,
+        description="Ansatz - AI assistant with tool-calling capabilities",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_EPILOGUE,
     )
@@ -130,7 +132,7 @@ def build_top_level_parser():
     # --model / --provider are accepted at the top level so they can pair
     # with -z without needing the `chat` subcommand.  If neither -z nor a
     # subcommand consumes them, they fall through harmlessly as None.
-    # Mirrors `hermes chat --model ... --provider ...` semantics.
+    # Mirrors `ansatz chat --model ... --provider ...` semantics.
     _inherited_flag(
         parser,
         "-m",
@@ -148,7 +150,7 @@ def build_top_level_parser():
         help=(
             "Provider override for this invocation (e.g. openrouter, anthropic). "
             "Applies to -z/--oneshot and --tui. The persistent provider lives in config.yaml "
-            "under model.provider — use `hermes setup` or edit the file to change it."
+            f"under model.provider — use `{CANONICAL_COMMAND} setup` or edit the file to change it."
         ),
     )
     _inherited_flag(
@@ -309,7 +311,7 @@ def build_top_level_parser():
         "--image", help="Optional local image path to attach to a single query"
     )
     # `default=argparse.SUPPRESS` on flags that are ALSO declared on the
-    # top-level parser: when the user writes `hermes -m foo chat`, argparse
+    # top-level parser: when the user writes `ansatz -m foo chat`, argparse
     # first sets `args.model = "foo"` from the top-level parser, then
     # dispatches to the chat subparser. Without SUPPRESS the chat subparser's
     # own default (`None`) would silently clobber the top-level value because

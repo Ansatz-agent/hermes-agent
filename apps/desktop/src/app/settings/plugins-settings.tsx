@@ -29,12 +29,12 @@ import { EmptyState, ListRowSkeleton, Pill, SettingsContent, SettingsSection } f
 
 const KIND_ORDER: Record<PluginRecord['kind'], number> = { disk: 0, runtime: 1, bundled: 2 }
 
-// User-installed plugins first, bundled last — mirrors `hermes plugins list`.
+// User-installed plugins first, bundled last — mirrors `ansatz plugins list`.
 const SOURCE_ORDER: Record<string, number> = { user: 0, git: 0, project: 1, entrypoint: 2, bundled: 3 }
 
 // Plugin categories (by registry key prefix) that other surfaces own — same
 // curation stance as desktop-slash-commands.ts. dashboard_auth/* only matters
-// to `hermes dashboard`; model-providers/* are configured in Settings →
+// to `ansatz dashboard`; model-providers/* are configured in Settings →
 // Models; platforms/* are managed from Messaging. The plugin switch is not
 // the user-facing control for any of them, so listing them here is noise.
 const HIDDEN_KEY_PREFIXES = ['dashboard_auth/', 'model-providers/', 'platforms/']

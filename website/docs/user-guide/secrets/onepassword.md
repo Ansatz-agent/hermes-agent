@@ -22,7 +22,7 @@ Hermes never authenticates on your behalf and never downloads `op`: it shells ou
 
 When you authenticate with a **service-account token**, that token is itself the bootstrap credential Hermes needs *before* it can resolve any `op://` reference. It must be present in `os.environ` of every process that resolves secrets — including cron jobs (`kanban.dispatch_in_gateway: false`), subprocess invocations, CLI runs, macOS launchd agents, and Docker containers — not just the interactive gateway. There are three ways to make it available, in order of precedence:
 
-1. **In `~/.hermes/.env` (recommended).** `hermes secrets onepassword setup --token <token>` writes the token to `~/.hermes/.env`, exactly like Bitwarden's `BWS_ACCESS_TOKEN`. Because `load_hermes_dotenv()` always loads `.env`, the token is available everywhere with zero extra setup. This is the simplest reliable option.
+1. **In `~/.hermes/.env` (recommended).** `ansatz secrets onepassword setup --token <token>` writes the token to `~/.hermes/.env`, exactly like Bitwarden's `BWS_ACCESS_TOKEN`. Because `load_hermes_dotenv()` always loads `.env`, the token is available everywhere with zero extra setup. This is the simplest reliable option.
 
 2. **In `~/.hermes/.op.env` (gitignored).** If you'd rather keep the service-account token out of `.env` — for example so `.env` can be checked into a private dotfiles repo while the token stays out of version control — place it in `~/.hermes/.op.env`:
 
@@ -57,13 +57,13 @@ op whoami
 ### 2. Enable the integration
 
 ```bash
-hermes secrets onepassword setup
+ansatz secrets onepassword setup
 ```
 
 This verifies `op` is on `PATH` (or use `--binary-path`), records your account/token settings, checks for an active session, and flips `secrets.onepassword.enabled: true`. Non-interactive flags:
 
 ```bash
-hermes secrets onepassword setup \
+ansatz secrets onepassword setup \
   --account my.1password.com \
   --token-env OP_SERVICE_ACCOUNT_TOKEN \
   --token "$OP_SERVICE_ACCOUNT_TOKEN"
@@ -74,15 +74,15 @@ hermes secrets onepassword setup \
 The reference format is `op://<vault>/<item>/<field>`:
 
 ```bash
-hermes secrets onepassword set OPENAI_API_KEY    "op://Private/OpenAI/api key"
-hermes secrets onepassword set ANTHROPIC_API_KEY "op://Private/Anthropic/credential"
+ansatz secrets onepassword set OPENAI_API_KEY    "op://Private/OpenAI/api key"
+ansatz secrets onepassword set ANTHROPIC_API_KEY "op://Private/Anthropic/credential"
 ```
 
 ### 4. Preview and confirm
 
 ```bash
-hermes secrets onepassword sync     # dry-run: resolve now, show what would apply
-hermes secrets onepassword status   # config + binary + references + auth
+ansatz secrets onepassword sync     # dry-run: resolve now, show what would apply
+ansatz secrets onepassword status   # config + binary + references + auth
 ```
 
 From now on, every `hermes` invocation resolves the references at startup. You'll see a one-line summary in stderr the first time secrets are applied in a process.
@@ -91,14 +91,14 @@ From now on, every `hermes` invocation resolves the references at startup. You'l
 
 | Command | What it does |
 |---|---|
-| `hermes secrets onepassword setup` | Verify `op`, set account / token env var, enable |
-| `hermes secrets onepassword status` | Show config, binary, auth, and configured references |
-| `hermes secrets onepassword token` | Rotate the service-account token: validate with `op whoami`, then store it in `.env` |
-| `hermes secrets onepassword set ENV_VAR "op://…"` | Map an env var to a reference (stored stripped + validated) |
-| `hermes secrets onepassword remove ENV_VAR` | Drop a mapping |
-| `hermes secrets onepassword sync` | Dry-run: resolve references now and show what would apply |
-| `hermes secrets onepassword sync --apply` | Resolve and export into the current shell's environment |
-| `hermes secrets onepassword disable` | Flip `enabled: false`; leaves mappings in place |
+| `ansatz secrets onepassword setup` | Verify `op`, set account / token env var, enable |
+| `ansatz secrets onepassword status` | Show config, binary, auth, and configured references |
+| `ansatz secrets onepassword token` | Rotate the service-account token: validate with `op whoami`, then store it in `.env` |
+| `ansatz secrets onepassword set ENV_VAR "op://…"` | Map an env var to a reference (stored stripped + validated) |
+| `ansatz secrets onepassword remove ENV_VAR` | Drop a mapping |
+| `ansatz secrets onepassword sync` | Dry-run: resolve references now and show what would apply |
+| `ansatz secrets onepassword sync --apply` | Resolve and export into the current shell's environment |
+| `ansatz secrets onepassword disable` | Flip `enabled: false`; leaves mappings in place |
 
 `op` and `1password` are accepted as aliases for `onepassword`.
 
@@ -137,7 +137,7 @@ secrets:
 | Symptom | Cause | Fix |
 |---|---|---|
 | `the op CLI was not found on PATH` | `op` not installed / not on PATH | Install the CLI, or set `secrets.onepassword.binary_path` |
-| `op read failed for 'op://…': …` | Locked session, expired token, or no vault access | `op signin`, run `hermes secrets onepassword token` to rotate the service-account token, or grant the service account access |
+| `op read failed for 'op://…': …` | Locked session, expired token, or no vault access | `op signin`, run `ansatz secrets onepassword token` to rotate the service-account token, or grant the service account access |
 | `op read returned an empty value for 'op://…'` | The referenced field exists but is empty | Fix the item/field in 1Password (an empty value is never applied — your existing env var is left intact) |
 | `… is not an op:// secret reference` | A mapping value isn't an `op://` reference | Re-set it with the correct `op://vault/item/field` form |
 | `op read timed out` | Network blocked or 1Password slow | Check connectivity / the desktop app integration |

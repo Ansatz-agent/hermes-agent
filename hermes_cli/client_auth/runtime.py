@@ -27,6 +27,8 @@ from pathlib import Path
 from typing import Any, Protocol, TypeVar
 from urllib.parse import urlsplit
 
+from hermes_cli.cli_identity import CANONICAL_COMMAND
+
 from hermes_cli.client_auth.client import (
     CSRF_COOKIE,
     SESSION_COOKIE,
@@ -4526,7 +4528,7 @@ def _run_locked_wait(boundary: str) -> int:
                 else "locked-waiting"
             ),
             "reason": snapshot.reason,
-            "guidance": "run `hermes login`",
+            "guidance": f"run `{CANONICAL_COMMAND} login`",
         }
         print(json.dumps(payload, sort_keys=True), flush=True)
 
@@ -4612,7 +4614,7 @@ def _run_locked_service(arguments: list[str]) -> int:
                         else "locked-waiting"
                     ),
                     "reason": snapshot.reason,
-                    "guidance": "run `hermes login`",
+                    "guidance": f"run `{CANONICAL_COMMAND} login`",
                 },
                 sort_keys=True,
             ),

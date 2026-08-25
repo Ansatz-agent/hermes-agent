@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from hermes_constants import get_hermes_home, _get_platform_default_hermes_home
+from hermes_cli.cli_identity import CANONICAL_COMMAND, LEGACY_COMMAND, executable_name
 from typing import Any, Callable, NamedTuple, Optional
 from utils import atomic_json_write
 
@@ -411,7 +412,10 @@ def _gateway_command_subcommand(command: str | None) -> str | None:
     has_gateway_entry = (
         "hermes_cli.main" in joined
         or "hermes_cli/main.py" in joined
-        or any(t.rsplit("/", 1)[-1] in ("hermes", "hermes.exe") for t in tokens)
+        or any(
+            executable_name(token) in (CANONICAL_COMMAND, LEGACY_COMMAND)
+            for token in tokens
+        )
     )
     if not has_gateway_entry:
         return None
@@ -436,7 +440,7 @@ def _gateway_command_subcommand(command: str | None) -> str | None:
         if token != "gateway":
             continue
         if i + 1 >= len(filtered):
-            return "run"  # bare `hermes gateway` defaults to `run`
+            return "run"  # bare `ansatz gateway` defaults to `run`
         return filtered[i + 1]
     return None
 
@@ -1013,7 +1017,7 @@ def write_runtime_status(
         payload["active_agents"] = parse_active_agents(active_agents)
     if served_profiles is not _UNSET:
         # Profiles this gateway multiplexes (multi-profile mode). Absent/empty
-        # for a single-profile gateway. Lets `hermes status` show per-profile
+        # for a single-profile gateway. Lets `ansatz status` show per-profile
         # coverage without a second probe.
         payload["served_profiles"] = list(served_profiles or [])
 
@@ -1684,7 +1688,7 @@ def _consume_pid_marker_for_self(
     # platforms without ``/proc`` (macOS, native Windows — the very
     # platform the planned-stop watcher exists for). Requiring a non-None
     # match there would make every consume return False, so a legitimate
-    # ``hermes gateway stop`` on Windows would be misclassified as an
+    # ``ansatz gateway stop`` on Windows would be misclassified as an
     # unexpected ``UNKNOWN`` exit (exit 1) and revived by the service
     # manager. So: when both start_times are known they must match; when
     # either is unknown, fall back to PID equality alone (bounded by the

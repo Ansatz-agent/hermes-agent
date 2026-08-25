@@ -36,7 +36,7 @@ Key capabilities:
 ## Setup
 
 :::tip Nous Subscribers
-If you have a paid [Nous Portal](https://portal.nousresearch.com) subscription, you can use browser automation through the **[Tool Gateway](tool-gateway.md)** without any separate API keys. New installs can run `hermes setup --portal` to log in and turn on every gateway tool at once; existing installs can pick **Nous Subscription** as the browser provider via `hermes model` or `hermes tools`.
+If you have a paid [Nous Portal](https://portal.nousresearch.com) subscription, you can use browser automation through the **[Tool Gateway](tool-gateway.md)** without any separate API keys. New installs can run `ansatz setup --portal` to log in and turn on every gateway tool at once; existing installs can pick **Nous Subscription** as the browser provider via `ansatz model` or `ansatz tools`.
 :::
 
 ### Browserbase cloud mode
@@ -68,7 +68,7 @@ Browser Use mode uses the [Browser Use CLI 3.0](https://github.com/browser-use/b
 
 **This is the default browser mode**: when `browser.backend` is unset and the `browser-use` CLI is runnable (installed, or available through `uvx`), the agent gets the single `browser_exec` tool. If the CLI can't run, Hermes falls back to the built-in browser tools automatically.
 
-The mode is a **driver** that composes with your configured browser backend: it drives your local Chrome, a Nous-subscription cloud browser, Browserbase, Firecrawl, or Browser Use cloud browsers — whichever browser source is selected in `hermes tools` → Browser Automation. The one exception is Camofox, which has no CDP endpoint for the harness to attach to; Camofox setups automatically keep the built-in browser tools.
+The mode is a **driver** that composes with your configured browser backend: it drives your local Chrome, a Nous-subscription cloud browser, Browserbase, Firecrawl, or Browser Use cloud browsers — whichever browser source is selected in `ansatz tools` → Browser Automation. The one exception is Camofox, which has no CDP endpoint for the harness to attach to; Camofox setups automatically keep the built-in browser tools.
 
 To opt out and force the built-in browser tools, use `/browser use off`, or:
 
@@ -101,7 +101,7 @@ FIRECRAWL_API_KEY=fc-***
 Get your API key at [firecrawl.dev](https://firecrawl.dev). Then select Firecrawl as your browser provider:
 
 ```bash
-hermes setup tools
+ansatz setup tools
 # → Browser Automation → Firecrawl
 ```
 
@@ -144,7 +144,7 @@ With auto-routing disabled, private URLs are rejected with
 usually won't work since Browserbase etc. can't reach your LAN).
 
 Requirements: the local sidecar uses the same `agent-browser` CLI as pure local
-mode, so you need it installed (`hermes setup tools → Browser Automation`
+mode, so you need it installed (`ansatz setup tools → Browser Automation`
 auto-installs it). Post-navigation redirects from a public URL onto a private
 address are still blocked (you can't use a redirect-to-internal trick to reach
 your LAN through the public path).
@@ -233,7 +233,7 @@ CAMOFOX_LOOPBACK_HOST_ALIAS=host.docker.internal
 
 The rewrite only applies to page navigation URLs with loopback hosts (`localhost`, `127.0.0.1`, `::1`). It does not change `CAMOFOX_URL`. Leave it disabled for non-Docker Camofox installs, where the browser already runs on the host and loopback URLs are correct.
 
-Or configure via `hermes tools` → Browser Automation → Camofox.
+Or configure via `ansatz tools` → Browser Automation → Camofox.
 
 When `CAMOFOX_URL` is set, all browser tools automatically route through Camofox instead of Browserbase or agent-browser.
 
@@ -360,7 +360,7 @@ Hermes drives Lightpanda through `agent-browser` over CDP, the same way it drive
 Instead of a cloud provider, you can attach Hermes browser tools to your own running Chrome, Brave, Chromium, or Edge instance via the Chrome DevTools Protocol (CDP). This is useful when you want to see what the agent is doing in real-time, interact with pages that require your own cookies/sessions, or avoid cloud browser costs.
 
 :::note
-`/browser connect` is an **interactive-CLI slash command** — it is not dispatched by the gateway. If you try to run it inside a WebUI, Telegram, Discord, or other gateway chat, the message will be sent to the agent as plain text and the command will not execute. Start Hermes from the terminal (`hermes` or `hermes chat`) and issue `/browser connect` there.
+`/browser connect` is an **interactive-CLI slash command** — it is not dispatched by the gateway. If you try to run it inside a WebUI, Telegram, Discord, or other gateway chat, the message will be sent to the agent as plain text and the command will not execute. Start Hermes from the terminal (`hermes` or `ansatz chat`) and issue `/browser connect` there.
 :::
 
 In the CLI, use:
@@ -481,7 +481,7 @@ npm install -g agent-browser
 ```
 
 :::info
-The `browser` toolset must be included in your config's `toolsets` list or enabled via `hermes config set toolsets '["hermes-cli", "browser"]'`.
+The `browser` toolset must be included in your config's `toolsets` list or enabled via `ansatz config set toolsets '["hermes-cli", "browser"]'`.
 :::
 
 ## Available Tools

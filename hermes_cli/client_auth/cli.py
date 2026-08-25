@@ -4,6 +4,8 @@ import json
 import sys
 from collections.abc import Sequence
 
+from hermes_cli.cli_identity import CANONICAL_COMMAND
+
 
 def login() -> None:
     """Run the interactive remote-account login without full CLI imports."""
@@ -22,7 +24,7 @@ def login() -> None:
         return
     if not (sys.stdin.isatty() and sys.stderr.isatty()):
         raise AuthRequired("interactive_login_required")
-    username = input("Hermes account: ").strip()
+    username = input("Ansatz account: ").strip()
     password = bytearray(getpass("Password: ").encode("utf-8"))
     try:
         result = account_login(username, password)
@@ -36,7 +38,7 @@ def logout() -> None:
     from hermes_cli.client_auth.runtime import account_logout
 
     account_logout()
-    print("Remote Hermes account signed out; provider credentials were not modified.")
+    print("Remote Ansatz account signed out; provider credentials were not modified.")
 
 
 def status() -> None:
@@ -63,7 +65,8 @@ def try_handle(argv: Sequence[str]) -> bool:
             status()
     except AuthRequired as error:
         print(
-            f"AUTH_REQUIRED {error.reason or error.code}; run `hermes login`",
+            f"AUTH_REQUIRED {error.reason or error.code}; "
+            f"run `{CANONICAL_COMMAND} login`",
             file=sys.stderr,
         )
         raise SystemExit(20) from None

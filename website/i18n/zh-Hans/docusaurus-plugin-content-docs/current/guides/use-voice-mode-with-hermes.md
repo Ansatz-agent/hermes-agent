@@ -147,7 +147,7 @@ ELEVENLABS_API_KEY=***
 - `openai` → 良好的中间选项
 - `mistral` → 多语言，原生 Opus
 
-### 如果使用 `hermes setup`
+### 如果使用 `ansatz setup`
 
 如果你在设置向导中选择了 NeuTTS，Hermes 会检查 `neutts` 是否已安装。如果缺失，向导会告知你 NeuTTS 需要 Python 包 `neutts` 和系统包 `espeak-ng`，并提供自动安装，使用平台包管理器安装 `espeak-ng`，然后运行：
 
@@ -311,7 +311,7 @@ Hermes 仍作为普通聊天机器人运行，但可以朗读回复。
 ### 启动 gateway
 
 ```bash
-hermes gateway
+ansatz gateway
 ```
 
 ### 开启语音回复
@@ -453,7 +453,7 @@ Hermes 加入 Discord 语音频道（VC），监听用户语音，转录后运�
 如果你想走最短的成功路径：
 
 1. 让文本 Hermes 正常工作
-2. 运行 `hermes setup voice` 以启用语音支持
+2. 运行 `ansatz setup voice` 以启用语音支持
 3. 使用本地 STT + Edge TTS 的 CLI 语音模式
 4. 然后在 Telegram 或 Discord 中启用 `/voice on`
 5. 只有在此之后，再尝试 Discord 语音频道模式

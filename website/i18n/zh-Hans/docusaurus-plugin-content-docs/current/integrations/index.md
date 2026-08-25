@@ -10,7 +10,7 @@ Hermes Agent 可连接外部系统，用于 AI 推理、工具服务器、IDE �
 
 ## AI 提供商与路由
 
-Hermes 开箱即支持多个 AI 推理提供商。使用 `hermes model` 进行交互式配置，或在 `config.yaml` 中直接设置。
+Hermes 开箱即支持多个 AI 推理提供商。使用 `ansatz model` 进行交互式配置，或在 `config.yaml` 中直接设置。
 
 - **[AI 提供商](/user-guide/features/provider-routing)** — OpenRouter、Anthropic、OpenAI、Google 以及任何兼容 OpenAI 的端点。Hermes 会自动检测每个提供商的能力，包括视觉、流式传输和工具调用。
 - **[提供商路由](/user-guide/features/provider-routing)** — 精细控制哪些底层提供商处理你的 OpenRouter 请求。通过排序、白名单、黑名单和显式优先级排序，在成本、速度或质量之间优化。
@@ -22,7 +22,7 @@ Hermes 开箱即支持多个 AI 推理提供商。使用 `hermes model` 进行�
 
 ## 网页搜索后端
 
-`web_search` 和 `web_extract` 工具支持四个后端提供商，通过 `config.yaml` 或 `hermes tools` 配置：
+`web_search` 和 `web_extract` 工具支持四个后端提供商，通过 `config.yaml` 或 `ansatz tools` 配置：
 
 | 后端 | 环境变量 | 搜索 | 提取 | 爬取 |
 |---------|---------|--------|---------|-------|

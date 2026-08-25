@@ -1,4 +1,4 @@
-"""``hermes plugins`` subcommand parser.
+"""``ansatz plugins`` subcommand parser.
 
 Extracted from ``hermes_cli/main.py:main()`` (god-file Phase 2 follow-up).
 Handler injected to avoid importing ``main``.
@@ -29,7 +29,7 @@ def build_plugins_parser(subparsers, *, cmd_plugins: Callable) -> None:
         help=(
             "Git URL, owner/repo shorthand (e.g. anpicasso/hermes-plugin-chrome-profiles), "
             "or a bare plugin name resolved through the community index "
-            "(see `hermes plugins search`)"
+            "(see `ansatz plugins search`)"
         ),
     )
     plugins_install.add_argument(
@@ -52,7 +52,7 @@ def build_plugins_parser(subparsers, *, cmd_plugins: Callable) -> None:
     _install_enable_group.add_argument(
         "--no-enable",
         action="store_true",
-        help="Install disabled (skip confirmation prompt); enable later with `hermes plugins enable <name>`",
+        help="Install disabled (skip confirmation prompt); enable later with `ansatz plugins enable <name>`",
     )
 
     plugins_search = plugins_subparsers.add_parser(

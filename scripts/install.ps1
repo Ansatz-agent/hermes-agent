@@ -3010,7 +3010,10 @@ function Set-PathVariable {
         # path, so they work from any location and survive updates.)
         $hermesBin = "$InstallDir\bin"
         New-Item -ItemType Directory -Force -Path $hermesBin | Out-Null
-        foreach ($launcher in @("hermes.exe", "hermes-acp.exe")) {
+        # Keep this list aligned with [project.scripts]. Expose only these
+        # launchers (never the whole venv\Scripts directory) so the install
+        # does not shadow the user's python.exe or pip.exe.
+        foreach ($launcher in @("ansatz.exe", "ansatz-agent.exe", "ansatz-acp.exe", "hermes.exe", "hermes-agent.exe", "hermes-acp.exe")) {
             $src = "$InstallDir\venv\Scripts\$launcher"
             if (Test-Path $src) {
                 Copy-Item -Force $src "$hermesBin\$launcher"
@@ -3100,9 +3103,12 @@ function Write-AuthBootstrapComplete {
 
         $binDir = Join-Path $InstallDir "bin"
         New-Item -ItemType Directory -Force -Path $binDir | Out-Null
-        $launcherPath = Join-Path $binDir "hermes.cmd"
+        $launcherPath = Join-Path $binDir "ansatz.cmd"
         $launcher = "@echo off`r`nset `"PYTHONPATH=%~dp0..`"`r`n`"%~dp0..\auth-venv\Scripts\python.exe`" -m hermes_cli.main %*`r`n"
         Write-AtomicAuthBytes -Path $launcherPath -Bytes ([System.Text.Encoding]::ASCII.GetBytes($launcher))
+        $legacyLauncherPath = Join-Path $binDir "hermes.cmd"
+        $legacyLauncher = "@echo off`r`ncall `"%~dp0ansatz.cmd`" %*`r`n"
+        Write-AtomicAuthBytes -Path $legacyLauncherPath -Bytes ([System.Text.Encoding]::ASCII.GetBytes($legacyLauncher))
 
         $marker = [ordered]@{
             schemaVersion = 2

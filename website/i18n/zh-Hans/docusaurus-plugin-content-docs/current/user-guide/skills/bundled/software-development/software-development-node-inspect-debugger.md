@@ -217,13 +217,13 @@ cont
 
 暂停后，进入 `repl` → 检查 `props`、state 引用、`useInput` 处理器的值等。
 
-### 调试运行中的 `hermes --tui`
+### 调试运行中的 `ansatz --tui`
 
 TUI 由 Python CLI 启动 Node。最简路径：
 
 ```bash
 # 1. Launch TUI
-hermes --tui &
+ansatz --tui &
 TUI_PID=$(pgrep -f 'ui-tui/dist/entry' | head -1)
 
 # 2. Enable inspector on that Node PID

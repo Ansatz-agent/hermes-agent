@@ -1,0 +1,7 @@
+#!/usr/bin/env python3
+"""Canonical Ansatz CLI source launcher."""
+
+if __name__ == "__main__":
+    from hermes_cli.entrypoints import ansatz
+
+    ansatz()

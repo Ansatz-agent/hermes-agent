@@ -378,7 +378,7 @@ class TestWsAuthOkDesktopScope:
             ws,
             "dashboard.ws.message",
         )
-        assert ws.closed == {"code": 4401, "reason": "Hermes login required"}
+        assert ws.closed == {"code": 4401, "reason": "Ansatz login required"}
 
 
 class TestWsRequestIsAllowedGated:

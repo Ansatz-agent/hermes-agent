@@ -13,9 +13,9 @@
 # re-exec and continue directly.
 #
 # Routing:
-#   no args                       → exec `hermes` (the default)
+#   no args                       → exec `ansatz` (the default)
 #   first arg is an executable    → exec it directly (sleep, bash, sh, …)
-#   first arg is anything else    → exec `hermes <args>` (subcommand passthrough)
+#   first arg is anything else    → exec `ansatz <args>` (subcommand passthrough)
 #
 # Drop to hermes via s6-setuidgid, but skip it when already non-root.
 set -e
@@ -88,19 +88,19 @@ cd "$_hermes_orig_cwd"
 
 if [ $# -eq 0 ]; then
     wait_for_auth
-    drop hermes
+    drop ansatz
 fi
 
 case "$1" in
     login|logout|-h|--help|-V|--version)
-        drop hermes "$@"
+        drop ansatz "$@"
         ;;
     auth)
         if [ "${2:-}" = status ] && [ $# -eq 2 ]; then
-            drop hermes "$@"
+            drop ansatz "$@"
         fi
         ;;
-    hermes)
+    ansatz|hermes)
         case "${2:-}" in
             login|logout|-h|--help|-V|--version)
                 drop "$@"
@@ -121,4 +121,4 @@ fi
 
 # Hermes subcommand pass-through.
 wait_for_auth
-drop hermes "$@"
+drop ansatz "$@"

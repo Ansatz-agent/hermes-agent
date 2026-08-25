@@ -45,7 +45,7 @@ no-foreground invariant, click-dispatch internals — see
 pass `--skip-computer-use` / `-SkipComputerUse` to opt out), so enabling
 Computer Use is just a config flip:
 
-- **`hermes tools`** → pick `🖱️  Computer Use` — installs the driver
+- **`ansatz tools`** → pick `🖱️  Computer Use` — installs the driver
   automatically if it's still missing.
 - **Dashboard / desktop app** → toggle the Computer Use toolset — if the
   driver is missing, the toggle kicks off the install in the background
@@ -54,11 +54,11 @@ Computer Use is just a config flip:
 **Manual fallback (older installs, skipped installer step):**
 
 ```
-hermes computer-use install
+ansatz computer-use install
 ```
 
 This fetches and runs the upstream cua-driver installer — `install.sh`
-on macOS/Linux, `install.ps1` on Windows. Use `hermes computer-use
+on macOS/Linux, `install.ps1` on Windows. Use `ansatz computer-use
 status` to verify the install.
 
 After installing, regardless of which path you took, grant the
@@ -66,14 +66,14 @@ platform-appropriate prereqs:
 
 | Platform | Prereqs |
 |---|---|
-| **macOS** | System Settings → Privacy & Security → **Accessibility** + **Screen Recording** → allow your terminal (or Hermes app). `hermes computer-use doctor` will tell you which permission is missing. |
+| **macOS** | System Settings → Privacy & Security → **Accessibility** + **Screen Recording** → allow your terminal (or Hermes app). `ansatz computer-use doctor` will tell you which permission is missing. |
 | **Windows** | None at install time. If you're driving over SSH (not RDP / console), you need the autostart pattern — see [cua.ai/docs/how-to-guides/driver/windows-ssh](https://cua.ai/docs/how-to-guides/driver/windows-ssh) for the Session 0 ↔ Session 1+ proxy. |
 | **Linux** | A reachable display server: `DISPLAY` set for X11, or `XDG_SESSION_TYPE=wayland`. Wayland sessions need an XWayland bridge for capture. AT-SPI must be on (default on GNOME/KDE/Xfce). |
 
 Then start a session with the toolset enabled:
 
 ```
-hermes -t computer_use chat
+ansatz -t computer_use chat
 ```
 
 or add `computer_use` to your enabled toolsets in `~/.hermes/config.yaml`.
@@ -106,14 +106,14 @@ compromise you accept.
 
 </div>
 
-## `hermes computer-use doctor` — your first triage stop
+## `ansatz computer-use doctor` — your first triage stop
 
-`hermes computer-use doctor` runs cua-driver's structured
+`ansatz computer-use doctor` runs cua-driver's structured
 `health_report` MCP tool and prints a per-check matrix. It's the single
 fastest way to find out *why* an action isn't working.
 
 ```
-$ hermes computer-use doctor
+$ ansatz computer-use doctor
 ⚠️  cua-driver 0.5.8 on darwin — degraded
   ✅ binary_version: cua-driver 0.5.8
   ✅ platform_supported: macOS 26.4.1 (arm64)
@@ -347,7 +347,7 @@ computer_use:
   cua_telemetry: true   # default: false (telemetry off)
 ```
 
-When it's on, `hermes computer-use doctor` reports `telemetry: enabled`;
+When it's on, `ansatz computer-use doctor` reports `telemetry: enabled`;
 when off (the default), it reports `telemetry: disabled via
 CUA_DRIVER_RS_TELEMETRY_ENABLED`.
 
@@ -412,9 +412,9 @@ HERMES_CUA_DRIVER_CMD=/path/to/cua/libs/cua-driver/rust/target/debug/cua-driver
 
 ### Confirm Hermes is using your build
 
-- `hermes computer-use status` prints the resolved binary path and
+- `ansatz computer-use status` prints the resolved binary path and
   version.
-- `hermes computer-use doctor` confirms the binary is reachable and
+- `ansatz computer-use doctor` confirms the binary is reachable and
   exercises the full MCP path end-to-end.
 - In a session, `computer_use(action="capture")` exercises the spawned
   `cua-driver mcp` child process.
@@ -444,15 +444,15 @@ HERMES_CUA_DRIVER_CMD=/path/to/cua/libs/cua-driver/rust/target/debug/cua-driver
 
 ## Troubleshooting
 
-**First action when anything's off: run `hermes computer-use doctor`.**
+**First action when anything's off: run `ansatz computer-use doctor`.**
 The structured per-check matrix tells you (and any agent helping you
 debug) exactly what's wrong.
 
 Specific failure modes the doctor doesn't catch:
 
 **`computer_use backend unavailable: cua-driver is not installed`** —
-Run `hermes computer-use install` to fetch the cua-driver binary, or
-run `hermes tools` and enable the Computer Use toolset.
+Run `ansatz computer-use install` to fetch the cua-driver binary, or
+run `ansatz tools` and enable the Computer Use toolset.
 
 **Clicks seem to have no effect** — Capture and verify. A modal you
 didn't see may be blocking input. Dismiss it with `escape` or the close
@@ -468,7 +468,7 @@ matches the dangerous-shell-pattern list. Break the command up or
 reconsider.
 
 **Empty captures on Linux** — `DISPLAY` not set, or you're on pure
-Wayland without an XWayland bridge. `hermes computer-use doctor` will
+Wayland without an XWayland bridge. `ansatz computer-use doctor` will
 flag this as `ax_capability: fail` with a `Set DISPLAY (X11)…` hint.
 
 **Empty captures on Windows over SSH** — You're in Session 0 (the

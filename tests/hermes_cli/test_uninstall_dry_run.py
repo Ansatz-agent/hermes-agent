@@ -4,6 +4,47 @@ from types import SimpleNamespace
 from hermes_cli import uninstall
 
 
+def test_remove_wrapper_script_removes_both_command_families(monkeypatch, tmp_path):
+    local_bin = tmp_path / ".local" / "bin"
+    local_bin.mkdir(parents=True)
+    names = (
+        "ansatz",
+        "ansatz-agent",
+        "ansatz-acp",
+        "hermes",
+        "hermes-agent",
+        "hermes-acp",
+    )
+    for name in names:
+        local_bin.joinpath(name).write_text(
+            "#!/usr/bin/env bash\n"
+            f'exec "{tmp_path}/.hermes/hermes-agent/{name}" "$@"\n',
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    removed = uninstall.remove_wrapper_script()
+
+    assert set(removed) == {local_bin / name for name in names}
+    assert all(not local_bin.joinpath(name).exists() for name in names)
+
+
+def test_remove_wrapper_script_preserves_unowned_ansatz_script(monkeypatch, tmp_path):
+    local_bin = tmp_path / ".local" / "bin"
+    local_bin.mkdir(parents=True)
+    unrelated = local_bin / "ansatz"
+    body = "#!/usr/bin/env bash\necho 'my ansatz helper'\n"
+    unrelated.write_text(body, encoding="utf-8")
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    removed = uninstall.remove_wrapper_script()
+
+    assert unrelated not in removed
+    assert unrelated.read_text(encoding="utf-8") == body
+
+
 def test_dry_run_prints_plan_without_mutating(monkeypatch, tmp_path, capsys):
     project_root = tmp_path / "hermes-agent"
     hermes_home = tmp_path / ".hermes"

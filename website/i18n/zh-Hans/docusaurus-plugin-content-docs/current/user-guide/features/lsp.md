@@ -82,21 +82,21 @@ Hermes 会自动检测 PATH 上或 `<HERMES_HOME>/lsp/bin/` 中的二进制文�
 
 部分服务器需要与 npm 不会自动拉取的对等依赖一同安装。当前的典型情况是
 `typescript-language-server`，它要求 `typescript` SDK 可从同一 `node_modules`
-目录树中导入——当你运行 `hermes lsp install typescript` 或首次使用时触发自动安装时，
+目录树中导入——当你运行 `ansatz lsp install typescript` 或首次使用时触发自动安装时，
 Hermes 会同时安装这两个包。
 
 ## CLI
 
 ```
-hermes lsp status          # 服务状态 + 各服务器安装状态
-hermes lsp list            # 注册表，可选 --installed-only
-hermes lsp install <id>    # 主动安装单个服务器
-hermes lsp install-all     # 尝试安装所有已知安装方式的服务器
-hermes lsp restart         # 关闭正在运行的客户端
-hermes lsp which <id>      # 打印解析后的二进制路径
+ansatz lsp status          # 服务状态 + 各服务器安装状态
+ansatz lsp list            # 注册表，可选 --installed-only
+ansatz lsp install <id>    # 主动安装单个服务器
+ansatz lsp install-all     # 尝试安装所有已知安装方式的服务器
+ansatz lsp restart         # 关闭正在运行的客户端
+ansatz lsp which <id>      # 打印解析后的二进制路径
 ```
 
-`hermes lsp status` 是最佳起点——它显示哪些语言当前可获得语义诊断，
+`ansatz lsp status` 是最佳起点——它显示哪些语言当前可获得语义诊断，
 哪些语言还需要安装二进制文件。
 
 ## 配置
@@ -179,16 +179,16 @@ lsp:
 
 ## 故障排查
 
-**`hermes lsp status` 显示某服务器为"missing"**
+**`ansatz lsp status` 显示某服务器为"missing"**
 
 该二进制文件不在 PATH 上，也不在 `<HERMES_HOME>/lsp/bin/` 中。运行
-`hermes lsp install <server_id>` 尝试自动安装，或通过该语言的常规工具链手动安装。
+`ansatz lsp install <server_id>` 尝试自动安装，或通过该语言的常规工具链手动安装。
 
-**`hermes lsp status` 中出现 `Backend warnings` 部分**
+**`ansatz lsp status` 中出现 `Backend warnings` 部分**
 
 部分服务器以薄包装层的形式调用外部 CLI 进行实际诊断——它们能正常启动并接受请求，
 但在辅助二进制文件缺失时不会报错。最常见的情况是 `bash-language-server`，
-它将诊断委托给 `shellcheck`。当 `hermes lsp status` 显示 `Backend warnings` 部分时，
+它将诊断委托给 `shellcheck`。当 `ansatz lsp status` 显示 `Backend warnings` 部分时，
 请通过系统包管理器安装对应工具：
 
 ```
@@ -209,7 +209,7 @@ stderr 输出和协议错误均记录于此。部分服务器（尤其是 rust-a
 **服务器崩溃**
 
 崩溃的服务器会被加入损坏集合，在本次会话剩余时间内不再重试。运行
-`hermes lsp restart` 清除该集合；下次编辑时会重新启动。
+`ansatz lsp restart` 清除该集合；下次编辑时会重新启动。
 
 **编辑位于任何 git 仓库之外的文件**
 

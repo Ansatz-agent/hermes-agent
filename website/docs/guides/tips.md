@@ -9,7 +9,7 @@ description: "Practical advice to get the most out of Hermes Agent — prompt ti
 A quick-wins collection of practical tips that make you immediately more effective with Hermes Agent. Each section targets a different aspect — scan the headers and jump to what's relevant.
 
 :::tip Confused which model to pick?
-Run `hermes setup --portal` — you get 300+ models including Claude, GPT-5, and Gemini under one subscription. See [Nous Portal](/integrations/nous-portal).
+Run `ansatz setup --portal` — you get 300+ models including Claude, GPT-5, and Gemini under one subscription. See [Nous Portal](/integrations/nous-portal).
 :::
 
 ---
@@ -52,7 +52,7 @@ Press **Ctrl+C** once to interrupt the agent mid-response. You can then type a n
 
 ### Resume Sessions with `-c`
 
-Forgot something from your last session? Run `hermes -c` to resume exactly where you left off, with full conversation history restored. You can also resume by title: `hermes -r "my research project"`.
+Forgot something from your last session? Run `ansatz -c` to resume exactly where you left off, with full conversation history restored. You can also resume by title: `ansatz -r "my research project"`.
 
 ### Clipboard Image Paste
 
@@ -152,7 +152,7 @@ Instead of running terminal commands one at a time, ask the agent to write a scr
 Use `/model` to switch models mid-session. Use a frontier model (Claude Sonnet/Opus, GPT-4o) for complex reasoning and architecture decisions. Switch to a faster model for simple tasks like formatting, renaming, or boilerplate generation. Keep in mind each switch resets the prompt cache (see above), so on long sessions it's often cheaper to start a fresh session on the other model than to bounce back and forth.
 
 :::tip
-Run `/usage` periodically to see your token consumption. Run `/insights` for a broader view of usage patterns over the last 30 days. To see what your *fixed* per-message cost is before any conversation — system prompt, skills index, memory, tool schemas — run [`hermes prompt-size`](/reference/cli-commands#hermes-prompt-size) (works offline).
+Run `/usage` periodically to see your token consumption. Run `/insights` for a broader view of usage patterns over the last 30 days. To see what your *fixed* per-message cost is before any conversation — system prompt, skills index, memory, tool schemas — run [`ansatz prompt-size`](/reference/cli-commands#hermes-prompt-size) (works offline).
 :::
 
 ## Messaging Tips
@@ -163,11 +163,11 @@ Use `/sethome` in your preferred Telegram or Discord chat to designate it as the
 
 ### Use /title to Organize Sessions
 
-Name your sessions with `/title auth-refactor` or `/title research-llm-quantization`. Named sessions are easy to find with `hermes sessions list` and resume with `hermes -r "auth-refactor"`. Unnamed sessions pile up and become impossible to distinguish.
+Name your sessions with `/title auth-refactor` or `/title research-llm-quantization`. Named sessions are easy to find with `ansatz sessions list` and resume with `ansatz -r "auth-refactor"`. Unnamed sessions pile up and become impossible to distinguish.
 
 ### DM Pairing for Team Access
 
-Instead of manually collecting user IDs for allowlists, enable DM pairing. When a teammate DMs the bot, they get a one-time pairing code. You approve it with `hermes pairing approve telegram XKGH5N7P` — simple and secure.
+Instead of manually collecting user IDs for allowlists, enable DM pairing. When a teammate DMs the bot, they get a one-time pairing code. You approve it with `ansatz pairing approve telegram XKGH5N7P` — simple and secure.
 
 ### Tool Progress Display Modes
 

@@ -9,7 +9,7 @@ description: "Text-to-speech and voice message transcription across all platform
 Hermes Agent supports both text-to-speech output and voice message transcription across all messaging platforms.
 
 :::tip Nous Subscribers
-If you have a paid [Nous Portal](https://portal.nousresearch.com) subscription, OpenAI TTS is available through the **[Tool Gateway](tool-gateway.md)** without a separate OpenAI API key. New installs can run `hermes setup --portal` to log in and turn on every gateway tool at once; existing installs can pick **Nous Subscription** for just TTS via `hermes model` or `hermes tools`.
+If you have a paid [Nous Portal](https://portal.nousresearch.com) subscription, OpenAI TTS is available through the **[Tool Gateway](tool-gateway.md)** without a separate OpenAI API key. New installs can run `ansatz setup --portal` to log in and turn on every gateway tool at once; existing installs can pick **Nous Subscription** for just TTS via `ansatz model` or `ansatz tools`.
 :::
 
 ## Text-to-Speech
@@ -231,7 +231,7 @@ See the [xAI Custom Voices docs](https://docs.x.ai/developers/model-capabilities
 
 Piper is a fast, local neural TTS engine from the Open Home Foundation (the Home Assistant maintainers). It runs entirely on CPU, supports **44 languages** with pre-trained voices, and needs no API key.
 
-**Install via `hermes tools`** → Voice & TTS → Piper — Hermes runs `pip install piper-tts` for you. Or install manually: `pip install piper-tts`.
+**Install via `ansatz tools`** → Voice & TTS → Piper — Hermes runs `pip install piper-tts` for you. Or install manually: `pip install piper-tts`.
 
 **Switch to Piper:**
 
@@ -373,7 +373,7 @@ For TTS engines that can't be expressed as a single shell command — Python SDK
 | Two or three CLIs chained with shell pipes | **Command provider** |
 | A Python SDK only — no CLI | **Plugin** |
 | Streaming bytes you want to deliver chunked (mid-generation voice bubbles) | **Plugin** (override `stream()`) |
-| A voice-listing API used by `hermes setup` | **Plugin** (override `list_voices()`) |
+| A voice-listing API used by `ansatz setup` | **Plugin** (override `list_voices()`) |
 | OAuth refresh flow (not a static bearer token) | **Plugin** |
 
 Built-ins always win, and command providers win over a same-name plugin — so plugins are safe to register against any non-built-in name without worrying about shadowing your existing config.
@@ -426,15 +426,15 @@ def register(ctx):
     ctx.register_tts_provider(MyTTSProvider())
 ```
 
-Enable it (`hermes plugins enable my-tts`), point `tts.provider` at it (`tts.provider: my-tts` in `config.yaml`), and the `text_to_speech` tool will route through your plugin.
+Enable it (`ansatz plugins enable my-tts`), point `tts.provider` at it (`tts.provider: my-tts` in `config.yaml`), and the `text_to_speech` tool will route through your plugin.
 
 #### Optional hooks
 
 Override these on your provider class for richer integration:
 
-- `list_voices()` → list of `{id, display, language, gender, preview_url}` dicts shown in `hermes tools`.
+- `list_voices()` → list of `{id, display, language, gender, preview_url}` dicts shown in `ansatz tools`.
 - `list_models()` → list of `{id, display, languages, max_text_length}` dicts.
-- `get_setup_schema()` → return `{name, badge, tag, env_vars: [{key, prompt, url}]}` to power the picker row in `hermes tools` / `hermes setup`. Without this, the plugin still works but its row in the picker is minimal.
+- `get_setup_schema()` → return `{name, badge, tag, env_vars: [{key, prompt, url}]}` to power the picker row in `ansatz tools` / `ansatz setup`. Without this, the plugin still works but its row in the picker is minimal.
 - `stream(text, *, voice, model, format, **extra)` → iterator yielding audio bytes for streaming delivery (default raises `NotImplementedError`).
 - `voice_compatible` property → set `True` if your output is Opus-compatible and the gateway should deliver it as a voice bubble (default `False` = regular audio attachment).
 
@@ -705,7 +705,7 @@ def register(ctx):
     ctx.register_transcription_provider(MySTTProvider())
 ```
 
-Enable it (`hermes plugins enable my-stt`), set `stt.provider: my-stt` in `config.yaml`, and voice-message transcription will route through your plugin.
+Enable it (`ansatz plugins enable my-stt`), set `stt.provider: my-stt` in `config.yaml`, and voice-message transcription will route through your plugin.
 
 #### Optional hooks
 
@@ -713,6 +713,6 @@ Override these on your provider class for richer integration:
 
 - `list_models()` → list of `{id, display, languages, max_audio_seconds}` dicts.
 - `default_model()` → string returned when the user doesn't override the model.
-- `get_setup_schema()` → return `{name, badge, tag, env_vars: [{key, prompt, url}]}` to power picker rows in `hermes tools` / `hermes setup` (the picker category for STT is not yet shipped — this metadata is available to plugins for forward compatibility).
+- `get_setup_schema()` → return `{name, badge, tag, env_vars: [{key, prompt, url}]}` to power picker rows in `ansatz tools` / `ansatz setup` (the picker category for STT is not yet shipped — this metadata is available to plugins for forward compatibility).
 
 See `agent/transcription_provider.py` for the full ABC including docstrings.

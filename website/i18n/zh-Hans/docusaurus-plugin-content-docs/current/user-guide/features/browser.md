@@ -34,7 +34,7 @@ Hermes Agent 内置完整的浏览器自动化工具集，支持多种后端选�
 ## 配置
 
 :::tip Nous 订阅用户
-如果您拥有付费 [Nous Portal](https://portal.nousresearch.com) 订阅，可通过 **[Tool Gateway](tool-gateway.md)** 使用浏览器自动化功能，无需单独的 API 密钥。新安装可运行 `hermes setup --portal` 登录并一次性开启所有 gateway 工具；已有安装可通过 `hermes model` 或 `hermes tools` 选择 **Nous Subscription** 作为浏览器提供商。
+如果您拥有付费 [Nous Portal](https://portal.nousresearch.com) 订阅，可通过 **[Tool Gateway](tool-gateway.md)** 使用浏览器自动化功能，无需单独的 API 密钥。新安装可运行 `ansatz setup --portal` 登录并一次性开启所有 gateway 工具；已有安装可通过 `ansatz model` 或 `ansatz tools` 选择 **Nous Subscription** 作为浏览器提供商。
 :::
 
 ### Browserbase 云端模式
@@ -72,7 +72,7 @@ FIRECRAWL_API_KEY=fc-***
 在 [firecrawl.dev](https://firecrawl.dev) 获取 API 密钥，然后选择 Firecrawl 作为浏览器提供商：
 
 ```bash
-hermes setup tools
+ansatz setup tools
 # → Browser Automation → Firecrawl
 ```
 
@@ -103,7 +103,7 @@ browser:
 
 禁用自动路由后，私有 URL 将被拒绝并返回 `"Blocked: URL targets a private or internal address"`，除非同时设置 `browser.allow_private_urls: true`（允许云端提供商尝试访问，但通常无法成功，因为 Browserbase 等无法访问您的 LAN）。
 
-要求：本地辅助进程使用与纯本地模式相同的 `agent-browser` CLI，因此需要先安装（`hermes setup tools → Browser Automation` 会自动安装）。从公网 URL 导航后重定向到私有地址的情况仍会被阻止（无法通过公网路径的重定向访问 LAN）。
+要求：本地辅助进程使用与纯本地模式相同的 `agent-browser` CLI，因此需要先安装（`ansatz setup tools → Browser Automation` 会自动安装）。从公网 URL 导航后重定向到私有地址的情况仍会被阻止（无法通过公网路径的重定向访问 LAN）。
 
 ### Camofox 本地模式
 
@@ -170,7 +170,7 @@ make down
 CAMOFOX_URL=http://localhost:9377
 ```
 
-或通过 `hermes tools` → Browser Automation → Camofox 进行配置。
+或通过 `ansatz tools` → Browser Automation → Camofox 进行配置。
 
 设置 `CAMOFOX_URL` 后，所有浏览器工具将自动通过 Camofox 路由，而非 Browserbase 或 agent-browser。
 
@@ -275,7 +275,7 @@ CAMOFOX_ADOPT_EXISTING_TAB=true
 除云端提供商外，您还可以通过 Chrome DevTools Protocol（CDP）将 Hermes 浏览器工具连接到本地运行的 Chrome、Brave、Chromium 或 Edge 实例。当您希望实时查看 Agent 操作、与需要自身 Cookie/会话的页面交互，或避免云端浏览器费用时，此方式非常有用。
 
 :::note
-`/browser connect` 是**交互式 CLI 斜杠命令** — 不由 gateway 分发。若在 WebUI、Telegram、Discord 或其他 gateway 聊天中尝试运行，消息将作为纯文本发送给 Agent，命令不会执行。请从终端启动 Hermes（`hermes` 或 `hermes chat`）并在那里执行 `/browser connect`。
+`/browser connect` 是**交互式 CLI 斜杠命令** — 不由 gateway 分发。若在 WebUI、Telegram、Discord 或其他 gateway 聊天中尝试运行，消息将作为纯文本发送给 Agent，命令不会执行。请从终端启动 Hermes（`hermes` 或 `ansatz chat`）并在那里执行 `/browser connect`。
 :::
 
 在 CLI 中使用：
@@ -385,7 +385,7 @@ npm install
 ```
 
 :::info
-`browser` 工具集必须包含在配置的 `toolsets` 列表中，或通过 `hermes config set toolsets '["hermes-cli", "browser"]'` 启用。
+`browser` 工具集必须包含在配置的 `toolsets` 列表中，或通过 `ansatz config set toolsets '["hermes-cli", "browser"]'` 启用。
 :::
 
 ## 可用工具

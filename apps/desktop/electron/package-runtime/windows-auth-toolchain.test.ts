@@ -150,6 +150,7 @@ test('Windows auth runtime uses System32 PowerShell and only bundled local packa
     )
     assert.ok(fs.statSync(path.join(result.runtimeRoot, 'python.exe')).isFile())
     assert.ok(fs.statSync(result.managedUvPath).isFile())
+    assert.ok(fs.statSync(path.join(fixture.activeRoot, 'bin', 'ansatz.cmd')).isFile())
     assert.ok(fs.statSync(path.join(fixture.activeRoot, 'bin', 'hermes.cmd')).isFile())
     const marker = JSON.parse(fs.readFileSync(path.join(fixture.activeRoot, '.hermes-auth-bootstrap-complete'), 'utf8'))
     assert.deepEqual(marker, {

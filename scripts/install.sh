@@ -239,7 +239,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --skip-computer-use  Skip the cua-driver (Computer Use) install"
             echo "  --no-skills    Start with a blank slate — seed no bundled skills, and"
             echo "                   write \$HERMES_HOME/.no-bundled-skills so future"
-            echo "                   'hermes update' runs never inject bundled skills either"
+            echo "                   'ansatz update' runs never inject bundled skills either"
             echo "  --branch NAME  Git branch to install (default: main)"
             echo "  --commit SHA   Pin checkout to a specific commit after clone/update"
             echo "                   (ignored when it would roll an existing install back)"
@@ -322,7 +322,7 @@ json_escape() {
 
 # npm rewrites tracked package-lock.json files non-deterministically during
 # `npm install` / `npm run pack`. On a managed install those diffs are never
-# intentional, but they leave the checkout dirty — which forces `hermes update`
+# intentional, but they leave the checkout dirty — which forces `ansatz update`
 # to autostash on every run and makes branch switches fragile. Restore them so
 # a fresh install ends with a clean tree. Best-effort; only touches lockfiles.
 restore_dirty_lockfiles() {
@@ -775,7 +775,7 @@ install_uv() {
     # Hermes owns its own uv at $HERMES_HOME/bin/uv.  Always install there —
     # no PATH probing, no conda guards, no multi-location resolution chains.
     # The runtime update path (hermes_cli/managed_uv.py) looks in the same
-    # place, so install.sh and `hermes update` stay in sync.
+    # place, so install.sh and `ansatz update` stay in sync.
     local _managed_uv="$HERMES_HOME/bin/uv"
 
     if [ -x "$_managed_uv" ]; then
@@ -2178,29 +2178,29 @@ remove_legacy_desktop_launcher_if_owned() {
 }
 
 setup_path() {
-    local primary_launcher="hermes"
+    local primary_launcher="ansatz"
 
     if [ "$DESKTOP_PRODUCT" = "ansatz-voice-trace" ]; then
-        primary_launcher="ansatz-voice-trace"
         log_info "Setting up Ansatz commands..."
     else
-        log_info "Setting up hermes command..."
+        log_info "Setting up ansatz command..."
     fi
 
     if [ "$USE_VENV" = true ]; then
         HERMES_BIN="$INSTALL_DIR/venv/bin/python"
+        ANSATZ_ENTRYPOINT="$INSTALL_DIR/ansatz"
         HERMES_ENTRYPOINT="$INSTALL_DIR/hermes"
     else
-        HERMES_BIN="$(which hermes 2>/dev/null || echo "")"
+        HERMES_BIN="$(command -v ansatz 2>/dev/null || echo "")"
         if [ -z "$HERMES_BIN" ]; then
-            log_warn "hermes not found on PATH after install"
+            log_warn "ansatz not found on PATH after install"
             return 0
         fi
     fi
 
     # Verify the interpreter and the checked-in entrypoint needed by the launcher.
-    if [ ! -x "$HERMES_BIN" ] || { [ "$USE_VENV" = true ] && [ ! -f "$HERMES_ENTRYPOINT" ]; }; then
-        log_warn "Hermes launcher prerequisites not found"
+    if [ ! -x "$HERMES_BIN" ] || { [ "$USE_VENV" = true ] && [ ! -f "$ANSATZ_ENTRYPOINT" ]; }; then
+        log_warn "Ansatz launcher prerequisites not found"
         log_info "This usually means the Python package install didn't complete successfully."
         if [ "$DISTRO" = "termux" ]; then
             log_info "Try: cd $INSTALL_DIR && python -m pip install -e '.[termux-all]' -c constraints-termux.txt"
@@ -2215,84 +2215,96 @@ setup_path() {
     command_link_dir="$(get_command_link_dir)"
     command_link_display_dir="$(get_command_link_display_dir)"
 
-    # Create a user-facing shim for the hermes command.
-    # We intentionally clear PYTHONPATH/PYTHONHOME here so inherited env vars
-    # can't make this launcher import modules from another checkout.
+    # Publish the canonical command family first. We intentionally clear
+    # PYTHONPATH/PYTHONHOME so another checkout cannot shadow this install.
     mkdir -p "$command_link_dir"
-    # Older installs created this path as a symlink to $HERMES_BIN. Without
-    # the rm, `cat >` follows the symlink and overwrites the venv pip entry
-    # point with this shim — making `exec "$HERMES_BIN"` self-recurse. (#21454)
+    local quoted_ansatz_bin
+    local quoted_ansatz_entrypoint
+    local quoted_agent_entrypoint
+    local quoted_command_link_dir
+    local launcher_home_export=""
+    printf -v quoted_ansatz_bin '%q' "$HERMES_BIN"
+    printf -v quoted_ansatz_entrypoint '%q' "${ANSATZ_ENTRYPOINT:-}"
+    printf -v quoted_agent_entrypoint '%q' "$INSTALL_DIR/run_agent.py"
+    printf -v quoted_command_link_dir '%q' "$command_link_dir"
     if [ "$DESKTOP_PRODUCT" = "ansatz-voice-trace" ]; then
-        local ansatz_hermes_home
-        local ansatz_hermes_bin
-        local ansatz_hermes_entrypoint
-        local ansatz_agent_entrypoint
-        printf -v ansatz_hermes_home '%q' "$HERMES_HOME"
-        printf -v ansatz_hermes_bin '%q' "$HERMES_BIN"
-        printf -v ansatz_hermes_entrypoint '%q' "${HERMES_ENTRYPOINT:-}"
-        printf -v ansatz_agent_entrypoint '%q' "$INSTALL_DIR/run_agent.py"
+        local quoted_ansatz_home
+        printf -v quoted_ansatz_home '%q' "$HERMES_HOME"
+        launcher_home_export="export HERMES_HOME=$quoted_ansatz_home"
+    fi
 
-        rm -f "$command_link_dir/ansatz-voice-trace"
-        if [ "$USE_VENV" = true ]; then
-            cat > "$command_link_dir/ansatz-voice-trace" <<EOF
+    rm -f "$command_link_dir/ansatz"
+    if [ "$USE_VENV" = true ]; then
+        cat > "$command_link_dir/ansatz" <<EOF
 #!/usr/bin/env bash
 unset PYTHONPATH
 unset PYTHONHOME
-export HERMES_HOME=$ansatz_hermes_home
-exec $ansatz_hermes_bin $ansatz_hermes_entrypoint "\$@"
+$launcher_home_export
+exec $quoted_ansatz_bin $quoted_ansatz_entrypoint "\$@"
 EOF
-        else
-            cat > "$command_link_dir/ansatz-voice-trace" <<EOF
+    else
+        cat > "$command_link_dir/ansatz" <<EOF
 #!/usr/bin/env bash
 unset PYTHONPATH
 unset PYTHONHOME
-export HERMES_HOME=$ansatz_hermes_home
-exec $ansatz_hermes_bin "\$@"
+$launcher_home_export
+exec $quoted_ansatz_bin "\$@"
 EOF
-        fi
-        chmod +x "$command_link_dir/ansatz-voice-trace"
+    fi
+    chmod +x "$command_link_dir/ansatz"
+    log_success "Installed ansatz launcher → $command_link_display_dir/ansatz"
+
+    rm -f "$command_link_dir/ansatz-agent"
+    if [ "$USE_VENV" = true ]; then
+        cat > "$command_link_dir/ansatz-agent" <<EOF
+#!/usr/bin/env bash
+unset PYTHONPATH
+unset PYTHONHOME
+$launcher_home_export
+exec $quoted_ansatz_bin $quoted_agent_entrypoint "\$@"
+EOF
+    else
+        cat > "$command_link_dir/ansatz-agent" <<EOF
+#!/usr/bin/env bash
+unset PYTHONPATH
+unset PYTHONHOME
+$launcher_home_export
+exec $quoted_ansatz_bin run_agent.py "\$@"
+EOF
+    fi
+    chmod +x "$command_link_dir/ansatz-agent"
+    log_success "Installed ansatz-agent launcher → $command_link_display_dir/ansatz-agent"
+
+    rm -f "$command_link_dir/ansatz-acp"
+    if [ "$USE_VENV" = true ]; then
+        cat > "$command_link_dir/ansatz-acp" <<EOF
+#!/usr/bin/env bash
+unset PYTHONPATH
+unset PYTHONHOME
+$launcher_home_export
+exec $quoted_ansatz_bin $quoted_ansatz_entrypoint acp "\$@"
+EOF
+    else
+        cat > "$command_link_dir/ansatz-acp" <<EOF
+#!/usr/bin/env bash
+unset PYTHONPATH
+unset PYTHONHOME
+$launcher_home_export
+exec $quoted_ansatz_bin acp "\$@"
+EOF
+    fi
+    chmod +x "$command_link_dir/ansatz-acp"
+    log_success "Installed ansatz-acp launcher → $command_link_display_dir/ansatz-acp"
+
+    if [ "$DESKTOP_PRODUCT" = "ansatz-voice-trace" ]; then
+        for product_launcher in ansatz-voice-trace ansatz-voice-trace-agent ansatz-voice-trace-acp; do
+            rm -f "$command_link_dir/$product_launcher"
+        done
+        cp "$command_link_dir/ansatz" "$command_link_dir/ansatz-voice-trace"
+        cp "$command_link_dir/ansatz-agent" "$command_link_dir/ansatz-voice-trace-agent"
+        cp "$command_link_dir/ansatz-acp" "$command_link_dir/ansatz-voice-trace-acp"
         log_success "Installed ansatz-voice-trace launcher → $command_link_display_dir/ansatz-voice-trace"
-
-        rm -f "$command_link_dir/ansatz-voice-trace-agent"
-        if [ "$USE_VENV" = true ]; then
-            cat > "$command_link_dir/ansatz-voice-trace-agent" <<EOF
-#!/usr/bin/env bash
-unset PYTHONPATH
-unset PYTHONHOME
-export HERMES_HOME=$ansatz_hermes_home
-exec $ansatz_hermes_bin $ansatz_agent_entrypoint "\$@"
-EOF
-        else
-            cat > "$command_link_dir/ansatz-voice-trace-agent" <<EOF
-#!/usr/bin/env bash
-unset PYTHONPATH
-unset PYTHONHOME
-export HERMES_HOME=$ansatz_hermes_home
-exec $ansatz_hermes_bin run_agent.py "\$@"
-EOF
-        fi
-        chmod +x "$command_link_dir/ansatz-voice-trace-agent"
         log_success "Installed ansatz-voice-trace-agent launcher → $command_link_display_dir/ansatz-voice-trace-agent"
-
-        rm -f "$command_link_dir/ansatz-voice-trace-acp"
-        if [ "$USE_VENV" = true ]; then
-            cat > "$command_link_dir/ansatz-voice-trace-acp" <<EOF
-#!/usr/bin/env bash
-unset PYTHONPATH
-unset PYTHONHOME
-export HERMES_HOME=$ansatz_hermes_home
-exec $ansatz_hermes_bin $ansatz_hermes_entrypoint acp "\$@"
-EOF
-        else
-            cat > "$command_link_dir/ansatz-voice-trace-acp" <<EOF
-#!/usr/bin/env bash
-unset PYTHONPATH
-unset PYTHONHOME
-export HERMES_HOME=$ansatz_hermes_home
-exec $ansatz_hermes_bin acp "\$@"
-EOF
-        fi
-        chmod +x "$command_link_dir/ansatz-voice-trace-acp"
         log_success "Installed ansatz-voice-trace-acp launcher → $command_link_display_dir/ansatz-voice-trace-acp"
 
         local install_root
@@ -2301,76 +2313,46 @@ EOF
         remove_legacy_desktop_launcher_if_owned "$command_link_dir/hermes-agent" "$install_root"
         remove_legacy_desktop_launcher_if_owned "$command_link_dir/hermes-acp" "$install_root"
     else
-    rm -f "$command_link_dir/hermes"
-    if [ "$USE_VENV" = true ]; then
-        # uv-generated console scripts resolve themselves through `realpath`,
-        # which stock macOS does not provide. Run the checked-in entrypoint
-        # with the venv interpreter instead, so the public launcher remains
-        # independent of non-standard shell utilities.
+        # Temporary compatibility boundary. These aliases can be deleted as
+        # one block after downstream callers have migrated to Ansatz.
+        rm -f "$command_link_dir/hermes"
         cat > "$command_link_dir/hermes" <<EOF
 #!/usr/bin/env bash
 unset PYTHONPATH
 unset PYTHONHOME
-exec "$HERMES_BIN" "$HERMES_ENTRYPOINT" "\$@"
+if [ -t 0 ] && [ -t 2 ]; then
+    printf '%s\n' 'Deprecated command `hermes`; use `ansatz` instead.' >&2
+fi
+exec $quoted_command_link_dir/ansatz "\$@"
 EOF
-    else
-        cat > "$command_link_dir/hermes" <<EOF
-#!/usr/bin/env bash
-unset PYTHONPATH
-unset PYTHONHOME
-exec "$HERMES_BIN" "\$@"
-EOF
-    fi
-    chmod +x "$command_link_dir/hermes"
-    log_success "Installed hermes launcher → $command_link_display_dir/hermes"
+        chmod +x "$command_link_dir/hermes"
+        log_success "Installed hermes compatibility launcher → $command_link_display_dir/hermes"
 
-    # Also expose `hermes-agent`. The `hermes-agent` console script declared in
-    # pyproject.toml's [project.scripts] lives inside the venv, which is not on
-    # the login-shell PATH. Without this launcher users can't invoke the agent
-    # entrypoint directly from outside the venv. (#74819)
-    rm -f "$command_link_dir/hermes-agent"
-    if [ "$USE_VENV" = true ]; then
+        rm -f "$command_link_dir/hermes-agent"
         cat > "$command_link_dir/hermes-agent" <<EOF
 #!/usr/bin/env bash
 unset PYTHONPATH
 unset PYTHONHOME
-exec "$HERMES_BIN" "$INSTALL_DIR/run_agent.py" "\$@"
+if [ -t 0 ] && [ -t 2 ]; then
+    printf '%s\n' 'Deprecated command `hermes-agent`; use `ansatz-agent` instead.' >&2
+fi
+exec $quoted_command_link_dir/ansatz-agent "\$@"
 EOF
-    else
-        cat > "$command_link_dir/hermes-agent" <<EOF
-#!/usr/bin/env bash
-unset PYTHONPATH
-unset PYTHONHOME
-exec "$HERMES_BIN" run_agent.py "\$@"
-EOF
-    fi
-    chmod +x "$command_link_dir/hermes-agent"
-    log_success "Installed hermes-agent launcher → $command_link_display_dir/hermes-agent"
+        chmod +x "$command_link_dir/hermes-agent"
+        log_success "Installed hermes-agent compatibility launcher → $command_link_display_dir/hermes-agent"
 
-    # Also expose `hermes-acp`. ACP hosts (Zed, JetBrains, Buzz) resolve the
-    # agent by command name on the login-shell PATH, and the `hermes-acp`
-    # console script lives inside the venv, which is not on that PATH. Without
-    # this launcher those hosts report Hermes as not installed. (#21454 applies
-    # here too: clear the path first so `cat >` cannot follow an old symlink
-    # into the venv and overwrite the console script.)
-    rm -f "$command_link_dir/hermes-acp"
-    if [ "$USE_VENV" = true ]; then
+        rm -f "$command_link_dir/hermes-acp"
         cat > "$command_link_dir/hermes-acp" <<EOF
 #!/usr/bin/env bash
 unset PYTHONPATH
 unset PYTHONHOME
-exec "$HERMES_BIN" "$HERMES_ENTRYPOINT" acp "\$@"
+if [ -t 0 ] && [ -t 2 ]; then
+    printf '%s\n' 'Deprecated command `hermes-acp`; use `ansatz-acp` instead.' >&2
+fi
+exec $quoted_command_link_dir/ansatz-acp "\$@"
 EOF
-    else
-        cat > "$command_link_dir/hermes-acp" <<EOF
-#!/usr/bin/env bash
-unset PYTHONPATH
-unset PYTHONHOME
-exec "$HERMES_BIN" acp "\$@"
-EOF
-    fi
-    chmod +x "$command_link_dir/hermes-acp"
-    log_success "Installed hermes-acp launcher → $command_link_display_dir/hermes-acp"
+        chmod +x "$command_link_dir/hermes-acp"
+        log_success "Installed hermes-acp compatibility launcher → $command_link_display_dir/hermes-acp"
     fi
 
     if [ "$DISTRO" = "termux" ]; then
@@ -2557,14 +2539,14 @@ SOUL_EOF
     # Seed bundled skills into ~/.hermes/skills/ (manifest-based, one-time per skill)
     if [ "$NO_SKILLS" = true ]; then
         # Blank-slate install: write the opt-out marker and skip seeding.
-        # skills_sync.py and `hermes update` both honor this marker, so the
+        # skills_sync.py and `ansatz update` both honor this marker, so the
         # default profile stays empty across future updates too.
         printf '%s\n' \
             "This profile opted out of bundled-skill seeding (installed with --no-skills)." \
-            "Delete this file to re-enable sync on the next 'hermes update'." \
+            "Delete this file to re-enable sync on the next 'ansatz update'." \
             > "$HERMES_HOME/.no-bundled-skills" 2>/dev/null || true
         log_info "Skipping bundled skills (--no-skills). Wrote $HERMES_HOME/.no-bundled-skills"
-        log_info "  Future 'hermes update' runs will not inject bundled skills. Delete the marker to opt back in."
+        log_info "  Future 'ansatz update' runs will not inject bundled skills. Delete the marker to opt back in."
     else
         log_info "Syncing bundled skills to ~/.hermes/skills/ ..."
         if "$INSTALL_DIR/venv/bin/python" "$INSTALL_DIR/tools/skills_sync.py" 2>/dev/null; then
@@ -3053,7 +3035,7 @@ install_node_deps() {
         log_success "TUI dependencies installed"
     fi
 
-    # Keep the checkout clean so `hermes update` doesn't autostash every run.
+    # Keep the checkout clean so `ansatz update` doesn't autostash every run.
     restore_dirty_lockfiles "$INSTALL_DIR"
 }
 
@@ -3062,7 +3044,7 @@ install_browser_use_cli() {
     # (tools/browser_use_cli.py). Provision it here so fresh installs don't
     # silently fall back to the built-in browser tools. Best-effort: any
     # failure is non-fatal because browser_exec can still run via uvx and
-    # `hermes tools` can install it later.
+    # `ansatz tools` can install it later.
     if [ "$SKIP_BROWSER" = true ]; then
         log_info "Skipping Browser Use CLI install (--skip-browser)"
         return 0
@@ -3090,16 +3072,16 @@ install_browser_use_cli() {
         log_success "Browser Use CLI installed"
     else
         log_warn "Browser Use CLI install failed — browser automation falls back to built-in tools."
-        log_info "Install later with: $UV_CMD tool install browser-use  (or via 'hermes tools')"
+        log_info "Install later with: $UV_CMD tool install browser-use  (or via 'ansatz tools')"
     fi
 }
 
 install_computer_use_driver() {
     # cua-driver powers the computer_use toolset (background desktop control).
     # Provision it at install time so enabling the tool later — via
-    # `hermes tools`, the dashboard, or the desktop app — is a config flip,
+    # `ansatz tools`, the dashboard, or the desktop app — is a config flip,
     # not a surprise multi-minute binary fetch (the confusion this fixes:
-    # users had to discover `hermes computer-use install` on their own).
+    # users had to discover `ansatz computer-use install` on their own).
     # Best-effort and non-fatal: the enable paths still lazy-install via
     # install_cua_driver() when this step was skipped or failed.
     if [ "$SKIP_COMPUTER_USE" = true ]; then
@@ -3141,7 +3123,7 @@ run_setup_wizard() {
     # but opening fails with ENXIO, so the wizard would proceed and
     # then crash on `< /dev/tty` below.
     if ! (: </dev/tty) 2>/dev/null; then
-        log_info "Setup wizard skipped (no terminal available). Run 'hermes setup' after install."
+        log_info "Setup wizard skipped (no terminal available). Run 'ansatz setup' after install."
         return 0
     fi
 
@@ -3151,7 +3133,7 @@ run_setup_wizard() {
 
     cd "$INSTALL_DIR"
 
-    # Run hermes setup using the venv Python directly (no activation needed).
+    # Run ansatz setup using the venv Python directly (no activation needed).
     # Redirect stdin from /dev/tty so interactive prompts work when piped from curl.
     if [ "$USE_VENV" = true ]; then
         "$INSTALL_DIR/venv/bin/python" -m hermes_cli.main setup < /dev/tty
@@ -3191,14 +3173,14 @@ maybe_start_gateway() {
         if [ "$IS_INTERACTIVE" = true ]; then
             echo ""
             log_info "WhatsApp is enabled but not yet paired."
-            log_info "Running 'hermes whatsapp' to pair via QR code..."
+            log_info "Running 'ansatz whatsapp' to pair via QR code..."
             echo ""
             if prompt_yes_no "Pair WhatsApp now?" "yes"; then
                 HERMES_CMD="$(get_hermes_command_path)"
                 $HERMES_CMD whatsapp || true
             fi
         else
-            log_info "WhatsApp pairing skipped (non-interactive). Run 'hermes whatsapp' to pair."
+            log_info "WhatsApp pairing skipped (non-interactive). Run 'ansatz whatsapp' to pair."
         fi
     fi
 
@@ -3206,7 +3188,7 @@ maybe_start_gateway() {
     # in Docker builds where the device node is in the mount namespace
     # but opening fails with ENXIO. See #16746.
     if ! (: </dev/tty) 2>/dev/null; then
-        log_info "Gateway setup skipped (no terminal available). Run 'hermes gateway install' later."
+        log_info "Gateway setup skipped (no terminal available). Run 'ansatz gateway install' later."
         return 0
     fi
 
@@ -3232,10 +3214,10 @@ maybe_start_gateway() {
                 if $HERMES_CMD gateway start 2>/dev/null; then
                     log_success "Gateway started! Your bot is now online."
                 else
-                    log_warn "Service installed but failed to start. Try: hermes gateway start"
+                    log_warn "Service installed but failed to start. Try: ansatz gateway start"
                 fi
             else
-                log_warn "Systemd install failed. You can start manually: hermes gateway"
+                log_warn "Systemd install failed. You can start manually: ansatz gateway"
             fi
         else
             if [ "$DISTRO" = "termux" ]; then
@@ -3247,13 +3229,13 @@ maybe_start_gateway() {
             GATEWAY_PID=$!
             log_success "Gateway started (PID $GATEWAY_PID). Logs: ~/.hermes/logs/gateway.log"
             log_info "To stop: kill $GATEWAY_PID"
-            log_info "To restart later: hermes gateway"
+            log_info "To restart later: ansatz gateway"
             if [ "$DISTRO" = "termux" ]; then
                 log_warn "Android may stop background processes when Termux is suspended or the system reclaims resources."
             fi
         fi
     else
-        log_info "Skipped. Start the gateway later with: hermes gateway"
+        log_info "Skipped. Start the gateway later with: ansatz gateway"
     fi
 }
 
@@ -3322,11 +3304,11 @@ print_success() {
     echo -e "${CYAN}${BOLD}🚀 Commands:${NC}"
     echo ""
     echo -e "   ${GREEN}hermes${NC}              Start chatting"
-    echo -e "   ${GREEN}hermes setup${NC}        Configure API keys & settings"
-    echo -e "   ${GREEN}hermes config${NC}       View/edit configuration"
-    echo -e "   ${GREEN}hermes config edit${NC}  Open config in editor"
-    echo -e "   ${GREEN}hermes gateway install${NC} Install gateway service (messaging + cron)"
-    echo -e "   ${GREEN}hermes update${NC}       Update to latest version"
+    echo -e "   ${GREEN}ansatz setup${NC}        Configure API keys & settings"
+    echo -e "   ${GREEN}ansatz config${NC}       View/edit configuration"
+    echo -e "   ${GREEN}ansatz config edit${NC}  Open config in editor"
+    echo -e "   ${GREEN}ansatz gateway install${NC} Install gateway service (messaging + cron)"
+    echo -e "   ${GREEN}ansatz update${NC}       Update to latest version"
     echo ""
 
     echo -e "${CYAN}─────────────────────────────────────────────────────────${NC}"
@@ -3400,7 +3382,7 @@ ensure_browser() {
 
     # agent-browser itself is intentionally NOT installed here (#43564 /
     # PR #44772 review): it resolves lazily via `npx agent-browser` instead,
-    # which every consumer (tools/browser_tool.py, `hermes update`'s npx
+    # which every consumer (tools/browser_tool.py, `ansatz update`'s npx
     # cache warm) already goes through. Eagerly npm-installing a second,
     # separately version-pinned copy here -- only reachable via this
     # explicit --ensure browser fallback in the first place -- was redundant
@@ -3478,7 +3460,7 @@ ensure_mode() {
 # extract a tree MISSING the electron binary, so the `electron`->`Hermes` rename
 # dies with ENOENT and every re-run repeats the broken extraction forever. This
 # is the bash sibling of install.ps1's Clear-ElectronBuildCache and the Python
-# _purge_electron_build_cache() used by `hermes desktop`; install.sh was the only
+# _purge_electron_build_cache() used by `ansatz desktop`; install.sh was the only
 # build path lacking it. Echoes the removed paths (one per line); best-effort.
 clear_electron_build_cache() {
     local desktop_dir="$1"
@@ -3741,7 +3723,7 @@ install_desktop() {
     #    Electron download self-heals instead of failing the whole install:
     #      a) plain `npm run pack` (downloads Electron from GitHub),
     #      b) on failure, purge a corrupt cached zip + stale unpacked dir and
-    #         retry (matches install.ps1 / `hermes desktop`),
+    #         retry (matches install.ps1 / `ansatz desktop`),
     #      c) on still-failing, fall back to a public Electron mirror — this is
     #         the GitHub-blocked/throttled case (the repeating "retrying" log).
     log_info "Building desktop app (this takes 1-3 minutes)..."
@@ -3834,7 +3816,7 @@ install_desktop() {
     fi
 
     # macOS: route through the same config-aware signing fixup as
-    # `hermes desktop`, so install/repair and self-update agree about the app's
+    # `ansatz desktop`, so install/repair and self-update agree about the app's
     # identity. The fixup preserves the Electron entitlement plists and signs
     # with a stable Designated Requirement (configured keychain identity, else
     # identifier-pinned ad-hoc), so macOS TCC grants — Full Disk Access,
@@ -3871,7 +3853,7 @@ PYEOF
     fi
 
     # `npm install` + `npm run pack` rewrite lockfiles; restore them so the
-    # checkout stays clean for the next `hermes update`.
+    # checkout stays clean for the next `ansatz update`.
     restore_dirty_lockfiles "$INSTALL_DIR"
 }
 
@@ -4004,7 +3986,7 @@ run_stage_body() {
             # $HERMES_HOME. $HERMES_HOME is a shared data dir (it can be
             # bind-mounted into a Docker gateway too), so a stamp there gets
             # clobbered by the container's 'docker' stamp and wrongly blocks
-            # 'hermes update' on this host install. See detect_install_method().
+            # 'ansatz update' on this host install. See detect_install_method().
             write_install_method_stamp
             ;;
         auth-complete)
@@ -4105,7 +4087,7 @@ main() {
     # Code-scoped stamp: write next to the install tree, not into $HERMES_HOME.
     # $HERMES_HOME is a shared data dir (it can be bind-mounted into a Docker
     # gateway too), so a stamp there gets clobbered by the container's 'docker'
-    # stamp and wrongly blocks 'hermes update' on this host install.
+    # stamp and wrongly blocks 'ansatz update' on this host install.
     # See detect_install_method().
     write_install_method_stamp
 }

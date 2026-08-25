@@ -25,7 +25,7 @@ description: "完整操作指南：订阅、配置、切换模型、启用 gatew
 ## 2. 运行一键配置
 
 ```bash
-hermes setup --portal
+ansatz setup --portal
 ```
 
 这条命令会完成五件事：
@@ -45,11 +45,11 @@ OAuth 需要浏览器，但 loopback 回调运行在 Hermes 所在的机器上�
 ```bash
 # 方案 A：SSH 端口转发（推荐）
 ssh -N -L 8642:127.0.0.1:8642 user@remote-host    # 在本地终端执行
-hermes setup --portal                              # 在远程机器上执行，在本地浏览器中打开打印出的 URL
+ansatz setup --portal                              # 在远程机器上执行，在本地浏览器中打开打印出的 URL
 
 # 方案 B：设备码登录（适用于 Cloud Shell、Codespaces、EC2 Instance Connect）
-hermes auth add nous --type oauth
-# 然后重新运行 `hermes setup --portal` 以连接 provider + gateway
+ansatz auth add nous --type oauth
+# 然后重新运行 `ansatz setup --portal` 以连接 provider + gateway
 ```
 
 完整操作说明（包括 ProxyJump 链、mosh/tmux 和 ControlMaster 注意事项）请参阅 [OAuth over SSH / 远程主机](/guides/oauth-over-ssh)。
@@ -57,7 +57,7 @@ hermes auth add nous --type oauth
 ## 3. 验证配置是否成功
 
 ```bash
-hermes portal info
+ansatz portal info
 ```
 
 你应该看到：
@@ -82,7 +82,7 @@ hermes portal info
 ## 4. 运行第一次对话
 
 ```bash
-hermes chat
+ansatz chat
 ```
 
 尝试一个同时调用模型和 Tool Gateway 的请求：
@@ -95,7 +95,7 @@ Hey, search the web for "Hermes Agent release notes" and summarize the top 3 hit
 
 ## 5. 选择你实际需要的模型
 
-`hermes setup --portal` 会在设置过程中让你选择模型，但订阅的意义在于可以访问完整的模型目录——随时可在会话中使用 `/model` 切换：
+`ansatz setup --portal` 会在设置过程中让你选择模型，但订阅的意义在于可以访问完整的模型目录——随时可在会话中使用 `/model` 切换：
 
 ```bash
 /model anthropic/claude-sonnet-4.6     # 最佳通用 agentic 模型
@@ -115,7 +115,7 @@ Hey, search the web for "Hermes Agent release notes" and summarize the top 3 hit
 
 ```bash
 # 在终端中，在任何会话之外执行
-hermes config set model.default anthropic/claude-sonnet-4.6
+ansatz config set model.default anthropic/claude-sonnet-4.6
 ```
 
 ### 不要在 agent 任务中使用 Hermes-4
@@ -129,7 +129,7 @@ Portal 的[信息页面](https://portal.nousresearch.com/info)也有此说明—
 gateway 是按工具选择启用的，而非全部开启或全部关闭。如果你已有 Browserbase 账号并希望继续使用，同时将网页搜索和图像生成路由至 Nous，这是支持的：
 
 ```bash
-hermes tools
+ansatz tools
 # → Web search       → "Nous Subscription"     （推荐）
 # → Image generation → "Nous Subscription"     （推荐）
 # → Browser          → "Browserbase"           （你自己的密钥）
@@ -139,7 +139,7 @@ hermes tools
 使用以下命令验证你的混合配置：
 
 ```bash
-hermes portal tools
+ansatz portal tools
 ```
 
 你将看到每个工具的路由情况——通过订阅路由的工具显示 `via Nous Portal`，使用你自己密钥的工具显示合作方名称（`browserbase`、`firecrawl` 等）。
@@ -149,7 +149,7 @@ hermes portal tools
 由于 Tool Gateway 包含 OpenAI TTS，无需单独的 OpenAI 密钥即可使用[语音模式](/user-guide/features/voice-mode)：
 
 ```bash
-hermes setup voice
+ansatz setup voice
 # → 为 TTS 选择 "Nous Subscription"
 # → 选择语音转文字后端（本地 faster-whisper 免费，无需配置）
 ```
@@ -161,7 +161,7 @@ hermes setup voice
 Portal 订阅对 [cron 定时任务](/user-guide/features/cron)和[批处理](/user-guide/features/batch-processing)的支持方式与交互式对话相同——OAuth refresh token 会自动复用。无需额外配置，直接安排 cron 任务，费用将计入你的订阅。
 
 ```bash
-hermes cron add "Daily AI news summary" "every day at 9am" \
+ansatz cron add "Daily AI news summary" "every day at 9am" \
   "Search the web for top AI news and summarize the 5 most important stories"
 ```
 
@@ -175,12 +175,12 @@ hermes cron add "Daily AI news summary" "every day at 9am" \
 
 ## 故障排查
 
-### 运行 `hermes setup --portal` 后，`hermes portal info` 显示"not logged in"
+### 运行 `ansatz setup --portal` 后，`ansatz portal info` 显示"not logged in"
 
 OAuth 流程未完成。重新运行：
 
 ```bash
-hermes portal
+ansatz portal
 ```
 
 如果浏览器未打开或回调失败，你可能在远程/无头主机上——参见 [OAuth over SSH](/guides/oauth-over-ssh) 了解端口转发的解决方案。
@@ -190,24 +190,24 @@ hermes portal
 本地配置发生了偏移。OAuth 成功，但 `model.provider` 仍指向其他 provider。修复方法：
 
 ```bash
-hermes config set model.provider nous
+ansatz config set model.provider nous
 ```
 
 或以交互方式：
 
 ```bash
-hermes model
+ansatz model
 # 选择 Nous Portal
 ```
 
-使用 `hermes portal info` 重新验证。
+使用 `ansatz portal info` 重新验证。
 
 ### Tool Gateway 工具显示合作方名称而非"via Nous Portal"
 
 按工具的配置覆盖了 gateway 设置。运行：
 
 ```bash
-hermes tools
+ansatz tools
 # 对需要通过 gateway 路由的工具选择 "Nous Subscription"
 ```
 
@@ -218,7 +218,7 @@ hermes tools
 你的 Portal refresh token 已失效（密码更改、手动撤销、会话过期）。该 token 现已在本地被隔离，以防 Hermes 无限重试。重新登录即可：
 
 ```bash
-hermes auth add nous
+ansatz auth add nous
 ```
 
 成功重新登录后，隔离状态会自动解除。
@@ -236,16 +236,16 @@ Portal 目录基于 OpenRouter 的模型列表（300+ 个），并补充了通�
 
 ### 账单未出现在我的 Portal 账号中
 
-`hermes portal info` 会告诉你是否真的在通过 Portal 路由，还是使用了其他 provider。常见原因：
+`ansatz portal info` 会告诉你是否真的在通过 Portal 路由，还是使用了其他 provider。常见原因：
 
 - `model.provider` 设置为 `openrouter`/`anthropic`/等，而非 `nous`
 - OAuth refresh 失败后回退到了其他已配置的 provider
-- 存在多个 Hermes profiles，你使用的是错误的那个（检查 `hermes profile list`）
+- 存在多个 Hermes profiles，你使用的是错误的那个（检查 `ansatz profile list`）
 
 ### 想要撤销并重新开始
 
 ```bash
-hermes auth logout nous       # 清除本地 refresh token
+ansatz auth logout nous       # 清除本地 refresh token
 # 然后重新运行 setup，或在 Portal 网页界面取消订阅
 ```
 

@@ -1,13 +1,13 @@
-"""hermes import-agent — import Claude Code / Codex CLI setups into Hermes.
+"""ansatz import-agent — import Claude Code / Codex CLI setups into Hermes.
 
 Usage:
-    hermes import-agent                       # auto-detect ~/.claude or ~/.codex
-    hermes import-agent claude-code           # import from ~/.claude
-    hermes import-agent codex                 # import from ~/.codex
-    hermes import-agent claude-code --dry-run # preview only, no changes
-    hermes import-agent codex --source /path/to/.codex
+    ansatz import-agent                       # auto-detect ~/.claude or ~/.codex
+    ansatz import-agent claude-code           # import from ~/.claude
+    ansatz import-agent codex                 # import from ~/.codex
+    ansatz import-agent claude-code --dry-run # preview only, no changes
+    ansatz import-agent codex --source /path/to/.codex
 
-Follows the OpenClaw migration pattern (``hermes claw migrate`` /
+Follows the OpenClaw migration pattern (``ansatz claw migrate`` /
 ``optional-skills/migration/openclaw-migration/scripts/openclaw_to_hermes.py``):
 detect → parse → map → apply, with a mandatory preview phase, per-item
 imported/skipped/conflict/error records, and a ``--dry-run`` that writes
@@ -33,7 +33,7 @@ codex (~/.codex):
 Secrets are NEVER imported: credential files (.credentials.json, auth.json)
 are ignored, and MCP server env vars with secret-looking names (KEY, TOKEN,
 SECRET, PASSWORD, ...) are stripped and reported so the user can re-add them
-deliberately via ``hermes setup`` or config.yaml.
+deliberately via ``ansatz setup`` or config.yaml.
 """
 
 from __future__ import annotations
@@ -132,7 +132,7 @@ def load_yaml_file(path: Path) -> Dict[str, Any]:
     except yaml.YAMLError as exc:
         raise ConfigReadError(
             f"Refusing to overwrite {path}: the existing file is not valid YAML "
-            f"({exc}). Fix it with `hermes config edit` (or move it aside), then "
+            f"({exc}). Fix it with `ansatz config edit` (or move it aside), then "
             f"re-run the import."
         ) from exc
     # An empty file parses to None — a legitimate state with nothing to lose.
@@ -142,7 +142,7 @@ def load_yaml_file(path: Path) -> Dict[str, Any]:
         raise ConfigReadError(
             f"Refusing to overwrite {path}: expected the existing file to hold a "
             f"YAML mapping but found {type(data).__name__}. Fix it with "
-            f"`hermes config edit` (or move it aside), then re-run the import."
+            f"`ansatz config edit` (or move it aside), then re-run the import."
         )
     return data
 
@@ -842,7 +842,7 @@ class AgentImporter:
 # ---------------------------------------------------------------------------
 
 def import_agent_command(args) -> None:
-    """Handle ``hermes import-agent`` (invoked from hermes_cli.main)."""
+    """Handle ``ansatz import-agent`` (invoked from hermes_cli.main)."""
     from hermes_cli.config import get_config_path, load_config, save_config
     from hermes_constants import get_hermes_home
     from hermes_cli.setup import (
@@ -867,12 +867,12 @@ def import_agent_command(args) -> None:
         if not detected:
             print()
             print_error("No supported agent setup found (~/.claude or ~/.codex).")
-            print_info("Specify one explicitly: hermes import-agent claude-code --source /path")
+            print_info("Specify one explicitly: ansatz import-agent claude-code --source /path")
             return
         if len(detected) > 1 and explicit_source is None:
             print()
             print_info("Multiple agent setups detected: " + ", ".join(detected))
-            print_info("Pick one: hermes import-agent claude-code   or   hermes import-agent codex")
+            print_info("Pick one: ansatz import-agent claude-code   or   ansatz import-agent codex")
             return
         agent = detected[0]
 
@@ -886,7 +886,7 @@ def import_agent_command(args) -> None:
     if not source_dir.is_dir():
         print()
         print_error(f"Agent directory not found: {source_dir}")
-        print_info("Specify a custom path: hermes import-agent "
+        print_info("Specify a custom path: ansatz import-agent "
                     f"{agent} --source /path/to/{_AGENT_DEFAULT_DIRS[agent]}")
         return
 
@@ -897,7 +897,7 @@ def import_agent_command(args) -> None:
     print_info(f"Source:      {source_dir}")
     print_info(f"Target:      {hermes_home}")
     print_info(f"Overwrite:   {'yes' if overwrite else 'no (skip conflicts)'}")
-    print_info("Secrets:     never imported — run 'hermes setup' for credentials")
+    print_info("Secrets:     never imported — run 'ansatz setup' for credentials")
 
     # Ensure config.yaml exists before the import tries to merge into it
     config_path = get_config_path()
@@ -939,7 +939,7 @@ def import_agent_command(args) -> None:
     if not auto_yes:
         if not sys.stdin.isatty():
             print_info("Non-interactive session — preview only.")
-            print_info(f"To execute, re-run with: hermes import-agent {agent} --yes")
+            print_info(f"To execute, re-run with: ansatz import-agent {agent} --yes")
             return
         if not prompt_yes_no("Proceed with import?", default=True):
             print_info("Import cancelled.")
@@ -962,7 +962,7 @@ def import_agent_command(args) -> None:
     print_import_report(report, dry_run=False)
     print()
     print_success("Import complete.")
-    print_info("API keys and credentials were NOT imported — run 'hermes setup' "
+    print_info("API keys and credentials were NOT imported — run 'ansatz setup' "
                "to configure providers, or add them to ~/.hermes/.env.")
 
 
@@ -1007,7 +1007,7 @@ def print_import_report(report: Dict[str, Any], dry_run: bool) -> None:
         print(color("  ⚷ Secrets stripped (never imported):", Colors.YELLOW))
         for name in stripped:
             print(f"      {name}")
-        print_info("Re-add credentials deliberately via 'hermes setup' or ~/.hermes/.env.")
+        print_info("Re-add credentials deliberately via 'ansatz setup' or ~/.hermes/.env.")
         print()
 
     parts = []

@@ -12,7 +12,7 @@ Hermes Agent 内置两个可供模型调用的网页工具，由多个提供商�
 - **`web_search`** — 搜索网页并返回排序结果
 - **`web_extract`** — 从一个或多个 URL 获取并提取可读内容
 
-两者均通过单一后端选择进行配置。提供商可通过 `hermes tools` 选择，或直接在 `config.yaml` 中设置。
+两者均通过单一后端选择进行配置。提供商可通过 `ansatz tools` 选择，或直接在 `config.yaml` 中设置。
 
 ## 后端
 
@@ -25,14 +25,14 @@ Hermes Agent 内置两个可供模型调用的网页工具，由多个提供商�
 | **Tavily** | `TAVILY_API_KEY` | ✔ | ✔ | 1 000 次搜索/月 |
 | **Exa** | `EXA_API_KEY` | ✔ | ✔ | 1 000 次搜索/月 |
 | **Parallel** | `PARALLEL_API_KEY` | ✔ | ✔ | 付费 |
-| **xAI (Grok)** | `XAI_API_KEY` 或 `hermes auth login xai-oauth` | ✔ | — | 付费（SuperGrok 或按 token 计费） |
+| **xAI (Grok)** | `XAI_API_KEY` 或 `ansatz auth login xai-oauth` | ✔ | — | 付费（SuperGrok 或按 token 计费） |
 
 Brave Search、DDGS 和 xAI 均为**仅搜索**——如果同时需要 `web_extract`，可将其中任意一个与 Firecrawl/Tavily/Exa/Parallel 配合使用。DDGS 底层使用 [`ddgs` Python 包](https://pypi.org/project/ddgs/)；若尚未安装，请运行 `pip install ddgs`（或让 Hermes 在首次使用时懒加载安装）。xAI 通过 Responses API 运行 Grok 服务端的 `web_search` 工具——结果由 LLM 生成而非基于索引，因此标题、描述和 URL 选择均为模型输出（参见下方[信任模型说明](#xai-grok)）。
 
 **按能力拆分：** 搜索和提取可分别使用不同的提供商——例如搜索使用 SearXNG（免费），提取使用 Firecrawl。详见下方[按能力配置](#per-capability-configuration)。
 
 :::tip Nous 订阅用户
-如果您拥有付费 [Nous Portal](https://portal.nousresearch.com) 订阅，网页搜索和提取可通过 **[Tool Gateway](tool-gateway.md)** 使用托管的 Firecrawl——无需 API 密钥。新安装可运行 `hermes setup --portal` 登录并一次性开启所有 gateway 工具；现有安装可通过 `hermes tools` 单独开启网页功能。
+如果您拥有付费 [Nous Portal](https://portal.nousresearch.com) 订阅，网页搜索和提取可通过 **[Tool Gateway](tool-gateway.md)** 使用托管的 Firecrawl——无需 API 密钥。新安装可运行 `ansatz setup --portal` 登录并一次性开启所有 gateway 工具；现有安装可通过 `ansatz tools` 单独开启网页功能。
 :::
 
 ---
@@ -52,7 +52,7 @@ Brave Search、DDGS 和 xAI 均为**仅搜索**——如果同时需要 `web_ext
 
 ### 哪个模型负责摘要？
 
-`web_extract` 辅助任务。默认情况下（`auxiliary.web_extract.provider: "auto"`），使用您的**主聊天模型**——与 `hermes model` 相同的提供商和模型。对大多数配置而言这没问题，但在昂贵的推理模型（Opus、MiniMax M2.7 等）上，每次长页面提取都会产生可观的成本。
+`web_extract` 辅助任务。默认情况下（`auxiliary.web_extract.provider: "auto"`），使用您的**主聊天模型**——与 `ansatz model` 相同的提供商和模型。对大多数配置而言这没问题，但在昂贵的推理模型（Opus、MiniMax M2.7 等）上，每次长页面提取都会产生可观的成本。
 
 若要将提取摘要路由到廉价快速的模型，无论主模型是什么：
 
@@ -65,7 +65,7 @@ auxiliary:
     timeout: 360       # 秒；如果遇到摘要超时，请调大此值
 ```
 
-或交互式选择：`hermes model` → **Configure auxiliary models** → `web_extract`。
+或交互式选择：`ansatz model` → **Configure auxiliary models** → `web_extract`。
 
 完整参考和按任务覆盖模式，请参阅[辅助模型](/user-guide/configuration#auxiliary-models)。
 
@@ -77,12 +77,12 @@ auxiliary:
 
 ## 设置
 
-### 通过 `hermes tools` 快速设置
+### 通过 `ansatz tools` 快速设置
 
-运行 `hermes tools`，导航至 **Web Search & Extract**，选择一个提供商。向导会提示输入所需的 URL 或 API 密钥，并写入您的配置。
+运行 `ansatz tools`，导航至 **Web Search & Extract**，选择一个提供商。向导会提示输入所需的 URL 或 API 密钥，并写入您的配置。
 
 ```bash
-hermes tools
+ansatz tools
 ```
 
 ---
@@ -201,7 +201,7 @@ web:
   search_backend: "searxng"
 ```
 
-或通过 `hermes tools` → Web Search & Extract → SearXNG 设置。
+或通过 `ansatz tools` → Web Search & Extract → SearXNG 设置。
 
 ---
 
@@ -288,7 +288,7 @@ XAI_API_KEY=sk-xai-your-key-here
 或对于 SuperGrok 订阅用户：
 
 ```bash
-hermes auth login xai-oauth
+ansatz auth login xai-oauth
 ```
 
 然后选择 xAI 作为搜索后端：
@@ -369,7 +369,7 @@ xAI Web Search **不在**自动检测链中——设置了 `XAI_API_KEY`（或�
 
 ## 验证设置
 
-运行 `hermes setup` 查看检测到的网页后端：
+运行 `ansatz setup` 查看检测到的网页后端：
 
 ```
 ✅ Web Search & Extract (searxng)
@@ -436,7 +436,7 @@ web:
 对于需要直接通过 `curl` 使用 SearXNG 的 agent（例如作为网页工具集不可用时的回退），请安装 `searxng-search` 可选技能：
 
 ```bash
-hermes skills install official/research/searxng-search
+ansatz skills install official/research/searxng-search
 ```
 
 这将添加一个技能，教 agent 如何：

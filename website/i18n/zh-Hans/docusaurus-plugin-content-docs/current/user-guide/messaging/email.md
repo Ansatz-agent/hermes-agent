@@ -48,7 +48,7 @@ Email 适配器使用 Python 内置的 `imaplib`、`smtplib` 和 `email` 模块�
 最简便的方式：
 
 ```bash
-hermes gateway setup
+ansatz gateway setup
 ```
 
 从平台菜单中选择 **Email**。向导会提示输入邮箱地址、密码、IMAP/SMTP 主机以及允许的发件人。
@@ -79,9 +79,9 @@ EMAIL_HOME_ADDRESS=your@email.com      # cron 任务的默认投递目标
 ## 第二步：启动 Gateway
 
 ```bash
-hermes gateway              # 在前台运行
-hermes gateway install      # 安装为用户服务
-sudo hermes gateway install --system   # 仅 Linux：开机自启的系统服务
+ansatz gateway              # 在前台运行
+ansatz gateway install      # 安装为用户服务
+sudo ansatz gateway install --system   # 仅 Linux：开机自启的系统服务
 ```
 
 启动时，适配器会：
@@ -155,7 +155,7 @@ platforms:
 | 启动时出现 **"SMTP connection failed"** | 检查 `EMAIL_SMTP_HOST` 和 `EMAIL_SMTP_PORT`。确认密码正确（Gmail 请使用应用专用密码）。 |
 | **未收到邮件** | 检查 `EMAIL_ALLOWED_USERS` 是否包含发件人邮箱。检查垃圾邮件文件夹——部分服务商会将自动回复标记为垃圾邮件。 |
 | **"Authentication failed"** | 对于 Gmail，必须使用应用专用密码，而非常规密码。请先确保已启用双重验证。 |
-| **重复回复** | 确保只有一个 gateway 实例在运行。检查 `hermes gateway status`。 |
+| **重复回复** | 确保只有一个 gateway 实例在运行。检查 `ansatz gateway status`。 |
 | **响应缓慢** | 默认轮询间隔为 15 秒。设置 `EMAIL_POLL_INTERVAL=5` 可加快响应速度（但会增加 IMAP 连接次数）。 |
 | **回复未归入线程** | 适配器使用 In-Reply-To 头部。部分邮件客户端（尤其是网页版）可能无法正确将自动回复归入线程。 |
 

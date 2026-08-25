@@ -52,14 +52,14 @@ That's it — there is no public URL or tunnel to set up.
 Either run the unified gateway wizard and pick **Photon iMessage**:
 
 ```bash
-hermes gateway setup
+ansatz gateway setup
 ```
 
 …or run the Photon setup directly (the wizard calls the same flow):
 
 ```bash
 # Device-code login + project + user + sidecar deps, all in one
-hermes photon setup --phone +15551234567
+ansatz photon setup --phone +15551234567
 ```
 
 The setup, in order:
@@ -94,10 +94,10 @@ channel. Choose one approach:
 line, Hermes replies with a pairing code. Approve it with:
 
 ```bash
-hermes pairing approve photon <CODE>
+ansatz pairing approve photon <CODE>
 ```
 
-Use `hermes pairing list` to see pending codes and approved users.
+Use `ansatz pairing list` to see pending codes and approved users.
 
 **Pre-authorize specific numbers** (in `~/.hermes/.env`):
 
@@ -149,7 +149,7 @@ BlueBubbles iMessage channel uses.
 ## Start the gateway
 
 ```bash
-hermes gateway start
+ansatz gateway start
 ```
 
 You'll see something like:
@@ -163,7 +163,7 @@ Send an iMessage to your assigned number and Hermes will reply.
 ## Status & troubleshooting
 
 ```bash
-hermes photon status
+ansatz photon status
 ```
 
 Prints saved credentials, sidecar health, your registered number, and the
@@ -186,14 +186,14 @@ Photon iMessage status
 
 Common issues:
 
-- **`sidecar deps : ✗ run hermes photon install-sidecar`** — Node is
+- **`sidecar deps : ✗ run ansatz photon install-sidecar`** — Node is
   installed but `spectrum-ts` isn't. Run the suggested command.
-- **`device token : ✗ missing`** — run `hermes photon setup` to log in.
+- **`device token : ✗ missing`** — run `ansatz photon setup` to log in.
 - **`No iMessage line assigned yet`** — Spectrum is enabled but no line
-  has been provisioned; re-run `hermes photon setup` or check the
+  has been provisioned; re-run `ansatz photon setup` or check the
   [dashboard][app].
 - **Sidecar won't start** — confirm `node --version` is 18.17+ and that
-  `hermes photon install-sidecar` completed without errors.
+  `ansatz photon install-sidecar` completed without errors.
 
 ## Limits today
 
@@ -215,7 +215,7 @@ Common issues:
   50 new-conversation initiations per shared line per day. Increases
   available — email `help@photon.codes`.
 - **Cron and standalone sends need the gateway running.** Out-of-process
-  senders (cron jobs, `hermes send`, the dashboard) reuse the sidecar the
+  senders (cron jobs, `ansatz send`, the dashboard) reuse the sidecar the
   gateway spawned — they read its port/token from
   `<hermes-home>/runtime/photon-sidecar.json`, written once the sidecar
   passes its health check and removed when it stops. If a standalone send

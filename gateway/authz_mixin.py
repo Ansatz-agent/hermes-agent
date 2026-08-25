@@ -592,7 +592,7 @@ class GatewayAuthorizationMixin:
 
         # Check pairing store. A pairing entry is a first-class authorization
         # grant, created only by a trusted operator approving a pairing code
-        # (hermes gateway pairing approve / the authenticated dashboard) — an
+        # (ansatz gateway pairing approve / the authenticated dashboard) — an
         # inbound sender can never reach approve_code, so this is not an
         # attacker-controlled path. Honored as a UNION with the allowlist: a
         # paired user is authorized regardless of the allowlist, and when an

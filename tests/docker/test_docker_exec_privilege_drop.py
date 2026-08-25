@@ -26,7 +26,9 @@ from tests.docker.conftest import docker_exec
 
 import subprocess
 import time
+from pathlib import Path
 from collections.abc import Iterator
+import re
 
 import pytest
 
@@ -35,6 +37,27 @@ import pytest
 # Generous because under arm64 QEMU emulation cont-init (a Python config
 # migration + chowns) runs several times slower than on native amd64.
 _RUN_READY_TIMEOUT_S = 60
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_canonical_docker_exec_uses_the_same_privilege_drop_shim():
+    dockerfile = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
+    shim = (REPO_ROOT / "docker" / "hermes-exec-shim.sh").read_text(encoding="utf-8")
+
+    install = re.search(
+        r"RUN mkdir -p /opt/hermes/bin && \\\n"
+        r"\s+cp /opt/hermes/docker/hermes-exec-shim\.sh /opt/hermes/bin/ansatz && \\\n"
+        r"\s+ln -s ansatz /opt/hermes/bin/hermes && \\\n"
+        r"\s+chmod 0755 /opt/hermes/bin/ansatz &&",
+        dockerfile,
+    )
+    assert install is not None
+    assert re.search(
+        r"^COPY --chmod=0755 docker/hermes-exec-shim\.sh /opt/hermes/bin/ansatz$",
+        dockerfile,
+        flags=re.MULTILINE,
+    )
+    assert re.search(r"^REAL=/opt/hermes/\.venv/bin/ansatz$", shim, flags=re.MULTILINE)
 
 
 def _wait_for_cont_init(container: str) -> None:

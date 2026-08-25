@@ -9,7 +9,7 @@ description: "How to build a memory provider plugin for Hermes Agent"
 Memory provider plugins give Hermes Agent persistent, cross-session knowledge beyond the built-in MEMORY.md and USER.md. This guide covers how to build one.
 
 :::tip
-Memory providers are one of two **provider plugin** types. The other is [Context Engine Plugins](/developer-guide/context-engine-plugin), which replace the built-in context compressor. Both follow the same pattern: single-select, config-driven, managed via `hermes plugins`.
+Memory providers are one of two **provider plugin** types. The other is [Context Engine Plugins](/developer-guide/context-engine-plugin), which replace the built-in context compressor. Both follow the same pattern: single-select, config-driven, managed via `ansatz plugins`.
 :::
 
 ## Installation Layouts
@@ -66,7 +66,7 @@ package layout. No copy under `$HERMES_HOME/plugins/` is required.
 
 A package entry point gets everything a directory install does, including the
 two files Hermes reads from disk rather than importing — `config_schema.py`
-(the dashboard config panel) and `cli.py` (your `hermes <provider>`
+(the dashboard config panel) and `cli.py` (your `ansatz <provider>`
 subcommands). Both are found next to your package's `__init__.py`, so point the
 entry point at a package rather than a single module if you ship either.
 
@@ -114,7 +114,7 @@ class MyMemoryProvider(MemoryProvider):
 
 | Method | Purpose | Must Implement? |
 |--------|---------|-----------------|
-| `get_config_schema()` | Declare config fields for `hermes memory setup` | **Yes** |
+| `get_config_schema()` | Declare config fields for `ansatz memory setup` | **Yes** |
 | `save_config(values, hermes_home)` | Write non-secret config to native location | **Yes** (unless env-var-only) |
 
 ### Optional Hooks
@@ -132,7 +132,7 @@ class MyMemoryProvider(MemoryProvider):
 
 ## Config Schema
 
-`get_config_schema()` returns a list of field descriptors used by `hermes memory setup`:
+`get_config_schema()` returns a list of field descriptors used by `ansatz memory setup`:
 
 ```python
 def get_config_schema(self):
@@ -162,7 +162,7 @@ def get_config_schema(self):
 Fields with `secret: True` and `env_var` go to `.env`. Non-secret fields are passed to `save_config()`.
 
 :::tip Minimal vs Full Schema
-Every field in `get_config_schema()` is prompted during `hermes memory setup`. Providers with many options should keep the schema minimal — only include fields the user **must** configure (API key, required credentials). Document optional settings in a config file reference (e.g. `$HERMES_HOME/myprovider.json`) rather than prompting for them all during setup. This keeps the setup wizard fast while still supporting advanced configuration. See the Supermemory provider for an example — it only prompts for the API key; all other options live in `supermemory.json`.
+Every field in `get_config_schema()` is prompted during `ansatz memory setup`. Providers with many options should keep the schema minimal — only include fields the user **must** configure (API key, required credentials). Document optional settings in a config file reference (e.g. `$HERMES_HOME/myprovider.json`) rather than prompting for them all during setup. This keeps the setup wizard fast while still supporting advanced configuration. See the Supermemory provider for an example — it only prompts for the API key; all other options live in `supermemory.json`.
 :::
 
 ## Save Config
@@ -287,9 +287,9 @@ Memory provider plugins can register their own CLI subcommand tree (e.g. `hermes
 1. Add a `cli.py` file to your plugin directory
 2. Define a `register_cli(subparser)` function that builds the argparse tree
 3. The memory plugin system discovers it at startup via `discover_plugin_cli_commands()`
-4. Your commands appear under `hermes <provider-name> <subcommand>`
+4. Your commands appear under `ansatz <provider-name> <subcommand>`
 
-**Active-provider gating:** Your CLI commands only appear when your provider is the active `memory.provider` in config. If a user hasn't configured your provider, your commands won't show in `hermes --help`.
+**Active-provider gating:** Your CLI commands only appear when your provider is the active `memory.provider` in config. If a user hasn't configured your provider, your commands won't show in `ansatz --help`.
 
 ### Example
 

@@ -17,7 +17,7 @@ ntfy 是 Hermes 的轻量级推送渠道的理想选择：通过 [ntfy 移动应
 ### 通过设置向导
 
 ```bash
-hermes gateway setup
+ansatz gateway setup
 ```
 
 选择 **ntfy** 并按提示操作。
@@ -66,7 +66,7 @@ ntfy 没有原生的已认证用户身份。已发布消息中的 `title` 字段
    ```bash
    echo 'NTFY_TOPIC=hermes-myname-2026' >> ~/.hermes/.env
    echo 'NTFY_ALLOWED_USERS=hermes-myname-2026' >> ~/.hermes/.env
-   hermes gateway restart
+   ansatz gateway restart
    ```
 4. 从 ntfy 应用向该 topic 发送一条消息。agent 的回复将以推送通知的形式送达。
 

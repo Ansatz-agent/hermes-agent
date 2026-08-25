@@ -14,7 +14,7 @@ TRL：面向 LLM RLHF 的 SFT、DPO、PPO、GRPO 及奖励建模。
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/mlops/trl-fine-tuning` 安装 |
+| 来源 | 可选 — 通过 `ansatz skills install official/mlops/trl-fine-tuning` 安装 |
 | 路径 | `optional-skills/mlops/training/trl-fine-tuning` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |

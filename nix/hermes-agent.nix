@@ -192,7 +192,7 @@ stdenv.mkDerivation (finalAttrs: {
           --set HERMES_OPTIONAL_MCPS $out/share/hermes-agent/optional-mcps \
           --set HERMES_WEB_DIST $out/share/hermes-agent/web_dist \
           --set HERMES_TUI_DIR $out/ui-tui \
-          --set-default HERMES_BIN $out/bin/hermes \
+          --set-default HERMES_BIN $out/bin/ansatz \
           --set HERMES_PYTHON ${hermesVenv}/bin/python3 \
           --set HERMES_NODE ${lib.getExe hermesNpmLib.nodejs}${
             # Fold the line continuation INTO the optionalString: a bare
@@ -208,6 +208,9 @@ stdenv.mkDerivation (finalAttrs: {
           }
       '')
       [
+        "ansatz"
+        "ansatz-agent"
+        "ansatz-acp"
         "hermes"
         "hermes-agent"
         "hermes-acp"
@@ -264,7 +267,7 @@ stdenv.mkDerivation (finalAttrs: {
   meta = with lib; {
     description = "AI agent with advanced tool-calling capabilities";
     homepage = "https://github.com/NousResearch/hermes-agent";
-    mainProgram = "hermes";
+    mainProgram = "ansatz";
     license = licenses.mit;
     platforms = platforms.unix;
   };

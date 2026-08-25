@@ -172,7 +172,7 @@ Save this number; you'll need it for the next step.
 ### Option A: Interactive Setup (Recommended)
 
 ```bash
-hermes gateway setup
+ansatz gateway setup
 ```
 
 Select **Telegram** when prompted. The wizard asks for your bot token and allowed user IDs, then writes the configuration for you.
@@ -189,7 +189,7 @@ TELEGRAM_ALLOWED_USERS=123456789    # Comma-separated for multiple users
 ### Start the Gateway
 
 ```bash
-hermes gateway
+ansatz gateway
 ```
 
 The bot should come online within seconds. Send it a message on Telegram to verify.
@@ -492,7 +492,7 @@ When `base_url` is set, Hermes:
 Restart the gateway and look for a confirmation log line:
 
 ```bash
-hermes gateway restart
+ansatz gateway restart
 grep -E "Using custom Telegram base_url|Using Telegram local_mode" ~/.hermes/logs/gateway.log | tail
 ```
 
@@ -565,17 +565,17 @@ To operate several profiles, run the gateway command once per profile. For examp
 
 ```bash
 # default profile
-hermes gateway start
-hermes gateway status
-hermes gateway stop
+ansatz gateway start
+ansatz gateway status
+ansatz gateway stop
 
 # named profiles
-hermes -p research gateway start
-hermes -p research gateway status
-hermes -p research gateway stop
+ansatz -p research gateway start
+ansatz -p research gateway status
+ansatz -p research gateway stop
 ```
 
-For a small fixed fleet, use a shell loop or script that calls `hermes gateway <action>` for the default profile and `hermes -p <profile> gateway <action>` for each named profile. This is more reliable than assuming a single process-level command controls every named profile on every service manager.
+For a small fixed fleet, use a shell loop or script that calls `ansatz gateway <action>` for the default profile and `ansatz -p <profile> gateway <action>` for each named profile. This is more reliable than assuming a single process-level command controls every named profile on every service manager.
 
 ### Troubleshooting: works in DMs but not groups
 
@@ -800,7 +800,7 @@ gateway:
         disable_topic_auto_rename: true
 ```
 
-When this flag is on, Hermes still generates an internal session title (used by `hermes sessions`, the TUI, etc.) but never edits the Telegram topic name. Useful when you organise topics by hand under BotFather Threaded Mode and don't want every first reply to overwrite the title.
+When this flag is on, Hermes still generates an internal session title (used by `ansatz sessions`, the TUI, etc.) but never edits the Telegram topic name. Useful when you organise topics by hand under BotFather Threaded Mode and don't want every first reply to overwrite the title.
 
 ### `/new` inside a topic
 
@@ -1181,7 +1181,7 @@ Set the proxy in your environment before starting the gateway:
 
 ```bash
 export HTTPS_PROXY=http://proxy.example.com:8080
-hermes gateway
+ansatz gateway
 ```
 
 Or add it to `~/.hermes/.env`:
@@ -1252,7 +1252,7 @@ Numeric YAML keys are automatically normalized to strings.
 
 | Problem | Solution |
 |---------|----------|
-| Bot not responding at all | Verify `TELEGRAM_BOT_TOKEN` is correct. Check `hermes gateway` logs for errors. |
+| Bot not responding at all | Verify `TELEGRAM_BOT_TOKEN` is correct. Check `ansatz gateway` logs for errors. |
 | Bot responds with "unauthorized" | Your user ID is not in `TELEGRAM_ALLOWED_USERS`. Double-check with @userinfobot. |
 | Bot ignores group messages | Privacy mode is likely on. Disable it (Step 3) or make the bot a group admin. **Remember to remove and re-add the bot after changing privacy.** |
 | Voice messages not transcribed | Verify STT is available: install `faster-whisper` for local transcription, or set `GROQ_API_KEY` / `VOICE_TOOLS_OPENAI_KEY` in `~/.hermes/.env`. |

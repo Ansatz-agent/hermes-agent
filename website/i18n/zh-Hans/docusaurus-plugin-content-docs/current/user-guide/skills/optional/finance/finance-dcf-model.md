@@ -14,7 +14,7 @@ description: "在 Excel 中构建机构级 DCF 估值模型——收入预测、
 
 | | |
 |---|---|
-| 来源 | 可选——通过 `hermes skills install official/finance/dcf-model` 安装 |
+| 来源 | 可选——通过 `ansatz skills install official/finance/dcf-model` 安装 |
 | 路径 | `optional-skills/finance/dcf-model` |
 | 版本 | `1.0.0` |
 | 作者 | Anthropic（由 Nous Research 改编） |

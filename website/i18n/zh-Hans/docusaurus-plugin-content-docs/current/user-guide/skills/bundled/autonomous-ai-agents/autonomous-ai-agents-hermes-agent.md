@@ -58,16 +58,16 @@ curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
 hermes
 
 # 单次查询
-hermes chat -q "What is the capital of France?"
+ansatz chat -q "What is the capital of France?"
 
 # 设置向导
-hermes setup
+ansatz setup
 
 # 更改模型/提供商
-hermes model
+ansatz model
 
 # 健康检查
-hermes doctor
+ansatz doctor
 ```
 
 ---
@@ -94,7 +94,7 @@ hermes [flags] [command]
 ### Chat
 
 ```
-hermes chat [flags]
+ansatz chat [flags]
   -q, --query TEXT          Single query, non-interactive
   -m, --model MODEL         Model (e.g. anthropic/claude-sonnet-4)
   -t, --toolsets LIST       Comma-separated toolsets
@@ -108,64 +108,64 @@ hermes chat [flags]
 ### 配置
 
 ```
-hermes setup [section]      Interactive wizard (model|terminal|gateway|tools|agent)
-hermes model                Interactive model/provider picker
-hermes config               View current config
-hermes config edit          Open config.yaml in $EDITOR
-hermes config set KEY VAL   Set a config value
-hermes config path          Print config.yaml path
-hermes config env-path      Print .env path
-hermes config check         Check for missing/outdated config
-hermes config migrate       Update config with new options
-hermes auth                 交互式凭据管理器
-hermes auth add PROVIDER    添加 OAuth 或 API key 凭据（例如 nous、openai-codex、qwen-oauth）
-hermes auth list            列出已存储的凭据
-hermes auth remove PROVIDER 移除已存储的凭据
-hermes doctor [--fix]       Check dependencies and config
-hermes status [--all]       Show component status
+ansatz setup [section]      Interactive wizard (model|terminal|gateway|tools|agent)
+ansatz model                Interactive model/provider picker
+ansatz config               View current config
+ansatz config edit          Open config.yaml in $EDITOR
+ansatz config set KEY VAL   Set a config value
+ansatz config path          Print config.yaml path
+ansatz config env-path      Print .env path
+ansatz config check         Check for missing/outdated config
+ansatz config migrate       Update config with new options
+ansatz auth                 交互式凭据管理器
+ansatz auth add PROVIDER    添加 OAuth 或 API key 凭据（例如 nous、openai-codex、qwen-oauth）
+ansatz auth list            列出已存储的凭据
+ansatz auth remove PROVIDER 移除已存储的凭据
+ansatz doctor [--fix]       Check dependencies and config
+ansatz status [--all]       Show component status
 ```
 
 ### 工具与 Skill
 
 ```
-hermes tools                Interactive tool enable/disable (curses UI)
-hermes tools list           Show all tools and status
-hermes tools enable NAME    Enable a toolset
-hermes tools disable NAME   Disable a toolset
+ansatz tools                Interactive tool enable/disable (curses UI)
+ansatz tools list           Show all tools and status
+ansatz tools enable NAME    Enable a toolset
+ansatz tools disable NAME   Disable a toolset
 
-hermes skills list          List installed skills
-hermes skills search QUERY  Search the skills hub
-hermes skills install ID    Install a skill (ID can be a hub identifier OR a direct https://…/SKILL.md URL; pass --name to override when frontmatter has no name)
-hermes skills inspect ID    Preview without installing
-hermes skills config        Enable/disable skills per platform
-hermes skills check         Check for updates
-hermes skills update        Update outdated skills
-hermes skills uninstall N   Remove a hub skill
-hermes skills publish PATH  Publish to registry
-hermes skills browse        Browse all available skills
-hermes skills tap add REPO  Add a GitHub repo as skill source
+ansatz skills list          List installed skills
+ansatz skills search QUERY  Search the skills hub
+ansatz skills install ID    Install a skill (ID can be a hub identifier OR a direct https://…/SKILL.md URL; pass --name to override when frontmatter has no name)
+ansatz skills inspect ID    Preview without installing
+ansatz skills config        Enable/disable skills per platform
+ansatz skills check         Check for updates
+ansatz skills update        Update outdated skills
+ansatz skills uninstall N   Remove a hub skill
+ansatz skills publish PATH  Publish to registry
+ansatz skills browse        Browse all available skills
+ansatz skills tap add REPO  Add a GitHub repo as skill source
 ```
 
 ### MCP 服务器
 
 ```
-hermes mcp serve            Run Hermes as an MCP server
-hermes mcp add NAME         Add an MCP server (--url or --command)
-hermes mcp remove NAME      Remove an MCP server
-hermes mcp list             List configured servers
-hermes mcp test NAME        Test connection
-hermes mcp configure NAME   Toggle tool selection
+ansatz mcp serve            Run Hermes as an MCP server
+ansatz mcp add NAME         Add an MCP server (--url or --command)
+ansatz mcp remove NAME      Remove an MCP server
+ansatz mcp list             List configured servers
+ansatz mcp test NAME        Test connection
+ansatz mcp configure NAME   Toggle tool selection
 ```
 
 ### Gateway（消息平台）
 
 ```
-hermes gateway run          Start gateway foreground
-hermes gateway install      Install as background service
-hermes gateway start/stop   Control the service
-hermes gateway restart      Restart the service
-hermes gateway status       Check status
-hermes gateway setup        Configure platforms
+ansatz gateway run          Start gateway foreground
+ansatz gateway install      Install as background service
+ansatz gateway start/stop   Control the service
+ansatz gateway restart      Restart the service
+ansatz gateway status       Check status
+ansatz gateway setup        Configure platforms
 ```
 
 支持的平台：Telegram、Discord、Slack、WhatsApp、Signal、Email、SMS、Matrix、Mattermost、Home Assistant、DingTalk、Feishu、WeCom、BlueBubbles（iMessage）、Weixin（WeChat）、API Server、Webhooks。Open WebUI 通过 API Server 适配器连接。
@@ -175,72 +175,72 @@ hermes gateway setup        Configure platforms
 ### 会话
 
 ```
-hermes sessions list        List recent sessions
-hermes sessions browse      Interactive picker
-hermes sessions export OUT  Export to JSONL
-hermes sessions rename ID T Rename a session
-hermes sessions delete ID   Delete a session
-hermes sessions prune       Clean up old sessions (--older-than N days)
-hermes sessions stats       Session store statistics
+ansatz sessions list        List recent sessions
+ansatz sessions browse      Interactive picker
+ansatz sessions export OUT  Export to JSONL
+ansatz sessions rename ID T Rename a session
+ansatz sessions delete ID   Delete a session
+ansatz sessions prune       Clean up old sessions (--older-than N days)
+ansatz sessions stats       Session store statistics
 ```
 
 ### Cron 任务
 
 ```
-hermes cron list            List jobs (--all for disabled)
-hermes cron create SCHED    Create: '30m', 'every 2h', '0 9 * * *'
-hermes cron edit ID         Edit schedule, prompt, delivery
-hermes cron pause/resume ID Control job state
-hermes cron run ID          Trigger on next tick
-hermes cron remove ID       Delete a job
-hermes cron status          Scheduler status
+ansatz cron list            List jobs (--all for disabled)
+ansatz cron create SCHED    Create: '30m', 'every 2h', '0 9 * * *'
+ansatz cron edit ID         Edit schedule, prompt, delivery
+ansatz cron pause/resume ID Control job state
+ansatz cron run ID          Trigger on next tick
+ansatz cron remove ID       Delete a job
+ansatz cron status          Scheduler status
 ```
 
 ### Webhook
 
 ```
-hermes webhook subscribe N  Create route at /webhooks/<name>
-hermes webhook list         List subscriptions
-hermes webhook remove NAME  Remove a subscription
-hermes webhook test NAME    Send a test POST
+ansatz webhook subscribe N  Create route at /webhooks/<name>
+ansatz webhook list         List subscriptions
+ansatz webhook remove NAME  Remove a subscription
+ansatz webhook test NAME    Send a test POST
 ```
 
 ### Profiles
 
 ```
-hermes profile list         List all profiles
-hermes profile create NAME  Create (--clone, --clone-all, --clone-from)
-hermes profile use NAME     Set sticky default
-hermes profile delete NAME  Delete a profile
-hermes profile show NAME    Show details
-hermes profile alias NAME   Manage wrapper scripts
-hermes profile rename A B   Rename a profile
-hermes profile export NAME  Export to tar.gz
-hermes profile import FILE  Import from archive
+ansatz profile list         List all profiles
+ansatz profile create NAME  Create (--clone, --clone-all, --clone-from)
+ansatz profile use NAME     Set sticky default
+ansatz profile delete NAME  Delete a profile
+ansatz profile show NAME    Show details
+ansatz profile alias NAME   Manage wrapper scripts
+ansatz profile rename A B   Rename a profile
+ansatz profile export NAME  Export to tar.gz
+ansatz profile import FILE  Import from archive
 ```
 
 ### 凭证池
 
 ```
-hermes auth add             Interactive credential wizard
-hermes auth list [PROVIDER] List pooled credentials
-hermes auth remove P INDEX  Remove by provider + index
-hermes auth reset PROVIDER  Clear exhaustion status
+ansatz auth add             Interactive credential wizard
+ansatz auth list [PROVIDER] List pooled credentials
+ansatz auth remove P INDEX  Remove by provider + index
+ansatz auth reset PROVIDER  Clear exhaustion status
 ```
 
 ### 其他
 
 ```
-hermes insights [--days N]  Usage analytics
-hermes update               Update to latest version
-hermes pairing list/approve/revoke  DM authorization
-hermes plugins list/install/remove  Plugin management
-hermes honcho setup/status  Honcho memory integration (requires honcho plugin)
-hermes memory setup/status/off  Memory provider config
-hermes completion bash|zsh  Shell completions
-hermes acp                  ACP server (IDE integration)
-hermes claw migrate         Migrate from OpenClaw
-hermes uninstall            Uninstall Hermes
+ansatz insights [--days N]  Usage analytics
+ansatz update               Update to latest version
+ansatz pairing list/approve/revoke  DM authorization
+ansatz plugins list/install/remove  Plugin management
+ansatz honcho setup/status  Honcho memory integration (requires honcho plugin)
+ansatz memory setup/status/off  Memory provider config
+ansatz completion bash|zsh  Shell completions
+ansatz acp                  ACP server (IDE integration)
+ansatz claw migrate         Migrate from OpenClaw
+ansatz uninstall            Uninstall Hermes
 ```
 
 ---
@@ -360,7 +360,7 @@ Profiles 使用 `~/.hermes/profiles/<name>/`，布局相同。
 
 ### 配置节
 
-使用 `hermes config edit` 或 `hermes config set section.key value` 编辑。
+使用 `ansatz config edit` 或 `ansatz config set section.key value` 编辑。
 
 | 节 | 键选项 |
 |---------|-------------|
@@ -380,14 +380,14 @@ Profiles 使用 `~/.hermes/profiles/<name>/`，布局相同。
 
 ### 提供商
 
-支持 20+ 个提供商。通过 `hermes model` 或 `hermes setup` 设置。
+支持 20+ 个提供商。通过 `ansatz model` 或 `ansatz setup` 设置。
 
 | 提供商 | 认证方式 | Key 环境变量 |
 |----------|------|-------------|
 | OpenRouter | API key | `OPENROUTER_API_KEY` |
 | Anthropic | API key | `ANTHROPIC_API_KEY` |
-| Nous Portal | OAuth | `hermes auth` |
-| OpenAI Codex | OAuth | `hermes auth` |
+| Nous Portal | OAuth | `ansatz auth` |
+| OpenAI Codex | OAuth | `ansatz auth` |
 | GitHub Copilot | Token | `COPILOT_GITHUB_TOKEN` |
 | Google Gemini | API key | `GOOGLE_API_KEY` 或 `GEMINI_API_KEY` |
 | DeepSeek | API key | `DEEPSEEK_API_KEY` |
@@ -403,7 +403,7 @@ Profiles 使用 `~/.hermes/profiles/<name>/`，布局相同。
 | AI Gateway (Vercel) | API key | `AI_GATEWAY_API_KEY` |
 | OpenCode Zen | API key | `OPENCODE_ZEN_API_KEY` |
 | OpenCode Go | API key | `OPENCODE_GO_API_KEY` |
-| Qwen OAuth | OAuth | `hermes auth add qwen-oauth` |
+| Qwen OAuth | OAuth | `ansatz auth add qwen-oauth` |
 | 自定义端点 | 配置 | `config.yaml` 中的 `model.base_url` + `model.api_key` |
 | GitHub Copilot ACP | 外部 | `COPILOT_CLI_PATH` 或 Copilot CLI |
 
@@ -411,7 +411,7 @@ Profiles 使用 `~/.hermes/profiles/<name>/`，布局相同。
 
 ### Toolset
 
-通过 `hermes tools`（交互式）或 `hermes tools enable/disable NAME` 启用/禁用。
+通过 `ansatz tools`（交互式）或 `ansatz tools enable/disable NAME` 启用/禁用。
 
 | Toolset | 提供的功能 |
 |---------|-----------------|
@@ -461,14 +461,14 @@ Profiles 使用 `~/.hermes/profiles/<name>/`，布局相同。
 密钥脱敏**默认关闭** — 工具输出（终端 stdout、`read_file`、网页内容、子 agent 摘要等）不经修改直接传递。如果用户希望 Hermes 在 API key、token 和密钥进入对话上下文和日志之前自动屏蔽它们：
 
 ```bash
-hermes config set security.redact_secrets true       # 全局启用
+ansatz config set security.redact_secrets true       # 全局启用
 ```
 
-**需要重启。** `security.redact_secrets` 在导入时快照 — 在会话中途切换（例如通过工具调用执行 `export HERMES_REDACT_SECRETS=true`）对正在运行的进程**不会**生效。告知用户在终端运行 `hermes config set security.redact_secrets true`，然后启动新会话。这是有意为之——防止 LLM 在任务中途自行切换该开关。
+**需要重启。** `security.redact_secrets` 在导入时快照 — 在会话中途切换（例如通过工具调用执行 `export HERMES_REDACT_SECRETS=true`）对正在运行的进程**不会**生效。告知用户在终端运行 `ansatz config set security.redact_secrets true`，然后启动新会话。这是有意为之——防止 LLM 在任务中途自行切换该开关。
 
 再次禁用：
 ```bash
-hermes config set security.redact_secrets false
+ansatz config set security.redact_secrets false
 ```
 
 ### Gateway 消息中的 PII 脱敏
@@ -476,8 +476,8 @@ hermes config set security.redact_secrets false
 与密钥脱敏分开。启用后，gateway 在上下文到达模型之前对用户 ID 进行哈希处理并从会话上下文中去除电话号码：
 
 ```bash
-hermes config set privacy.redact_pii true    # 启用
-hermes config set privacy.redact_pii false   # 禁用（默认）
+ansatz config set privacy.redact_pii true    # 启用
+ansatz config set privacy.redact_pii false   # 禁用（默认）
 ```
 
 ### 命令审批提示
@@ -489,12 +489,12 @@ hermes config set privacy.redact_pii false   # 禁用（默认）
 - `off` — 跳过所有审批提示（等同于 `--yolo`）
 
 ```bash
-hermes config set approvals.mode smart       # 推荐的折中方案
-hermes config set approvals.mode off         # 绕过一切（不推荐）
+ansatz config set approvals.mode smart       # 推荐的折中方案
+ansatz config set approvals.mode off         # 绕过一切（不推荐）
 ```
 
 单次调用绕过（不更改配置）：
-- `hermes --yolo …`
+- `ansatz --yolo …`
 - `export HERMES_YOLO_MODE=1`
 
 注意：YOLO / `approvals.mode: off` **不会**关闭密钥脱敏。两者相互独立。
@@ -505,7 +505,7 @@ hermes config set approvals.mode off         # 绕过一切（不推荐）
 
 ### 禁用 web/browser/image-gen 工具
 
-要完全阻止模型访问网络或媒体工具，打开 `hermes tools` 并按平台切换。在下次会话（`/reset`）后生效。参见上方的工具与 Skill 部分。
+要完全阻止模型访问网络或媒体工具，打开 `ansatz tools` 并按平台切换。在下次会话（`/reset`）后生效。参见上方的工具与 Skill 部分。
 
 ---
 
@@ -562,10 +562,10 @@ stt:
 ### 单次模式
 
 ```
-terminal(command="hermes chat -q 'Research GRPO papers and write summary to ~/research/grpo.md'", timeout=300)
+terminal(command="ansatz chat -q 'Research GRPO papers and write summary to ~/research/grpo.md'", timeout=300)
 
 # 长任务后台运行：
-terminal(command="hermes chat -q 'Set up CI/CD for ~/myapp'", background=true)
+terminal(command="ansatz chat -q 'Set up CI/CD for ~/myapp'", background=true)
 ```
 
 ### 交互式 PTY 模式（通过 tmux）
@@ -593,11 +593,11 @@ terminal(command="tmux send-keys -t agent1 '/exit' Enter && sleep 2 && tmux kill
 
 ```
 # Agent A：后端
-terminal(command="tmux new-session -d -s backend -x 120 -y 40 'hermes -w'", timeout=10)
+terminal(command="tmux new-session -d -s backend -x 120 -y 40 'ansatz -w'", timeout=10)
 terminal(command="sleep 8 && tmux send-keys -t backend 'Build REST API for user management' Enter", timeout=15)
 
 # Agent B：前端
-terminal(command="tmux new-session -d -s frontend -x 120 -y 40 'hermes -w'", timeout=10)
+terminal(command="tmux new-session -d -s frontend -x 120 -y 40 'ansatz -w'", timeout=10)
 terminal(command="sleep 8 && tmux send-keys -t frontend 'Build React dashboard for user management' Enter", timeout=15)
 
 # 检查进度，在两者之间传递上下文
@@ -609,10 +609,10 @@ terminal(command="tmux send-keys -t frontend 'Here is the API schema from the ba
 
 ```
 # 恢复最近的会话
-terminal(command="tmux new-session -d -s resumed 'hermes --continue'", timeout=10)
+terminal(command="tmux new-session -d -s resumed 'ansatz --continue'", timeout=10)
 
 # 恢复特定会话
-terminal(command="tmux new-session -d -s resumed 'hermes --resume 20260225_143052_a1b2c3'", timeout=10)
+terminal(command="tmux new-session -d -s resumed 'ansatz --resume 20260225_143052_a1b2c3'", timeout=10)
 ```
 
 ### 提示
@@ -620,7 +620,7 @@ terminal(command="tmux new-session -d -s resumed 'hermes --resume 20260225_14305
 - **快速子任务优先使用 `delegate_task`** — 比生成完整进程开销更小
 - **生成编辑代码的 agent 时使用 `-w`（worktree 模式）** — 防止 git 冲突
 - **为单次模式设置超时** — 复杂任务可能需要 5-10 分钟
-- **fire-and-forget 使用 `hermes chat -q`** — 无需 PTY
+- **fire-and-forget 使用 `ansatz chat -q`** — 无需 PTY
 - **交互式会话使用 tmux** — 原始 PTY 模式与 prompt_toolkit 存在 `\r` vs `\n` 问题
 - **定时任务使用 `cronjob` 工具而非生成进程** — 处理投递和重试
 
@@ -643,7 +643,7 @@ terminal(command="tmux new-session -d -s resumed 'hermes --resume 20260225_14305
 
 ### Cron（定时任务）
 
-持久化调度器——`cron/jobs.py` + `cron/scheduler.py`。通过 `cronjob` 工具、`hermes cron` CLI（`list`、`add`、`edit`、`pause`、`resume`、`run`、`remove`）或 `/cron` 斜杠命令驱动。
+持久化调度器——`cron/jobs.py` + `cron/scheduler.py`。通过 `cronjob` 工具、`ansatz cron` CLI（`list`、`add`、`edit`、`pause`、`resume`、`run`、`remove`）或 `/cron` 斜杠命令驱动。
 
 - **调度格式：** 持续时间（`"30m"`、`"2h"`）、"every" 短语（`"every monday 9am"`）、5 字段 cron（`"0 9 * * *"`）或 ISO 时间戳。
 - **每任务选项：** `skills`、`model`/`provider` 覆盖、`script`（预运行数据收集；`no_agent=True` 使脚本成为整个任务）、`context_from`（将任务 A 的输出链接到任务 B）、`workdir`（在特定目录中运行，加载其 `AGENTS.md` / `CLAUDE.md`）、多平台投递。
@@ -655,7 +655,7 @@ terminal(command="tmux new-session -d -s resumed 'hermes --resume 20260225_14305
 
 agent 创建的 skill 的后台维护。跟踪使用情况，将闲置 skill 标记为过时，归档过时的 skill，保留运行前的 tar.gz 备份以防数据丢失。
 
-- **CLI：** `hermes curator <verb>` — `status`、`run`、`pause`、`resume`、`pin`、`unpin`、`archive`、`restore`、`prune`、`backup`、`rollback`。
+- **CLI：** `ansatz curator <verb>` — `status`、`run`、`pause`、`resume`、`pin`、`unpin`、`archive`、`restore`、`prune`、`backup`、`rollback`。
 - **斜杠命令：** `/curator <subcommand>` 与 CLI 对应。
 - **范围：** 仅处理 `created_by: "agent"` 来源的 skill。内置和 hub 安装的 skill 不在范围内。**从不删除** — 最具破坏性的操作是归档。已固定的 skill 不受任何自动转换和任何 LLM 审查的影响。
 - **遥测：** `~/.hermes/skills/.usage.json` 中的 sidecar 保存每个 skill 的 `use_count`、`view_count`、`patch_count`、`last_activity_at`、`state`、`pinned`。
@@ -665,7 +665,7 @@ agent 创建的 skill 的后台维护。跟踪使用情况，将闲置 skill 标
 
 ### Kanban（多 agent 工作队列）
 
-用于多 profile/多 worker 协作的持久化 SQLite 看板（kanban）。用户通过 `hermes kanban <verb>` 驱动；调度器生成的 worker 看到由 `HERMES_KANBAN_TASK` 控制的专注 `kanban_*` toolset，orchestrator profile 可以选择加入更广泛的 `kanban` toolset。普通会话除非配置，否则没有任何 `kanban_*` schema 占用。
+用于多 profile/多 worker 协作的持久化 SQLite 看板（kanban）。用户通过 `ansatz kanban <verb>` 驱动；调度器生成的 worker 看到由 `HERMES_KANBAN_TASK` 控制的专注 `kanban_*` toolset，orchestrator profile 可以选择加入更广泛的 `kanban` toolset。普通会话除非配置，否则没有任何 `kanban_*` schema 占用。
 
 - **CLI 动词（常用）：** `init`、`create`、`list`（别名 `ls`）、`show`、`assign`、`link`、`unlink`、`comment`、`complete`、`block`、`unblock`、`archive`、`tail`。不常用：`watch`、`stats`、`runs`、`log`、`dispatch`、`daemon`、`gc`。
 - **Worker/orchestrator toolset：** `kanban_show`、`kanban_complete`、`kanban_block`、`kanban_heartbeat`、`kanban_comment`、`kanban_create`、`kanban_link`；在调度器生成的任务之外显式启用 `kanban` toolset 的 profile 还可获得 `kanban_list` 和 `kanban_unblock` 用于看板路由。
@@ -690,7 +690,7 @@ mintty / git-bash 行为相同（Alt+Enter 全屏），除非你在选项 → �
 
 ### 配置/文件
 
-**首次运行时 HTTP 400 "No models provided"。** `config.yaml` 保存时带有 UTF-8 BOM（Windows 应用写入时常见）。重新保存为不带 BOM 的 UTF-8。`hermes config edit` 写入时不带 BOM；手动在记事本中编辑是常见原因。
+**首次运行时 HTTP 400 "No models provided"。** `config.yaml` 保存时带有 UTF-8 BOM（Windows 应用写入时常见）。重新保存为不带 BOM 的 UTF-8。`ansatz config edit` 写入时不带 BOM；手动在记事本中编辑是常见原因。
 
 ### `execute_code` / 沙箱
 
@@ -732,15 +732,15 @@ export PYTHONPATH="$(pwd)"
 3. 在 gateway 中：`/restart`。在 CLI 中：退出并重新启动。
 
 ### 工具不可用
-1. `hermes tools` — 检查 toolset 是否为你的平台启用
+1. `ansatz tools` — 检查 toolset 是否为你的平台启用
 2. 某些工具需要环境变量（检查 `.env`）
 3. 启用工具后执行 `/reset`
 
 ### 模型/提供商问题
-1. `hermes doctor` — 检查配置和依赖
-2. `hermes auth` — 重新认证 OAuth 提供商（或 `hermes auth add <provider>`）
+1. `ansatz doctor` — 检查配置和依赖
+2. `ansatz auth` — 重新认证 OAuth 提供商（或 `ansatz auth add <provider>`）
 3. 检查 `.env` 中是否有正确的 API key
-4. **Copilot 403**：`gh auth login` 的 token **不适用于** Copilot API。必须通过 `hermes model` → GitHub Copilot 使用 Copilot 专用 OAuth 设备码流程。
+4. **Copilot 403**：`gh auth login` 的 token **不适用于** Copilot API。必须通过 `ansatz model` → GitHub Copilot 使用 Copilot 专用 OAuth 设备码流程。
 
 ### 变更未生效
 - **工具/skill：** `/reset` 以更新后的 toolset 启动新会话
@@ -748,9 +748,9 @@ export PYTHONPATH="$(pwd)"
 - **代码变更：** 重启 CLI 或 gateway 进程
 
 ### Skill 未显示
-1. `hermes skills list` — 验证已安装
-2. `hermes skills config` — 检查平台启用状态
-3. 显式加载：`/skill name` 或 `hermes -s name`
+1. `ansatz skills list` — 验证已安装
+2. `ansatz skills config` — 检查平台启用状态
+3. 显式加载：`/skill name` 或 `ansatz -s name`
 
 ### Gateway 问题
 首先检查日志：
@@ -771,8 +771,8 @@ grep -i "failed to send\|error" ~/.hermes/logs/gateway.log | tail -20
 ### 辅助模型不工作
 如果 `auxiliary` 任务（视觉、压缩）静默失败，`auto` 提供商找不到后端。请设置 `OPENROUTER_API_KEY` 或 `GOOGLE_API_KEY`，或显式配置每个辅助任务的提供商：
 ```bash
-hermes config set auxiliary.vision.provider <your_provider>
-hermes config set auxiliary.vision.model <model_name>
+ansatz config set auxiliary.vision.provider <your_provider>
+ansatz config set auxiliary.vision.model <model_name>
 ```
 
 ---
@@ -781,20 +781,20 @@ hermes config set auxiliary.vision.model <model_name>
 
 | 查找内容... | 位置 |
 |----------------|----------|
-| 配置选项 | `hermes config edit` 或[配置文档](https://hermes-agent.nousresearch.com/docs/user-guide/configuration) |
-| 可用工具 | `hermes tools list` 或[工具参考](https://hermes-agent.nousresearch.com/docs/reference/tools-reference) |
+| 配置选项 | `ansatz config edit` 或[配置文档](https://hermes-agent.nousresearch.com/docs/user-guide/configuration) |
+| 可用工具 | `ansatz tools list` 或[工具参考](https://hermes-agent.nousresearch.com/docs/reference/tools-reference) |
 | 斜杠命令 | 会话内 `/help` 或[斜杠命令参考](https://hermes-agent.nousresearch.com/docs/reference/slash-commands) |
-| Skill 目录 | `hermes skills browse` 或[Skill 目录](https://hermes-agent.nousresearch.com/docs/reference/skills-catalog) |
-| 提供商设置 | `hermes model` 或[提供商指南](https://hermes-agent.nousresearch.com/docs/integrations/providers) |
-| 平台设置 | `hermes gateway setup` 或[消息文档](https://hermes-agent.nousresearch.com/docs/user-guide/messaging/) |
-| MCP 服务器 | `hermes mcp list` 或[MCP 指南](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp) |
-| Profiles | `hermes profile list` 或[Profiles 文档](https://hermes-agent.nousresearch.com/docs/user-guide/profiles) |
-| Cron 任务 | `hermes cron list` 或[Cron 文档](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron) |
-| 记忆 | `hermes memory status` 或[记忆文档](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory) |
-| 环境变量 | `hermes config env-path` 或[环境变量参考](https://hermes-agent.nousresearch.com/docs/reference/environment-variables) |
-| CLI 命令 | `hermes --help` 或[CLI 参考](https://hermes-agent.nousresearch.com/docs/reference/cli-commands) |
+| Skill 目录 | `ansatz skills browse` 或[Skill 目录](https://hermes-agent.nousresearch.com/docs/reference/skills-catalog) |
+| 提供商设置 | `ansatz model` 或[提供商指南](https://hermes-agent.nousresearch.com/docs/integrations/providers) |
+| 平台设置 | `ansatz gateway setup` 或[消息文档](https://hermes-agent.nousresearch.com/docs/user-guide/messaging/) |
+| MCP 服务器 | `ansatz mcp list` 或[MCP 指南](https://hermes-agent.nousresearch.com/docs/user-guide/features/mcp) |
+| Profiles | `ansatz profile list` 或[Profiles 文档](https://hermes-agent.nousresearch.com/docs/user-guide/profiles) |
+| Cron 任务 | `ansatz cron list` 或[Cron 文档](https://hermes-agent.nousresearch.com/docs/user-guide/features/cron) |
+| 记忆 | `ansatz memory status` 或[记忆文档](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory) |
+| 环境变量 | `ansatz config env-path` 或[环境变量参考](https://hermes-agent.nousresearch.com/docs/reference/environment-variables) |
+| CLI 命令 | `ansatz --help` 或[CLI 参考](https://hermes-agent.nousresearch.com/docs/reference/cli-commands) |
 | Gateway 日志 | `~/.hermes/logs/gateway.log` |
-| 会话文件 | `~/.hermes/sessions/` 或 `hermes sessions browse` |
+| 会话文件 | `~/.hermes/sessions/` 或 `ansatz sessions browse` |
 | 源代码 | `~/.hermes/hermes-agent/` |
 
 ---

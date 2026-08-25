@@ -58,6 +58,16 @@ def _write_jobs(home, jobs):
     (cron_dir / "jobs.json").write_text(json.dumps(jobs), encoding="utf-8")
 
 
+def test_profile_setup_commands_use_canonical_default_cli(client, isolated_profiles):
+    default = client.get("/api/profiles/default/setup-command")
+    worker = client.get("/api/profiles/worker_beta/setup-command")
+
+    assert default.status_code == 200
+    assert default.json() == {"command": "ansatz setup"}
+    assert worker.status_code == 200
+    assert worker.json() == {"command": "worker_beta setup"}
+
+
 class TestProfileScopedConfig:
 
 

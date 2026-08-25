@@ -36,10 +36,10 @@ my-research-agent/
 接收方运行：
 
 ```bash
-hermes profile install github.com/you/my-research-agent --alias
+ansatz profile install github.com/you/my-research-agent --alias
 ```
 
-……他们就拥有了完整的 agent。填入自己的 API 密钥（`.env.EXAMPLE` → `.env`），即可运行 `my-research-agent chat`，或通过 Telegram / Discord / Slack / 任何 gateway 平台与其交互。当你推送新版本时，他们运行 `hermes profile update my-research-agent` 即可拉取你的更改——他们的记忆和会话保持不变。
+……他们就拥有了完整的 agent。填入自己的 API 密钥（`.env.EXAMPLE` → `.env`），即可运行 `my-research-agent chat`，或通过 Telegram / Discord / Slack / 任何 gateway 平台与其交互。当你推送新版本时，他们运行 `ansatz profile update my-research-agent` 即可拉取你的更改——他们的记忆和会话保持不变。
 
 ## 为什么选择 git？
 
@@ -65,7 +65,7 @@ hermes profile install github.com/you/my-research-agent --alias
 
 不适合的场景：
 
-- **你只想在自己的机器上备份一个 profile。** 使用 [`hermes profile export` / `import`](../reference/profile-commands.md#hermes-profile-export)——那正是这两个命令的用途。
+- **你只想在自己的机器上备份一个 profile。** 使用 [`ansatz profile export` / `import`](../reference/profile-commands.md#hermes-profile-export)——那正是这两个命令的用途。
 - **你想随 agent 一起共享 API 密钥。** `auth.json` 和 `.env` 被刻意排除在分发之外。每个安装者使用自己的凭据。
 - **你想共享记忆 / 会话 / 对话历史。** 这些是用户数据，不是分发内容，永远不会被发送。
 
@@ -82,7 +82,7 @@ hermes profile install github.com/you/my-research-agent --alias
 像构建其他 profile 一样构建并打磨 agent：
 
 ```bash
-hermes profile create research-bot
+ansatz profile create research-bot
 research-bot setup                    # configure model, API keys
 # Edit ~/.hermes/profiles/research-bot/SOUL.md
 # Install skills, wire up MCP servers, schedule cron jobs, etc.
@@ -146,7 +146,7 @@ git tag v1.1.0
 git push --tags
 ```
 
-运行 `hermes profile update research-bot` 的接收方将拉取最新版本。
+运行 `ansatz profile update research-bot` 的接收方将拉取最新版本。
 
 ### 仓库结构示例
 
@@ -195,7 +195,7 @@ distribution_owned:
 ### 安装
 
 ```bash
-hermes profile install github.com/you/research-bot --alias
+ansatz profile install github.com/you/research-bot --alias
 ```
 
 执行过程：
@@ -214,22 +214,22 @@ hermes profile install github.com/you/research-bot --alias
 
 ```bash
 # GitHub shorthand
-hermes profile install github.com/you/research-bot
+ansatz profile install github.com/you/research-bot
 
 # Full HTTPS
-hermes profile install https://github.com/you/research-bot.git
+ansatz profile install https://github.com/you/research-bot.git
 
 # SSH
-hermes profile install git@github.com:you/research-bot.git
+ansatz profile install git@github.com:you/research-bot.git
 
 # Self-hosted, GitLab, Gitea, Forgejo — any Git host
-hermes profile install https://git.example.com/team/research-bot.git
+ansatz profile install https://git.example.com/team/research-bot.git
 
 # Private repo using your configured git auth
-hermes profile install git@github.com:your-org/internal-bot.git
+ansatz profile install git@github.com:your-org/internal-bot.git
 
 # Local directory during development (no git push needed)
-hermes profile install ~/my-profile-in-progress/
+ansatz profile install ~/my-profile-in-progress/
 ```
 
 ### 覆盖 profile 名称
@@ -238,9 +238,9 @@ hermes profile install ~/my-profile-in-progress/
 
 ```bash
 # Alice
-hermes profile install github.com/acme/support-bot --name support-us --alias
+ansatz profile install github.com/acme/support-bot --name support-us --alias
 # Bob（同一分发，不同本地名称）
-hermes profile install github.com/acme/support-bot --name support-eu --alias
+ansatz profile install github.com/acme/support-bot --name support-eu --alias
 ```
 
 ### 填写环境变量
@@ -272,7 +272,7 @@ cp ~/.hermes/profiles/research-bot/.env.EXAMPLE ~/.hermes/profiles/research-bot/
 ### 查看已安装内容
 
 ```bash
-hermes profile info research-bot
+ansatz profile info research-bot
 ```
 
 显示：
@@ -291,7 +291,7 @@ Environment variables:
   SERPAPI_KEY (optional) — SerpAPI key for web search
 ```
 
-`hermes profile list` 还会显示 `Distribution` 列，让你一眼看出哪些 profile 来自仓库，哪些是手动构建的：
+`ansatz profile list` 还会显示 `Distribution` 列，让你一眼看出哪些 profile 来自仓库，哪些是手动构建的：
 
 ```
  Profile          Model                        Gateway      Alias        Distribution
@@ -305,7 +305,7 @@ Environment variables:
 ### 更新
 
 ```bash
-hermes profile update research-bot
+ansatz profile update research-bot
 ```
 
 执行过程：
@@ -320,7 +320,7 @@ hermes profile update research-bot
 ### 删除
 
 ```bash
-hermes profile delete research-bot
+ansatz profile delete research-bot
 ```
 
 删除确认提示会在要求你确认之前显示分发信息：
@@ -358,11 +358,11 @@ git remote add origin git@github.com:you/research-bot.git
 git push -u origin main
 
 # 工作站
-hermes profile install github.com/you/research-bot --alias
+ansatz profile install github.com/you/research-bot --alias
 # 填写 .env，完成。
 ```
 
-在笔记本上的任何迭代（`git commit && push`）都可以通过 `hermes profile update research-bot` 同步到工作站。记忆按机器独立保存——笔记本记住自己的对话，工作站记住自己的，互不干扰。
+在笔记本上的任何迭代（`git commit && push`）都可以通过 `ansatz profile update research-bot` 同步到工作站。记忆按机器独立保存——笔记本记住自己的对话，工作站记住自己的，互不干扰。
 
 ### 团队：发布经过审核的内部 agent
 
@@ -377,12 +377,12 @@ git tag v1.0.0
 git push -u origin main --tags    # push to your company's internal Git host
 
 # 每位工程师
-hermes profile install git@github.com:your-org/pr-reviewer.git --alias
+ansatz profile install git@github.com:your-org/pr-reviewer.git --alias
 # 填写 .env，使用自己的 API 密钥（费用由自己承担），.env.EXAMPLE 指明了所需内容
 pr-reviewer chat
 ```
 
-当负责人发布 v1.1（更好的 SOUL、新技能）时，工程师运行 `hermes profile update pr-reviewer`，所有人在几分钟内就能用上新版本。
+当负责人发布 v1.1（更好的 SOUL、新技能）时，工程师运行 `ansatz profile update pr-reviewer`，所有人在几分钟内就能用上新版本。
 
 ### 社区：发布公开 agent
 
@@ -399,7 +399,7 @@ git remote add origin https://github.com/you/hermes-polymarket-trader.git
 git push -u origin main --tags
 
 # 任何人
-hermes profile install github.com/you/hermes-polymarket-trader --alias
+ansatz profile install github.com/you/hermes-polymarket-trader --alias
 ```
 
 发推分享安装命令。尝试的人会给你提 issue 和 PR。想要自定义的人可以 fork——与大家已熟悉的 git 工作流完全相同。
@@ -442,10 +442,10 @@ env_requires:
 git push -u origin main
 
 # 每位值班人员
-hermes profile install git@github.com:your-org/incident-2026-q2.git --alias
+ansatz profile install git@github.com:your-org/incident-2026-q2.git --alias
 
 # 事故解决——清理
-hermes profile delete incident-2026-q2
+ansatz profile delete incident-2026-q2
 ```
 
 安装-删除的成本足够低，可以当作一次性工具使用。
@@ -457,14 +457,14 @@ hermes profile delete incident-2026-q2
 ### 固定到特定版本
 
 :::note
-Git ref 固定（`#v1.2.0`）已在规划中，但不在初始版本中——目前安装时跟踪默认分支。通过 `hermes profile info <name>` 查看已安装版本，在准备好之前暂缓更新。
+Git ref 固定（`#v1.2.0`）已在规划中，但不在初始版本中——目前安装时跟踪默认分支。通过 `ansatz profile info <name>` 查看已安装版本，在准备好之前暂缓更新。
 :::
 
 ### 查看当前版本与最新版本
 
 ```bash
 # 你已安装的版本
-hermes profile info research-bot | grep Version
+ansatz profile info research-bot | grep Version
 
 # 上游最新版本（不安装）
 git ls-remote --tags https://github.com/you/research-bot | tail -5
@@ -485,11 +485,11 @@ git ls-remote --tags https://github.com/you/research-bot | tail -5
 
 ```bash
 # 彻底删除并重新安装（记忆/会话也会丢失）
-hermes profile delete research-bot --yes
-hermes profile install github.com/you/research-bot --alias
+ansatz profile delete research-bot --yes
+ansatz profile install github.com/you/research-bot --alias
 
 # 更新到当前 main，但将 config.yaml 重置为分发默认值
-hermes profile update research-bot --force-config --yes
+ansatz profile update research-bot --force-config --yes
 ```
 
 ### Fork 并自定义
@@ -498,7 +498,7 @@ hermes profile update research-bot --force-config --yes
 
 ```bash
 # 在 GitHub 上 fork 仓库，然后安装你的 fork
-hermes profile install github.com/yourname/forked-research-bot --alias
+ansatz profile install github.com/yourname/forked-research-bot --alias
 
 # 在 ~/.hermes/profiles/forked-research-bot/ 中本地迭代
 # 编辑 SOUL.md，提交，推送到你的 fork
@@ -511,11 +511,11 @@ hermes profile install github.com/yourname/forked-research-bot --alias
 
 ```bash
 # 从本地目录安装（无需 git push）
-hermes profile install ~/.hermes/profiles/research-bot --name research-bot-test --alias
+ansatz profile install ~/.hermes/profiles/research-bot --name research-bot-test --alias
 
 # 调整、删除、重新安装，直到满意
-hermes profile delete research-bot-test --yes
-hermes profile install ~/.hermes/profiles/research-bot --name research-bot-test
+ansatz profile delete research-bot-test --yes
+ansatz profile install ~/.hermes/profiles/research-bot --name research-bot-test
 ```
 
 ---
@@ -545,7 +545,7 @@ Profile 分发默认不带签名。你信任的是：
 - **git 托管平台**（GitHub / GitLab / 其他平台）能够提供作者推送的原始内容。
 - **作者**不会发布恶意的 SOUL、技能或 cron 任务。
 
-来自分发的 cron 任务**不会自动调度**——安装器会打印 `hermes -p <name> cron list`，你需要显式启用它们。SOUL.md 和技能在你开始与 profile 对话后立即生效，因此如果你从不熟悉的来源安装，请在第一次运行前阅读它们。
+来自分发的 cron 任务**不会自动调度**——安装器会打印 `ansatz -p <name> cron list`，你需要显式启用它们。SOUL.md 和技能在你开始与 profile 对话后立即生效，因此如果你从不熟悉的来源安装，请在第一次运行前阅读它们。
 
 粗略类比：安装分发就像安装浏览器扩展或 VS Code 扩展。低摩擦、高权限，信任来源。对于公司内部分发，使用私有仓库和你现有的 git 认证——无需额外配置。
 
@@ -557,7 +557,7 @@ Profile 分发默认不带签名。你信任的是：
 
 简要说明：
 
-- `install`、`update`、`info` 位于 `hermes profile` 下——不是独立的命令树。
+- `install`、`update`、`info` 位于 `ansatz profile` 下——不是独立的命令树。
 - manifest 格式为 YAML，schema 极简（仅 `name` 为必填）。
 - 安装器使用你本地的 `git` 二进制文件进行克隆，因此 shell 已处理的任何认证（SSH 密钥、credential helper）都能透明生效。
 - 克隆完成后，`.git/` 会被剥离——已安装的 profile 本身不是 git checkout，避免了"不小心将 `.env` 提交到分发 git 历史"的陷阱。
@@ -567,7 +567,7 @@ Profile 分发默认不带签名。你信任的是：
 
 - [Profiles：运行多个 Agent](./profiles.md) — 基础概念
 - [Profile 命令参考](../reference/profile-commands.md) — 每个标志、每个选项
-- [`hermes profile export` / `import`](../reference/profile-commands.md#hermes-profile-export) — 本地备份 / 恢复（非分发）
+- [`ansatz profile export` / `import`](../reference/profile-commands.md#hermes-profile-export) — 本地备份 / 恢复（非分发）
 - [在 Hermes 中使用 SOUL](../guides/use-soul-with-hermes.md) — 编写个性
 - [个性与 SOUL](./features/personality.md) — SOUL 在 agent 中的作用
 - [技能目录](../reference/skills-catalog.md) — 可打包的技能

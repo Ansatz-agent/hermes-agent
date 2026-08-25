@@ -1184,7 +1184,7 @@ export const en: Translations = {
     edit: 'Edit',
     archive: 'Archive',
     skillArchivedTitle: 'Skill archived',
-    skillArchivedMessage: 'Restorable via hermes curator restore.',
+    skillArchivedMessage: 'Restorable via ansatz curator restore.',
     hub: {
       searchPlaceholder: 'Search the skill hub',
       search: 'Search',
@@ -3193,7 +3193,7 @@ export const en: Translations = {
       success: platform => `Handed off to ${platform}. Resume here anytime.`,
       systemNote: platform => `↻ Handed off to ${platform} — resume here anytime.`,
       failed: error => `Handoff failed: ${error}`,
-      timedOut: 'Timed out waiting for the gateway. Is `hermes gateway` running?'
+      timedOut: 'Timed out waiting for the gateway. Is `ansatz gateway` running?'
     }
   },
 

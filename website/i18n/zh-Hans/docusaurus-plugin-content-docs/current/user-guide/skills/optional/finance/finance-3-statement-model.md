@@ -14,7 +14,7 @@ description: "在 Excel 中构建完整集成的三表模型（利润表、资�
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/finance/3-statement-model` 安装 |
+| 来源 | 可选 — 通过 `ansatz skills install official/finance/3-statement-model` 安装 |
 | 路径 | `optional-skills/finance/3-statement-model` |
 | 版本 | `1.0.0` |
 | 作者 | Anthropic（由 Nous Research 改编） |

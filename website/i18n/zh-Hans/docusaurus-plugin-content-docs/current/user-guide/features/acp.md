@@ -41,7 +41,7 @@ cd ~/.hermes/hermes-agent && uv pip install -e '.[acp]'
 
 这将安装 `agent-client-protocol` 依赖并启用：
 
-- `hermes acp`
+- `ansatz acp`
 - `hermes-acp`
 - `python -m acp_adapter`
 
@@ -50,7 +50,7 @@ cd ~/.hermes/hermes-agent && uv pip install -e '.[acp]'
 以下任意命令均可以 ACP 模式启动 Hermes：
 
 ```bash
-hermes acp
+ansatz acp
 ```
 
 ```bash
@@ -66,8 +66,8 @@ Hermes 将日志输出到 stderr，以保留 stdout 用于 ACP JSON-RPC 流量�
 非交互式检查：
 
 ```bash
-hermes acp --version
-hermes acp --check
+ansatz acp --version
+ansatz acp --check
 ```
 
 ### 浏览器工具（可选）
@@ -75,11 +75,11 @@ hermes acp --check
 浏览器工具（`browser_navigate`、`browser_click` 等）依赖 `agent-browser` npm 包和 Chromium，这些不包含在 Python wheel 中。通过以下命令安装：
 
 ```bash
-hermes acp --setup-browser           # 交互式（下载约 400 MB 前会提示确认）
-hermes acp --setup-browser --yes     # 非交互式接受下载
+ansatz acp --setup-browser           # 交互式（下载约 400 MB 前会提示确认）
+ansatz acp --setup-browser --yes     # 非交互式接受下载
 ```
 
-这是独立命令。终端认证流程（`hermes acp --setup`）在模型选择后也会将浏览器引导作为后续问题提供，因此大多数用户无需直接运行 `--setup-browser`。
+这是独立命令。终端认证流程（`ansatz acp --setup`）在模型选择后也会将浏览器引导作为后续问题提供，因此大多数用户无需直接运行 `--setup-browser`。
 
 具体操作：
 
@@ -108,7 +108,7 @@ Buzz relay <-- WebSocket --> buzz-acp <-- ACP over stdio --> Hermes Agent
 
 前置条件：
 
-- 完成上文的 ACP 安装并通过 `hermes acp --check`。
+- 完成上文的 ACP 安装并通过 `ansatz acp --check`。
 - 从 [Buzz 仓库](https://github.com/block/buzz)构建 `buzz-acp` 和 `buzz` CLI
   （`cargo build --release -p buzz-acp`）。
 - 为 Hermes 铸造专用的 Nostr 密钥对（`buzz-admin generate-key`）并将其注册为
@@ -202,11 +202,11 @@ Desktop 会在该 agent 的 **Activity log** 中实时渲染生命周期、工�
 
 前提条件：
 
-- 先通过 `hermes model` 配置 Hermes provider 凭据，或在 `~/.hermes/.env` / `~/.hermes/config.yaml` 中设置。
+- 先通过 `ansatz model` 配置 Hermes provider 凭据，或在 `~/.hermes/.env` / `~/.hermes/config.yaml` 中设置。
 
 ### JetBrains
 
-使用兼容 ACP 的插件并将其指向 `hermes acp` 或 `hermes-acp`。
+使用兼容 ACP 的插件并将其指向 `ansatz acp` 或 `hermes-acp`。
 
 ### Buzz Desktop
 
@@ -221,7 +221,7 @@ command -v hermes-acp || command -v hermes
 ```
 
 较新的安装会将 `hermes` 和 `hermes-acp` 两个启动器写入 `~/.local/bin`；
-运行 `hermes update` 会为较旧的安装补上 `hermes-acp` 启动器。作为手动兜底方案，
+运行 `ansatz update` 会为较旧的安装补上 `hermes-acp` 启动器。作为手动兜底方案，
 可以将 Buzz 的 agent 命令配置为 `hermes`，参数为 `["acp"]`。
 
 #### 将 Buzz agent 保持为 owner-only
@@ -309,7 +309,7 @@ ACP 桥接将这些选项映射到 Hermes 的内部审批语义——`allow_alwa
 
 检查：
 
-- 对于手动/本地开发，验证自定义 `agent_servers` 命令是否指向 `hermes acp`。
+- 对于手动/本地开发，验证自定义 `agent_servers` 命令是否指向 `ansatz acp`。
 - Hermes 已安装且在 PATH 中。
 - ACP 扩展已安装（`cd ~/.hermes/hermes-agent && uv pip install -e '.[acp]'`）。
 
@@ -318,10 +318,10 @@ ACP 桥接将这些选项映射到 Hermes 的内部审批语义——`allow_alwa
 尝试以下检查：
 
 ```bash
-hermes acp --version
-hermes acp --check
-hermes doctor
-hermes status
+ansatz acp --version
+ansatz acp --check
+ansatz doctor
+ansatz status
 ```
 
 ### 缺少凭据
@@ -329,10 +329,10 @@ hermes status
 ACP 模式使用 Hermes 现有的 provider 设置。通过以下方式配置凭据：
 
 ```bash
-hermes model
+ansatz model
 ```
 
-或编辑 `~/.hermes/.env`。终端认证流程（`hermes acp --setup`）也可以触发交互式 provider/模型设置。
+或编辑 `~/.hermes/.env`。终端认证流程（`ansatz acp --setup`）也可以触发交互式 provider/模型设置。
 
 ## 另请参阅
 

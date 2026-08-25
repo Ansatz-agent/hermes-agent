@@ -14,7 +14,7 @@ Canvas LMS 集成 — 使用 API token（令牌）认证获取已注册课程和
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/productivity/canvas` 安装 |
+| 来源 | 可选 — 通过 `ansatz skills install official/productivity/canvas` 安装 |
 | 路径 | `optional-skills/productivity/canvas` |
 | 版本 | `1.0.0` |
 | 作者 | community |

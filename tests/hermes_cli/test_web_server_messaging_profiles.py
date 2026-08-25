@@ -125,7 +125,7 @@ class TestProfileScopedMessagingReads:
         payload = resp.json()
         assert payload["env_path"] == str(worker_home / ".env")
         assert payload["gateway_start_command"] == (
-            "hermes -p worker_alpha gateway start"
+            "ansatz -p worker_alpha gateway start"
         )
         telegram = _telegram(payload)
         assert telegram["state"] == "startup_failed"
@@ -266,4 +266,3 @@ class TestMultiplexPortBindingGuard:
                 json={"clear_env": [api_server["env_vars"][0]["key"]]},
             )
             assert resp.status_code == 200
-

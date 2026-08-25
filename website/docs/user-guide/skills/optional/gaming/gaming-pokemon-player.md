@@ -14,7 +14,7 @@ Play Pokemon via headless emulator + RAM reads.
 
 | | |
 |---|---|
-| Source | Optional — install with `hermes skills install official/gaming/pokemon-player` |
+| Source | Optional — install with `ansatz skills install official/gaming/pokemon-player` |
 | Path | `optional-skills/gaming/pokemon-player` |
 | Version | `1.0.0` |
 | Author | Teknium (teknium1), Hermes Agent |

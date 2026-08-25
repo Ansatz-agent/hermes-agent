@@ -21,12 +21,30 @@ const ANSATZ_PRODUCT = Object.freeze({
   remoteOauthSessionPartition: 'persist:ansatz-voice-trace-remote-oauth',
   linkTitleSession: 'ansatz:link-titles',
   desktopProduct: 'ansatz-voice-trace',
+  canonicalCliLaunchers: Object.freeze([
+    'ansatz',
+    'ansatz-agent',
+    'ansatz-acp'
+  ] as const),
+  legacyCliLaunchers: Object.freeze([
+    'hermes',
+    'hermes-agent',
+    'hermes-acp'
+  ] as const),
   posixLaunchers: Object.freeze([
     'ansatz-voice-trace',
     'ansatz-voice-trace-agent',
     'ansatz-voice-trace-acp'
   ] as const)
 } as const)
+
+function resolveAnsatzCliPath(
+  canonicalPath: string,
+  legacyPath: string,
+  exists: (candidate: string) => boolean
+) {
+  return exists(canonicalPath) ? canonicalPath : legacyPath
+}
 
 function resolveAnsatzRuntimeRoot(platform, homeDirectory, localAppData) {
   if (platform === 'win32') {
@@ -182,6 +200,7 @@ export {
   ansatzAuthEnvironment,
   buildAnsatzTerminalEnvironment,
   buildBundledRuntimeValidationEnvironment,
+  resolveAnsatzCliPath,
   resolveAnsatzDesktopRuntimeRoot,
   resolveAnsatzRuntimeRoot,
   resolveAnsatzSshControlDirectory

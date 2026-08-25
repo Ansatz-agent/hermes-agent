@@ -31,8 +31,8 @@ def _scan_dashboard_processes(
 ) -> list[tuple[int, str]]:
     """Return matching ``dashboard``/``serve`` processes with their cmdlines.
 
-    ``hermes dashboard`` is a long-lived server process commonly started and
-    forgotten.  When ``hermes update`` replaces files on disk, the running
+    ``ansatz dashboard`` is a long-lived server process commonly started and
+    forgotten.  When ``ansatz update`` replaces files on disk, the running
     process keeps the old Python backend in memory while the JS bundle on
     disk is updated, causing a silent frontend/backend mismatch (e.g. new
     auth headers the old backend doesn't recognise → every API call 401s).
@@ -44,7 +44,7 @@ def _scan_dashboard_processes(
 
     *exclude_pids* is an optional set of PIDs that must never be returned.
     This is used by the Hermes Desktop Electron app to protect its own
-    backend child process: when the desktop spawns ``hermes serve`` as
+    backend child process: when the desktop spawns ``ansatz serve`` as
     a backend and triggers an auto-update, the update must not kill the
     backend that the desktop itself manages.  The desktop sets the
     environment variable ``HERMES_DESKTOP_CHILD_PID`` on the spawned
@@ -54,12 +54,16 @@ def _scan_dashboard_processes(
     Returns an empty list on any scan error (missing ps/wmic, timeout, etc.).
     """
     patterns = [
+        "ansatz dashboard",
+        # Pre-upgrade processes and the compatibility aliases still run under
+        # the legacy `hermes` command name; they must stay reapable.
         "hermes dashboard",
         "hermes_cli.main dashboard",
         "hermes_cli/main.py dashboard",
-        # The headless backend (`hermes serve`) is the same long-lived server
+        # The headless backend (`ansatz serve`) is the same long-lived server
         # under a different command name — the desktop app spawns it. Reap it
         # on update for the same frontend/backend-mismatch reason.
+        "ansatz serve",
         "hermes serve",
         "hermes_cli.main serve",
         "hermes_cli/main.py serve",
@@ -170,7 +174,7 @@ def _is_ephemeral_port_zero_backend(argv: list[str]) -> bool:
 
     Ephemeral-port backends are owned by Hermes Desktop (or become PPID-1
     orphans after a prior update respawn).  Replaying them after
-    ``hermes update`` multiplies listening backends because ``--port 0``
+    ``ansatz update`` multiplies listening backends because ``--port 0``
     always binds a fresh free port.  Covers both ``serve`` and the legacy
     ``dashboard --no-open`` fallback older Desktop runtimes use.
     """
@@ -251,7 +255,7 @@ def _profile_key_for_respawn(
 def _filter_dashboard_respawn_candidates(
     candidates: list[tuple[int, list[str], str | None]],
 ) -> list[list[str]]:
-    """Select which killed manual backends to respawn after ``hermes update``.
+    """Select which killed manual backends to respawn after ``ansatz update``.
 
     Each candidate is ``(pid, argv, hermes_home)``.
 
@@ -265,7 +269,7 @@ def _filter_dashboard_respawn_candidates(
     3. Cap at most one managed backend per profile / ``HERMES_HOME``.
 
     Intentionally does **not** blanket-skip every PPID-1 process: a prior
-    ``hermes update`` respawn detaches with ``start_new_session=True``, so
+    ``ansatz update`` respawn detaches with ``start_new_session=True``, so
     fixed-port manual backends are reparented to init and must still be
     eligible for the next update's #40449 restart.
     """
@@ -296,10 +300,10 @@ def _kill_stale_dashboard_processes(
     *,
     restart_managed: bool = False,
 ) -> dict[str, list]:
-    """Kill running ``hermes dashboard`` / ``hermes serve`` processes.
+    """Kill running ``ansatz dashboard`` / ``ansatz serve`` processes.
 
-    Called at the end of ``hermes update`` (default ``reason``) and also
-    from ``hermes dashboard --stop`` (which overrides ``reason``).  The
+    Called at the end of ``ansatz update`` (default ``reason``) and also
+    from ``ansatz dashboard --stop`` (which overrides ``reason``).  The
     dashboard has no service manager, so after a code update the running
     process is guaranteed to be serving stale Python against a
     freshly-updated JS bundle.  Leaving it alive produces silent
@@ -312,7 +316,7 @@ def _kill_stale_dashboard_processes(
 
     Manually-started dashboards are not auto-restarted because we don't know
     the original launch args (--host, --port, --insecure, --tui, --no-open).
-    When ``restart_managed`` is true (the ``hermes update`` path), a detected
+    When ``restart_managed`` is true (the ``ansatz update`` path), a detected
     ``hermes-dashboard.service`` is restarted through systemd; any OTHER
     killed PID that was supervised by a systemd unit (custom unit names —
     e.g. a remote backend's ``hermes-serve.service``) has its owning unit
@@ -352,7 +356,7 @@ def _kill_stale_dashboard_processes(
     # Before killing, snapshot systemd cgroup info for each PID so we can
     # restart supervised services after the kill (the cgroup disappears
     # along with the process).  Only meaningful on Linux, and only when the
-    # caller asked for restarts (the `hermes update` path) — `--stop` must
+    # caller asked for restarts (the `ansatz update` path) — `--stop` must
     # stay a stop, not a restart.
     pid_cgroup: dict[int, str | None] = {}
     pid_service: dict[int, str | None] = {}
@@ -441,7 +445,7 @@ def _kill_stale_dashboard_processes(
 
     # Restart what we just killed (update path only).  Two categories:
     #  - systemd-supervised PIDs: restart the owning unit.  Without this, a
-    #    remote backend (hermes serve) under Restart=on-failure never comes
+    #    remote backend (ansatz serve) under Restart=on-failure never comes
     #    back after our clean SIGTERM, and the Desktop can't reconnect (#68934).
     #  - manually-started PIDs: respawn the argv captured before the kill
     #    (#40449) — detached, headless, logged to logs/dashboard-restart.log.
@@ -484,11 +488,11 @@ def _kill_stale_dashboard_processes(
 
         if failed_restarts or unrecovered:
             print("  Restart anything not auto-restarted when you're ready:")
-            print("    hermes dashboard --port <port>")
+            print("    ansatz dashboard --port <port>")
     elif killed:
         unrecovered = list(killed)
         print("  Restart the dashboard when you're ready:")
-        print("    hermes dashboard --port <port>")
+        print("    ansatz dashboard --port <port>")
 
     return {
         "matched": list(pids),
@@ -505,14 +509,14 @@ def _detect_concurrent_hermes_instances(
     Windows blocks DELETE/REPLACE on a running .exe — and even RENAME on the
     same .exe when another process opened it without ``FILE_SHARE_DELETE``.
     The Hermes Desktop Electron app spawns ``hermes.EXE`` as a backend child,
-    so during ``hermes update`` the user-invoked process and the desktop's
+    so during ``ansatz update`` the user-invoked process and the desktop's
     child both hold the same file. The quarantine rename then fails with
     ``[WinError 32]`` and uv inherits the lock.
 
     This helper enumerates processes whose ``exe`` matches one of the venv's
     shims (``hermes.exe`` / ``hermes-gateway.exe``) and returns ``(pid,
     process_name)`` pairs. The caller's own PID and its entire ancestor
-    chain are excluded so the running ``hermes update`` invocation never
+    chain are excluded so the running ``ansatz update`` invocation never
     reports itself — this matters on Windows where the setuptools .exe
     launcher (``hermes.exe``) is a separate process from the Python
     interpreter it loads (``python.exe``).
@@ -543,7 +547,7 @@ def _detect_concurrent_hermes_instances(
     # setuptools-generated hermes.exe launcher is a separate native process
     # that spawns python.exe (the interpreter that runs our code).
     # os.getpid() returns the Python PID, but the launcher (which holds the
-    # file lock) is the parent. Without excluding it, every ``hermes update``
+    # file lock) is the parent. Without excluding it, every ``ansatz update``
     # reports its own launcher as a concurrent instance — a false positive
     # (issues #29341, #34795).
     #
@@ -619,8 +623,8 @@ def _is_desktop_local_serve_cmdline(command: str) -> bool:
 
     Desktop primary/pool backends launch as::
 
-        hermes serve --host 127.0.0.1 --port 0
-        hermes serve --isolated --host 127.0.0.1 --port 0 ...
+        ansatz serve --host 127.0.0.1 --port 0
+        ansatz serve --isolated --host 127.0.0.1 --port 0 ...
 
     Intentional long-lived headless serves (e.g. ``--host <tailscale-ip>
     --port 9119``) must never match — those are operator-managed remote
@@ -684,9 +688,9 @@ def _exclude_pids_from_env() -> set[int]:
 # --- SSH remote-backend lock ownership -------------------------------------
 #
 # ``backend.lock.json`` is the ownership record the Desktop SSH runtime writes
-# on the *remote* host for every ``hermes serve`` backend it spawns over SSH
+# on the *remote* host for every ``ansatz serve`` backend it spawns over SSH
 # (see apps/desktop/electron/remote-lifecycle.ts). A backend started from
-# another client/machine — e.g. a MacBook driving a ``hermes serve`` on a Mac
+# another client/machine — e.g. a MacBook driving a ``ansatz serve`` on a Mac
 # Mini over SSH — is a *legitimate, lock-owned* backend even though it has no
 # parent on this host (sshd has long since exited, reparenting it to pid 1).
 #
@@ -817,13 +821,13 @@ def _lock_owned_serve_pids(base_dir: Path | None = None) -> set[int]:
 
 def _reap_orphaned_desktop_local_serves(
     *,
-    reason: str = "orphaned desktop-local hermes serve",
+    reason: str = "orphaned desktop-local ansatz serve",
     signal_term=None,
     signal_kill=None,
     sleep_fn=None,
     lock_owned_pids_fn=None,
 ) -> dict[str, list]:
-    """Kill leftover Desktop-local ``hermes serve`` backends with no parent.
+    """Kill leftover Desktop-local ``ansatz serve`` backends with no parent.
 
     When Electron dies uncleanly (crash / SIGKILL / update handoff), local
     ``serve --host 127.0.0.1 --port 0`` children can be reparented to pid 1 and

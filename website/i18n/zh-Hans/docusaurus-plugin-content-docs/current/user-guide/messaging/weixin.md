@@ -44,7 +44,7 @@ cd ~/.hermes/hermes-agent && uv pip install -e ".[messaging]"
 连接微信账号最简便的方式是通过交互式配置向导：
 
 ```bash
-hermes gateway setup
+ansatz gateway setup
 ```
 
 在提示中选择 **Weixin**。向导将执行以下步骤：
@@ -88,7 +88,7 @@ WEIXIN_HOME_CHANNEL_NAME=Home
 ### 3. 启动网关
 
 ```bash
-hermes gateway
+ansatz gateway
 ```
 
 适配器将恢复已保存的凭据，连接到 iLink API，并开始长轮询消息。
@@ -96,7 +96,7 @@ hermes gateway
 ## 功能特性
 
 - **长轮询传输** — 无需公网端点、webhook 或 WebSocket
-- **扫码登录** — 通过 `hermes gateway setup` 扫码连接
+- **扫码登录** — 通过 `ansatz gateway setup` 扫码连接
 - **私信（DM）消息** — 可配置访问策略；群消息功能取决于 iLink 是否实际为所连接身份推送群事件（iLink bot 账号通常不推送，详见上方警告）
 - **媒体支持** — 图片、视频、文件和语音消息
 - **AES-128-ECB 加密 CDN** — 所有媒体传输自动加解密
@@ -297,10 +297,10 @@ iLink Bot API 要求在每条出站消息中回传 `context_token`（针对特�
 | 问题 | 解决方法 |
 |---------|-----|
 | `Weixin startup failed: aiohttp and cryptography are required` | 安装两者：`pip install aiohttp cryptography` |
-| `Weixin startup failed: WEIXIN_TOKEN is required` | 运行 `hermes gateway setup` 完成扫码登录，或手动设置 `WEIXIN_TOKEN` |
-| `Weixin startup failed: WEIXIN_ACCOUNT_ID is required` | 在 `.env` 中设置 `WEIXIN_ACCOUNT_ID`，或运行 `hermes gateway setup` |
+| `Weixin startup failed: WEIXIN_TOKEN is required` | 运行 `ansatz gateway setup` 完成扫码登录，或手动设置 `WEIXIN_TOKEN` |
+| `Weixin startup failed: WEIXIN_ACCOUNT_ID is required` | 在 `.env` 中设置 `WEIXIN_ACCOUNT_ID`，或运行 `ansatz gateway setup` |
 | `Another local Hermes gateway is already using this Weixin token` | 先停止另一个网关实例——每个 token 只允许一个轮询器 |
-| 会话过期（`errcode=-14`） | 登录会话已过期。重新运行 `hermes gateway setup` 扫描新二维码 |
+| 会话过期（`errcode=-14`） | 登录会话已过期。重新运行 `ansatz gateway setup` 扫描新二维码 |
 | 配置过程中二维码过期 | 二维码最多自动刷新 3 次。若持续过期，请检查网络连接 |
 | Bot 不响应私信 | 检查 `WEIXIN_DM_POLICY`——若设置为 `allowlist`，发送方必须在 `WEIXIN_ALLOWED_USERS` 中 |
 | Bot 忽略群消息 | 群组策略默认为 `disabled`。设置 `WEIXIN_GROUP_POLICY=open` 或 `allowlist`——但请注意，扫码登录的 iLink bot 身份（`...@im.bot`）通常根本无法接收普通微信群消息。若网关日志中没有群消息的原始入站事件，限制来自 iLink 侧，而非 Hermes。 |

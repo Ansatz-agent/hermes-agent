@@ -24,7 +24,7 @@ def _render_real_help() -> str:
     # importing main.py. There is no runtime flag or environment variable that
     # can perform this substitution in a packaged Hermes process.
     guard.enforce_raw_argv = lambda _argv: None
-    sys.argv = ["hermes", "__build_auth_free_help__"]
+    sys.argv = ["ansatz", "__build_auth_free_help__"]
 
     from hermes_cli import main as cli_main
 
@@ -43,7 +43,7 @@ def _render_real_help() -> str:
     ):
         setattr(cli_main, name, lambda: False)
 
-    sys.argv = ["hermes", "--help"]
+    sys.argv = ["ansatz", "--help"]
     rendered = io.StringIO()
     with contextlib.redirect_stdout(rendered):
         try:
@@ -54,7 +54,7 @@ def _render_real_help() -> str:
         else:
             raise RuntimeError("real parser did not exit after --help")
     value = rendered.getvalue()
-    if not value.startswith("usage: hermes ") or not value.endswith("\n"):
+    if not value.startswith("usage: ansatz ") or not value.endswith("\n"):
         raise RuntimeError("real parser returned malformed help")
     return value
 

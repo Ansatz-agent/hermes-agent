@@ -602,7 +602,7 @@ def format_directory_for_display(platforms: Optional[Dict[str, Any]] = None) -> 
     """Format the channel directory as a human-readable list for the model.
 
     ``platforms`` overrides the on-disk directory when provided (used by
-    ``hermes send --list`` to merge in configured-but-undiscovered
+    ``ansatz send --list`` to merge in configured-but-undiscovered
     platforms). Platforms present with an empty channel list are rendered
     with a "(no channels discovered yet)" hint instead of being hidden —
     a configured platform is a valid send target even before discovery.

@@ -14,7 +14,7 @@ If you only have time to set up one integration, set up [Nous Portal](/integrati
 
 ## AI Providers & Routing
 
-Hermes supports multiple AI inference providers out of the box. Use `hermes model` to configure interactively, or set them in `config.yaml`.
+Hermes supports multiple AI inference providers out of the box. Use `ansatz model` to configure interactively, or set them in `config.yaml`.
 
 - **[AI Providers](/integrations/providers)** — OpenRouter, Anthropic, OpenAI, Google, and any OpenAI-compatible endpoint. Hermes auto-detects capabilities like vision, streaming, and tool use per provider.
 - **[Provider Routing](/user-guide/features/provider-routing)** — Fine-grained control over which underlying providers handle your OpenRouter requests. Optimize for cost, speed, or quality with sorting, whitelists, blacklists, and explicit priority ordering.
@@ -26,7 +26,7 @@ Hermes supports multiple AI inference providers out of the box. Use `hermes mode
 
 ## Web Search Backends
 
-The `web_search` and `web_extract` tools support eight backend providers, configured via `config.yaml` or `hermes tools`:
+The `web_search` and `web_extract` tools support eight backend providers, configured via `config.yaml` or `ansatz tools`:
 
 | Backend | Env Var | Search | Extract | Crawl |
 |---------|---------|--------|---------|-------|
@@ -103,7 +103,7 @@ The big platforms have a canonical "create your bot/app" URL, and some accept pa
 |----------|-------------|---------------|
 | **Telegram** | [t.me/BotFather](https://t.me/BotFather) | Chat with BotFather — send `/newbot` to mint a bot token |
 | **Discord** | [discord.com/developers/applications?new_application=true](https://discord.com/developers/applications?new_application=true) | Developer Portal with the **New Application** dialog pre-opened |
-| **Slack** | [api.slack.com/apps?new_app=1](https://api.slack.com/apps?new_app=1) | The **Create New App** dialog — pick *From an app manifest* and paste the manifest `hermes slack manifest --agent-view` generates |
+| **Slack** | [api.slack.com/apps?new_app=1](https://api.slack.com/apps?new_app=1) | The **Create New App** dialog — pick *From an app manifest* and paste the manifest `ansatz slack manifest --agent-view` generates |
 | **LINE** | [developers.line.biz/console](https://developers.line.biz/console/) | LINE Developers Console for creating a Messaging API channel |
 | **Feishu/Lark** | [open.feishu.cn/app](https://open.feishu.cn/app) | Feishu open-platform console for creating a custom app |
 

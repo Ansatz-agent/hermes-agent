@@ -373,7 +373,10 @@ requires = ["setuptools==83.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project.scripts]
-hermes = "hermes_cli.main:main"
+ansatz = "hermes_cli.entrypoints:ansatz"
+ansatz-agent = "hermes_cli.client_auth.entrypoint_wrappers:ansatz_agent"
+ansatz-acp = "hermes_cli.client_auth.entrypoint_wrappers:ansatz_acp"
+hermes = "hermes_cli.entrypoints:hermes"
 hermes-agent = "hermes_cli.client_auth.entrypoint_wrappers:hermes_agent"
 hermes-acp = "hermes_cli.client_auth.entrypoint_wrappers:hermes_acp"
 

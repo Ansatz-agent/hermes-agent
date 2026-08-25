@@ -15,7 +15,7 @@ profile 是一个独立的 Hermes 主目录。每个 profile 拥有自己的目�
 ## 快速开始
 
 ```bash
-hermes profile create coder       # 创建 profile + "coder" 命令别名
+ansatz profile create coder       # 创建 profile + "coder" 命令别名
 coder setup                       # 配置 API 密钥和模型
 coder chat                        # 开始对话
 ```
@@ -27,7 +27,7 @@ coder chat                        # 开始对话
 ### 空白 profile
 
 ```bash
-hermes profile create mybot
+ansatz profile create mybot
 ```
 
 创建一个预置了内置技能的全新 profile。运行 `mybot setup` 配置 API 密钥、模型和 gateway token。
@@ -35,15 +35,15 @@ hermes profile create mybot
 如果你计划将此 profile 用作 kanban（看板）工作节点（或希望 kanban 编排器将任务路由到它），在创建时传入 `--description "<角色>"` 以便编排器了解其能力：
 
 ```bash
-hermes profile create researcher --description "Reads source code and external docs, writes findings."
+ansatz profile create researcher --description "Reads source code and external docs, writes findings."
 ```
 
-你也可以稍后通过 `hermes profile describe` 设置或自动生成描述——完整路由模型请参阅 [Kanban 指南](./features/kanban#auto-vs-manual-orchestration)。
+你也可以稍后通过 `ansatz profile describe` 设置或自动生成描述——完整路由模型请参阅 [Kanban 指南](./features/kanban#auto-vs-manual-orchestration)。
 
 ### 仅克隆配置（`--clone`）
 
 ```bash
-hermes profile create work --clone
+ansatz profile create work --clone
 ```
 
 将当前 profile 的 `config.yaml`、`.env`、`SOUL.md` 和 skills 复制到新 profile。API 密钥、模型和能力相同，但会话和记忆是全新的。编辑 `~/.hermes/profiles/work/.env` 可使用不同的 API 密钥，编辑 `~/.hermes/profiles/work/SOUL.md` 可设置不同的人格。
@@ -51,21 +51,21 @@ hermes profile create work --clone
 ### 克隆全部内容（`--clone-all`）
 
 ```bash
-hermes profile create backup --clone-all
+ansatz profile create backup --clone-all
 ```
 
-复制**所有内容**——配置、API 密钥、人格、记忆、技能、cron 任务、插件。会排除每个 profile 自己的历史数据（会话历史、`state.db`、`backups/`、`state-snapshots/`、`checkpoints/`），这些数据属于源 profile 且可能达到数十 GB。若要包含历史的完整备份，请使用 `hermes profile export` 或 `hermes backup`。
+复制**所有内容**——配置、API 密钥、人格、记忆、技能、cron 任务、插件。会排除每个 profile 自己的历史数据（会话历史、`state.db`、`backups/`、`state-snapshots/`、`checkpoints/`），这些数据属于源 profile 且可能达到数十 GB。若要包含历史的完整备份，请使用 `ansatz profile export` 或 `ansatz backup`。
 
 ### 从指定 profile 克隆
 
 ```bash
-hermes profile create work --clone-from coder
+ansatz profile create work --clone-from coder
 ```
 
 `--clone-from <source>` 会直接选择源 profile，并隐含执行 config/skills/SOUL 克隆。若要完整复制该源 profile，请与 `--clone-all` 组合使用：
 
 ```bash
-hermes profile create work-backup --clone-from coder --clone-all
+ansatz profile create work-backup --clone-from coder --clone-all
 ```
 
 :::tip Honcho 记忆 + profiles
@@ -87,25 +87,25 @@ coder skills list             # 列出 coder 的技能
 coder config set model.default anthropic/claude-sonnet-4
 ```
 
-别名支持所有 hermes 子命令——底层实际上是 `hermes -p <name>`。
+别名支持所有 hermes 子命令——底层实际上是 `ansatz -p <name>`。
 
 ### `-p` 标志
 
 你也可以通过任意命令显式指定 profile：
 
 ```bash
-hermes -p coder chat
-hermes --profile=coder doctor
-hermes chat -p coder -q "hello"    # 可在任意位置使用
+ansatz -p coder chat
+ansatz --profile=coder doctor
+ansatz chat -p coder -q "hello"    # 可在任意位置使用
 ```
 
-### 粘性默认值（`hermes profile use`）
+### 粘性默认值（`ansatz profile use`）
 
 ```bash
-hermes profile use coder
-hermes chat                   # 现在指向 coder
-hermes tools                  # 配置 coder 的工具
-hermes profile use default    # 切换回默认
+ansatz profile use coder
+ansatz chat                   # 现在指向 coder
+ansatz tools                  # 配置 coder 的工具
+ansatz profile use default    # 切换回默认
 ```
 
 设置默认值后，普通 `hermes` 命令将指向该 profile。类似于 `kubectl config use-context`。
@@ -116,7 +116,7 @@ CLI 始终显示当前活跃的 profile：
 
 - **提示符**：显示 `coder ❯` 而非 `❯`
 - **启动横幅**：启动时显示 `Profile: coder`
-- **`hermes profile`**：显示当前 profile 名称、路径、模型、gateway 状态
+- **`ansatz profile`**：显示当前 profile 名称、路径、模型、gateway 状态
 
 ## Profile vs 工作区 vs 沙箱
 
@@ -179,7 +179,7 @@ assistant gateway install     # 创建 hermes-gateway-assistant 服务
 每个 profile 拥有独立的服务名称，各自独立运行。
 
 :::note 在官方 Docker 镜像中
-各 profile 的 gateway 由 [s6-overlay](https://github.com/just-containers/s6-overlay)（容器中的 PID 1）监管，因此 `hermes profile create <name>` 会自动在 `/run/service/gateway-<name>/` 注册 s6 服务槽。`hermes -p <name> gateway start/stop/restart` 会调度到 `s6-svc` 而非直接启动裸进程——崩溃后自动重启，`docker restart` 会保留之前运行的 gateway 集合。详见 [各 profile gateway 监管](/user-guide/docker#per-profile-gateway-supervision)。
+各 profile 的 gateway 由 [s6-overlay](https://github.com/just-containers/s6-overlay)（容器中的 PID 1）监管，因此 `ansatz profile create <name>` 会自动在 `/run/service/gateway-<name>/` 注册 s6 服务槽。`ansatz -p <name> gateway start/stop/restart` 会调度到 `s6-svc` 而非直接启动裸进程——崩溃后自动重启，`docker restart` 会保留之前运行的 gateway 集合。详见 [各 profile gateway 监管](/user-guide/docker#per-profile-gateway-supervision)。
 :::
 
 ## 配置 profile
@@ -203,10 +203,10 @@ coder config set terminal.cwd /absolute/path/to/project
 
 ## 更新
 
-`hermes update` 拉取一次代码（共享），并自动将新的内置技能同步到**所有** profile：
+`ansatz update` 拉取一次代码（共享），并自动将新的内置技能同步到**所有** profile：
 
 ```bash
-hermes update
+ansatz update
 # → Code updated (12 commits)
 # → Skills synced: default (up to date), coder (+2 new), assistant (+2 new)
 ```
@@ -216,35 +216,35 @@ hermes update
 ## 管理 profile
 
 ```bash
-hermes profile list           # 显示所有 profile 及其状态
-hermes profile show coder     # 显示某个 profile 的详细信息
-hermes profile rename coder dev-bot   # 重命名（同步更新别名和服务）
-hermes profile export coder   # 导出为 coder.tar.gz
-hermes profile import coder.tar.gz   # 从归档文件导入
+ansatz profile list           # 显示所有 profile 及其状态
+ansatz profile show coder     # 显示某个 profile 的详细信息
+ansatz profile rename coder dev-bot   # 重命名（同步更新别名和服务）
+ansatz profile export coder   # 导出为 coder.tar.gz
+ansatz profile import coder.tar.gz   # 从归档文件导入
 ```
 
 ## 删除 profile
 
 ```bash
-hermes profile delete coder
+ansatz profile delete coder
 ```
 
 此操作将停止 gateway、移除 systemd/launchd 服务、移除命令别名并删除所有 profile 数据。系统会要求你输入 profile 名称以确认。
 
-使用 `--yes` 跳过确认：`hermes profile delete coder --yes`
+使用 `--yes` 跳过确认：`ansatz profile delete coder --yes`
 
 :::note
-你无法删除默认 profile（`~/.hermes`）。如需删除所有内容，请使用 `hermes uninstall`。
+你无法删除默认 profile（`~/.hermes`）。如需删除所有内容，请使用 `ansatz uninstall`。
 :::
 
 ## Tab 补全
 
 ```bash
 # Bash
-eval "$(hermes completion bash)"
+eval "$(ansatz completion bash)"
 
 # Zsh
-eval "$(hermes completion zsh)"
+eval "$(ansatz completion zsh)"
 ```
 
 将该行添加到 `~/.bashrc` 或 `~/.zshrc` 以启用持久补全。支持补全 `-p` 后的 profile 名称、profile 子命令及顶级命令。
@@ -263,10 +263,10 @@ profile 使用 `HERMES_HOME` 环境变量。运行 `coder chat` 时，包装脚�
 
 ```bash
 # 从 git 仓库安装完整 agent
-hermes profile install github.com/you/research-bot --alias
+ansatz profile install github.com/you/research-bot --alias
 
 # 当作者发布新版本时更新（保留你的记忆和 .env）
-hermes profile update research-bot
+ansatz profile update research-bot
 ```
 
 完整指南请参阅 **[Profile 发行版：共享完整 Agent](./profile-distributions.md)**——包括编写、发布、更新语义、安全模型和使用场景。

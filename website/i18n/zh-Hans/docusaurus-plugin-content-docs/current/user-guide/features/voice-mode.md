@@ -15,7 +15,7 @@ Hermes Agent 支持在 CLI 和消息平台上进行完整的语音交互。通�
 使用语音功能前，请确保已完成以下准备：
 
 1. **已安装 Hermes Agent** — 通过安装脚本（参见 [安装](/getting-started/installation)）
-2. **已配置 LLM 提供商** — 运行 `hermes model` 或在 `~/.hermes/.env` 中设置首选提供商的凭据
+2. **已配置 LLM 提供商** — 运行 `ansatz model` 或在 `~/.hermes/.env` 中设置首选提供商的凭据
 3. **基础设置正常** — 运行 `hermes` 验证 Agent 能够响应文字消息，再启用语音功能
 
 :::tip
@@ -23,7 +23,7 @@ Hermes Agent 支持在 CLI 和消息平台上进行完整的语音交互。通�
 :::
 
 :::tip Nous Portal 同时覆盖两项
-付费的 [Nous Portal](/user-guide/features/tool-gateway) 订阅通过 Tool Gateway 同时提供 LLM（第 2 步）**和** OpenAI TTS — 无需单独的 OpenAI 密钥。全新安装时，`hermes setup --portal` 可一次性完成两项配置。
+付费的 [Nous Portal](/user-guide/features/tool-gateway) 订阅通过 Tool Gateway 同时提供 LLM（第 2 步）**和** OpenAI TTS — 无需单独的 OpenAI 密钥。全新安装时，`ansatz setup --portal` 可一次性完成两项配置。
 :::
 
 ## 概览
@@ -109,7 +109,7 @@ ELEVENLABS_API_KEY=***           # ElevenLabs — 高级音质
 
 ## CLI 语音模式
 
-语音模式在**经典 CLI**（`hermes chat`）和 **TUI**（`hermes --tui`）中均可使用。两者行为完全一致 — 相同的斜杠命令、相同的 VAD（语音活动检测）静音检测、相同的流式 TTS、相同的幻觉过滤器。TUI 额外将崩溃诊断日志转发至 `~/.hermes/logs/`，以便在异常音频后端出现按键录音失败时提供完整堆栈跟踪，而非静默消失。
+语音模式在**经典 CLI**（`ansatz chat`）和 **TUI**（`ansatz --tui`）中均可使用。两者行为完全一致 — 相同的斜杠命令、相同的 VAD（语音活动检测）静音检测、相同的流式 TTS、相同的幻觉过滤器。TUI 额外将崩溃诊断日志转发至 `~/.hermes/logs/`，以便在异常音频后端出现按键录音失败时提供完整堆栈跟踪，而非静默消失。
 
 ### 快速开始
 
@@ -180,8 +180,8 @@ Whisper 有时会从静音或背景噪音中生成幻觉文字（如"Thank you f
 启动 gateway 以连接到消息平台：
 
 ```bash
-hermes gateway        # 启动 gateway（连接到已配置的平台）
-hermes gateway setup  # 首次配置的交互式设置向导
+ansatz gateway        # 启动 gateway（连接到已配置的平台）
+ansatz gateway setup  # 首次配置的交互式设置向导
 ```
 
 ### Discord：频道与私信
@@ -326,7 +326,7 @@ DISCORD_ALLOWED_USERS=your-user-id
 ### 启动 Gateway
 
 ```bash
-hermes gateway        # 使用现有配置启动
+ansatz gateway        # 使用现有配置启动
 ```
 
 Bot 应在几秒内在 Discord 中上线。

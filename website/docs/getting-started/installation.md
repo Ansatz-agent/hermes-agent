@@ -34,7 +34,7 @@ iex (irm https://hermes-agent.nousresearch.com/install.ps1)
 
 If you want to install & run Hermes Desktop after a command-line only install, simply run
 ```bash
-hermes desktop
+ansatz desktop
 ```
 
 ### What the Installer Does
@@ -64,19 +64,19 @@ hermes             # Start chatting!
 To reconfigure individual settings later, use the dedicated commands:
 
 ```bash
-hermes model          # Choose your LLM provider and model
-hermes tools          # Configure which tools are enabled
-hermes gateway setup  # Set up messaging platforms
-hermes config set     # Set individual config values
-hermes config get     # Inspect individual config values
-hermes setup          # Or run the full setup wizard to configure everything at once
+ansatz model          # Choose your LLM provider and model
+ansatz tools          # Configure which tools are enabled
+ansatz gateway setup  # Set up messaging platforms
+ansatz config set     # Set individual config values
+ansatz config get     # Inspect individual config values
+ansatz setup          # Or run the full setup wizard to configure everything at once
 ```
 
 :::tip Fastest path: Nous Portal
 One subscription covers 300+ models plus the [Tool Gateway](/user-guide/features/tool-gateway) (web search, image generation, TTS, cloud browser). Skip the per-tool key juggling:
 
 ```bash
-hermes setup --portal
+ansatz setup --portal
 ```
 
 That logs you in, sets Nous as your provider, and turns on the Tool Gateway in one command.
@@ -143,7 +143,7 @@ Running Hermes as a dedicated unprivileged user (e.g. a `hermes` systemd service
    sudo ln -s /home/hermes/.hermes/hermes-agent/venv/bin/hermes /usr/local/bin/hermes
    ```
 
-4. **Verify:** `hermes doctor` should now run cleanly. If you get `ModuleNotFoundError: No module named 'dotenv'`, you're invoking the repo source `hermes` file (`~/.hermes/hermes-agent/hermes`) with system Python instead of the venv launcher (`~/.hermes/hermes-agent/venv/bin/hermes`) — fix step 3.
+4. **Verify:** `ansatz doctor` should now run cleanly. If you get `ModuleNotFoundError: No module named 'dotenv'`, you're invoking the repo source `hermes` file (`~/.hermes/hermes-agent/hermes`) with system Python instead of the venv launcher (`~/.hermes/hermes-agent/venv/bin/hermes`) — fix step 3.
 
 5. **Running the messaging gateway from this account?** A user-level service stops at logout and does not start at boot until you enable lingering for the service user:
 
@@ -162,11 +162,11 @@ The same pattern works on Arch (the installer uses pacman with the same sudo-det
 | Problem | Solution |
 |---------|----------|
 | `hermes: command not found` | Reload your shell (`source ~/.bashrc`) or check PATH |
-| `API key not set` | Run `hermes model` to configure your provider, or `hermes config set OPENROUTER_API_KEY your_key` |
-| Missing config after update | Run `hermes config check` then `hermes config migrate` |
+| `API key not set` | Run `ansatz model` to configure your provider, or `ansatz config set OPENROUTER_API_KEY your_key` |
+| Missing config after update | Run `ansatz config check` then `ansatz config migrate` |
 
-For more diagnostics, run `hermes doctor` — it will tell you exactly what's missing and how to fix it.
+For more diagnostics, run `ansatz doctor` — it will tell you exactly what's missing and how to fix it.
 
 ## Install method auto-detection
 
-Hermes auto-detects whether it was installed via the git installer, Docker, or NixOS, and `hermes update` prints the matching update command for that path. There's no env var to set — the detection is based on the install layout (`~/.hermes/hermes-agent/` checkout, Docker image stamp, or Nix store path). `hermes doctor` also surfaces the detected method under its environment summary.
+Hermes auto-detects whether it was installed via the git installer, Docker, or NixOS, and `ansatz update` prints the matching update command for that path. There's no env var to set — the detection is based on the install layout (`~/.hermes/hermes-agent/` checkout, Docker image stamp, or Nix store path). `ansatz doctor` also surfaces the detected method under its environment summary.

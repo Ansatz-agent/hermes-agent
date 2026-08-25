@@ -14,7 +14,7 @@ description: "查询 Polymarket：市场、价格、订单簿、历史记录"
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/finance/polymarket` 安装 |
+| 来源 | 可选 — 通过 `ansatz skills install official/finance/polymarket` 安装 |
 | 路径 | `optional-skills/finance/polymarket` |
 | 版本 | `1.0.0` |
 | 作者 | Hermes Agent + Teknium |

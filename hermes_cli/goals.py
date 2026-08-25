@@ -2009,7 +2009,7 @@ def run_kanban_goal_loop(
     """Drive a kanban worker through a Ralph-style goal loop.
 
     The dispatcher spawns a goal-mode worker exactly like a normal worker
-    (``hermes -p <profile> chat -q "work kanban task <id>"``). The worker's
+    (``ansatz -p <profile> chat -q "work kanban task <id>"``). The worker's
     first turn has already run by the time this is called; ``first_response``
     is that turn's reply. From here we:
 

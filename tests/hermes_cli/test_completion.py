@@ -78,10 +78,11 @@ class TestWalk:
 # ---------------------------------------------------------------------------
 
 class TestGenerateBash:
-    def test_contains_completion_function_and_register(self):
+    def test_registers_canonical_ansatz_command(self):
         out = generate_bash(_make_parser())
         assert "_hermes_completion()" in out
-        assert "complete -F _hermes_completion hermes" in out
+        assert "complete -F _hermes_completion ansatz" in out
+        assert "complete -F _hermes_completion hermes" not in out
 
 
     def test_valid_bash_syntax(self):
@@ -102,6 +103,12 @@ class TestGenerateBash:
 # ---------------------------------------------------------------------------
 
 class TestGenerateZsh:
+
+    def test_registers_canonical_ansatz_command(self):
+        out = generate_zsh(_make_parser())
+        assert out.startswith("#compdef ansatz\n")
+        assert "compdef _hermes ansatz" in out
+        assert "compdef _hermes hermes" not in out
 
 
     def test_preserves_valid_zsh_arguments_alias_syntax(self):

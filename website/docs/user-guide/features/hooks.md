@@ -209,7 +209,7 @@ Create `~/.hermes/BOOT.md`. Write it as if you were giving instructions to a hum
 ```markdown
 # Startup Checklist
 
-1. Run `hermes cron list` and check if any scheduled jobs failed overnight.
+1. Run `ansatz cron list` and check if any scheduled jobs failed overnight.
 2. If any failed, summarize them for Discord #ops (the hook delivers your final response to its configured target).
 3. Check if `/opt/app/deploy.log` has any ERROR lines from the last 24 hours. If yes, summarize them and include in the same report.
 4. If nothing went wrong, reply with only `[SILENT]` so no message is sent.
@@ -323,13 +323,13 @@ Without these, a bare `AIAgent()` falls back to built-in defaults and will 401 a
 Restart the gateway:
 
 ```bash
-hermes gateway restart
+ansatz gateway restart
 ```
 
 Watch the logs:
 
 ```bash
-hermes logs --follow --level INFO | grep boot-md
+ansatz logs --follow --level INFO | grep boot-md
 ```
 
 You should see `Running BOOT.md (N chars)` followed by either `boot-md completed: ...` (summary of what the agent did) or `boot-md completed (nothing to report)` when the agent replied with an exact silence token such as `[SILENT]`.
@@ -385,7 +385,7 @@ def register(ctx):
 - Callback exceptions are logged and skipped; later callbacks continue.
 - The catalog below is descriptive: **observers** ignore returns, **transforms** accept the first valid string replacement, and **directive/control** hooks consume documented return shapes. Plugin middleware is a separate registry and surface, not another hook category.
 - Correlation fields such as `turn_id`, `api_request_id`, `task_id`, `session_id`, and `api_call_count` are hook-specific and may be absent. Treat IDs as opaque.
-- Runtime event-name validity comes from `hermes_cli.plugins.VALID_HOOKS`. `hermes hooks list` lists configured shell/outbound hooks, not every available event; `hermes hooks test <event>` reports the valid set only when an invalid event is supplied.
+- Runtime event-name validity comes from `hermes_cli.plugins.VALID_HOOKS`. `ansatz hooks list` lists configured shell/outbound hooks, not every available event; `ansatz hooks test <event>` reports the valid set only when an invalid event is supplied.
 
 ### Cache-safe system prompt sections
 
@@ -1679,7 +1679,7 @@ With `fail_closed: true`, each of these now **blocks** the tool call with `hook 
 | Non-JSON stdout (e.g. a stack trace) | warn, proceed | **block** |
 | Clean exit, valid no-op JSON (`{}`) | proceed | proceed |
 
-`fail_closed` only applies to blocking-capable events (`pre_tool_call` today); setting it on any other event logs a warning at config-parse time and is ignored. `hermes hooks test` reflects these semantics — the `parsed` line shows exactly the block shape the dispatcher would receive.
+`fail_closed` only applies to blocking-capable events (`pre_tool_call` today); setting it on any other event logs a warning at config-parse time and is ignored. `ansatz hooks test` reflects these semantics — the `parsed` line shows exactly the block shape the dispatcher would receive.
 
 ### Worked examples
 
@@ -1770,13 +1770,13 @@ Each unique `(event, command)` pair prompts the user for approval the first time
 
 Three escape hatches bypass the interactive prompt — any one is sufficient:
 
-1. `--accept-hooks` flag on the CLI (e.g. `hermes --accept-hooks chat`)
+1. `--accept-hooks` flag on the CLI (e.g. `ansatz --accept-hooks chat`)
 2. `HERMES_ACCEPT_HOOKS=1` environment variable
 3. `hooks_auto_accept: true` in `~/.hermes/config.yaml`
 
 Non-TTY runs (gateway, cron, CI) need one of these three — otherwise any newly-added hook silently stays un-registered and logs a warning.
 
-**Script edits are silently trusted.** The allowlist keys on the exact command string, not the script's hash, so editing the script on disk does not invalidate consent. `hermes hooks doctor` flags mtime drift so you can spot edits and decide whether to re-approve.
+**Script edits are silently trusted.** The allowlist keys on the exact command string, not the script's hash, so editing the script on disk does not invalidate consent. `ansatz hooks doctor` flags mtime drift so you can spot edits and decide whether to re-approve.
 
 #### Manual allowlisting
 
@@ -1793,16 +1793,16 @@ Manual allowlisting is useful for non-TTY or service-account deployments where a
 }
 ```
 
-The command string must match the configured hook command exactly. A path-keyed object with a `sha256` field is not the expected format and will not approve the hook. Verify manual entries with `hermes hooks list`.
+The command string must match the configured hook command exactly. A path-keyed object with a `sha256` field is not the expected format and will not approve the hook. Verify manual entries with `ansatz hooks list`.
 
-### The `hermes hooks` CLI
+### The `ansatz hooks` CLI
 
 | Command | What it does |
 |---------|--------------|
-| `hermes hooks list` | Dump configured hooks with matcher, timeout, and consent status |
-| `hermes hooks test <event> [--for-tool X] [--payload-file F]` | Fire every matching hook against a synthetic payload and print the parsed response |
-| `hermes hooks revoke <command>` | Remove every allowlist entry matching `<command>` (takes effect on next restart) |
-| `hermes hooks doctor` | For every configured hook: check exec bit, allowlist status, mtime drift, JSON output validity, and rough execution time |
+| `ansatz hooks list` | Dump configured hooks with matcher, timeout, and consent status |
+| `ansatz hooks test <event> [--for-tool X] [--payload-file F]` | Fire every matching hook against a synthetic payload and print the parsed response |
+| `ansatz hooks revoke <command>` | Remove every allowlist entry matching `<command>` (takes effect on next restart) |
+| `ansatz hooks doctor` | For every configured hook: check exec bit, allowlist status, mtime drift, JSON output validity, and rough execution time |
 
 ### Security
 
@@ -1810,7 +1810,7 @@ Shell hooks run with **your full user credentials** — same trust boundary as a
 
 - Only reference scripts you wrote or fully reviewed.
 - Keep scripts inside `~/.hermes/agent-hooks/` so the path is easy to audit.
-- Re-run `hermes hooks doctor` after you pull a shared config to spot newly-added hooks before they register.
+- Re-run `ansatz hooks doctor` after you pull a shared config to spot newly-added hooks before they register.
 - If your config.yaml is version-controlled across a team, review PRs that change the `hooks:` section the same way you'd review CI config.
 
 ### Ordering and precedence
@@ -1849,7 +1849,7 @@ hooks:
 
 Any event from the plugin-hook set is valid (`pre_tool_call`, `post_tool_call`, `pre_llm_call`, `post_llm_call`, `on_session_start`, `on_session_end`, `subagent_start`, `subagent_stop`, ...). Malformed entries warn and are skipped — a broken webhook never crashes the agent. Changes take effect on the next CLI session / gateway restart.
 
-Secrets: prefer `secret_env` (the name of an environment variable, typically set in `~/.hermes/.env`) over an inline `secret:` literal, so the config file stays free of credentials. Entries without a secret are delivered unsigned (flagged as `UNSIGNED` by `hermes hooks list`).
+Secrets: prefer `secret_env` (the name of an environment variable, typically set in `~/.hermes/.env`) over an inline `secret:` literal, so the config file stays free of credentials. Entries without a secret are delivered unsigned (flagged as `UNSIGNED` by `ansatz hooks list`).
 
 ### Wire format
 
@@ -1901,4 +1901,4 @@ Because `delivery_id` and `timestamp` live **inside the signed body**, a verifie
 - **Bounded queue.** If the queue backs up (dead endpoint, event storm), new events are dropped with a warning rather than consuming unbounded memory.
 - **No consent prompt.** Outbound targets execute no code on your machine — they receive data at a URL you configured. `HERMES_SAFE_MODE=1` still skips registration, same as plugins and shell hooks. Note that payloads include tool inputs and event metadata, so only point targets at endpoints you trust, and prefer `https://`.
 
-`hermes hooks list` shows configured outbound targets alongside shell hooks, including whether each target is signed.
+`ansatz hooks list` shows configured outbound targets alongside shell hooks, including whether each target is signed.

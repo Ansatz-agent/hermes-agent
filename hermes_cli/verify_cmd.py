@@ -1,4 +1,4 @@
-"""``hermes verify`` — detect a project's run recipe and smoke-test it.
+"""``ansatz verify`` — detect a project's run recipe and smoke-test it.
 
 Scoped port of superagent-ai/grok-cli's verify subsystem entrypoint.
 Statically detects the project kind (or loads the saved manifest at
@@ -6,7 +6,7 @@ Statically detects the project kind (or loads the saved manifest at
 optional background start + readiness poll, printing an evidence summary.
 
 Completed runs are recorded into the coding verification evidence ledger
-(:mod:`agent.verification_evidence`), so a passing ``hermes verify`` satisfies
+(:mod:`agent.verification_evidence`), so a passing ``ansatz verify`` satisfies
 the verify-on-stop guard the same way a passing canonical test command does.
 """
 
@@ -140,7 +140,7 @@ def _record_evidence(root: Path, recipe, result, *, partial: bool) -> None:
             root=root,
             session_id=os.environ.get("HERMES_SESSION_ID"),
             ok=result.ok,
-            command="hermes verify",
+            command="ansatz verify",
             scope="targeted" if partial else "full",
             output="\n".join(tails),
         )

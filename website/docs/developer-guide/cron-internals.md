@@ -16,7 +16,7 @@ The cron subsystem provides scheduled task execution — from simple one-shot de
 | `cron/scheduler.py` | Scheduler loop — due-job detection, execution, repeat tracking |
 | `tools/cronjob_tools.py` | Model-facing `cronjob` tool registration and handler |
 | `gateway/run.py` | Gateway integration — cron ticking in the long-running loop |
-| `hermes_cli/cron.py` | CLI `hermes cron` subcommands |
+| `hermes_cli/cron.py` | CLI `ansatz cron` subcommands |
 
 ## Scheduling Model
 
@@ -127,7 +127,7 @@ What "firing" *means* (job execution + delivery) is unchanged and shared by all
 providers — it stays in `scheduler.run_job()` / `scheduler._deliver_result()`.
 A provider only controls the trigger, never execution.
 
-In CLI mode, cron jobs only fire when `hermes cron` commands are run or during active CLI sessions.
+In CLI mode, cron jobs only fire when `ansatz cron` commands are run or during active CLI sessions.
 
 ### Managed cron (Chronos) for scale-to-zero
 
@@ -280,20 +280,20 @@ Cron-run sessions have the `cronjob` toolset disabled. This prevents:
 
 ## Locking
 
-The scheduler uses cross-process file-based locking (`fcntl.flock` on Unix, `msvcrt.locking` on Windows) to prevent overlapping ticks from executing the same due-job batch twice — even between the gateway's in-process ticker and a standalone `hermes cron` / manual `tick()` call. If the lock cannot be acquired, `tick()` returns 0 immediately.
+The scheduler uses cross-process file-based locking (`fcntl.flock` on Unix, `msvcrt.locking` on Windows) to prevent overlapping ticks from executing the same due-job batch twice — even between the gateway's in-process ticker and a standalone `ansatz cron` / manual `tick()` call. If the lock cannot be acquired, `tick()` returns 0 immediately.
 
 ## CLI Interface
 
-The `hermes cron` CLI provides direct job management:
+The `ansatz cron` CLI provides direct job management:
 
 ```bash
-hermes cron list                    # Show all jobs
-hermes cron create                  # Interactive job creation (alias: add)
-hermes cron edit <job_id>           # Edit job configuration
-hermes cron pause <job_id>          # Pause a running job
-hermes cron resume <job_id>         # Resume a paused job
-hermes cron run <job_id>            # Trigger immediate execution
-hermes cron remove <job_id>         # Delete a job
+ansatz cron list                    # Show all jobs
+ansatz cron create                  # Interactive job creation (alias: add)
+ansatz cron edit <job_id>           # Edit job configuration
+ansatz cron pause <job_id>          # Pause a running job
+ansatz cron resume <job_id>         # Resume a paused job
+ansatz cron run <job_id>            # Trigger immediate execution
+ansatz cron remove <job_id>         # Delete a job
 ```
 
 ## Related Docs

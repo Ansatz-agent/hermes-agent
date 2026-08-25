@@ -1023,9 +1023,9 @@ if AIOHTTP_AVAILABLE:
         except AuthRequired:
             return web.json_response(
                 {
-                    "error": "Hermes login required",
+                    "error": "Ansatz login required",
                     "code": "login_required",
-                    "hint": "Run `hermes login` and retry.",
+                    "hint": "Run `ansatz login` and retry.",
                 },
                 status=401,
             )
@@ -2252,7 +2252,7 @@ class APIServerAdapter(BasePlatformAdapter):
     def _ensure_session_db(self):
         """Lazily initialise and return the SessionDB for the active profile home.
 
-        Sessions are persisted to ``state.db`` so that ``hermes sessions list``
+        Sessions are persisted to ``state.db`` so that ``ansatz sessions list``
         shows API-server conversations alongside CLI and gateway ones.
 
         Under multiplex ``/p/<profile>/`` requests the profile runtime scope
@@ -2882,7 +2882,7 @@ class APIServerAdapter(BasePlatformAdapter):
                 )
 
         # When the config has no model.default but a provider was resolved
-        # (e.g. user ran `hermes auth add openai-codex` without `hermes model`),
+        # (e.g. user ran `ansatz auth add openai-codex` without `ansatz model`),
         # fall back to the provider's first catalog model so the API call
         # doesn't fail with "model must be a non-empty string". Mirrors
         # run.py::_resolve_session_agent_runtime. Runs after the selection

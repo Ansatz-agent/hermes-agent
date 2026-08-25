@@ -48,7 +48,7 @@ CLI 会自动检测多行粘贴。直接粘贴代码块或错误堆栈——不�
 
 ### 使用 `-c` 恢复会话
 
-上次会话有遗漏？运行 `hermes -c` 可精确恢复到上次离开的位置，完整对话历史全部还原。也可以按标题恢复：`hermes -r "my research project"`。
+上次会话有遗漏？运行 `ansatz -c` 可精确恢复到上次离开的位置，完整对话历史全部还原。也可以按标题恢复：`ansatz -r "my research project"`。
 
 ### 剪贴板图片粘贴
 
@@ -159,11 +159,11 @@ Hermes 在会话启动时从当前工作目录加载顶层 `AGENTS.md`。子目�
 
 ### 使用 /title 整理会话
 
-用 `/title auth-refactor` 或 `/title research-llm-quantization` 为会话命名。命名后的会话可通过 `hermes sessions list` 轻松找到，并用 `hermes -r "auth-refactor"` 恢复。未命名的会话会堆积起来，难以区分。
+用 `/title auth-refactor` 或 `/title research-llm-quantization` 为会话命名。命名后的会话可通过 `ansatz sessions list` 轻松找到，并用 `ansatz -r "auth-refactor"` 恢复。未命名的会话会堆积起来，难以区分。
 
 ### DM 配对实现团队访问
 
-不要手动收集用户 ID 来维护白名单，而是启用 DM 配对。当团队成员向 bot 发送私信时，他们会收到一次性配对码。你用 `hermes pairing approve telegram XKGH5N7P` 批准即可——简单且安全。
+不要手动收集用户 ID 来维护白名单，而是启用 DM 配对。当团队成员向 bot 发送私信时，他们会收到一次性配对码。你用 `ansatz pairing approve telegram XKGH5N7P` 批准即可——简单且安全。
 
 ### 工具进度显示模式
 

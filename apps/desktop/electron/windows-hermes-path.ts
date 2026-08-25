@@ -239,7 +239,7 @@ export function resolveVenvHermesCommand(
 
   const resolved = resolvePath(String(command))
 
-  if (!/^hermes(?:\.exe)?$/i.test(basename(resolved))) {
+  if (!/^(?:ansatz|hermes)(?:\.exe)?$/i.test(basename(resolved))) {
     return null
   }
 
@@ -268,14 +268,14 @@ export function resolveVenvHermesCommand(
     })
   ) {
     rememberLog?.(
-      `Ignoring venv Hermes at ${python}: runtime import probe failed (broken/partial venv); falling through to bootstrap.`
+      `Ignoring venv Ansatz runtime at ${python}: runtime import probe failed (broken/partial venv); falling through to bootstrap.`
     )
 
     return null
   }
 
   return {
-    label: `existing Hermes Python at ${python}`,
+    label: `existing Ansatz Python at ${python}`,
     command: python,
     args: ['-m', 'hermes_cli.main', ...backendArgs],
     bootstrap: false,

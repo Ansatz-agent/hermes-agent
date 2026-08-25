@@ -28,7 +28,7 @@ QQ Bot 适配器使用[官方 QQ Bot API](https://bot.q.qq.com/wiki/develop/api-
 ### 交互式设置
 
 ```bash
-hermes gateway setup
+ansatz gateway setup
 ```
 
 从平台列表中选择 **QQ Bot** 并按提示操作。

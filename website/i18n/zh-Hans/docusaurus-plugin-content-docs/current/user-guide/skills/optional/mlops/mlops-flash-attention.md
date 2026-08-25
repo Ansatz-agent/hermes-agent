@@ -14,7 +14,7 @@ description: "通过 Flash Attention 优化 Transformer 注意力机制，实现
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/mlops/flash-attention` 安装 |
+| 来源 | 可选 — 通过 `ansatz skills install official/mlops/flash-attention` 安装 |
 | 路径 | `optional-skills/mlops/flash-attention` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |

@@ -34,6 +34,7 @@ import {
   ANSATZ_PRODUCT,
   ansatzAuthEnvironment,
   buildAnsatzTerminalEnvironment,
+  resolveAnsatzCliPath,
   resolveAnsatzDesktopRuntimeRoot,
   resolveAnsatzSshControlDirectory
 } from './ansatz-product'
@@ -460,7 +461,7 @@ if (IS_WSL && !REMOTE_DISPLAY_REASON && fs.existsSync('/dev/dxg')) {
 // Linux: point Chromium at the session's keychain backend so safeStorage can
 // encrypt remote gateway tokens (hardening.ts refuses to persist them without
 // it). The value arrives via HERMES_DESKTOP_PASSWORD_STORE, bridged by the
-// `hermes desktop` launcher from detection or `desktop.password_store` in
+// `ansatz desktop` launcher from detection or `desktop.password_store` in
 // config.yaml. Must run before app `ready` — the switch only applies pre-launch.
 const PASSWORD_STORE = resolveLinuxPasswordStore()
 
@@ -480,7 +481,7 @@ if (PASSWORD_STORE.store) {
 // 0x80000003. After enough GPU deaths the browser process FATAL-exits before the
 // UI is usable. Must run before app `ready` so `--no-sandbox` applies to child
 // processes. The sticky marker recovers Start Menu / shortcut launches that
-// never go through `hermes desktop`; it is version-scoped so an app update
+// never go through `ansatz desktop`; it is version-scoped so an app update
 // re-probes the sandbox instead of degrading forever.
 //
 // `windowsSandboxFallbackActive` = this process runs without the Chromium
@@ -1175,7 +1176,7 @@ const DESKTOP_UPDATE_CONFIG_PATH = path.join(app.getPath('userData'), 'updates.j
 const DESKTOP_WINDOW_STATE_PATH = path.join(app.getPath('userData'), 'window-state.json')
 const DESKTOP_BACKEND_OWNERSHIP_PATH = path.join(app.getPath('userData'), 'backend-ownership.json')
 // active-profile.json records which Hermes profile the desktop launches its
-// local backend as. When set, startHermes() passes `hermes --profile <name>
+// local backend as. When set, startHermes() passes `ansatz --profile <name>
 // dashboard …`, which deterministically pins HERMES_HOME (see
 // _apply_profile_override in hermes_cli/main.py) and bypasses the sticky
 // ~/.hermes/active_profile file. Unset (null) preserves the legacy behavior:
@@ -1544,7 +1545,7 @@ if (IS_WINDOWS) {
 
 // Seed the native About panel with the live Hermes version. This is refreshed
 // on every open via the explicit "About" menu handler (refreshAboutPanel), so
-// an in-place `hermes update` mid-session is reflected without an app restart;
+// an in-place `ansatz update` mid-session is reflected without an app restart;
 // the seed here just covers the first open and any non-menu invocation path.
 app.setAboutPanelOptions({
   applicationName: APP_NAME,
@@ -1652,7 +1653,7 @@ const rendererReloadTimesRef: { current: number[] } = { current: [] }
 // the renderer's "Reload and retry" path or by quitting the app.
 let bootstrapFailure = null
 // Latched non-bootstrap backend spawn failure — stops getConnection() from
-// respawning hermes serve backend children in a tight loop while boot is broken.
+// respawning ansatz serve backend children in a tight loop while boot is broken.
 let backendStartFailure = null
 // Latched CONFIRMED remote reauth failure. Remote failures deliberately do not
 // latch via backendStartFailure (they're usually transient and must stay
@@ -2385,6 +2386,16 @@ function findOnPath(command) {
   return null
 }
 
+function findLegacyHermesCliCompatibility() {
+  const legacy = findOnPath('hermes')
+
+  if (legacy) {
+    rememberLog(`[compat] Canonical Ansatz CLI not found; using legacy Hermes CLI at ${legacy}`)
+  }
+
+  return legacy
+}
+
 function isCommandScript(command) {
   return IS_WINDOWS && /\.(cmd|bat)$/i.test(command || '')
 }
@@ -2408,7 +2419,7 @@ function unwrapWindowsVenvHermesCommand(command, backendArgs) {
 }
 
 // Does the resolved runtime understand the `serve` subcommand? The desktop
-// spawns `hermes serve`; runtimes older than serve only have `dashboard`. We
+// spawns `ansatz serve`; runtimes older than serve only have `dashboard`. We
 // detect support so getBackendArgsForRuntime() can route old runtimes through
 // the legacy `dashboard --no-open` form instead of crashing on an unknown
 // subcommand (would brick every user mid-upgrade — #54568 follow-up).
@@ -2446,7 +2457,7 @@ function backendSupportsServe(backend) {
       const prefix = backend.args && backend.args[0] === '-m' ? backend.args.slice(0, 2) : []
       // Same cold-Windows Python-startup class as the runtime probes
       // (#61764/#72632/#72707): `serve --help` imports at least as much as
-      // `hermes --version` (~10.5s measured cold), and a false negative here
+      // `ansatz --version` (~10.5s measured cold), and a false negative here
       // is cached for the process lifetime, silently routing a modern
       // runtime through the legacy `dashboard` form. Share the probe budget
       // and its timeout-only retry instead of a thinner local bound.
@@ -3230,7 +3241,7 @@ let quitPromptOpen = false
 let quitConfirmedWithActiveWork = false
 
 // Resolve the staged updater binary the desktop may hand an update to. On
-// Windows that binary owns ALL repo mutation — running `hermes update` +
+// Windows that binary owns ALL repo mutation — running `ansatz update` +
 // rebuilding the desktop — so the desktop never touches its own bits while
 // running. macOS/Linux stage the same binary but deliberately do not use it;
 // see resolveStagedUpdaterBinary for the policy and for #74836. Returns null
@@ -3267,13 +3278,15 @@ function repairMacUpdaterHelper(updater) {
   }
 }
 
-// Path to the venv shim whose lock decides whether `hermes update` can write
+// Path to the venv shim whose lock decides whether `ansatz update` can write
 // fresh entry points. On Windows this is the file the running backend
 // `hermes.exe` holds open; on POSIX it's never mandatory-locked.
 function venvHermesShimPath(updateRoot) {
-  return IS_WINDOWS
-    ? path.join(updateRoot, 'venv', 'Scripts', 'hermes.exe')
-    : path.join(updateRoot, 'venv', 'bin', 'hermes')
+  const venvBin = path.join(updateRoot, 'venv', IS_WINDOWS ? 'Scripts' : 'bin')
+  const canonical = path.join(venvBin, IS_WINDOWS ? 'ansatz.exe' : 'ansatz')
+  const legacy = path.join(venvBin, IS_WINDOWS ? 'hermes.exe' : 'hermes')
+
+  return resolveAnsatzCliPath(canonical, legacy, fileExists)
 }
 
 // Best-effort lock probe mirroring the Rust updater's is_locked(): a running
@@ -3654,8 +3667,8 @@ async function releaseBackendLock(updateRoot, tag) {
 //
 // The desktop is a pure consumer: it does NOT git pull / pip install / rebuild
 // itself (the old open-coded git dance lived here and drifted from
-// `hermes update`). Instead we spawn the staged Hermes-Setup binary with
-// --update and quit, so it can run `hermes update` (which refuses while we
+// `ansatz update`). Instead we spawn the staged Hermes-Setup binary with
+// --update and quit, so it can run `ansatz update` (which refuses while we
 // hold the venv shim) and rebuild the desktop with our exe already gone.
 //
 // Detection (checkUpdates / commit changelog / "N behind") stays in the UI;
@@ -3672,20 +3685,20 @@ async function applyUpdates(opts = {}) {
 
     if (!updater && !IS_WINDOWS) {
       // macOS/Linux: hand off to the repo-owned posix script — same shape as
-      // Windows (quit → detached orchestrator → `hermes update` → relaunch),
+      // Windows (quit → detached orchestrator → `ansatz update` → relaunch),
       // minus the venv-lock gauntlet POSIX doesn't need. The old in-app
       // updater (applyUpdatesPosixInApp) is gone with everything it dragged
       // in: the HERMES_DESKTOP_CHILD_PID reaper-exclusion dance (#37532),
       // the in-window rebuild retry, and the relaunch-outcome matrix — the
       // script owns swap/relaunch, and the app is DEAD during the update so
       // there is nothing to reap around. Checkouts that predate the script
-      // get the manual `hermes update` card once; their next update pulls it.
+      // get the manual `ansatz update` card once; their next update pulls it.
       return await applyUpdatesPosixHandoff(opts)
     }
 
     if (!updater) {
       // No staged updater binary — this is a CLI-installed user (they ran
-      // `hermes desktop`, never the Tauri installer that self-copies
+      // `ansatz desktop`, never the Tauri installer that self-copies
       // hermes-setup.exe into HERMES_HOME). On Windows the repo hand-off
       // script serves them just as well as installer users — it only needs
       // PowerShell and the checkout — so fall through to the normal hand-off
@@ -3697,11 +3710,11 @@ async function applyUpdates(opts = {}) {
         // They DO have a working `hermes` on PATH / in the venv, so the
         // correct path is the one-liner in their native medium. We show the
         // EXACT command, branch-pinned to the checkout they're on — bare
-        // `hermes update` defaults to main and would silently switch a
+        // `ansatz update` defaults to main and would silently switch a
         // bb/gui (or any non-main) install off-branch. Mirror the GUI
         // button's contract: append --branch <current> for non-main
         // checkouts, keep it bare for main so the card stays clean.
-        let command = 'hermes update'
+        let command = 'ansatz update'
 
         try {
           const head = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: updateRoot })
@@ -3711,11 +3724,11 @@ async function applyUpdates(opts = {}) {
             const branch = await resolveHealedBranch(updateRoot, current)
 
             if (branch !== 'main') {
-              command = `hermes update --branch ${branch}`
+              command = `ansatz update --branch ${branch}`
             }
           }
         } catch {
-          // Best-effort: fall back to bare `hermes update` if branch detection fails.
+          // Best-effort: fall back to bare `ansatz update` if branch detection fails.
         }
 
         rememberLog(`[updates] no staged updater; surfacing manual \`${command}\` for CLI install at ${updateRoot}`)
@@ -3820,14 +3833,14 @@ async function applyUpdates(opts = {}) {
     }
 
     // Detached so the updater outlives this process — it needs us GONE before
-    // `hermes update` will run (the venv shim is locked while we live).
+    // `ansatz update` will run (the venv shim is locked while we live).
     //
     // Prefer the repo-owned hand-off script over the staged Tauri binary.
     // The staged binary is frozen (no self-update path) and historically runs
     // months-stale updater logic — pre-#67369 cache resolver, pre-#74782
     // marker adoption — producing failures that were fixed on main long ago
     // (2026-08-09 incident). scripts/desktop-update/windows.ps1 ships WITH the
-    // checkout, so each `hermes update` refreshes the code that drives the
+    // checkout, so each `ansatz update` refreshes the code that drives the
     // next one. Checkouts that predate the script fall back to the binary
     // path unchanged.
     const scriptHandoff = resolveUpdateScriptHandoff(updateRoot)
@@ -3868,7 +3881,7 @@ async function applyUpdates(opts = {}) {
       // the first moments of the hand-off — the script's step 0 overwrites it
       // with its own live $PID, and if the script never starts the wrapper's
       // dead pid makes the marker read as stale and self-delete (no wedge).
-      // The `hermes update` child adopts the SCRIPT's claim via
+      // The `ansatz update` child adopts the SCRIPT's claim via
       // update_lock.py's process-ancestry rule; no mtime heuristics needed.
       if (Number.isInteger(child.pid)) {
         writeUpdateMarker(HERMES_HOME, child.pid)
@@ -3933,7 +3946,7 @@ async function applyUpdates(opts = {}) {
     const handoffOutcome = await observeUpdaterHandoff(child, UPDATE_HANDOFF_DWELL_MS)
 
     if (!handoffOutcome.ok) {
-      const message = `Update failed to start: ${handoffOutcome.message}. ${ANSATZ_PRODUCT.productName} will keep running — try again, or run \`hermes update\` from a terminal.`
+      const message = `Update failed to start: ${handoffOutcome.message}. ${ANSATZ_PRODUCT.productName} will keep running — try again, or run \`ansatz update\` from a terminal.`
 
       rememberLog(`[updates] hand-off not viable, aborting quit: ${handoffOutcome.message}`)
       emitUpdateProgress({ stage: 'error', message, percent: null })
@@ -3993,7 +4006,13 @@ async function handOffWindowsBootstrapRecovery(reason) {
     : configuredBranch || DEFAULT_UPDATE_BRANCH
 
   const venvBin = path.join(updateRoot, 'venv', IS_WINDOWS ? 'Scripts' : 'bin')
-  const venvHermes = path.join(venvBin, IS_WINDOWS ? 'hermes.exe' : 'hermes')
+
+  const venvHermes = resolveAnsatzCliPath(
+    path.join(venvBin, IS_WINDOWS ? 'ansatz.exe' : 'ansatz'),
+    path.join(venvBin, IS_WINDOWS ? 'hermes.exe' : 'hermes'),
+    fileExists
+  )
+
   const venvPython = path.join(venvBin, IS_WINDOWS ? 'python.exe' : 'python')
 
   // Choose the gentle in-place --update when ANY real-install signal is present,
@@ -4083,7 +4102,7 @@ function runningAppBundle() {
 // intact before any update process mutates the install.  Runs in the
 // desktop Electron process itself, before the backend is killed and
 // before the updater is spawned — a separate safety net from the
-// Python-level pre-update snapshot inside `hermes update`.
+// Python-level pre-update snapshot inside `ansatz update`.
 function preflightStateDb(hermesHome, rememberLog) {
   const stateDbPath = path.join(hermesHome, 'state.db')
 
@@ -4166,7 +4185,7 @@ function preflightStateDb(hermesHome, rememberLog) {
 
 // macOS/Linux update hand-off: spawn the repo-owned posix orchestrator
 // (scripts/desktop-update/posix.sh) detached and QUIT. The script waits us
-// out, runs `hermes update`, swaps/relaunches the app bundle, and writes
+// out, runs `ansatz update`, swaps/relaunches the app bundle, and writes
 // .hermes-update-result.json for the relaunched Desktop to surface. It shows
 // its own tiny shim window (or nothing, headless) — this process only needs
 // to leave. Checkouts that predate the script get the manual card once.
@@ -4175,9 +4194,9 @@ async function applyUpdatesPosixHandoff(opts: any) {
   const handoff = resolvePosixScriptHandoff(updateRoot)
 
   if (!handoff) {
-    emitUpdateProgress({ stage: 'manual', message: 'hermes update', percent: null })
+    emitUpdateProgress({ stage: 'manual', message: 'ansatz update', percent: null })
 
-    return { ok: true, manual: true, command: 'hermes update', hermesRoot: updateRoot }
+    return { ok: true, manual: true, command: 'ansatz update', hermesRoot: updateRoot }
   }
 
   const handoffConflict = updateHandoffConflict(HERMES_HOME)
@@ -4271,7 +4290,7 @@ async function applyUpdatesPosixHandoff(opts: any) {
   const handoffOutcome = await observeUpdaterHandoff(child, UPDATE_HANDOFF_DWELL_MS)
 
   if (!handoffOutcome.ok) {
-    const message = `Update failed to start: ${handoffOutcome.message}. ${ANSATZ_PRODUCT.productName} will keep running — try again, or run \`hermes update\` from a terminal.`
+    const message = `Update failed to start: ${handoffOutcome.message}. ${ANSATZ_PRODUCT.productName} will keep running — try again, or run \`ansatz update\` from a terminal.`
 
     rememberLog(`[updates] posix hand-off not viable, aborting quit: ${handoffOutcome.message}`)
     emitUpdateProgress({ stage: 'error', message, percent: null })
@@ -4454,7 +4473,7 @@ function resolveRendererIndex() {
     rememberLog(
       `[renderer] every renderer bundle is incomplete (${present.join(', ')}). ` +
         `The last update replaced the app while its files were locked. ` +
-        `Repair with: hermes desktop --force-build`
+        `Repair with: ansatz desktop --force-build`
     )
 
     return present[0]
@@ -4466,7 +4485,7 @@ function resolveRendererIndex() {
   rememberLog(
     `[renderer] index.html not found — the desktop app was packaged without a ` +
       `renderer bundle. Tried: ${candidates.join(', ')}. ` +
-      `Rebuild with: hermes desktop --force-build`
+      `Rebuild with: ansatz desktop --force-build`
   )
 
   return candidates[0]
@@ -4623,7 +4642,7 @@ function createActiveBackend(backendArgs) {
 
   return {
     kind: 'python',
-    label: `Hermes at ${ACTIVE_HERMES_ROOT}`,
+    label: `Ansatz at ${ACTIVE_HERMES_ROOT}`,
     command,
     args: ['-m', 'hermes_cli.main', ...backendArgs],
     env: buildDesktopBackendEnv({
@@ -4646,7 +4665,7 @@ function resolveHermesBackend(backendArgs, options: any = {}) {
   const overrideRoot = process.env.HERMES_DESKTOP_HERMES_ROOT && path.resolve(process.env.HERMES_DESKTOP_HERMES_ROOT)
 
   if (overrideRoot && isHermesSourceRoot(overrideRoot)) {
-    const backend = createPythonBackend(overrideRoot, `Hermes source at ${overrideRoot}`, backendArgs)
+    const backend = createPythonBackend(overrideRoot, `Ansatz source at ${overrideRoot}`, backendArgs)
 
     if (backend) {
       return backend
@@ -4658,7 +4677,7 @@ function resolveHermesBackend(backendArgs, options: any = {}) {
   //    installed `hermes` on PATH so local Python edits are actually exercised.
   //    (In dev with no checkout, SOURCE_REPO_ROOT won't pass isHermesSourceRoot.)
   if (!IS_PACKAGED && isHermesSourceRoot(SOURCE_REPO_ROOT)) {
-    const backend = createPythonBackend(SOURCE_REPO_ROOT, `Hermes source at ${SOURCE_REPO_ROOT}`, backendArgs)
+    const backend = createPythonBackend(SOURCE_REPO_ROOT, `Ansatz source at ${SOURCE_REPO_ROOT}`, backendArgs)
 
     if (backend) {
       return backend
@@ -4683,7 +4702,7 @@ function resolveHermesBackend(backendArgs, options: any = {}) {
 
     return {
       kind: 'bootstrap-needed',
-      label: 'Hermes bundled backend refresh required',
+      label: 'Ansatz bundled backend refresh required',
       command: null,
       args: backendArgs,
       bootstrap: true,
@@ -4706,7 +4725,7 @@ function resolveHermesBackend(backendArgs, options: any = {}) {
   if (activeRuntime.shouldUseActiveRuntime && !bootstrapRepairRequested) {
     if (!activeRuntime.hasValidMarker) {
       rememberLog(
-        `[bootstrap] Active Hermes runtime at ${ACTIVE_HERMES_ROOT} is usable but the bootstrap marker is missing or stale; skipping first-run bootstrap.`
+        `[bootstrap] Active Ansatz runtime at ${ACTIVE_HERMES_ROOT} is usable but the bootstrap marker is missing or stale; skipping first-run bootstrap.`
       )
     }
 
@@ -4717,7 +4736,7 @@ function resolveHermesBackend(backendArgs, options: any = {}) {
     rememberLog('[bootstrap] repair requested; bypassing the usable active runtime to re-run the installer')
   }
 
-  // 4. Existing `hermes` on PATH -- installed via install.ps1 / install.sh from
+  // 4. Existing Ansatz CLI on PATH -- installed via install.ps1 / install.sh from
   //    a previous tool-only setup, or pip-installed system-wide. Use it but
   //    do NOT write a bootstrap marker; the user did this themselves and we
   //    don't want to take ownership of an install we didn't perform.
@@ -4734,15 +4753,24 @@ function resolveHermesBackend(backendArgs, options: any = {}) {
       } else if (!isWindowsBinaryPathInWsl(hermesOverride, { isWsl: IS_WSL })) {
         hermesCommand = hermesOverride
       } else {
-        rememberLog(`Ignoring Windows Hermes override under WSL: ${hermesOverride}`)
+        rememberLog(`Ignoring Windows Ansatz CLI override under WSL: ${hermesOverride}`)
       }
     } else {
-      hermesCommand = findOnPath('hermes')
+      hermesCommand = findOnPath('ansatz')
+
+      if (hermesCommand && looksLikeDesktopAppBinary(hermesCommand)) {
+        rememberLog(`Ignoring desktop app executable on PATH while resolving Ansatz CLI: ${hermesCommand}`)
+        hermesCommand = null
+      }
+
+      if (!hermesCommand) {
+        hermesCommand = findLegacyHermesCliCompatibility()
+      }
     }
 
     if (hermesCommand) {
       if (looksLikeDesktopAppBinary(hermesCommand)) {
-        rememberLog(`Ignoring desktop app executable on PATH while resolving Hermes CLI: ${hermesCommand}`)
+        rememberLog(`Ignoring desktop app executable on PATH while resolving Ansatz CLI: ${hermesCommand}`)
         hermesCommand = null
       }
     }
@@ -4755,14 +4783,14 @@ function resolveHermesBackend(backendArgs, options: any = {}) {
       }
 
       // The desktop auth bridge must launch a closed Python module directly;
-      // a generic `hermes` shim cannot safely be repurposed for that protocol.
+      // a generic CLI shim cannot safely be repurposed for that protocol.
       // Continue to a Python-module candidate or the signed bootstrap below.
       if (options.requirePythonModule) {
-        rememberLog(`Ignoring Hermes CLI shim for the auth bridge: ${hermesCommand}`)
+        rememberLog(`Ignoring Ansatz CLI shim for the auth bridge: ${hermesCommand}`)
         hermesCommand = null
       }
 
-      // Smoke-test the candidate before trusting it. A `hermes` shim
+      // Smoke-test the candidate before trusting it. A CLI shim
       // left behind by a half-uninstalled pip install (or a venv
       // entry-point pointing at a deleted interpreter) still resolves
       // via findOnPath but explodes on spawn -- the user then sees a
@@ -4786,7 +4814,7 @@ function resolveHermesBackend(backendArgs, options: any = {}) {
         // same un-memoized import probe, costing up to another full probe
         // timeout on the boot path for an answer we already have.
         return {
-          label: `existing Hermes CLI at ${hermesCommand}`,
+          label: `existing Ansatz CLI at ${hermesCommand}`,
           command: hermesCommand,
           args: backendArgs,
           bootstrap: false,
@@ -4797,7 +4825,7 @@ function resolveHermesBackend(backendArgs, options: any = {}) {
       }
 
       rememberLog(
-        `Ignoring existing Hermes CLI at ${hermesCommand}: --version probe failed; falling through to bootstrap.`
+        `Ignoring existing Ansatz CLI at ${hermesCommand}: --version probe failed; falling through to bootstrap.`
       )
     }
   }
@@ -4843,7 +4871,7 @@ function resolveHermesBackend(backendArgs, options: any = {}) {
   //    is a recoverable state the GUI can drive through.
   return {
     kind: 'bootstrap-needed',
-    label: 'Hermes Agent not installed yet; bootstrap required',
+    label: 'Ansatz is not installed yet; bootstrap required',
     command: null,
     args: backendArgs,
     bootstrap: true,
@@ -4874,11 +4902,11 @@ async function ensureRuntime(backend, { scope = 'runtime' }: any = {}) {
   // will rewire startup to spawn the window first and route bootstrap events
   // to a renderer-side install overlay.
   if (backend.kind === 'bootstrap-needed') {
-    rememberLog('[bootstrap] no Hermes install found; starting first-launch bootstrap')
+    rememberLog('[bootstrap] no Ansatz install found; starting first-launch bootstrap')
 
     if (await handOffWindowsBootstrapRecovery('bootstrap-needed')) {
       const handoffError: Error & { isBootstrapFailure?: boolean; bootstrapHandedOff?: boolean } = new Error(
-        'Hermes recovery was handed off to Hermes Setup. The desktop will restart when recovery completes.'
+        'Ansatz recovery was handed off to Ansatz Setup. The desktop will restart when recovery completes.'
       )
 
       handoffError.isBootstrapFailure = true
@@ -4943,7 +4971,7 @@ async function ensureRuntime(backend, { scope = 'runtime' }: any = {}) {
     bootstrapAbortController = null
 
     if (bootstrapResult.cancelled) {
-      const cancelledError = new Error('Hermes install was cancelled.') as any
+      const cancelledError = new Error('Ansatz install was cancelled.') as any
       cancelledError.isBootstrapFailure = true
       cancelledError.bootstrapCancelled = true
       bootstrapFailure = cancelledError
@@ -4952,7 +4980,7 @@ async function ensureRuntime(backend, { scope = 'runtime' }: any = {}) {
 
     if (!bootstrapResult.ok) {
       const bootstrapError = new Error(
-        `Hermes bootstrap failed${bootstrapResult.failedStage ? ` at stage '${bootstrapResult.failedStage}'` : ''}: ` +
+        `Ansatz bootstrap failed${bootstrapResult.failedStage ? ` at stage '${bootstrapResult.failedStage}'` : ''}: ` +
           `${bootstrapResult.error || 'unknown error'}. ` +
           `Check ${path.join(HERMES_HOME, 'logs', 'desktop.log')} for the full transcript.`
       ) as any
@@ -4971,7 +4999,7 @@ async function ensureRuntime(backend, { scope = 'runtime' }: any = {}) {
 
       return {
         kind: 'python',
-        label: 'Hermes authentication runtime',
+        label: 'Ansatz authentication runtime',
         command: IS_WINDOWS ? path.join(AUTH_VENV_ROOT, 'python.exe') : getVenvPython(VENV_ROOT),
         args: [],
         bootstrap: false,
@@ -4995,7 +5023,7 @@ async function ensureRuntime(backend, { scope = 'runtime' }: any = {}) {
   // attests they ran successfully).
   if (!isHermesSourceRoot(ACTIVE_HERMES_ROOT)) {
     throw new Error(
-      `Hermes install at ${ACTIVE_HERMES_ROOT} is missing or incomplete. ` +
+      `Ansatz install at ${ACTIVE_HERMES_ROOT} is missing or incomplete. ` +
         'Reinstall via the desktop installer or scripts/install.ps1.'
     )
   }
@@ -5008,10 +5036,10 @@ async function ensureRuntime(backend, { scope = 'runtime' }: any = {}) {
   // here via an external `hermes` on PATH, this check still helps.
   if (IS_WINDOWS && !findGitBash()) {
     throw new Error(
-      'Git for Windows is required for Hermes on Windows (provides Git Bash, ' +
+      'Git for Windows is required for Ansatz on Windows (provides Git Bash, ' +
         "which the agent's terminal tool uses). Install it from " +
         'https://git-scm.com/download/win or run `winget install -e --id Git.Git`, ' +
-        'then relaunch Hermes.'
+        'then relaunch Ansatz.'
     )
   }
 
@@ -5026,15 +5054,15 @@ async function ensureRuntime(backend, { scope = 'runtime' }: any = {}) {
     // If we hit this, the user (or a deleted venv) broke the invariant; tell
     // them to re-run the install.
     throw new Error(
-      `Hermes venv missing at ${VENV_ROOT}. Re-run the desktop installer or ` + '`scripts/install.ps1` to rebuild it.'
+      `Ansatz venv missing at ${VENV_ROOT}. Re-run the desktop installer or ` + '`scripts/install.ps1` to rebuild it.'
     )
   }
 
   backend.command = getVenvPython(VENV_ROOT)
-  backend.label = `Hermes at ${ACTIVE_HERMES_ROOT} (venv: ${VENV_ROOT})`
+  backend.label = `Ansatz at ${ACTIVE_HERMES_ROOT} (venv: ${VENV_ROOT})`
   updateBootProgress({
     phase: 'runtime.ready',
-    message: 'Hermes runtime is ready',
+    message: 'Ansatz runtime is ready',
     progress: 82,
     running: true,
     error: null
@@ -10033,7 +10061,7 @@ async function testDesktopConnectionConfig(input: any = {}) {
             return {
               reachable: false,
               sshError: 'update-required',
-              error: 'Update Hermes on the remote host before connecting with Desktop SSH.'
+              error: 'Update Ansatz on the remote host before connecting with Desktop SSH.'
             }
           }
 
@@ -10914,7 +10942,7 @@ async function startHermes() {
     const backendArgs = ['serve', '--host', '127.0.0.1', '--port', '0']
     // Pin the desktop's chosen profile via the global --profile flag. This is
     // deterministic (it wins over the sticky ~/.hermes/active_profile file) and
-    // resolves HERMES_HOME the same way `hermes -p <name>` does on the CLI. An
+    // resolves HERMES_HOME the same way `ansatz -p <name>` does on the CLI. An
     // unset preference keeps the legacy launch so existing installs are
     // unaffected.
     const activeProfile = readActiveDesktopProfile()
@@ -12556,7 +12584,7 @@ guardedHandle('hermes:window:openInstance', async () => {
 })
 
 // Hand a session to the user's OWN terminal emulator, running the TUI against
-// it (`hermes --tui --resume <id>`). Not the in-app terminal pane: the point is
+// it (`ansatz --tui --resume <id>`). Not the in-app terminal pane: the point is
 // to continue the chat in the terminal they already live in.
 //
 // The desktop's runtime is usually a venv Python invoked as
@@ -12575,7 +12603,7 @@ guardedHandle('hermes:window:openInTerminal', async (_event, sessionId, opts) =>
     const backend = resolveHermesBackend(tuiResumeArgs(sessionId.trim(), profile || undefined))
 
     if (!backend.command) {
-      return { ok: false, error: 'Hermes is not installed yet' }
+      return { ok: false, error: 'Ansatz is not installed yet' }
     }
 
     const { cwd } = sanitizeWorkspaceCwd(opts?.cwd)
@@ -13206,12 +13234,12 @@ guardedHandle('hermes:gateway:ws-url-for', async (_event, payload) => {
   })
 })
 
-// Fan out `hermes update` to every eligible registered connection at once.
+// Fan out `ansatz update` to every eligible registered connection at once.
 // Cloud entries are excluded (platform-managed); each dispatch reports
 // independently so one dead LAN box can't wedge the batch. Local reuses the
 // app's own update pipeline; remote/ssh POST the backend's own
 // /api/hermes/update endpoint (the dashboard updater), which runs
-// `hermes update` on THAT machine.
+// `ansatz update` on THAT machine.
 guardedHandle('hermes:connections:update-all', async () => {
   const registry = readDesktopConnectionsRegistry()
 
@@ -14981,7 +15009,7 @@ function resolveHermesVersion() {
 }
 
 // Re-resolve the live Hermes version and push it into the native About panel
-// just before showing it, so an in-place `hermes update` is reflected without
+// just before showing it, so an in-place `ansatz update` is reflected without
 // an app restart. macOS only — `showAboutPanel()` is a no-op elsewhere, and the
 // other platforms don't use this menu item.
 function showAboutPanelFresh() {
@@ -15007,7 +15035,7 @@ guardedHandle('hermes:version', async () => ({
 //
 // The renderer's About → Danger Zone surfaces three options that mirror the
 // CLI exactly: GUI only, Lite (keep user data), Full. We ask the agent to do
-// the actual removal via `hermes uninstall …` so the cross-platform PATH /
+// the actual removal via `ansatz uninstall …` so the cross-platform PATH /
 // registry / service / node-symlink cleanup all lives in one place
 // (hermes_cli/uninstall.py + hermes_cli/gui_uninstall.py).
 //

@@ -39,9 +39,9 @@ Cron 运行的会话不能递归创建更多 cron 任务。Hermes 在 cron 执�
 ### 从独立 CLI
 
 ```bash
-hermes cron create "every 2h" "Check server status"
-hermes cron create "every 1h" "Summarize new feed items" --skill blogwatcher
-hermes cron create "every 1h" "Use both skills and combine the result" \
+ansatz cron create "every 2h" "Check server status"
+ansatz cron create "every 1h" "Summarize new feed items" --skill blogwatcher
+ansatz cron create "every 1h" "Use both skills and combine the result" \
   --skill blogwatcher \
   --skill maps \
   --name "Skill combo"
@@ -95,7 +95,7 @@ Cron 任务默认与任何代码仓库脱离运行——不加载 `AGENTS.md`、
 
 ```bash
 # 独立 CLI（schedule 和 prompt 为位置参数）
-hermes cron create "every 1d at 09:00" \
+ansatz cron create "every 1d at 09:00" \
   "Audit open PRs, summarize CI health, and post to #eng" \
   --workdir /home/me/projects/acme
 ```
@@ -127,7 +127,7 @@ cronjob(
 
 ```bash
 # 将任务固定到 `night-ops` profile，无论在哪里调度
-hermes cron create "every 1d at 03:00" \
+ansatz cron create "every 1d at 03:00" \
   "Tail the security log and flag anomalies" \
   --profile night-ops
 ```
@@ -171,12 +171,12 @@ cronjob(
 ### 独立 CLI
 
 ```bash
-hermes cron edit <job_id> --schedule "every 4h"
-hermes cron edit <job_id> --prompt "Use the revised task"
-hermes cron edit <job_id> --skill blogwatcher --skill maps
-hermes cron edit <job_id> --add-skill maps
-hermes cron edit <job_id> --remove-skill blogwatcher
-hermes cron edit <job_id> --clear-skills
+ansatz cron edit <job_id> --schedule "every 4h"
+ansatz cron edit <job_id> --prompt "Use the revised task"
+ansatz cron edit <job_id> --skill blogwatcher --skill maps
+ansatz cron edit <job_id> --add-skill maps
+ansatz cron edit <job_id> --remove-skill blogwatcher
+ansatz cron edit <job_id> --clear-skills
 ```
 
 注意：
@@ -203,13 +203,13 @@ Cron 任务现在拥有比创建/删除更完整的生命周期。
 ### 独立 CLI
 
 ```bash
-hermes cron list
-hermes cron pause <job_id>
-hermes cron resume <job_id>
-hermes cron run <job_id>
-hermes cron remove <job_id>
-hermes cron status
-hermes cron tick
+ansatz cron list
+ansatz cron pause <job_id>
+ansatz cron resume <job_id>
+ansatz cron run <job_id>
+ansatz cron remove <job_id>
+ansatz cron status
+ansatz cron tick
 ```
 
 各操作说明：
@@ -224,12 +224,12 @@ hermes cron tick
 **Cron 执行由 gateway 守护进程处理。** Gateway 每 60 秒 tick 一次调度器，在隔离的 agent 会话中运行到期的任务。
 
 ```bash
-hermes gateway install     # 安装为用户服务
-sudo hermes gateway install --system   # Linux：服务器开机启动的系统服务
-hermes gateway             # 或在前台运行
+ansatz gateway install     # 安装为用户服务
+sudo ansatz gateway install --system   # Linux：服务器开机启动的系统服务
+ansatz gateway             # 或在前台运行
 
-hermes cron list
-hermes cron status
+ansatz cron list
+ansatz cron status
 ```
 
 ### Gateway 调度器行为
@@ -250,7 +250,7 @@ hermes cron status
 
 Hermes 会在执行器或调度提供程序分派之前，将每次已领取的 cron 尝试记录到当前 profile 的 `~/.hermes/cron/executions.db`。尝试会依次进入 `claimed`、`running`，然后进入不可变的终态：`completed`、`failed` 或 `unknown`。重启后，只有原 PID 与进程启动时间指纹能够证明所有者已经消失时，Hermes 才会将遗留尝试标记为 `unknown`。未知尝试仅用于审计，绝不会自动重跑。
 
-使用 `hermes cron runs [job-id] --limit 20`（别名：`history`）查看最近的尝试。终态历史有界，活动尝试不会被清理；快速备份也包含该账本。
+使用 `ansatz cron runs [job-id] --limit 20`（别名：`history`）查看最近的尝试。终态历史有界，活动尝试不会被清理；快速备份也包含该账本。
 
 ## 投递选项
 
@@ -427,7 +427,7 @@ cron:
 对于不需要 LLM 推理的周期性任务——经典的看门狗、磁盘/内存告警、心跳、CI ping——在创建时传入 `no_agent=True`。调度器按计划运行你的脚本，并直接投递其 stdout，完全跳过 agent：
 
 ```bash
-hermes cron create "every 5m" \
+ansatz cron create "every 5m" \
   --no-agent \
   --script memory-watchdog.sh \
   --deliver telegram \
@@ -601,10 +601,10 @@ cronjob(action="remove", job_id="...")
 
 ## Cron 任务可用的工具集
 
-Cron 在全新的 agent 会话中运行每个任务，不附加任何聊天平台。默认情况下，cron agent 获得**你在 `hermes tools` 中为 `cron` 平台配置的工具集**——不是 CLI 默认值，也不是所有工具。
+Cron 在全新的 agent 会话中运行每个任务，不附加任何聊天平台。默认情况下，cron agent 获得**你在 `ansatz tools` 中为 `cron` 平台配置的工具集**——不是 CLI 默认值，也不是所有工具。
 
 ```bash
-hermes tools
+ansatz tools
 # → 在 curses UI 中选择 "cron" 平台
 # → 像 Telegram/Discord 等平台一样切换工具集开关
 ```
@@ -618,7 +618,7 @@ cronjob(action="create", name="weekly-news-summary",
         prompt="Summarize this week's AI news: ...")
 ```
 
-当任务上设置了 `enabled_toolsets` 时，它优先生效；否则 `hermes tools` 的 cron 平台配置生效；否则 Hermes 回退到内置默认值。这对成本控制很重要：在每个小型"获取新闻"任务中携带 `moa`、`browser`、`delegation` 会在每次 LLM 调用时膨胀工具 schema prompt。
+当任务上设置了 `enabled_toolsets` 时，它优先生效；否则 `ansatz tools` 的 cron 平台配置生效；否则 Hermes 回退到内置默认值。这对成本控制很重要：在每个小型"获取新闻"任务中携带 `moa`、`browser`、`delegation` 会在每次 LLM 调用时膨胀工具 schema prompt。
 
 ### 完全跳过 agent：`wakeAgent`
 

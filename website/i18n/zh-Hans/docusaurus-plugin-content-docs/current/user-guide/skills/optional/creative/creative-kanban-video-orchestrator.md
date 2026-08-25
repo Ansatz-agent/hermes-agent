@@ -14,7 +14,7 @@ description: "规划、搭建并监控由 Hermes Kanban 支撑的多智能体视
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/creative/kanban-video-orchestrator` 安装 |
+| 来源 | 可选 — 通过 `ansatz skills install official/creative/kanban-video-orchestrator` 安装 |
 | 路径 | `optional-skills/creative/kanban-video-orchestrator` |
 | 版本 | `1.0.0` |
 | 作者 | ['SHL0MS', 'alt-glitch'] |
@@ -98,11 +98,11 @@ DISCOVER  →  BRIEF  →  TEAM DESIGN  →  SETUP  →  EXECUTE  →  MONITOR
 
 1. 创建项目工作区（`~/projects/video-pipeline/<slug>/`）
 2. 将提供的资产复制到 `taste/`、`audio/`、`assets/`
-3. 通过 `hermes profile create --clone` 创建每个 Hermes profile
+3. 通过 `ansatz profile create --clone` 创建每个 Hermes profile
 4. 编写各 profile 的 `SOUL.md`（个性 + 角色定义）
 5. 配置 profile YAML（工具集、always_load 技能、cwd）
 6. 编写 `brief.md`、`TEAM.md` 和 `taste/` 内容
-7. 触发分配给 director 的初始 `hermes kanban create` 任务
+7. 触发分配给 director 的初始 `ansatz kanban create` 任务
 
 使用 `scripts/bootstrap_pipeline.py` 从简报 + 团队设计 JSON 生成 setup.sh。安装脚本结构、profile 配置模式和关键的"共享工作区"规则，参见 **[references/kanban-setup.md](https://github.com/NousResearch/hermes-agent/blob/main/optional-skills/creative/kanban-video-orchestrator/references/kanban-setup.md)**。
 
@@ -111,9 +111,9 @@ DISCOVER  →  BRIEF  →  TEAM DESIGN  →  SETUP  →  EXECUTE  →  MONITOR
 运行 `setup.sh`。然后向用户提供监控命令：
 
 ```bash
-hermes kanban watch --tenant <project-tenant>     # 实时事件
-hermes kanban list  --tenant <project-tenant>     # 看板快照
-hermes dashboard                                   # 可视化看板 UI
+ansatz kanban watch --tenant <project-tenant>     # 实时事件
+ansatz kanban list  --tenant <project-tenant>     # 看板快照
+ansatz dashboard                                   # 可视化看板 UI
 ```
 
 director profile 从此接管，通过 kanban 工具集将工作分解并路由给专业 profiles。
@@ -146,7 +146,7 @@ director profile 从此接管，通过 kanban 工具集将工作分解并路由�
 
 5. **尊重现有技能。** 当某个场景适合现有技能时，相关渲染器应通过任务上的 `--skill <name>` 或 profile 中的 `always_load` 加载该技能。不要重新推导技能已提供的内容。
 
-6. **director 绝不执行。** 即使拥有完整的 `kanban + terminal + file` 工具集，director 的 `SOUL.md` 规则也禁止其自行执行工作。它只负责分解和路由——每个具体任务都变成对专业 profile 的 `hermes kanban create` 调用。自动注入的 kanban 编排指引对此有进一步说明。
+6. **director 绝不执行。** 即使拥有完整的 `kanban + terminal + file` 工具集，director 的 `SOUL.md` 规则也禁止其自行执行工作。它只负责分解和路由——每个具体任务都变成对专业 profile 的 `ansatz kanban create` 调用。自动注入的 kanban 编排指引对此有进一步说明。
 
 7. **不要过度分解。** 一个 30 秒的产品视频**不需要** 20 个任务。目标是最小任务图，同时仍能良好并行化并暴露正确的人工审核节点。
 

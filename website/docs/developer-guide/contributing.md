@@ -43,7 +43,7 @@ We value contributions in this order:
 For most contributors, the best development bootstrap is the same path users
 take: run the standard installer, then work inside the repository it cloned.
 The installer creates the Hermes venv, wires the `hermes` command, stamps the
-install method for `hermes update`, and clones the full git project into
+install method for `ansatz update`, and clones the full git project into
 `$HERMES_HOME/hermes-agent` (usually `~/.hermes/hermes-agent`). That keeps your
 development environment on the same layout the CLI, updater, lazy dependency
 installer, gateway, and docs assume.
@@ -119,8 +119,8 @@ echo 'OPENROUTER_API_KEY=sk-or-v1-your-key' >> ~/.hermes/.env
 
 ```bash
 # The standard installer already put `hermes` on PATH.
-hermes doctor
-hermes chat -q "Hello"
+ansatz doctor
+ansatz chat -q "Hello"
 ```
 
 If you used the manual clone fallback, run `./hermes` from the checkout or
@@ -287,7 +287,7 @@ When you ask Hermes to review a PR in a repository that has `.agents/checks/`, t
 ## Reporting Issues
 
 - Use [GitHub Issues](https://github.com/NousResearch/hermes-agent/issues)
-- Include: OS, Python version, Hermes version (`hermes version`), full error traceback
+- Include: OS, Python version, Hermes version (`ansatz version`), full error traceback
 - Include steps to reproduce
 - Check existing issues before creating duplicates
 - For security vulnerabilities, please report privately

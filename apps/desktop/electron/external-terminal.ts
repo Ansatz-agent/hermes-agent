@@ -2,7 +2,7 @@
 //
 // This is deliberately NOT the in-app terminal pane: the point of the verb is
 // to hand a session to the terminal the user already lives in, running
-// `hermes --tui --resume <id>` there. Two problems have to be solved for that
+// `ansatz --tui --resume <id>` there. Two problems have to be solved for that
 // to work anywhere:
 //
 //  1. WHAT to run. The desktop's Hermes runtime is often a venv Python invoked

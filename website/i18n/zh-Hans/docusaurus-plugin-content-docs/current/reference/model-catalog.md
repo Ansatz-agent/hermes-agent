@@ -55,7 +55,7 @@ https://hermes-agent.nousresearch.com/docs/api/model-catalog.json
 
 | 时机 | 行为 |
 |---|---|
-| `/model` 或 `hermes model` | 若磁盘缓存已过期则重新获取，否则使用缓存 |
+| `/model` 或 `ansatz model` | 若磁盘缓存已过期则重新获取，否则使用缓存 |
 | 磁盘缓存新鲜（< TTL） | 不发起网络请求 |
 | 网络故障且有缓存 | 静默回退到缓存，输出一行日志 |
 | 网络故障且无缓存 | 静默回退到仓库内置快照 |

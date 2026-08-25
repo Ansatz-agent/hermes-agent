@@ -1,14 +1,14 @@
 """Install and remove the Linux desktop entry (``hermes.desktop``).
 
-``hermes desktop`` builds and launches the Electron app. On Linux, a
+``ansatz desktop`` builds and launches the Electron app. On Linux, a
 freshly-built app has no launcher presence: no menu item, no icon. This
 module writes the XDG desktop entry that gives it one.
-``hermes uninstall --gui`` removes the entry again.
+``ansatz uninstall --gui`` removes the entry again.
 
 Two values must be absolute for the entry to work:
 
   - ``Exec`` — the launcher runs without shell ``PATH`` customizations, so
-    a bare ``hermes desktop`` fails when hermes lives in ``~/.local/bin``
+    a bare ``ansatz desktop`` fails when hermes lives in ``~/.local/bin``
     or a venv. Resolve the real binary and write its full path.
   - ``Icon`` — an unqualified icon name needs an indexed icon theme. The
     spec allows an absolute path instead, so point at the app icon in the
@@ -58,15 +58,15 @@ def icon_path(project_root: Path) -> Path:
 
 
 def resolve_exec_command() -> str:
-    """Build the absolute ``Exec=`` command line for ``hermes desktop``.
+    """Build the absolute ``Exec=`` command line for ``ansatz desktop``.
 
     Prefer the real ``hermes`` executable (argv[0] or PATH). When Hermes
     runs as a module with no launcher installed, use the current
     interpreter, also absolute.
     """
-    from hermes_cli.relaunch import resolve_hermes_bin
+    from hermes_cli.relaunch import resolve_cli_bin
 
-    bin_path = resolve_hermes_bin()
+    bin_path = resolve_cli_bin()
     if bin_path:
         argv = [str(Path(bin_path).resolve()), "desktop"]
     else:

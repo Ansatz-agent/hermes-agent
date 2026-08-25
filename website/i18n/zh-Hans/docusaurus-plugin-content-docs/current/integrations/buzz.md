@@ -12,15 +12,15 @@ Hermes 有三种方式与 Buzz 集成。根据 Hermes 运行的位置和你的�
 
 | | ① Desktop 运行时 | ② 中继桥接（ACP） | ③ 原生网关平台 |
 |---|---|---|---|
-| **是什么** | Buzz Desktop 在本地将 Hermes 作为托管 harness 启动 | Buzz 的 `buzz-acp` 通过 stdio 将频道桥接到 `hermes acp` | Hermes 网关将 Buzz 作为一等消息平台加入 |
+| **是什么** | Buzz Desktop 在本地将 Hermes 作为托管 harness 启动 | Buzz 的 `buzz-acp` 通过 stdio 将频道桥接到 `ansatz acp` | Hermes 网关将 Buzz 作为一等消息平台加入 |
 | **Hermes 运行在** | 你的桌面，由 Buzz 启动 | 服务器，由 `buzz-acp` 启动 | 你自己的网关，与 Telegram/Discord 等并列 |
 | **适合** | 零配置在 Buzz Desktop 中试用 Hermes | 由 Buzz 掌管传输的托管 agent 身份 | 完整 Hermes：记忆、技能、审批、cron、会话 |
 | **入站** | ACP stdio | ACP stdio（经中继 WebSocket） | NIP-42 认证的 Nostr WebSocket（轮询兜底） |
-| **设置** | 自动发现 | `buzz-acp` 环境变量 | `hermes gateway setup` → Buzz |
+| **设置** | 自动发现 | `buzz-acp` 环境变量 | `ansatz gateway setup` → Buzz |
 
 ## ① Buzz Desktop 托管运行时
 
-Buzz Desktop 将 Hermes 作为预设运行时提供。按常规方式安装 Hermes 后，打开 **Settings → Runtimes**，Hermes 会自动出现——发现机制在登录 shell 的 PATH 上解析 `hermes-acp` 启动器，安装器会将其写入 `~/.local/bin`（较旧安装由 `hermes update` 自动补齐）。
+Buzz Desktop 将 Hermes 作为预设运行时提供。按常规方式安装 Hermes 后，打开 **Settings → Runtimes**，Hermes 会自动出现——发现机制在登录 shell 的 PATH 上解析 `hermes-acp` 启动器，安装器会将其写入 `~/.local/bin`（较旧安装由 `ansatz update` 自动补齐）。
 
 完整设置、故障排查和安全注意事项（Buzz 会自动批准工具权限——请保持 agent 为 owner-only）：**[ACP 宿主集成 → Buzz Desktop](/user-guide/features/acp#buzz-desktop)**
 
@@ -39,7 +39,7 @@ Buzz relay <-- WebSocket --> buzz-acp <-- ACP over stdio --> Hermes Agent
 内置的 `buzz` 平台插件让 Buzz 成为普通的 Hermes 消息平台——频道、私信、提及门控、话题回复、表情回应、图片和 cron 投递（`deliver=buzz`），同时保留 Hermes 自己的审批、记忆和会话管理。入站通过持久的 NIP-42 认证 Nostr WebSocket（无依赖 BIP-340 签名）到达，自动兜底到 CLI 轮询；出站通过 `buzz` CLI。
 
 ```bash
-hermes gateway setup   # 选择 Buzz
+ansatz gateway setup   # 选择 Buzz
 ```
 
 完整配置参考（环境变量、config.yaml、传输模式、访问控制）：**[消息平台 → Buzz](/user-guide/messaging/buzz)**

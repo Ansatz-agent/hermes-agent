@@ -34,7 +34,7 @@ Secrets Manager 包含在 Bitwarden 免费套餐中（有使用限制）；无�
 ### 2. 运行向导
 
 ```bash
-hermes secrets bitwarden setup
+ansatz secrets bitwarden setup
 ```
 
 该命令将：
@@ -49,7 +49,7 @@ hermes secrets bitwarden setup
 也支持通过参数进行非交互式设置：
 
 ```bash
-hermes secrets bitwarden setup \
+ansatz secrets bitwarden setup \
   --access-token "$BWS_ACCESS_TOKEN" \
   --server-url https://vault.bitwarden.eu \
   --project-id <project-uuid>
@@ -58,7 +58,7 @@ hermes secrets bitwarden setup \
 ### 3. 确认
 
 ```bash
-hermes secrets bitwarden status
+ansatz secrets bitwarden status
 ```
 
 此后，每次调用 `hermes` 都会在启动时拉取最新 secret。进程中首次应用 secret 时，stderr 会显示一行摘要信息。
@@ -67,21 +67,21 @@ hermes secrets bitwarden status
 
 | 命令 | 功能 |
 |---|---|
-| `hermes secrets bitwarden setup` | 交互式向导（安装二进制文件、提示输入令牌、选择项目、测试拉取） |
-| `hermes secrets bitwarden status` | 显示配置、二进制版本，以及令牌是否存在/是否通过校验 |
-| `hermes secrets bitwarden token` | 轮换访问令牌：先向 Bitwarden 验证新令牌，验证通过后再写入 `.env` |
-| `hermes secrets bitwarden sync` | 演习模式：立即拉取 secret 并显示将应用的内容 |
-| `hermes secrets bitwarden sync --apply` | 拉取并导出到当前 shell 的环境中 |
-| `hermes secrets bitwarden install` | 仅下载固定版本的 `bws` 二进制文件（无需认证） |
-| `hermes secrets bitwarden disable` | 将 `enabled` 设为 `false`；保留令牌和项目 ID |
+| `ansatz secrets bitwarden setup` | 交互式向导（安装二进制文件、提示输入令牌、选择项目、测试拉取） |
+| `ansatz secrets bitwarden status` | 显示配置、二进制版本，以及令牌是否存在/是否通过校验 |
+| `ansatz secrets bitwarden token` | 轮换访问令牌：先向 Bitwarden 验证新令牌，验证通过后再写入 `.env` |
+| `ansatz secrets bitwarden sync` | 演习模式：立即拉取 secret 并显示将应用的内容 |
+| `ansatz secrets bitwarden sync --apply` | 拉取并导出到当前 shell 的环境中 |
+| `ansatz secrets bitwarden install` | 仅下载固定版本的 `bws` 二进制文件（无需认证） |
+| `ansatz secrets bitwarden disable` | 将 `enabled` 设为 `false`；保留令牌和项目 ID |
 
 ## 轮换已过期或已吊销的令牌
 
 当机器账户令牌过期、被吊销或账户被删除时，启动信息会显示令牌被拒绝的说明，并附带 `→` 修复提示。无需重新运行整个向导即可修复：
 
 ```bash
-hermes secrets bitwarden token                     # 隐藏输入提示
-hermes secrets bitwarden token --access-token 0.…  # 非交互式
+ansatz secrets bitwarden token                     # 隐藏输入提示
+ansatz secrets bitwarden token --access-token 0.…  # 非交互式
 ```
 
 该命令会在写入任何内容**之前**用新令牌探测 Bitwarden——令牌被拒绝时不会改动现有 `.env`。成功后会存储令牌、清除拉取缓存，并在配置的项目对新机器账户不可见时发出警告。
@@ -118,9 +118,9 @@ Bitwarden 永远不会阻塞 Hermes 启动。如果出现任何问题，stderr �
 
 | 现象 | 原因 | 修复方法 |
 |---|---|---|
-| `BWS_ACCESS_TOKEN is not set` | 配置中已启用，但令牌已从 `.env` 中清除 | 重新运行 `hermes secrets bitwarden setup` |
-| `Bitwarden rejected the machine-account access token … invalid_client` | 令牌已吊销、过期、机器账户被删除——或令牌属于其他区域（例如欧盟令牌访问了美国 identity 端点） | 运行 `hermes secrets bitwarden token` 粘贴新令牌；区域不匹配时重新运行 setup 选择欧盟/自托管（或设置 `secrets.bitwarden.server_url`） |
-| `bws exited 1: invalid access token` | 令牌已吊销或有误 | 运行 `hermes secrets bitwarden token` 提供新令牌 |
+| `BWS_ACCESS_TOKEN is not set` | 配置中已启用，但令牌已从 `.env` 中清除 | 重新运行 `ansatz secrets bitwarden setup` |
+| `Bitwarden rejected the machine-account access token … invalid_client` | 令牌已吊销、过期、机器账户被删除——或令牌属于其他区域（例如欧盟令牌访问了美国 identity 端点） | 运行 `ansatz secrets bitwarden token` 粘贴新令牌；区域不匹配时重新运行 setup 选择欧盟/自托管（或设置 `secrets.bitwarden.server_url`） |
+| `bws exited 1: invalid access token` | 令牌已吊销或有误 | 运行 `ansatz secrets bitwarden token` 提供新令牌 |
 | `bws timed out` | 网络受阻或 Bitwarden API 响应缓慢 | 检查到 `api.bitwarden.com`（或你的 `server_url`）的连通性 |
 | `bws binary not available` | `auto_install: false` 且 `bws` 不在 PATH 中 | 从 [github.com/bitwarden/sdk-sm/releases](https://github.com/bitwarden/sdk-sm/releases) 手动安装，或重新开启 `auto_install` |
 | `Checksum mismatch` | 下载内容损坏或被篡改 | 重新运行，将自动重试；如持续出现，请提交 issue |
