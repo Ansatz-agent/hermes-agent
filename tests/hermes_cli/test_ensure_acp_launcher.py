@@ -91,6 +91,29 @@ def test_legacy_only_install_gains_canonical_and_missing_compatibility_launchers
     assert unrelated.read_text(encoding="utf-8") == "do not replace\n"
 
 
+def test_legacy_only_fallback_preserves_the_acp_subcommand_for_both_names(
+    fake_home,
+    tmp_path,
+    monkeypatch,
+):
+    """Both repaired ACP wrappers must add ``acp`` to the legacy launcher."""
+    empty_venv_python = tmp_path / "empty-venv" / "bin" / "python"
+    monkeypatch.setattr("hermes_cli.main.sys.executable", str(empty_venv_python))
+    legacy = fake_home / "hermes"
+    legacy.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\"\n", encoding="utf-8")
+    legacy.chmod(0o755)
+
+    _ensure_acp_launcher()
+
+    for launcher_name in ("ansatz-acp", "hermes-acp"):
+        launcher = fake_home / launcher_name
+        assert f'exec "{legacy}" "acp" "$@"' in launcher.read_text(encoding="utf-8")
+        result = subprocess.run(
+            [launcher, "--stdio"], check=True, capture_output=True, text=True
+        )
+        assert result.stdout.strip() == "acp --stdio"
+
+
 def test_repair_uses_verified_venv_scripts_not_an_occupied_canonical_path(
     fake_home,
     venv_console_scripts,

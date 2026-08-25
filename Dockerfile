@@ -412,8 +412,9 @@ COPY --chmod=0755 docker/entrypoint-dispatch.sh /opt/hermes/docker/entrypoint-di
 # the venv bin onto PATH; Architecture B's main-wrapper.sh does the
 # same for the container's main process, but `docker exec` and our
 # cont-init.d scripts don't pass through the wrapper. Expose the venv
-# bin globally so `docker exec <container> hermes ...` and any
-# subprocess that doesn't activate the venv first still find hermes.
+# bin globally so `docker exec <container> ansatz ...` resolves the canonical
+# privilege-drop shim; `hermes` remains its compatibility alias. Subprocesses
+# that do not activate the venv still find the complete console-script family.
 #
 # /opt/hermes/bin is prepended ahead of the venv so the privilege-drop
 # shim wins PATH resolution. The shim's last act is to exec the venv

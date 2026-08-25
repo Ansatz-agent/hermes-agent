@@ -2425,7 +2425,9 @@ def _ensure_acp_launcher() -> None:
                     () if acp_target != legacy_fallback else ("acp",),
                 ),
             )
-            canonical_targets = {name: target for name, target, _args in canonical}
+            canonical_targets = {
+                name: (target, args) for name, target, args in canonical
+            }
             for name, target, args in canonical:
                 if _write_launcher(bin_dir / name, target, *args):
                     repaired.append(name)
@@ -2437,8 +2439,12 @@ def _ensure_acp_launcher() -> None:
                 ("hermes-agent", "ansatz-agent"),
                 ("hermes-acp", "ansatz-acp"),
             ):
-                target = venv_scripts[legacy] or canonical_targets[canonical_name]
-                if _write_launcher(bin_dir / legacy, target):
+                target = venv_scripts[legacy]
+                if target is None:
+                    target, args = canonical_targets[canonical_name]
+                else:
+                    args = ()
+                if _write_launcher(bin_dir / legacy, target, *args):
                     repaired.append(legacy)
         except OSError:
             continue
