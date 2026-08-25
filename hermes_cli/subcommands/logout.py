@@ -16,7 +16,7 @@ def build_logout_parser(subparsers, *, cmd_logout: Callable) -> None:
     # =========================================================================
     logout_parser = subparsers.add_parser(
         "logout",
-        help="Sign out of the Hermes remote account",
+        help="Sign out of the Ansatz remote account",
         description="Revoke the remote account Session without changing provider credentials.",
     )
     logout_parser.set_defaults(func=cmd_logout)

@@ -81,6 +81,7 @@ _bootstrap_root = os.path.realpath(os.path.join(os.path.dirname(__file__), os.pa
 if _bootstrap_root not in sys.path:
     sys.path.insert(0, _bootstrap_root)
 from hermes_cli import _startup_fast  # noqa: E402
+from hermes_cli.cli_identity import CANONICAL_COMMAND  # noqa: E402
 
 _startup_fast.ensure_project_root_on_path()
 _raw_startup_argv = tuple(sys.argv[1:])
@@ -109,7 +110,7 @@ try:
     enforce_raw_argv(_raw_startup_argv)
 except GuardRejected as _auth_error:
     print(
-        f"AUTH_REQUIRED {_auth_error.reason}; run `hermes login`",
+        f"AUTH_REQUIRED {_auth_error.reason}; run `{CANONICAL_COMMAND} login`",
         file=sys.stderr,
     )
     raise SystemExit(20) from None
@@ -13202,7 +13203,7 @@ def main():
     except AuthRequired as auth_error:
         print(
             f"AUTH_REQUIRED {auth_error.reason or auth_error.code}; "
-            "run `hermes login`",
+            f"run `{CANONICAL_COMMAND} login`",
             file=sys.stderr,
         )
         raise SystemExit(20) from None

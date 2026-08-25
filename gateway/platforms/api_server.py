@@ -1023,9 +1023,9 @@ if AIOHTTP_AVAILABLE:
         except AuthRequired:
             return web.json_response(
                 {
-                    "error": "Hermes login required",
+                    "error": "Ansatz login required",
                     "code": "login_required",
-                    "hint": "Run `hermes login` and retry.",
+                    "hint": "Run `ansatz login` and retry.",
                 },
                 status=401,
             )

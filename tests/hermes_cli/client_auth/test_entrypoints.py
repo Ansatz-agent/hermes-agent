@@ -104,6 +104,17 @@ hermes-acp = "acp_adapter.entry:main"
     }.issubset(discovered)
 
 
+def test_manifest_marks_canonical_and_legacy_cli_interactive():
+    payload = entrypoint_scanner._manifest_payload(
+        {"pyproject:ansatz", "pyproject:hermes", "pyproject:ansatz-agent"}
+    )
+    entries = {item["id"]: item for item in payload["entrypoints"]}
+
+    assert entries["pyproject:ansatz"]["interactive"] is True
+    assert entries["pyproject:hermes"]["interactive"] is True
+    assert entries["pyproject:ansatz-agent"]["interactive"] is False
+
+
 def test_distribution_scanner_finds_every_shipped_direct_python_script(tmp_path):
     _write(
         tmp_path / "scripts" / "runtime_helper.py",
@@ -246,7 +257,7 @@ def test_packaged_direct_scripts_reject_before_capability_import(
     assert result.returncode == 20
     assert result.stdout == "CAPABILITY_MODULES=\n"
     assert result.stderr == (
-        "AUTH_REQUIRED runtime_unavailable; run `hermes login`\n"
+        "AUTH_REQUIRED runtime_unavailable; run `ansatz login`\n"
     )
 
 
@@ -350,7 +361,7 @@ def test_legacy_gateway_launcher_exits_locked_before_dotenv_import():
     assert result.returncode == 20
     assert result.stdout == "dotenv_loaded=False\n"
     assert result.stderr == (
-        "AUTH_REQUIRED runtime_unavailable; run `hermes login`\n"
+        "AUTH_REQUIRED runtime_unavailable; run `ansatz login`\n"
     )
 
 

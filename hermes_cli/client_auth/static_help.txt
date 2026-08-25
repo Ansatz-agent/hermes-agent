@@ -1,4 +1,4 @@
-usage: hermes [-h] [--version] [-z PROMPT] [--usage-file PATH] [-m MODEL]
+usage: ansatz [-h] [--version] [-z PROMPT] [--usage-file PATH] [-m MODEL]
               [--provider PROVIDER] [--reasoning LEVEL] [-t TOOLSETS]
               [--resume SESSION] [--no-restore-cwd] [--in DIR]
               [--continue [SESSION_NAME]] [--worktree] [--accept-hooks]
@@ -8,7 +8,7 @@ usage: hermes [-h] [--version] [-z PROMPT] [--usage-file PATH] [-m MODEL]
               {chat,model,moa,fallback,secrets,egress,migrate,gateway,proxy,lsp,setup,whatsapp,whatsapp-cloud,slack,send,login,logout,auth,provider,status,pause,resume,cron,sync,webhook,portal,kanban,project,hooks,doctor,verify,security,approvals,dump,debug,backup,checkpoints,import,import-agent,config,skin,console,pairing,skills,bundles,plugins,curator,pets,journey,learning,memory-graph,memory,tools,computer-use,mcp,sessions,insights,monitoring,claw,version,update,uninstall,acp,profile,completion,dashboard,serve,desktop,gui,logs,prompt-size}
               ...
 
-Hermes Agent - AI assistant with tool-calling capabilities
+Ansatz - AI assistant with tool-calling capabilities
 
 positional arguments:
   {chat,model,moa,fallback,secrets,egress,migrate,gateway,proxy,lsp,setup,whatsapp,whatsapp-cloud,slack,send,login,logout,auth,provider,status,pause,resume,cron,sync,webhook,portal,kanban,project,hooks,doctor,verify,security,approvals,dump,debug,backup,checkpoints,import,import-agent,config,skin,console,pairing,skills,bundles,plugins,curator,pets,journey,learning,memory-graph,memory,tools,computer-use,mcp,sessions,insights,monitoring,claw,version,update,uninstall,acp,profile,completion,dashboard,serve,desktop,gui,logs,prompt-size}
@@ -32,9 +32,9 @@ positional arguments:
     slack               Slack integration helpers (manifest generation, etc.)
     send                Send a message to a configured platform (scripts, cron
                         jobs, CI).
-    login               Sign in to the fixed Hermes remote account server
-    logout              Sign out of the Hermes remote account
-    auth                Hermes remote account status
+    login               Sign in to the fixed Ansatz remote account server
+    logout              Sign out of the Ansatz remote account
+    auth                Ansatz remote account status
     provider            Manage inference-provider credentials
     status              Show status of all components
     pause               Emergency stop: pause cron/kanban dispatch and new
@@ -124,7 +124,7 @@ options:
   --provider PROVIDER   Provider override for this invocation (e.g.
                         openrouter, anthropic). Applies to -z/--oneshot and
                         --tui. The persistent provider lives in config.yaml
-                        under model.provider — use `hermes setup` or edit the
+                        under model.provider — use `ansatz setup` or edit the
                         file to change it.
   --reasoning LEVEL     Reasoning effort for this invocation: none, minimal,
                         low, medium, high, xhigh, max, or ultra. Overrides
@@ -174,47 +174,47 @@ options:
                         build)
 
 Examples:
-    hermes                        Start interactive chat
-    hermes chat -q "Hello"        Single query mode
-    hermes --tui                  Launch the modern TUI (or set display.interface: tui)
-    hermes --cli                  Force the classic REPL (overrides display.interface: tui)
-    hermes -c                     Resume the most recent session
-    hermes -c "my project"        Resume a session by name (latest in lineage)
-    hermes --resume <session_id>  Resume a specific session by ID
-    hermes --resume latest        Resume the most recent session (same as -c)
-    hermes --tui --resume latest --in ./dir   Resume ./dir's latest session in the TUI
-    hermes setup                  Run setup wizard
-    hermes login                  Sign in to the Hermes remote account
-    hermes logout                 Sign out of the Hermes remote account
-    hermes auth status            Show Hermes remote account status
-    hermes provider add <p>       Add a pooled provider credential
-    hermes provider list          List provider credentials
-    hermes provider remove <p> <t> Remove provider credential by index, id, or label
-    hermes provider reset <p>     Clear provider exhaustion status
-    hermes model                  Select default model
-    hermes fallback [list]        Show fallback provider chain
-    hermes fallback add           Add a fallback provider (same picker as `hermes model`)
-    hermes fallback remove        Remove a fallback provider from the chain
-    hermes config                 View configuration
-    hermes config edit            Edit config in $EDITOR
-    hermes config set model gpt-4 Set a config value
-    hermes gateway                Run messaging gateway
-    hermes -s hermes-agent-dev,github-auth
-    hermes -w                     Start in isolated git worktree
-    hermes gateway install        Install gateway background service
-    hermes sessions list          List past sessions
-    hermes sessions browse        Interactive session picker
-    hermes sessions rename ID T   Rename/title a session
-    hermes logs                   View agent.log (last 50 lines)
-    hermes logs -f                Follow agent.log in real time
-    hermes logs errors            View errors.log
-    hermes logs --since 1h        Lines from the last hour
-    hermes debug share             Upload debug report for support
-    hermes console                Open the safe Hermes command console
-    hermes update                 Update to latest version
-    hermes dashboard              Start web UI dashboard (port 9119)
-    hermes dashboard --stop       Stop running dashboard processes
-    hermes dashboard --status     List running dashboard processes
+    ansatz                        Start interactive chat
+    ansatz chat -q "Hello"        Single query mode
+    ansatz --tui                  Launch the modern TUI (or set display.interface: tui)
+    ansatz --cli                  Force the classic REPL (overrides display.interface: tui)
+    ansatz -c                     Resume the most recent session
+    ansatz -c "my project"        Resume a session by name (latest in lineage)
+    ansatz --resume <session_id>  Resume a specific session by ID
+    ansatz --resume latest        Resume the most recent session (same as -c)
+    ansatz --tui --resume latest --in ./dir   Resume ./dir's latest session in the TUI
+    ansatz setup                  Run setup wizard
+    ansatz login                  Sign in to the Ansatz remote account
+    ansatz logout                 Sign out of the Ansatz remote account
+    ansatz auth status            Show Ansatz remote account status
+    ansatz provider add <p>       Add a pooled provider credential
+    ansatz provider list          List provider credentials
+    ansatz provider remove <p> <t> Remove provider credential by index, id, or label
+    ansatz provider reset <p>     Clear provider exhaustion status
+    ansatz model                  Select default model
+    ansatz fallback [list]        Show fallback provider chain
+    ansatz fallback add           Add a fallback provider (same picker as `ansatz model`)
+    ansatz fallback remove        Remove a fallback provider from the chain
+    ansatz config                 View configuration
+    ansatz config edit            Edit config in $EDITOR
+    ansatz config set model gpt-4 Set a config value
+    ansatz gateway                Run messaging gateway
+    ansatz -s hermes-agent-dev,github-auth
+    ansatz -w                     Start in isolated git worktree
+    ansatz gateway install        Install gateway background service
+    ansatz sessions list          List past sessions
+    ansatz sessions browse        Interactive session picker
+    ansatz sessions rename ID T   Rename/title a session
+    ansatz logs                   View agent.log (last 50 lines)
+    ansatz logs -f                Follow agent.log in real time
+    ansatz logs errors            View errors.log
+    ansatz logs --since 1h        Lines from the last hour
+    ansatz debug share             Upload debug report for support
+    ansatz console                Open the safe Ansatz command console
+    ansatz update                 Update to latest version
+    ansatz dashboard              Start web UI dashboard (port 9119)
+    ansatz dashboard --stop       Stop running dashboard processes
+    ansatz dashboard --status     List running dashboard processes
 
 For more help on a command:
-    hermes <command> --help
+    ansatz <command> --help

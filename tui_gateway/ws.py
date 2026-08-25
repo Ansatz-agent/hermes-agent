@@ -299,7 +299,7 @@ async def handle_ws(ws: Any) -> None:
             require_authorized("tui.ws.connect")
         except AuthRequired:
             disconnect_reason = "hermes_login_required"
-            await ws.close(code=4401, reason="Hermes login required")
+            await ws.close(code=4401, reason="Ansatz login required")
             return
         await ws.accept()
         disconnect_reason = "connected"
@@ -404,7 +404,7 @@ async def handle_ws(ws: Any) -> None:
                 resp = await asyncio.to_thread(server.dispatch, req, transport)
             except AuthRequired:
                 disconnect_reason = "hermes_login_required"
-                await ws.close(code=4401, reason="Hermes login required")
+                await ws.close(code=4401, reason="Ansatz login required")
                 break
             except Exception:
                 dispatch_crashes += 1

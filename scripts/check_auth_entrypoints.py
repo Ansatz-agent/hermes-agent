@@ -245,6 +245,7 @@ def _manifest_payload(ids: set[str]) -> dict[str, object]:
         else:
             startup = "guarded"
         interactive = entry_id in {
+            "pyproject:ansatz",
             "pyproject:hermes",
             "python:cli.py",
             "python:hermes_cli/main.py",

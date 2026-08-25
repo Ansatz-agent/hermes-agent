@@ -97,7 +97,7 @@ def test_protected_main_import_exits_before_recovery_config_or_parser_modules():
             "yaml",
         }
     )
-    assert result.stderr == "AUTH_REQUIRED runtime_unavailable; run `hermes login`\n"
+    assert result.stderr == "AUTH_REQUIRED runtime_unavailable; run `ansatz login`\n"
 
 
 @pytest.mark.parametrize("flag", ["--help", "-h"])
@@ -115,6 +115,7 @@ def test_auth_free_help_is_the_packaged_real_parser_snapshot(flag):
     )
 
     assert result.returncode == 0, result.stderr
+    assert result.stdout.startswith("usage: ansatz ")
     assert result.stdout == expected
     assert result.stderr == ""
 
@@ -167,7 +168,7 @@ def test_direct_entrypoint_is_noninteractive_and_exits_with_auth_code(
     assert error.value.code == 20
     assert calls == [("direct.batch", False)]
     assert capsys.readouterr().err == (
-        "AUTH_REQUIRED signed_out; run `hermes login`\n"
+        "AUTH_REQUIRED signed_out; run `ansatz login`\n"
     )
 
 

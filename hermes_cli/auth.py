@@ -7845,10 +7845,10 @@ def _save_model_choice(model_id: str) -> None:
 
 
 def login_command(args) -> None:
-    """Deprecated: use 'hermes model' or 'hermes setup' instead."""
-    print("The 'hermes login' command has been removed.")
-    print("Use 'hermes auth' to manage credentials,")
-    print("'hermes model' to select a provider, or 'hermes setup' for full setup.")
+    """Explain the removed provider-login flow and its replacements."""
+    print("The deprecated provider-login flow has been removed.")
+    print("Use `ansatz provider` to manage credentials,")
+    print("`ansatz model` to select a provider, or `ansatz setup` for full setup.")
     raise SystemExit(0)
 
 

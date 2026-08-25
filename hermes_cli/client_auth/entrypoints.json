@@ -31,6 +31,21 @@
       "startup": "distribution-bootstrap"
     },
     {
+      "id": "pyproject:ansatz",
+      "interactive": true,
+      "startup": "guarded"
+    },
+    {
+      "id": "pyproject:ansatz-acp",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
+      "id": "pyproject:ansatz-agent",
+      "interactive": false,
+      "startup": "guarded"
+    },
+    {
       "id": "pyproject:hermes",
       "interactive": true,
       "startup": "guarded"

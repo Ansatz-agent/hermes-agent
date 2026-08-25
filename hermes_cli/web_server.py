@@ -935,9 +935,9 @@ async def client_runtime_auth_middleware(request: Request, call_next):
             return JSONResponse(
                 status_code=401,
                 content={
-                    "detail": "Hermes login required",
+                    "detail": "Ansatz login required",
                     "code": "login_required",
-                    "hint": "Run `hermes login` and retry.",
+                    "hint": "Run `ansatz login` and retry.",
                 },
             )
     return await call_next(request)
@@ -15701,7 +15701,7 @@ async def _ws_client_runtime_authorized(ws: "WebSocket", boundary: str) -> bool:
         return True
     except AuthRequired:
         with contextlib.suppress(Exception):
-            await ws.close(code=4401, reason="Hermes login required")
+            await ws.close(code=4401, reason="Ansatz login required")
         return False
 
 # Per-channel subscriber registry used by /api/pub (PTY-side gateway → dashboard)

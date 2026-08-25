@@ -118,6 +118,20 @@ def test_login_subparser_advertises_remote_account_login():
     sub = parser.add_subparsers(dest="command")
     build_login_parser(sub, cmd_login=_h("login"))
     help_text = parser.format_help()
-    assert "Sign in to the fixed Hermes remote account server" in help_text
+    assert "Sign in to the fixed Ansatz remote account server" in help_text
     with pytest.raises(SystemExit):
         parser.parse_args(["login", "--provider", "anthropic"])
+
+
+def test_removed_provider_login_guidance_uses_ansatz(capsys):
+    from hermes_cli.auth import login_command
+
+    with pytest.raises(SystemExit) as error:
+        login_command(None)
+
+    assert error.value.code == 0
+    assert capsys.readouterr().out == (
+        "The deprecated provider-login flow has been removed.\n"
+        "Use `ansatz provider` to manage credentials,\n"
+        "`ansatz model` to select a provider, or `ansatz setup` for full setup.\n"
+    )
