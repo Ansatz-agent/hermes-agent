@@ -115,3 +115,12 @@ test('local backend startup coordinates encrypted capture but never waits for a 
   )
   assert.doesNotMatch(authSubscription, /cleanupDesktopCapabilities|desktopRuntimeGate\.invalidate/)
 })
+
+test('main records real auth owner transitions and migrates them in the background after backend readiness is unblocked', () => {
+  const source = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
+
+  assert.match(source, /traceNamespaceTransition\(previousLocalAuthStatus, status/)
+  assert.match(source, /writeTraceNamespaceTransition\(/)
+  assert.match(source, /void store\s*\.migrateTrustedSource\(/)
+  assert.doesNotMatch(source, /await TraceOutboxStore\.migrateTrustedNamespace\(/)
+})

@@ -113,7 +113,7 @@ export interface TraceOutboxStoreOptions {
 export interface TraceOutboxNamespaceMigrationOptions {
   fs?: TraceFileSystem
   keyProtector: TraceKeyProtector
-  renameDirectory: (source: string, destination: string) => Promise<void>
+  removeSourceDirectory: (source: string) => Promise<void>
   sourceOwner: TraceOwner
   sourceRoot: string
   targetOwner: TraceOwner
@@ -191,56 +191,27 @@ export class TraceOutboxStore {
       throw new Error('invalid_trace_namespace_migration')
     }
 
-    if ((await fs.readFile(join(options.targetRoot, KEY_FILE_NAME))) !== null) {
-      return false
-    }
-
     if ((await fs.readFile(join(options.sourceRoot, KEY_FILE_NAME))) === null) {
       return false
     }
 
-    const stagingRoot = `${options.targetRoot}.migrating-${randomUUID()}`
-    const source = await TraceOutboxStore.open({
-      expectedOwner: sourceOwner,
+    const target = await TraceOutboxStore.open({
+      expectedOwner: targetOwner,
       fs,
       keyProtector: options.keyProtector,
-      root: options.sourceRoot
+      root: options.targetRoot
     })
-    let staging: TraceOutboxStore | null = null
 
     try {
-      const batches = await Promise.all(
-        [...source.records.values()]
-          .filter(
-            (record): record is StoredRecord & { state: 'pending' | 'quarantined' } =>
-              record.state === 'pending' || record.state === 'quarantined'
-          )
-          .sort((left, right) => left.batch.sequence - right.batch.sequence)
-          .map(async record => ({ batch: await source.readStoredBatch(record.batch.batchId), state: record.state }))
-      )
-      staging = await TraceOutboxStore.open({
-        expectedOwner: targetOwner,
+      return await target.migrateTrustedSource({
         fs,
         keyProtector: options.keyProtector,
-        root: stagingRoot
+        removeSourceDirectory: options.removeSourceDirectory,
+        sourceOwner,
+        sourceRoot: options.sourceRoot
       })
-      await staging.importMigratedBatches(batches, targetOwner)
-      await staging.close()
-      staging = null
-      await options.renameDirectory(stagingRoot, options.targetRoot)
-      await fs.syncDirectory(dirname(options.targetRoot))
-
-      const verified = await TraceOutboxStore.open({
-        expectedOwner: targetOwner,
-        fs,
-        keyProtector: options.keyProtector,
-        root: options.targetRoot
-      })
-      await verified.close()
-
-      return true
     } finally {
-      await Promise.allSettled([source.close(), staging?.close() ?? Promise.resolve()])
+      await target.close()
     }
   }
 
@@ -314,6 +285,7 @@ export class TraceOutboxStore {
       dataKey,
       capacityBytes,
       expectedAccountKey: expectedOwner.accountKey,
+      expectedOwner,
       freeSpace: options.freeSpace ?? (() => fs.freeSpace(options.root)),
       fs,
       groupCommitBytes,
@@ -435,6 +407,7 @@ export class TraceOutboxStore {
       dataKey: Buffer
       capacityBytes: number
       expectedAccountKey: string
+      expectedOwner: TraceOwner
       freeSpace: () => TraceFreeSpace | Promise<TraceFreeSpace>
       fs: TraceFileSystem
       groupCommitBytes: number
@@ -560,6 +533,72 @@ export class TraceOutboxStore {
 
   async enqueue(input: TraceEnvelopeInput): Promise<DurableTraceBatch> {
     return this.beginEnqueue(input).durable
+  }
+
+  async migrateTrustedSource(options: {
+    fs?: TraceFileSystem
+    keyProtector: TraceKeyProtector
+    removeSourceDirectory: (source: string) => Promise<void>
+    sourceOwner: TraceOwner
+    sourceRoot: string
+  }): Promise<boolean> {
+    const sourceOwner = validateTraceOwner(options.sourceOwner).owner
+    const fs = options.fs ?? nodeTraceFileSystem
+
+    if (
+      !sourceOwner.accountKey.startsWith('legacy-') ||
+      !this.config.expectedAccountKey.startsWith('account-') ||
+      sourceOwner.installationId !== this.expectedOwnerInstallationId()
+    ) {
+      throw new Error('invalid_trace_namespace_migration')
+    }
+    if ((await fs.readFile(join(options.sourceRoot, KEY_FILE_NAME))) === null) {
+      return false
+    }
+
+    const source = await TraceOutboxStore.open({
+      expectedOwner: sourceOwner,
+      fs,
+      keyProtector: options.keyProtector,
+      root: options.sourceRoot
+    })
+    let complete = false
+
+    try {
+      const records = [...source.records.values()].sort((left, right) => left.batch.sequence - right.batch.sequence)
+      const migratedReceipts = new Set<string>()
+
+      for (const record of records) {
+        if (record.state === 'pending' || record.state === 'quarantined') {
+          const batch = await source.readStoredBatch(record.batch.batchId)
+          await this.importMigratedBatch(batch, record.state)
+        } else if (record.state === 'receipt') {
+          const receipt = source.receipts.get(record.batch.batchId)
+          if (receipt !== undefined) {
+            await this.importMigratedReceipt(receipt, this.dedupeKey({ ...record.batch, owner: this.targetOwner() }))
+            migratedReceipts.add(receipt.batchId)
+          }
+        }
+        await new Promise<void>(resolve => setImmediate(resolve))
+      }
+
+      for (const receipt of source.receipts.values()) {
+        if (!migratedReceipts.has(receipt.batchId) && receipt.dedupeKey !== null) {
+          await this.importMigratedReceipt(receipt, receipt.dedupeKey)
+          await new Promise<void>(resolve => setImmediate(resolve))
+        }
+      }
+      complete = true
+    } finally {
+      await source.close()
+    }
+
+    if (complete) {
+      await options.removeSourceDirectory(options.sourceRoot)
+      await fs.syncDirectory(dirname(options.sourceRoot))
+    }
+
+    return complete
   }
 
   close(): Promise<void> {
@@ -1277,66 +1316,115 @@ export class TraceOutboxStore {
     return { batch, encoded: encodeSegmentRecord({ encrypted, header }), item }
   }
 
-  private async importMigratedBatches(
-    batches: Array<{ batch: DurableTraceBatch; state: 'pending' | 'quarantined' }>,
-    owner: TraceOwner
-  ): Promise<void> {
-    if (this.records.size !== 0 || this.pending.length !== 0) {
-      throw new Error('trace_namespace_migration_target_not_empty')
-    }
+  private expectedOwnerInstallationId(): string {
+    return this.config.expectedOwner.installationId
+  }
 
-    const operations: TraceJournalOperation[] = [{ op: 'owner', accountKey: owner.accountKey }]
-    let offset = 0
+  private targetOwner(): TraceOwner {
+    return { ...this.config.expectedOwner }
+  }
 
-    for (const item of batches) {
-      const batch = { ...item.batch, body: Buffer.from(item.batch.body), owner: { ...owner } }
-      const header = this.headerFrom(batch)
+  private async importMigratedBatch(sourceBatch: DurableTraceBatch, state: 'pending' | 'quarantined'): Promise<void> {
+    return this.withMutationGate(() =>
+      this.withWriterLock(async () => {
+        const owner = this.targetOwner()
+        const existing = this.records.get(sourceBatch.batchId)
+        if (existing !== undefined) {
+          if (
+            existing.batch.payloadSha256 !== sourceBatch.payloadSha256 ||
+            existing.batch.entrypoint !== sourceBatch.entrypoint ||
+            existing.batch.hermesSessionId !== sourceBatch.hermesSessionId ||
+            existing.batch.runId !== sourceBatch.runId
+          ) {
+            throw new Error('conflicting_trace_namespace_batch')
+          }
+          return
+        }
 
-      if (!isValidTraceSegmentHeader(header)) {
-        throw new Error('invalid_record_header')
-      }
+        const batch = {
+          ...sourceBatch,
+          body: Buffer.from(sourceBatch.body),
+          owner,
+          sequence: this.nextSequence
+        }
+        const dedupeKey = this.dedupeKey(batch)
+        if (this.dedupe.has(dedupeKey)) {
+          return
+        }
+        const header = this.headerFrom(batch)
 
-      const encrypted = await encryptTraceRecord(
-        batch.body,
-        this.config.dataKey,
-        Buffer.from(`${owner.accountKey}/${batch.batchId}`, 'utf8')
-      )
-      const encoded = encodeSegmentRecord({ encrypted, header })
-      await this.config.fs.appendFile(this.config.segmentPath, encoded)
-      operations.push({
-        op: 'pending',
-        batchId: batch.batchId,
-        createdAt: batch.createdAt,
-        length: encoded.length,
-        offset,
-        segment: SEGMENT_FILE_NAME,
-        sequence: batch.sequence
-      })
-      if (item.state === 'quarantined') {
-        operations.push({
-          op: 'terminal',
-          batchId: batch.batchId,
-          errorClass: batch.lastErrorClass ?? 'migration_quarantined',
-          terminal: 'quarantined'
+        if (!isValidTraceSegmentHeader(header)) {
+          throw new Error('invalid_record_header')
+        }
+
+        const encrypted = await encryptTraceRecord(
+          batch.body,
+          this.config.dataKey,
+          Buffer.from(`${owner.accountKey}/${batch.batchId}`, 'utf8')
+        )
+        const encoded = encodeSegmentRecord({ encrypted, header })
+        const offset = this.segmentOffset
+        await this.config.fs.appendFile(this.config.segmentPath, encoded)
+        await this.config.fs.syncFile(this.config.segmentPath)
+        const operations: TraceJournalOperation[] = [
+          {
+            op: 'pending',
+            batchId: batch.batchId,
+            createdAt: batch.createdAt,
+            length: encoded.length,
+            offset,
+            segment: SEGMENT_FILE_NAME,
+            sequence: batch.sequence
+          }
+        ]
+        if (state === 'quarantined') {
+          operations.push({
+            op: 'terminal',
+            batchId: batch.batchId,
+            errorClass: batch.lastErrorClass ?? 'migration_quarantined',
+            terminal: 'quarantined'
+          })
+        }
+        this.records.set(batch.batchId, {
+          batch: header,
+          encodedBytes: encoded.length,
+          offset,
+          state
         })
-      }
-      this.records.set(batch.batchId, {
-        batch: header,
-        encodedBytes: encoded.length,
-        offset,
-        state: item.state
+        this.dedupe.set(dedupeKey, batch.batchId)
+        this.nextSequence += 1
+        this.segmentOffset += encoded.length
+        await this.appendAndSyncJournal(this.withOwnerOperation(operations))
+        this.ownerJournaled = true
       })
-      this.dedupe.set(this.dedupeKey(batch), batch.batchId)
-      this.nextSequence = Math.max(this.nextSequence, batch.sequence + 1)
-      offset += encoded.length
-    }
+    )
+  }
 
-    await this.config.fs.syncFile(this.config.segmentPath)
-    await this.config.journal.append(operations)
-    await this.config.fs.syncFile(join(dirname(dirname(this.config.segmentPath)), JOURNAL_FILE_NAME))
-    this.accountKey = owner.accountKey
-    this.ownerJournaled = true
-    this.segmentOffset = offset
+  private async importMigratedReceipt(receipt: ReceiptTombstone, dedupeKey: string): Promise<void> {
+    return this.withMutationGate(() =>
+      this.withWriterLock(async () => {
+        const existing = this.receipts.get(receipt.batchId)
+        if (existing !== undefined) {
+          if (existing.outcome !== receipt.outcome || existing.receivedAt !== receipt.receivedAt) {
+            throw new Error('conflicting_gateway_receipt')
+          }
+          return
+        }
+        const duplicate = this.dedupe.get(dedupeKey)
+        if (duplicate !== undefined && duplicate !== receipt.batchId) {
+          return
+        }
+        await this.appendExtendedReceipt(receipt, this.config.expectedAccountKey, dedupeKey)
+        this.receipts.set(receipt.batchId, {
+          accountKey: this.config.expectedAccountKey,
+          batchId: receipt.batchId,
+          dedupeKey,
+          outcome: receipt.outcome,
+          receivedAt: receipt.receivedAt
+        })
+        this.dedupe.set(dedupeKey, receipt.batchId)
+      })
+    )
   }
 
   private headerFrom(batch: DurableTraceBatch): Omit<DurableTraceBatch, 'body'> {

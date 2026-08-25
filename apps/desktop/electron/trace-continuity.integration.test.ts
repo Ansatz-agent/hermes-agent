@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rename, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import http from 'node:http'
 import { join } from 'node:path'
 
@@ -515,7 +515,7 @@ test('native login migrates a same-principal local-only FIFO through a synced st
     assert.equal(
       await TraceOutboxStore.migrateTrustedNamespace({
         keyProtector: protector(),
-        renameDirectory: rename,
+        removeSourceDirectory: path => rm(path, { force: false, recursive: true }),
         sourceOwner,
         sourceRoot,
         targetOwner,
@@ -523,7 +523,7 @@ test('native login migrates a same-principal local-only FIFO through a synced st
       }),
       true
     )
-    assert.notEqual(await readFile(join(sourceRoot, 'key.json')), null)
+    await assert.rejects(readFile(join(sourceRoot, 'key.json')), /ENOENT/)
 
     const migrated = await TraceOutboxStore.open({
       expectedOwner: targetOwner,
@@ -544,7 +544,7 @@ test('native login migrates a same-principal local-only FIFO through a synced st
     assert.equal(
       await TraceOutboxStore.migrateTrustedNamespace({
         keyProtector: protector(),
-        renameDirectory: rename,
+        removeSourceDirectory: path => rm(path, { force: false, recursive: true }),
         sourceOwner,
         sourceRoot,
         targetOwner,
@@ -552,6 +552,95 @@ test('native login migrates a same-principal local-only FIFO through a synced st
       }),
       false
     )
+  } finally {
+    await rm(userData, { force: true, recursive: true })
+  }
+})
+
+test('trusted migration streams records, merges an existing same-account target, preserves receipts, and drains source only after success', async () => {
+  const userData = await temporaryUserData()
+  const sourceOwner: TraceOwner = {
+    accountId: null,
+    accountKey: `legacy-${'e'.repeat(64)}`,
+    installationId,
+    sessionId: null
+  }
+  const targetOwner = owner('a')
+  const sourceRoot = join(userData, 'trace-outbox', sourceOwner.accountKey)
+  const targetRoot = join(userData, 'trace-outbox', targetOwner.accountKey)
+  let readsInFlight = 0
+  let maximumReadsInFlight = 0
+  const streamingFs: TraceFileSystem = {
+    ...nodeTraceFileSystem,
+    readRange: async (path, offset, length) => {
+      readsInFlight += 1
+      maximumReadsInFlight = Math.max(maximumReadsInFlight, readsInFlight)
+      try {
+        await Promise.resolve()
+        return await nodeTraceFileSystem.readRange(path, offset, length)
+      } finally {
+        readsInFlight -= 1
+      }
+    }
+  }
+
+  try {
+    const source = await TraceOutboxStore.open({
+      expectedOwner: sourceOwner,
+      keyProtector: protector(),
+      root: sourceRoot
+    })
+    const accepted = await source.enqueue(envelopeForOwner(sourceOwner, payload('migrated-receipt'), 1))
+    await source.acknowledge(accepted.batchId, {
+      batchId: accepted.batchId,
+      outcome: 'accepted',
+      receivedAt: Date.now()
+    })
+    const pending = await source.enqueue(envelopeForOwner(sourceOwner, payload('migrated-pending'), 2))
+    await source.close()
+
+    const target = await TraceOutboxStore.open({
+      expectedOwner: targetOwner,
+      keyProtector: protector(),
+      root: targetRoot
+    })
+    await target.enqueue(envelopeForOwner(targetOwner, payload('already-target'), 0))
+    await target.close()
+
+    assert.equal(
+      await TraceOutboxStore.migrateTrustedNamespace({
+        fs: streamingFs,
+        keyProtector: protector(),
+        removeSourceDirectory: path => rm(path, { force: false, recursive: true }),
+        sourceOwner,
+        sourceRoot,
+        targetOwner,
+        targetRoot
+      }),
+      true
+    )
+    assert.equal(maximumReadsInFlight, 1)
+    await assert.rejects(readFile(join(sourceRoot, 'key.json')), /ENOENT/)
+
+    const merged = await TraceOutboxStore.open({
+      expectedOwner: targetOwner,
+      keyProtector: protector(),
+      root: targetRoot
+    })
+    const diagnostics = await merged.diagnostics()
+    assert.equal(diagnostics.tombstones, 1)
+    assert.equal((await merged.peekEligible(Number.MAX_SAFE_INTEGER))?.batchId === pending.batchId, false)
+    const ids: string[] = []
+    for (;;) {
+      const batch = await merged.peekEligible(Number.MAX_SAFE_INTEGER)
+      if (!batch) {
+        break
+      }
+      ids.push(batch.batchId)
+      await merged.acknowledge(batch.batchId, { batchId: batch.batchId, outcome: 'accepted', receivedAt: Date.now() })
+    }
+    assert.ok(ids.includes(pending.batchId))
+    await merged.close()
   } finally {
     await rm(userData, { force: true, recursive: true })
   }

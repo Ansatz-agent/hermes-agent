@@ -1,5 +1,6 @@
-import { createHash } from 'node:crypto'
-import { join } from 'node:path'
+import { createHash, randomUUID } from 'node:crypto'
+import { mkdir, open, readFile, rename, rm } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
 
 import type { ConnectionScope } from './auth-bridge'
 import { isCanonicalUuidV4, type TraceOwner } from './trace-outbox-types'
@@ -26,6 +27,14 @@ type TraceAuthorizationStatus = {
   state: string
   username?: string | null
 }
+
+export type TraceNamespaceTransition = {
+  installationId: string
+  sourceAccountKey: string
+  targetAccountKey: string
+}
+
+const TRACE_TRANSITION_FILE = 'trusted-migration.json'
 
 export function legacyTraceOwnerForPrincipal(principalKey: string, installationId: string): TraceOwner {
   const match = LEGACY_PRINCIPAL_KEY.exec(principalKey)
@@ -89,6 +98,86 @@ export function traceOwnerFromScope(
     .digest('hex')
 
   return legacyTraceOwner(digest, installationId)
+}
+
+export function traceNamespaceTransition(
+  previous: TraceAuthorizationStatus | null,
+  current: TraceAuthorizationStatus,
+  scope: ConnectionScope,
+  installationId: string
+): TraceNamespaceTransition | null {
+  if (previous?.state !== 'authenticated' || previous.legacy !== true || previous.principal_key === null) {
+    return null
+  }
+
+  let source: TraceOwner
+  try {
+    source = legacyTraceOwnerForPrincipal(previous.principal_key, installationId)
+  } catch {
+    return null
+  }
+  const target = traceOwnerFromScope(current, scope, installationId)
+
+  if (!target.accountKey.startsWith('account-')) {
+    return null
+  }
+
+  return {
+    installationId,
+    sourceAccountKey: source.accountKey,
+    targetAccountKey: target.accountKey
+  }
+}
+
+export async function writeTraceNamespaceTransition(root: string, transition: TraceNamespaceTransition): Promise<void> {
+  const target = join(root, TRACE_TRANSITION_FILE)
+  const temporary = `${target}.tmp-${randomUUID()}`
+  await mkdir(root, { mode: 0o700, recursive: true })
+  const handle = await open(temporary, 'wx', 0o600)
+  try {
+    await handle.writeFile(JSON.stringify({ version: 1, ...transition }), 'utf8')
+    await handle.sync()
+  } finally {
+    await handle.close()
+  }
+  await rename(temporary, target)
+  const directory = await open(dirname(target), 'r')
+  try {
+    await directory.sync()
+  } finally {
+    await directory.close()
+  }
+}
+
+export async function readTraceNamespaceTransition(
+  root: string,
+  targetOwner: TraceOwner
+): Promise<TraceNamespaceTransition | null> {
+  try {
+    const parsed = JSON.parse(await readFile(join(root, TRACE_TRANSITION_FILE), 'utf8')) as Record<string, unknown>
+    if (
+      Object.keys(parsed).sort().join(',') !== 'installationId,sourceAccountKey,targetAccountKey,version' ||
+      parsed.version !== 1 ||
+      parsed.installationId !== targetOwner.installationId ||
+      parsed.targetAccountKey !== targetOwner.accountKey ||
+      typeof parsed.sourceAccountKey !== 'string' ||
+      !/^legacy-[0-9a-f]{64}$/.test(parsed.sourceAccountKey)
+    ) {
+      return null
+    }
+
+    return {
+      installationId: parsed.installationId,
+      sourceAccountKey: parsed.sourceAccountKey,
+      targetAccountKey: parsed.targetAccountKey
+    } as TraceNamespaceTransition
+  } catch {
+    return null
+  }
+}
+
+export async function clearTraceNamespaceTransition(root: string): Promise<void> {
+  await rm(join(root, TRACE_TRANSITION_FILE), { force: true })
 }
 
 export function previousLegacyTraceAccountKey(scope: ConnectionScope, installationId: string): string {

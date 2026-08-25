@@ -7,6 +7,7 @@ import {
   localOnlyTraceOwnerForPrincipal,
   migratePreviousLegacyTraceNamespace,
   previousLegacyTraceAccountKey,
+  traceNamespaceTransition,
   traceOwnerFromScope
 } from './trace-legacy-owner'
 
@@ -118,4 +119,39 @@ test('the exact previous scope namespace is atomically retained under the stable
   })
 
   assert.deepEqual(renamed, [[`/encrypted-trace-outbox/${previous}`, `/encrypted-trace-outbox/${current}`]])
+})
+
+test('legacy to native transition records the actual prior credential owner instead of recomputing it from native principal', () => {
+  const scope = { connection_id: 'local', epoch: 7, runtime_instance_id: 'runtime-transition' }
+  const legacyStatus = {
+    account_id: null,
+    epoch: scope.epoch,
+    installation_id: null,
+    legacy: true,
+    principal_key: `legacy:${'d'.repeat(64)}`,
+    runtime_instance_id: scope.runtime_instance_id,
+    session_id: null,
+    state: 'authenticated'
+  }
+  const accountId = '22222222-2222-4222-8222-222222222222'
+  const nativeStatus = {
+    ...legacyStatus,
+    account_id: accountId,
+    installation_id: installationId,
+    legacy: false,
+    principal_key: `account:${accountId}`,
+    session_id: '33333333-3333-4333-8333-333333333333'
+  }
+
+  const transition = traceNamespaceTransition(legacyStatus, nativeStatus, scope, installationId)
+
+  assert.deepEqual(transition, {
+    installationId,
+    sourceAccountKey: legacyTraceOwnerForPrincipal(legacyStatus.principal_key, installationId).accountKey,
+    targetAccountKey: `account-${accountId}`
+  })
+  assert.notEqual(
+    transition?.sourceAccountKey,
+    localOnlyTraceOwnerForPrincipal(nativeStatus.principal_key, installationId).accountKey
+  )
 })
