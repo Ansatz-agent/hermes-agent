@@ -16,6 +16,7 @@ import {
   type LocalDataEvidence,
   protectedIpcRejections
 } from './auth-assertions'
+import { runWithFixtureCleanup } from './authenticated-fixture-runner'
 import { type FixedAuthContractServer, startFixedAuthContractServer } from './fixed-auth-contract-server'
 import {
   buildAppEnv,
@@ -66,7 +67,7 @@ test('cached authorization restarts offline and silently revalidates', async () 
   })
   const fixture = await launchAuthenticatedFixture()
 
-  try {
+  await runWithFixtureCleanup(async () => {
     await login(fixture)
     await createConversation(fixture.page, SENTINEL)
     await createLocalArtifacts(fixture, SENTINEL)
@@ -134,16 +135,14 @@ test('cached authorization restarts offline and silently revalidates', async () 
     await expect(fixture.page.getByText(SENTINEL).first()).toBeVisible()
 
     assertNoCredentialDiagnostics(fixture)
-  } finally {
-    await fixture.cleanup()
-  }
+  }, fixture.cleanup)
 })
 
 test('sign out clears access but preserves every local user artifact', async () => {
   allowErrorBanners()
   const fixture = await launchAuthenticatedFixture()
 
-  try {
+  await runWithFixtureCleanup(async () => {
     await login(fixture)
     const conversation = 'signout preservation conversation'
     await createConversation(fixture.page, conversation)
@@ -171,9 +170,7 @@ test('sign out clears access but preserves every local user artifact', async () 
     assertLocalDataPreserved(before, localDigests(fixture))
     expect(JSON.stringify(before)).not.toMatch(/credential|keyring/i)
     assertNoCredentialDiagnostics(fixture)
-  } finally {
-    await fixture.cleanup()
-  }
+  }, fixture.cleanup)
 })
 
 for (const reason of ['account_disabled', 'account_revoked', 'session_revoked'] as const) {
@@ -181,7 +178,7 @@ for (const reason of ['account_disabled', 'account_revoked', 'session_revoked'] 
     allowErrorBanners()
     const fixture = await launchAuthenticatedFixture()
 
-    try {
+    await runWithFixtureCleanup(async () => {
       await login(fixture)
       const conversation = `${reason} preservation conversation`
       await createConversation(fixture.page, conversation)
@@ -234,9 +231,7 @@ for (const reason of ['account_disabled', 'account_revoked', 'session_revoked'] 
         .toBe(1)
       assertLocalDataPreserved(before, localDigests(fixture))
       assertNoCredentialDiagnostics(fixture)
-    } finally {
-      await fixture.cleanup()
-    }
+    }, fixture.cleanup)
   })
 }
 
