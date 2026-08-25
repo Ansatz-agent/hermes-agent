@@ -976,11 +976,7 @@ async function requireDesktopConnectionScope(connectionId = 'local') {
     throw new AuthBridgeError('runtime_unavailable', 'runtime_unavailable')
   }
 
-  await desktopAuthCoordinator.refresh(connectionId)
-  const scope = desktopAuthCoordinator.scope(connectionId)
-  await desktopAuthCoordinator.requireScope(scope)
-
-  return scope!
+  return desktopAuthCoordinator.requireCurrentScope(connectionId)
 }
 
 function desktopOwnsIpcSender(event: any) {

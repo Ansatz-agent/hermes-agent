@@ -227,6 +227,24 @@ export class AuthCoordinator {
       try {
         return await this.applyStatus(await bridge.logout(), connectionId)
       } catch (error) {
+        if (
+          connectionId === LOCAL_CONNECTION_ID &&
+          safeReason(error) === 'runtime_unavailable' &&
+          this.recoverBridge
+        ) {
+          try {
+            const replacement = await this.recoverBridge(connectionId, bridge)
+
+            if (replacement) {
+              this.bridges.set(connectionId, replacement)
+
+              return await this.applyStatus(await replacement.logout(), connectionId)
+            }
+          } catch (recoveryError) {
+            return this.applyFailure(recoveryError, connectionId)
+          }
+        }
+
         return this.applyFailure(error, connectionId)
       }
     })
@@ -347,6 +365,13 @@ export class AuthCoordinator {
     }
 
     await this.requireConnection(required.connection_id)
+  }
+
+  async requireCurrentScope(connectionId = LOCAL_CONNECTION_ID): Promise<ConnectionScope> {
+    const current = this.scope(connectionId)
+    await this.requireScope(current)
+
+    return current!
   }
 
   private async requireConnection(connectionId: string | null): Promise<void> {

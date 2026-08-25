@@ -383,6 +383,36 @@ def test_non_terminal_locked_status_maps_to_auth_required_not_internal_error(mon
     assert response["error"]["reason"] == reason
 
 
+@pytest.mark.parametrize("reason", ["invalid_csrf", "invalid_redirect"])
+def test_internal_auth_response_failure_is_reported_as_invalid_response(monkeypatch, reason):
+    locked = SimpleNamespace(
+        reason=reason,
+        public_dict=lambda: public_status(
+            state="locked",
+            username=None,
+            account_id=None,
+            session_id=None,
+            installation_id=None,
+            principal_key=None,
+            valid_until=0.0,
+            validation_state="degraded",
+            validation_reason=reason,
+            legacy=False,
+            reason=reason,
+        ),
+    )
+    monkeypatch.setattr("hermes_cli.client_auth.bridge.account_status", lambda **_context: locked)
+
+    response = dispatch(
+        {"version": 2, "id": "1", "method": "status", "params": {**NATIVE_CONTEXT}}
+    )
+
+    assert response["error"] == {
+        "code": "AUTH_REQUIRED",
+        "reason": "invalid_response",
+    }
+
+
 def test_status_forwards_the_validated_native_context_for_silent_legacy_upgrade(monkeypatch):
     captured: dict[str, object] = {}
 
