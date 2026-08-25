@@ -59,6 +59,7 @@ interface PendingCommit {
   batchId: string
   cancellation: DurableReceipt | null
   cancellationPromise: Promise<void> | null
+  cancellationOperation: Promise<void> | null
   durable: Promise<DurableTraceBatch>
   input: TraceEnvelopeInput | null
   reject: (error: unknown) => void
@@ -329,6 +330,7 @@ export class TraceOutboxStore {
 
   private readonly pending: PendingCommit[] = []
   private readonly dedupe = new Map<string, string>()
+  private readonly inflightMutations = new Set<Promise<unknown>>()
   private readonly receipts = new Map<string, ReceiptTombstone>()
   private readonly records = new Map<string, StoredRecord>()
   private admissionClosed = false
@@ -416,7 +418,7 @@ export class TraceOutboxStore {
       if (existingPending !== undefined) {
         return {
           batchId: existingBatchId,
-          cancelForGatewayReceipt: receipt => this.cancelForGatewayReceipt(existingPending, receipt),
+          cancelForGatewayReceipt: receipt => this.requestGatewayCancellation(existingPending, receipt),
           durable: existingPending.durable
         }
       }
@@ -426,7 +428,8 @@ export class TraceOutboxStore {
       if (existingReceipt !== undefined && existingReceipt.dedupeKey === dedupeKey) {
         return {
           batchId: existingBatchId,
-          cancelForGatewayReceipt: receipt => this.validateDuplicateReceipt(existingReceipt, receipt),
+          cancelForGatewayReceipt: receipt =>
+            this.withMutationGate(() => this.validateDuplicateReceipt(existingReceipt, receipt)),
           durable: Promise.resolve(this.receiptSafeBatch(input, existingReceipt))
         }
       }
@@ -446,12 +449,14 @@ export class TraceOutboxStore {
       resolve = currentResolve
       reject = currentReject
     })
+    const trackedDurable = this.trackMutationPromise(durable)
 
     const item: PendingCommit = {
       batchId,
       cancellation: null,
+      cancellationOperation: null,
       cancellationPromise: null,
-      durable,
+      durable: trackedDurable,
       input: { ...input, body: Buffer.from(input.body), owner: { ...input.owner } },
       receiptJournaled: false,
       reject,
@@ -472,8 +477,8 @@ export class TraceOutboxStore {
 
     return {
       batchId,
-      durable,
-      cancelForGatewayReceipt: receipt => this.cancelForGatewayReceipt(item, receipt)
+      durable: trackedDurable,
+      cancelForGatewayReceipt: receipt => this.requestGatewayCancellation(item, receipt)
     }
   }
 
@@ -487,24 +492,23 @@ export class TraceOutboxStore {
     }
 
     this.admissionClosed = true
-    const closing = this.drainForClose()
+    const closing = this.closeBarrier()
     this.closePromise = closing
 
     return closing
   }
 
   async quarantineInput(input: TraceEnvelopeInput, errorClass: string): Promise<DurableTraceBatch> {
-    const pending = this.beginEnqueueInternal(input, true)
-    const batch = await pending.durable
-    await this.quarantine(batch.batchId, errorClass)
+    return this.withMutationGate(async () => {
+      const pending = this.beginEnqueueInternal(input, true)
+      const batch = await pending.durable
+      await this.quarantineInternal(batch.batchId, errorClass)
 
-    return batch
+      return batch
+    })
   }
 
   async diagnostics(): Promise<TraceOutboxStoreDiagnostics> {
-    if (this.pruneReceipts(this.config.now())) {
-      await this.compactIfIdle()
-    }
     let payloadBytes = 0
     let pending = 0
     let quarantined = this.quarantinedSegments
@@ -540,9 +544,6 @@ export class TraceOutboxStore {
   }
 
   async lookupReceipt(batchId: string): Promise<DurableReceipt | undefined> {
-    if (this.pruneReceipts(this.config.now())) {
-      await this.compactIfIdle()
-    }
     const receipt = this.receipts.get(batchId)
 
     if (receipt === undefined) {
@@ -557,6 +558,10 @@ export class TraceOutboxStore {
   }
 
   async peekEligible(now: number): Promise<DurableTraceBatch | undefined> {
+    return this.withMutationGate(() => this.peekEligibleInternal(now))
+  }
+
+  private async peekEligibleInternal(now: number): Promise<DurableTraceBatch | undefined> {
     if (!Number.isSafeInteger(now) || now < 0) {
       throw new RangeError('invalid_trace_outbox_peek_time')
     }
@@ -613,6 +618,10 @@ export class TraceOutboxStore {
   }
 
   async acknowledge(batchId: string, receipt: DurableReceipt): Promise<void> {
+    return this.withMutationGate(() => this.acknowledgeInternal(batchId, receipt))
+  }
+
+  private async acknowledgeInternal(batchId: string, receipt: DurableReceipt): Promise<void> {
     this.validateReceipt(batchId, receipt)
     const record = this.records.get(batchId)
     const existing = this.receipts.get(batchId)
@@ -627,10 +636,14 @@ export class TraceOutboxStore {
         ? existing!
         : { accountKey: record.batch.owner.accountKey, dedupeKey: this.dedupeKey(record.batch) }
     )
-    await this.compactIfIdle()
+    await this.compactIfIdleInternal()
   }
 
   async quarantine(batchId: string, errorClass: string): Promise<void> {
+    return this.withMutationGate(() => this.quarantineInternal(batchId, errorClass))
+  }
+
+  private async quarantineInternal(batchId: string, errorClass: string): Promise<void> {
     if (!/^[0-9A-Za-z][0-9A-Za-z._:-]{0,127}$/.test(errorClass)) {
       throw new TypeError('invalid_trace_error_class')
     }
@@ -649,11 +662,19 @@ export class TraceOutboxStore {
   }
 
   async compactIfIdle(): Promise<boolean> {
+    return this.withMutationGate(() => this.compactIfIdleInternal())
+  }
+
+  private async compactIfIdleInternal(): Promise<boolean> {
     if (this.flushPromise !== null || this.pending.length !== 0) {
       return false
     }
 
-    return this.withWriterLock(() => this.compactForCapacity())
+    return this.withWriterLock(() => {
+      this.pruneReceipts(this.config.now())
+
+      return this.compactForCapacity()
+    })
   }
 
   private async compactForCapacity(): Promise<boolean> {
@@ -1036,6 +1057,22 @@ export class TraceOutboxStore {
     await this.journalTail
   }
 
+  private async closeBarrier(): Promise<void> {
+    const draining = this.drainForClose().then(
+      () => null,
+      (error: unknown) => error
+    )
+
+    await Promise.allSettled([...this.inflightMutations])
+    const drainError = await draining
+    await this.writerTail
+    await this.journalTail
+
+    if (drainError !== null) {
+      throw drainError
+    }
+  }
+
   private async flushGroup(group: PendingCommit[]): Promise<void> {
     try {
       if (!this.segmentWritable) {
@@ -1192,6 +1229,34 @@ export class TraceOutboxStore {
     return cancellation
   }
 
+  private requestGatewayCancellation(item: PendingCommit, receipt: DurableReceipt): Promise<void> {
+    if (this.admissionClosed) {
+      return Promise.reject(new Error('trace_outbox_closed'))
+    }
+
+    if (item.cancellationOperation !== null) {
+      try {
+        this.validateReceipt(item.batchId, receipt)
+        if (
+          item.cancellation === null ||
+          item.cancellation.outcome !== receipt.outcome ||
+          item.cancellation.receivedAt !== receipt.receivedAt
+        ) {
+          return Promise.reject(new Error('conflicting_gateway_receipt'))
+        }
+      } catch (error) {
+        return Promise.reject(error)
+      }
+
+      return item.cancellationOperation
+    }
+
+    const operation = this.withMutationGate(() => this.cancelForGatewayReceipt(item, receipt))
+    item.cancellationOperation = operation
+
+    return operation
+  }
+
   private async persistCancellation(item: PendingCommit, receipt: DurableReceipt): Promise<void> {
     if (item.state === 'queued') {
       const index = this.pending.indexOf(item)
@@ -1213,7 +1278,7 @@ export class TraceOutboxStore {
           accountKey: input.owner.accountKey,
           dedupeKey: this.dedupeKey(input)
         })
-        await this.compactIfIdle()
+        await this.compactIfIdleInternal()
         item.reject(new Error('local_commit_cancelled'))
       } catch (error) {
         item.reject(error)
@@ -1227,7 +1292,7 @@ export class TraceOutboxStore {
       await this.flushPromise
 
       if (item.receiptJournaled) {
-        await this.compactIfIdle()
+        await this.compactIfIdleInternal()
         return
       }
     }
@@ -1241,7 +1306,7 @@ export class TraceOutboxStore {
         accountKey: record.batch.owner.accountKey,
         dedupeKey: this.dedupeKey(record.batch)
       })
-      await this.compactIfIdle()
+      await this.compactIfIdleInternal()
     }
   }
 
@@ -1444,7 +1509,7 @@ export class TraceOutboxStore {
       }
     }
 
-    await this.compactIfIdle()
+    await this.compactIfIdleInternal()
   }
 
   private oldestUnsentOrQuarantined(): StoredRecord | undefined {
@@ -1697,5 +1762,46 @@ export class TraceOutboxStore {
     } finally {
       release()
     }
+  }
+
+  private withMutationGate<T>(operation: () => T | Promise<T>): Promise<T> {
+    if (this.admissionClosed) {
+      return Promise.reject(new Error('trace_outbox_closed'))
+    }
+
+    let release!: () => void
+    const marker = new Promise<void>(resolve => {
+      release = resolve
+    })
+    this.inflightMutations.add(marker)
+
+    let result: T | Promise<T>
+
+    try {
+      result = operation()
+    } catch (error) {
+      this.inflightMutations.delete(marker)
+      release()
+
+      return Promise.reject(error)
+    }
+
+    return Promise.resolve(result).finally(() => {
+      this.inflightMutations.delete(marker)
+      release()
+    })
+  }
+
+  private trackMutationPromise<T>(result: Promise<T>): Promise<T> {
+    let release!: () => void
+    const marker = new Promise<void>(resolve => {
+      release = resolve
+    })
+    this.inflightMutations.add(marker)
+
+    return result.finally(() => {
+      this.inflightMutations.delete(marker)
+      release()
+    })
   }
 }

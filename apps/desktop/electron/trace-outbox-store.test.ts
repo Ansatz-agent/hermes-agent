@@ -256,6 +256,13 @@ function receipt(batchId: string, outcome: DurableReceipt['outcome']): DurableRe
   return { batchId, outcome, receivedAt: 1_798_000_000_000 }
 }
 
+function fakeDiskSnapshot(fs: FakeTraceFileSystem): string {
+  return [...fs.files]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([path, contents]) => `${path}:${contents.toString('base64')}`)
+    .join('\n')
+}
+
 test('resolves every grouped enqueue only after segment sync then journal sync', async () => {
   const events: string[] = []
   const gate = deferred<void>()
@@ -300,6 +307,87 @@ test('Gateway receipt can win before local commit without retaining payload byte
   assert.equal((await store.diagnostics()).payloadBytes, 0)
   assert.equal((await store.lookupReceipt(pending.batchId))?.outcome, 'accepted')
   await assert.rejects(pending.durable, /local_commit_cancelled/)
+})
+
+test('close rejects every public persistent mutation API without changing disk bytes', async () => {
+  const fs = new FakeTraceFileSystem()
+  const store = await TraceOutboxStore.open(options({ fs, groupCommitMs: 1 }))
+  const acknowledged = await store.enqueue(envelope('closed-acknowledge'))
+  const cancellable = store.beginEnqueue(envelope('closed-cancellation'))
+  await cancellable.durable
+  await store.close()
+  const closedDisk = fakeDiskSnapshot(fs)
+
+  await assert.rejects(
+    Promise.resolve().then(() => store.beginEnqueue(envelope('closed-begin'))),
+    /trace_outbox_closed/
+  )
+  await assert.rejects(store.enqueue(envelope('closed-enqueue')), /trace_outbox_closed/)
+  await assert.rejects(store.quarantineInput(envelope('closed-input'), 'invalid_payload'), /trace_outbox_closed/)
+  await assert.rejects(
+    store.acknowledge(acknowledged.batchId, receipt(acknowledged.batchId, 'accepted')),
+    /trace_outbox_closed/
+  )
+  await assert.rejects(store.quarantine(acknowledged.batchId, 'invalid_payload'), /trace_outbox_closed/)
+  await assert.rejects(store.compactIfIdle(), /trace_outbox_closed/)
+  await assert.rejects(store.peekEligible(Number.MAX_SAFE_INTEGER), /trace_outbox_closed/)
+  await assert.rejects(
+    cancellable.cancelForGatewayReceipt(receipt(cancellable.batchId, 'accepted')),
+    /trace_outbox_closed/
+  )
+
+  assert.equal(fakeDiskSnapshot(fs), closedDisk)
+})
+
+test('expired tombstone diagnostics and lookup remain pure after close', async () => {
+  const fs = new FakeTraceFileSystem()
+  let now = 1_798_000_000_000
+  const store = await TraceOutboxStore.open(options({ fs, groupCommitMs: 1, now: () => now, retentionMs: 10 }))
+  const batch = await store.enqueue(envelope('closed-expired-receipt'))
+  await store.acknowledge(batch.batchId, receipt(batch.batchId, 'accepted'))
+  await store.close()
+  now += 11
+  const closedDisk = fakeDiskSnapshot(fs)
+
+  assert.equal((await store.diagnostics()).tombstones, 1)
+  assert.equal((await store.lookupReceipt(batch.batchId))?.outcome, 'accepted')
+  assert.equal(fakeDiskSnapshot(fs), closedDisk)
+})
+
+test('close waits for a registered inflight receipt mutation and remains concurrent-idempotent', async () => {
+  const blocked = deferred<void>()
+  const release = deferred<void>()
+  let holdJournalSync = false
+  const fs = new FakeTraceFileSystem({
+    'journal.sync': async () => {
+      if (holdJournalSync) {
+        blocked.resolve()
+        await release.promise
+      }
+    }
+  })
+  const store = await TraceOutboxStore.open(options({ fs, groupCommitMs: 1 }))
+  const batch = await store.enqueue(envelope('inflight-close-receipt'))
+  holdJournalSync = true
+  const acknowledging = store.acknowledge(batch.batchId, receipt(batch.batchId, 'accepted'))
+  await blocked.promise
+  let closeSettled = false
+  const rawFirstClose = store.close()
+  const concurrentClose = store.close()
+  assert.strictEqual(rawFirstClose, concurrentClose)
+  const firstClose = rawFirstClose.then(() => {
+    closeSettled = true
+  })
+
+  await new Promise(resolve => setTimeout(resolve, 10))
+  assert.equal(closeSettled, false)
+  release.resolve()
+  await Promise.all([acknowledging, firstClose, concurrentClose])
+  const closedDisk = fakeDiskSnapshot(fs)
+
+  await store.close()
+  assert.equal((await store.diagnostics()).tombstones, 1)
+  assert.equal(fakeDiskSnapshot(fs), closedDisk)
 })
 
 test('syncs an exclusive same-directory key temporary before renaming it into place', async () => {
@@ -873,6 +961,7 @@ test('makes a receipt terminal only after its journal sync and bounds expired to
   await acknowledged
   assert.equal(await store.peekEligible(Number.MAX_SAFE_INTEGER), undefined)
   now += 11
+  await store.compactIfIdle()
   assert.equal(await store.lookupReceipt(batch.batchId), undefined)
   assert.equal((await store.diagnostics()).tombstones, 0)
 })
@@ -1145,8 +1234,8 @@ test('persists root ownership after every payload and receipt tombstone is recla
     const batch = await first.enqueue(envelope('owner-only'))
     await first.acknowledge(batch.batchId, receipt(batch.batchId, 'accepted'))
     now += 11
-    assert.equal(await first.lookupReceipt(batch.batchId), undefined)
     await first.compactIfIdle()
+    assert.equal(await first.lookupReceipt(batch.batchId), undefined)
 
     const reopened = await TraceOutboxStore.open({
       expectedOwner: envelope('owner-only').owner,
@@ -1267,8 +1356,8 @@ test('reads an ownerless legacy receipt but fails closed for new account admissi
     assert.equal((await reopened.lookupReceipt('legacy-ownerless'))?.outcome, 'accepted')
     await assert.rejects(reopened.enqueue(envelope('unsafe-owner-guess')), /trace_outbox_account_unknown/)
     now += 11
-    assert.equal(await reopened.lookupReceipt('legacy-ownerless'), undefined)
     await reopened.compactIfIdle()
+    assert.equal(await reopened.lookupReceipt('legacy-ownerless'), undefined)
     const afterGc = await TraceOutboxStore.open({
       expectedOwner: envelope('legacy-owner').owner,
       groupCommitMs: 1,
