@@ -385,7 +385,7 @@ $PythonVersion = "3.11"
 # interpreters, so this list also matches a pre-existing system Python.  Single
 # source of truth shared by Test-Python's fallback and Resolve-AvailablePythonVersion.
 $PythonFallbackVersions = @("3.12", "3.13", "3.10")
-$NodeVersion = "22"
+$NodeVersion = "26"
 # The npm range the root package.json pins in `engines.npm`.  A constant rather
 # than a manifest read like the POSIX side does: Test-Node runs BEFORE the repo
 # is cloned, so there is usually no package.json on disk yet (and none at all
@@ -1593,11 +1593,10 @@ function Set-GitBashEnvVar {
     Write-Info "If needed, set HERMES_GIT_BASH_PATH manually to your bash.exe path."
 }
 
-# The dependency tree's real Node floor is >=22.22.0, set by react-router 8.3.0
-# (`engines.node`). Keep this in sync with the root package.json: looser lets an
-# install reach a `npm ci` that dies with EBADENGINE, stricter replaces a working
-# user toolchain for nothing. Returns $true when a `node --version` string
-# clears that floor.
+# The desktop toolchain is pinned to the Node 26 major (`.node-version`). The
+# repository's dependency floor is lower, but the packaged renderer/Electron
+# build is tested only with this major. Use the mirror's latest-v26.x index so
+# a stale Node 22 install can never be accepted by the bootstrap.
 function Test-NodeVersionOk {
     param([string]$Version)
     try {
@@ -1605,8 +1604,7 @@ function Test-NodeVersionOk {
     } catch {
         return $false
     }
-    if ($v.Major -eq 22) { return ($v.Minor -ge 22) }
-    return ($v.Major -gt 22)
+    return ($v.Major -ge 26)
 }
 
 function Test-Node {
@@ -1905,7 +1903,7 @@ function Invoke-OptionalPackageManager {
     $launcher = $resolved
     $argLine = ($Arguments -join ' ')
     if ($resolved -match '(?i)\.(cmd|bat)$') {
-        $launcher = $env:ComSpec
+        $launcher = if ($env:ComSpec) { $env:ComSpec } elseif ($env:SystemRoot) { Join-Path $env:SystemRoot 'System32\cmd.exe' } else { 'cmd.exe' }
         $argLine = "/d /s /c `"`"$resolved`" $argLine`""
     } elseif ($resolved -match '(?i)\.ps1$' -or $command.CommandType -eq 'ExternalScript') {
         $powershell = Get-Command powershell.exe -ErrorAction SilentlyContinue
@@ -3566,7 +3564,7 @@ function Install-NodeDeps {
         Write-Info "Open a new PowerShell window and re-run 'hermes setup tools' later."
         return
     }
-    $npmExe = $npmCmd.Source
+    $npmExe = if ($npmCmd.Source) { $npmCmd.Source } elseif ($npmCmd.Definition) { $npmCmd.Definition } else { $npmCmd.Name }
     if ($npmExe -like "*.ps1") {
         $npmCmdSibling = Join-Path (Split-Path $npmExe -Parent) "npm.cmd"
         if (Test-Path $npmCmdSibling) {
@@ -3607,12 +3605,26 @@ function Install-NodeDeps {
     # swallow live output, and Stop-Job leaves the npm child running.
     # taskkill /T kills the real process tree.  Works on Windows PowerShell
     # 5.1 -- no pwsh-only primitives.
+    function _Resolve-ComSpec {
+        $candidate = $env:ComSpec
+        if (-not $candidate) {
+            $candidate = [Environment]::GetEnvironmentVariable('ComSpec')
+        }
+        if (-not $candidate -and $env:SystemRoot) {
+            $candidate = Join-Path $env:SystemRoot 'System32\cmd.exe'
+        }
+        if (-not $candidate) {
+            $candidate = 'cmd.exe'
+        }
+        return $candidate
+    }
+
     function _Invoke-NativeWithTimeout(
         [string]$exePath, [string]$argLine, [string]$workDir,
         [string]$logPath, [int]$timeoutSec
     ) {
         $cmdLine = "/d /s /c "" ""$exePath"" $argLine > ""$logPath"" 2>&1 """
-        $proc = Start-Process -FilePath $env:ComSpec -ArgumentList $cmdLine `
+        $proc = Start-Process -FilePath (_Resolve-ComSpec) -ArgumentList $cmdLine `
             -WorkingDirectory $workDir -NoNewWindow -PassThru
         $deadline = [DateTime]::UtcNow.AddSeconds($timeoutSec)
         $nextHeartbeat = [DateTime]::UtcNow.AddSeconds(30)

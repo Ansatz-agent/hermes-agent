@@ -54,6 +54,7 @@ from hermes_cli.client_auth.runtime import (
     connect_runtime_owner,
     install_entrypoint_owner,
     install_runtime_consumer,
+    external_auth_scope,
     require_authorized,
     resolve_owner,
     parse_backend_scope_token_registration,
@@ -75,6 +76,17 @@ BOB_SESSION_ID = "55555555-5555-4555-8555-555555555555"
 
 def _scope_bearer(seed: bytes = b"A") -> str:
     return base64.urlsafe_b64encode(seed * 32).decode("ascii").rstrip("=")
+
+
+def test_ansatz_external_auth_uses_desktop_scope_without_runtime_owner(monkeypatch):
+    scope = AuthScope("fedcba9876543210fedcba9876543210", 12)
+    monkeypatch.setenv("ANSATZ_EXTERNAL_AUTH", "true")
+    monkeypatch.setenv("ANSATZ_EXTERNAL_AUTH_RUNTIME_INSTANCE_ID", scope.runtime_instance_id)
+    monkeypatch.setenv("ANSATZ_EXTERNAL_AUTH_EPOCH", str(scope.epoch))
+
+    assert external_auth_scope() == scope
+    assert require_authorized("dashboard.api.request") == scope
+    assert require_authorized("backend.scope_token.register", expected=scope) == scope
 
 
 def test_backend_scope_token_is_hashed_bounded_and_exactly_scope_bound():
