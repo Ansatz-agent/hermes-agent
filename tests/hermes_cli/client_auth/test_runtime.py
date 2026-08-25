@@ -1207,6 +1207,71 @@ def test_legacy_principal_key_is_stable_across_runtime_epoch_and_restart_but_iso
     assert other.principal_key != first.principal_key
 
 
+def _exact_v1_cookie_raw() -> str:
+    return json.dumps(
+        {
+            "version": 1,
+            "cookies": {
+                "__Host-ansatz_sessionid": "session-1",
+                "__Host-ansatz_csrftoken": "csrf-1",
+            },
+            "username": "alice",
+            "session_expires_at": status_at().session_expires_at,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def test_exact_v1_credential_is_atomically_persisted_as_v2_once():
+    raw = _exact_v1_cookie_raw()
+    owner, backend, client, _clock = vault_owner_factory()
+    backend.raw = raw
+
+    restored = owner.refresh()
+    migrated = json.loads(backend.raw or "null")
+    expected_principal = "legacy:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    assert restored.state is AuthState.AUTHENTICATED
+    assert restored.principal_key == expected_principal
+    assert migrated == {
+        "version": 2,
+        "cookies": {
+            "__Host-ansatz_sessionid": "session-1",
+            "__Host-ansatz_csrftoken": "csrf-1",
+        },
+        "username": "alice",
+        "session_expires_at": status_at().session_expires_at,
+        "principal_key": expected_principal,
+    }
+    assert backend.write_count == 1
+
+    restarted = VaultOwner(
+        client,
+        secret_backend=backend,
+        clock=FakeClock(),
+        jitter=lambda *_: 58.0,
+    ).refresh()
+    assert restarted.principal_key == expected_principal
+    assert backend.write_count == 1
+
+
+def test_exact_v1_migration_write_failure_preserves_recoverable_v1_without_half_identity():
+    raw = _exact_v1_cookie_raw()
+    owner, backend, client, _clock = vault_owner_factory(fail_writes=True)
+    backend.raw = raw
+
+    with pytest.raises(AuthRequired, match="vault_unavailable") as caught:
+        owner.refresh()
+
+    assert backend.raw == raw
+    assert backend.write_count == 1
+    assert client.status_calls == 0
+    assert owner.snapshot().state is AuthState.LOCKED
+    assert owner.snapshot().principal_key is None
+    assert "session-1" not in repr(caught.value)
+
+
 def test_logout_locks_and_clears_secret_even_when_remote_logout_fails():
     owner, secret_backend, auth_client, _clock = vault_owner_factory()
     before = owner.login("alice", bytearray(b"secret"))

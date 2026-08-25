@@ -1819,6 +1819,7 @@ class _OwnerCore:
     def _load_record(
         self,
     ) -> CookieRecord | NativeCredentialRecord | LegacyCredentialRecord | RevocationTombstone | None:
+        needs_migration = False
         with self._lock:
             if self._record_loaded:
                 return self._record
@@ -1837,6 +1838,7 @@ class _OwnerCore:
             try:
                 decoded = _decode_credential_blob(raw)
                 if isinstance(decoded, CookieRecord):
+                    needs_migration = json.loads(raw).get("version") == 1
                     record = LegacyCredentialRecord(
                         cookie_record=decoded,
                         principal_key=(
@@ -1869,6 +1871,19 @@ class _OwnerCore:
         with self._lock:
             if self._record_loaded:
                 return self._record
+            if isinstance(record, LegacyCredentialRecord) and needs_migration:
+                try:
+                    self._secret_backend.write(_encode_cookie_blob(record.cookie_record))
+                except Exception:
+                    reason = (
+                        "vault_unavailable"
+                        if self._vault_required
+                        else "runtime_unavailable"
+                    )
+                    locked = self._snapshot.locked(reason, now=self._clock())
+                    self._publish_locked(locked)
+                    self._next_refresh_at = None
+                    raise AuthRequired(reason) from None
             self._record = record
             self._record_loaded = True
             if isinstance(record, NativeCredentialRecord):
