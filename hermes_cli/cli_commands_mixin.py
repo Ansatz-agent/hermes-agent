@@ -3335,28 +3335,76 @@ class CLICommandsMixin:
         swapping either surface in the middle of an existing conversation.
         """
         from hermes_cli.object_context_command import (
+            OBJECT_CONTEXT_ENGINE,
             ObjectContextCommandError,
+            active_context_engine_monitor,
             active_context_engine_name,
             active_context_engine_status,
+            persisted_context_engine_telemetry,
             run_object_context_command,
         )
 
         parts = str(cmd_original or "/object_context").strip().split(None, 1)
         args_raw = parts[1] if len(parts) > 1 else ""
         agent = getattr(self, "agent", None)
+        action = (
+            args_raw.strip().split(None, 1)[0].casefold() if args_raw.strip() else ""
+        )
+        active_engine = active_context_engine_name(agent)
+        engine_status = active_context_engine_status(agent)
+        monitor_timeline = (
+            active_context_engine_monitor(agent) if action == "monitor" else None
+        )
+        if action == "monitor":
+            persisted = persisted_context_engine_telemetry(
+                getattr(self, "_session_db", None),
+                str(getattr(self, "session_id", "") or ""),
+                include_all_sessions=True,
+            )
+            if persisted is not None:
+                persisted_status, persisted_timeline = persisted
+                if engine_status is None:
+                    engine_status = persisted_status
+                active_engine = OBJECT_CONTEXT_ENGINE
+                monitor_timeline = persisted_timeline
+        elif agent is None and action == "stats":
+            persisted = persisted_context_engine_telemetry(
+                getattr(self, "_session_db", None),
+                str(getattr(self, "session_id", "") or ""),
+            )
+            if persisted is not None:
+                engine_status, _persisted_timeline = persisted
+                active_engine = OBJECT_CONTEXT_ENGINE
         try:
             result = run_object_context_command(
                 args_raw,
-                active_engine=active_context_engine_name(agent),
-                engine_status=active_context_engine_status(agent),
+                active_engine=active_engine,
+                engine_status=engine_status,
+                monitor_timeline=monitor_timeline,
             )
         except ObjectContextCommandError as exc:
             print(f"  Object Context V1: {exc}")
             return
 
+        browser_opened: bool | None = None
+        if result.artifact_path:
+            try:
+                import webbrowser
+                from pathlib import Path
+
+                browser_opened = bool(
+                    webbrowser.open(
+                        Path(result.artifact_path).resolve().as_uri(), new=2
+                    )
+                )
+            except Exception:
+                browser_opened = False
+
         print()
         for line in result.lines:
             print(f"  {line}" if line else "")
+        if browser_opened is False:
+            print("  Browser launch was unavailable; open the Dashboard path above.")
         print()
 
     def _handle_reasoning_command(self, cmd: str):

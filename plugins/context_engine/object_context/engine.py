@@ -238,6 +238,7 @@ class ObjectContextEngine(ContextCompressor):
         self._last_hot_tail_tokens = 0
         self._last_batch_size = 0
         self._last_failure = ""
+        self._projection_sequence = 0
         # Immutable replacement snapshot for high-frequency status-bar reads.
         # Detailed status continues to aggregate SQLite; this mapping must
         # remain entirely in-memory so prompt-toolkit repaint never performs
@@ -258,6 +259,9 @@ class ObjectContextEngine(ContextCompressor):
             return
         try:
             status = store.aggregate_status(self._conversation_id)
+            self._projection_sequence = max(
+                0, _safe_int(status.get("request_projection_count"), 0)
+            )
             latest = _as_dict(status.get("last_request_metrics"))
             totals = _as_dict(status.get("request_metric_totals"))
             last_raw = max(0, _safe_int(latest.get("raw_context_tokens"), 0))
@@ -282,6 +286,7 @@ class ObjectContextEngine(ContextCompressor):
                 "_session_raw_tokens": session_raw,
             }
         except Exception:
+            self._projection_sequence = 0
             self._clear_status_bar_savings()
             logger.debug(
                 "Object Context status-bar savings restore failed",
@@ -358,6 +363,7 @@ class ObjectContextEngine(ContextCompressor):
     def on_session_start(self, session_id: str, **kwargs: Any) -> None:
         super().on_session_start(session_id, **kwargs)
         self._clear_status_bar_savings()
+        self._projection_sequence = 0
         prior_conversation = self._conversation_id
         self._object_session_id = str(session_id or "")
         conversation_id = str(kwargs.get("conversation_id") or "")
@@ -412,6 +418,7 @@ class ObjectContextEngine(ContextCompressor):
         self._conversation_id = ""
         self._active_turn_id = ""
         self._last_rendered_refs.clear()
+        self._projection_sequence = 0
         self._clear_status_bar_savings()
 
     def on_session_reset(self) -> None:
@@ -420,6 +427,7 @@ class ObjectContextEngine(ContextCompressor):
         self._conversation_id = ""
         self._active_turn_id = ""
         self._last_rendered_refs.clear()
+        self._projection_sequence = 0
         self._clear_status_bar_savings()
 
     def _record_metric(
@@ -954,6 +962,7 @@ class ObjectContextEngine(ContextCompressor):
         budget_tokens: int = 0,
     ) -> list[dict[str, Any]] | None:
         del incoming_message, budget_tokens
+        started_at = time.perf_counter()
         projected = self._project(
             request_messages, identity_messages=conversation_messages
         )
@@ -966,15 +975,70 @@ class ObjectContextEngine(ContextCompressor):
             raw_tokens=raw_tokens,
             saved_tokens=saved_tokens,
         )
-        self._record_metric("raw_context_tokens", raw_tokens)
-        self._record_metric("rendered_context_tokens", rendered_tokens)
-        self._record_metric("hot_tail_tokens", self._last_hot_tail_tokens)
-        self._record_metric("tokens_saved", saved_tokens)
-        self._record_metric(
-            "compression_ratio",
-            1 - (rendered_tokens / raw_tokens) if raw_tokens else 0,
+        self._projection_sequence += 1
+        projection_sequence = self._projection_sequence
+        metadata = {
+            "event": "request_projection",
+            "projection_id": (
+                f"{self._object_session_id or 'session'}:"
+                f"{projection_sequence}:{time.time_ns()}"
+            ),
+            "projection_sequence": projection_sequence,
+            "turn_id": self._active_turn_id,
+            "session_id": self._object_session_id,
+        }
+        projection_latency_ms = max(
+            0.0, (time.perf_counter() - started_at) * 1000
         )
+        if self._store is not None and self._conversation_id:
+            try:
+                self._store.record_metrics(
+                    self._conversation_id,
+                    {
+                        "raw_context_tokens": raw_tokens,
+                        "rendered_context_tokens": rendered_tokens,
+                        "hot_tail_tokens": self._last_hot_tail_tokens,
+                        "tokens_saved": saved_tokens,
+                        "compression_ratio": (
+                            1 - (rendered_tokens / raw_tokens) if raw_tokens else 0
+                        ),
+                        "projection_latency_ms": projection_latency_ms,
+                    },
+                    metadata=metadata,
+                )
+            except Exception:
+                logger.debug(
+                    "Object Context projection telemetry write failed",
+                    exc_info=True,
+                )
         return projected
+
+    def get_projection_timeline(self) -> dict[str, Any]:
+        """Return content-free projection dynamics for the active conversation."""
+
+        if self._store is None or not self._conversation_id:
+            return {
+                "schema_version": 1,
+                "conversation_id": self._conversation_id,
+                "session_id": self._object_session_id,
+                "projections": [],
+            }
+        try:
+            projections = self._store.request_projection_timeline(
+                self._conversation_id
+            )
+        except Exception:
+            logger.debug(
+                "Object Context projection timeline query failed",
+                exc_info=True,
+            )
+            projections = []
+        return {
+            "schema_version": 1,
+            "conversation_id": self._conversation_id,
+            "session_id": self._object_session_id,
+            "projections": projections,
+        }
 
     def should_compress_preflight(self, messages: list[dict[str, Any]]) -> bool:
         projected = self._project(messages)

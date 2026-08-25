@@ -248,11 +248,23 @@ COMMAND_REGISTRY: list[CommandDef] = [
                busy_policy="reject", busy_handler="codex-runtime"),
     CommandDef(
         "object_context",
-        "Configure Context Compression V1 for the next CLI launch",
+        "Inspect or configure Object Context V1",
         "Configuration",
         aliases=("object-context", "oc"),
-        args_hint="[status|stats|on|off|set <key> <value>|reset [key|all]|help]",
-        subcommands=("status", "stats", "on", "off", "set", "reset", "help"),
+        args_hint=(
+            "[status|stats|monitor|on|off|set <key> <value>|"
+            "reset [key|all]|help]"
+        ),
+        subcommands=(
+            "status",
+            "stats",
+            "monitor",
+            "on",
+            "off",
+            "set",
+            "reset",
+            "help",
+        ),
         cli_only=True,
     ),
 

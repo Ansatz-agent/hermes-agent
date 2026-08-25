@@ -45,6 +45,7 @@ command:
 ```text
 /object_context
 /object_context stats
+/object_context monitor
 /object_context on
 /object_context off
 /object_context set hot_tail_max_deltas 4
@@ -65,6 +66,40 @@ conversation. These values deliberately exclude one-time per-Delta Card-build
 metrics, avoiding double counting. They are rough conversation-message token
 estimates, not provider-billing totals; retrieved payload is reported
 separately and is already reflected in the rendered projection.
+
+`/object_context monitor` writes a private, self-contained HTML snapshot for
+every conversation root with Object Context V1 projection telemetry and opens
+it in the default browser. Its experiment-tracking workspace provides global
+KPIs, a searchable session/run list and comparison table, and selects the
+current conversation by default. Stored Hermes session titles are the primary
+labels; stable conversation-root IDs remain visible underneath and both are
+searchable. Selecting a run switches the same three groups of four charts:
+tokens saved, Object Context projection time, and rendered-context tokens
+spent; each group shows per-project, cumulative-project, per-turn, and
+cumulative-turn dynamics. The saved-token group has one toggle that switches
+all four charts between absolute tokens avoided and relative savings percentage
+(`tokens_saved / raw_context_tokens`); cumulative percentages divide cumulative
+saved tokens by cumulative raw tokens rather than adding or averaging rates.
+Every chart has a one-click CSV download containing its currently displayed
+complete point series and identities, and the selected-session header has one
+combined CSV download for all 12 charts, including both saved-token modes. Here,
+one project is one request-time Object Context projection, one turn is one real
+user turn (all projections in that turn are summed), and projection time is
+local Object Context processing time only—it excludes model and network
+latency. Token values are the same rough conversation-message estimates used by `stats`, not
+provider-billed usage. The webpage abbreviates Token labels with base-1000
+`K`/`M`/`B` units regardless of browser locale; CSV downloads retain the raw,
+unscaled numeric values.
+
+The dashboard is an offline HTML/CSS/JavaScript/SVG file under the active
+profile's `logs/object-context-monitor/` directory. It contains stored session
+titles plus event identities, timestamps, and numeric telemetry—never prompt
+text, messages, Cards, stored objects, or retrieved payloads. Re-run the command
+to refresh the snapshot. If the browser cannot be launched, the CLI prints the
+exact local file path. A resumed conversation can be monitored immediately,
+before its first new model turn: the command resolves the persisted
+conversation lineage and reads the profile's complete V1 telemetry without
+forcing lazy agent initialization.
 
 When V1 is active and has avoided tokens, the classic CLI status bar also
 shows a compact live indicator. Medium-width terminals show the latest value,

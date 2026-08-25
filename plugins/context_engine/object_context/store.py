@@ -10,7 +10,7 @@ import sqlite3
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from agent.model_metadata import estimate_messages_tokens_rough, estimate_tokens_rough
 
@@ -27,6 +27,16 @@ from .models import (
 
 
 SCHEMA_VERSION = 1
+REQUEST_PROJECTION_METRIC_NAMES = frozenset(
+    {
+        "raw_context_tokens",
+        "rendered_context_tokens",
+        "tokens_saved",
+        "compression_ratio",
+        "hot_tail_tokens",
+        "projection_latency_ms",
+    }
+)
 OBJECT_REF_RE = re.compile(
     r"^object://(?P<object_id>obj_[a-f0-9]{24})@v(?P<version>[1-9][0-9]*)$"
 )
@@ -1260,6 +1270,131 @@ class ObjectContextStore:
                 ),
             )
 
+    def record_metrics(
+        self,
+        conversation_id: str,
+        values: Mapping[str, float],
+        *,
+        delta_id: str = "",
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """Persist one atomic group of related metrics with shared metadata."""
+
+        created_at = time.time()
+        encoded_metadata = canonical_json(metadata or {})
+        rows = [
+            (
+                conversation_id,
+                delta_id,
+                str(name),
+                float(value),
+                encoded_metadata,
+                created_at,
+            )
+            for name, value in values.items()
+        ]
+        if not rows:
+            return
+        with self._connect() as conn:
+            conn.executemany(
+                "INSERT INTO metrics("
+                "conversation_id, delta_id, name, value, metadata_json, created_at"
+                ") VALUES (?, ?, ?, ?, ?, ?)",
+                rows,
+            )
+
+    def request_projection_timeline(
+        self, conversation_id: str
+    ) -> list[dict[str, Any]]:
+        """Return ordered request-projection events without prompt/object content.
+
+        New telemetry rows carry a shared ``projection_id`` and real
+        ``turn_id`` in ``metadata_json``. Older V1 rows predate that identity;
+        they are reconstructed only at the per-projection token level and
+        explicitly marked legacy so callers do not invent turn or latency data.
+        """
+
+        names = sorted(REQUEST_PROJECTION_METRIC_NAMES)
+        placeholders = ",".join("?" for _ in names)
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, name, value, metadata_json, created_at FROM metrics "
+                "WHERE conversation_id = ? AND delta_id = '' "
+                f"AND name IN ({placeholders}) ORDER BY id",
+                (conversation_id, *names),
+            ).fetchall()
+
+        grouped: dict[str, dict[str, Any]] = {}
+        ordered_keys: list[str] = []
+        legacy_key = ""
+        for row in rows:
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except (TypeError, ValueError):
+                metadata = {}
+            if not isinstance(metadata, dict):
+                metadata = {}
+            projection_id = str(metadata.get("projection_id") or "")
+            is_legacy = not projection_id
+            name = str(row["name"])
+            if is_legacy:
+                if name == "raw_context_tokens" or not legacy_key:
+                    legacy_key = f"legacy:{int(row['id'])}"
+                projection_id = legacy_key
+            if projection_id not in grouped:
+                grouped[projection_id] = {
+                    "projection_id": projection_id,
+                    "projection_sequence": metadata.get("projection_sequence"),
+                    "turn_id": str(metadata.get("turn_id") or ""),
+                    "session_id": str(metadata.get("session_id") or ""),
+                    "created_at": float(row["created_at"]),
+                    "legacy": is_legacy,
+                    "metrics": {},
+                }
+                ordered_keys.append(projection_id)
+            event = grouped[projection_id]
+            event["created_at"] = min(
+                float(event["created_at"]), float(row["created_at"])
+            )
+            event["metrics"][name] = float(row["value"])
+
+        timeline = [grouped[key] for key in ordered_keys]
+        for ordinal, event in enumerate(timeline, start=1):
+            try:
+                sequence = int(event.get("projection_sequence"))
+            except (TypeError, ValueError):
+                sequence = ordinal
+            event["projection_sequence"] = max(1, sequence)
+        return timeline
+
+    def request_projection_conversations(self) -> list[dict[str, Any]]:
+        """List conversation roots with request-projection telemetry.
+
+        ``tokens_saved`` is written exactly once for every atomic request
+        projection, including legacy V1 rows, so it is the stable event-count
+        anchor. Only identifiers, counts, and timestamps leave the store; no
+        message, object, Card, or retrieval content is exposed.
+        """
+
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT conversation_id, COUNT(*) AS projection_count, "
+                "MIN(created_at) AS first_projection_at, "
+                "MAX(created_at) AS last_projection_at "
+                "FROM metrics WHERE delta_id = '' AND name = 'tokens_saved' "
+                "AND conversation_id != '' GROUP BY conversation_id "
+                "ORDER BY last_projection_at DESC, conversation_id ASC"
+            ).fetchall()
+        return [
+            {
+                "conversation_id": str(row["conversation_id"]),
+                "projection_count": max(0, int(row["projection_count"] or 0)),
+                "first_projection_at": float(row["first_projection_at"] or 0.0),
+                "last_projection_at": float(row["last_projection_at"] or 0.0),
+            }
+            for row in rows
+        ]
+
     def metrics(self, conversation_id: str) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -1320,7 +1455,8 @@ class ObjectContextStore:
                 "SELECT id, name, value FROM metrics "
                 "WHERE conversation_id = ? AND delta_id = '' AND name IN ("
                 "'raw_context_tokens', 'rendered_context_tokens', "
-                "'tokens_saved', 'compression_ratio', 'hot_tail_tokens'"
+                "'tokens_saved', 'compression_ratio', 'hot_tail_tokens', "
+                "'projection_latency_ms'"
                 ") ORDER BY id",
                 (conversation_id,),
             ).fetchall()

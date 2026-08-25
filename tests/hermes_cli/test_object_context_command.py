@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -13,11 +14,14 @@ from hermes_cli.object_context_command import (
     OBJECT_CONTEXT_ENGINE,
     PARAMETER_SPECS,
     ObjectContextCommandError,
+    active_context_engine_monitor,
     active_context_engine_name,
     active_context_engine_status,
     parse_parameter_value,
+    persisted_context_engine_telemetry,
     run_object_context_command,
 )
+from plugins.context_engine.object_context.store import ObjectContextStore
 
 
 def _write_config(tmp_path, text: str) -> None:
@@ -35,6 +39,7 @@ def test_registry_exposes_cli_only_command_and_aliases():
     assert set(command.subcommands) == {
         "status",
         "stats",
+        "monitor",
         "on",
         "off",
         "set",
@@ -131,6 +136,51 @@ def _live_v1_status() -> dict:
     }
 
 
+def _live_timeline() -> dict:
+    return {
+        "schema_version": 1,
+        "conversation_id": "conversation-a",
+        "session_id": "session-a",
+        "projections": [
+            {
+                "projection_id": "projection-1",
+                "projection_sequence": 1,
+                "turn_id": "turn-a",
+                "session_id": "session-a",
+                "legacy": False,
+                "metrics": {
+                    "raw_context_tokens": 100,
+                    "rendered_context_tokens": 40,
+                    "tokens_saved": 60,
+                    "projection_latency_ms": 1.5,
+                },
+            }
+        ],
+    }
+
+
+def _seed_persisted_timeline(tmp_path) -> None:
+    store = ObjectContextStore(
+        tmp_path / "context" / "object_context_v1.sqlite3"
+    )
+    store.record_metrics(
+        "conversation-a",
+        {
+            "raw_context_tokens": 100,
+            "rendered_context_tokens": 40,
+            "tokens_saved": 60,
+            "projection_latency_ms": 1.5,
+        },
+        metadata={
+            "event": "request_projection",
+            "projection_id": "persisted-projection-1",
+            "projection_sequence": 1,
+            "turn_id": "turn-a",
+            "session_id": "session-a",
+        },
+    )
+
+
 def test_status_directly_summarizes_live_v1_savings(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     _write_config(tmp_path, "context:\n  engine: object_context\n")
@@ -165,6 +215,39 @@ def test_stats_displays_request_only_savings_retrieval_and_memory():
     assert "2.0 KiB" in text
     assert "already reflect retrieval projection" in text
     assert result.changed is False
+
+
+def test_monitor_writes_current_conversation_dashboard(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    result = run_object_context_command(
+        "monitor",
+        active_engine="object_context",
+        engine_status=_live_v1_status(),
+        monitor_timeline=_live_timeline(),
+    )
+
+    path = tmp_path / "logs" / "object-context-monitor"
+    assert result.changed is False
+    assert result.artifact_path
+    assert str(path) in result.artifact_path
+    assert "Projects: 1" in "\n".join(result.lines)
+    assert "Opening the private local HTML dashboard" in "\n".join(result.lines)
+    assert "Session Dynamics Monitor" in Path(result.artifact_path).read_text(
+        encoding="utf-8"
+    )
+
+
+def test_monitor_explains_missing_data_without_writing_artifact():
+    result = run_object_context_command(
+        "monitor",
+        active_engine="object_context",
+        engine_status=_live_v1_status(),
+        monitor_timeline={"projections": []},
+    )
+
+    assert result.artifact_path == ""
+    assert "No request projection" in "\n".join(result.lines)
 
 
 @pytest.mark.parametrize("active_engine", ["", "compressor"])
@@ -313,6 +396,143 @@ def test_active_engine_status_uses_public_contract_and_fails_closed():
     assert active_context_engine_status(broken) is None
 
 
+def test_active_engine_monitor_uses_content_free_public_contract_and_fails_closed():
+    expected = _live_timeline()
+    agent = SimpleNamespace(
+        context_compressor=SimpleNamespace(get_projection_timeline=lambda: expected)
+    )
+    broken = SimpleNamespace(
+        context_compressor=SimpleNamespace(
+            get_projection_timeline=lambda: (_ for _ in ()).throw(
+                RuntimeError("boom")
+            )
+        )
+    )
+
+    assert active_context_engine_monitor(agent) == expected
+    assert active_context_engine_monitor(None) is None
+    assert active_context_engine_monitor(broken) is None
+
+
+def test_persisted_telemetry_resolves_resumed_session_conversation_root(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _seed_persisted_timeline(tmp_path)
+    session_db = SimpleNamespace(
+        get_conversation_root=lambda session_id: (
+            "conversation-a" if session_id == "resumed-session" else session_id
+        ),
+        get_session_title=lambda session_id: {
+            "session-a": "Latest continuation title",
+            "conversation-a": "Root title",
+        }.get(session_id),
+    )
+
+    persisted = persisted_context_engine_telemetry(
+        session_db, "resumed-session"
+    )
+
+    assert persisted is not None
+    status, timeline = persisted
+    assert status["object_context_available"] is True
+    assert status["request_projection_count"] == 1
+    assert timeline["source"] == "persisted"
+    assert timeline["conversation_id"] == "conversation-a"
+    assert timeline["session_id"] == "resumed-session"
+    assert timeline["title"] == "Latest continuation title"
+    assert timeline["projections"][0]["turn_id"] == "turn-a"
+
+
+def test_persisted_telemetry_does_not_borrow_another_conversations_metrics(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _seed_persisted_timeline(tmp_path)
+
+    assert persisted_context_engine_telemetry(
+        SimpleNamespace(get_conversation_root=lambda _session_id: "conversation-b"),
+        "resumed-session",
+    ) is None
+
+
+def test_persisted_monitor_telemetry_contains_every_projection_session(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _seed_persisted_timeline(tmp_path)
+    store = ObjectContextStore(
+        tmp_path / "context" / "object_context_v1.sqlite3"
+    )
+    store.record_metrics(
+        "conversation-b",
+        {
+            "raw_context_tokens": 200,
+            "rendered_context_tokens": 80,
+            "tokens_saved": 120,
+        },
+        metadata={
+            "event": "request_projection",
+            "projection_id": "persisted-projection-b",
+            "projection_sequence": 1,
+            "turn_id": "turn-b",
+            "session_id": "session-b",
+        },
+    )
+
+    persisted = persisted_context_engine_telemetry(
+        SimpleNamespace(
+            get_conversation_root=lambda _session_id: "conversation-a",
+            get_session_title=lambda session_id: {
+                "session-a": "Alpha title",
+                "session-b": "Beta title",
+            }.get(session_id),
+        ),
+        "resumed-session",
+        include_all_sessions=True,
+    )
+
+    assert persisted is not None
+    _status, timeline = persisted
+    assert timeline["schema_version"] == 2
+    assert timeline["active_conversation_id"] == "conversation-a"
+    assert timeline["session_id"] == "resumed-session"
+    assert {item["conversation_id"] for item in timeline["sessions"]} == {
+        "conversation-a",
+        "conversation-b",
+    }
+    assert sum(len(item["projections"]) for item in timeline["sessions"]) == 2
+    assert {
+        item["conversation_id"]: item["title"] for item in timeline["sessions"]
+    } == {
+        "conversation-a": "Alpha title",
+        "conversation-b": "Beta title",
+    }
+
+
+def test_all_session_monitor_remains_available_when_current_root_has_no_metrics(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _seed_persisted_timeline(tmp_path)
+
+    persisted = persisted_context_engine_telemetry(
+        SimpleNamespace(
+            get_conversation_root=lambda _session_id: "conversation-without-metrics"
+        ),
+        "new-session",
+        include_all_sessions=True,
+    )
+
+    assert persisted is not None
+    status, timeline = persisted
+    assert status["request_projection_count"] == 0
+    assert timeline["projections"] == []
+    assert [item["conversation_id"] for item in timeline["sessions"]] == [
+        "conversation-a"
+    ]
+
+
 def test_process_command_dispatches_original_arguments_to_handler():
     cli_obj = HermesCLI.__new__(HermesCLI)
     cli_obj._pending_resume_sessions = None
@@ -354,3 +574,170 @@ def test_cli_handler_prints_live_stats_from_active_engine(capsys):
     output = capsys.readouterr().out
     assert "Object Context V1 Token Savings" in output
     assert "~18,000" in output
+
+
+def test_cli_handler_opens_monitor_webpage_with_local_file_uri(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    cli_obj = HermesCLI.__new__(HermesCLI)
+    cli_obj.agent = SimpleNamespace(
+        context_compressor=SimpleNamespace(
+            name="object_context",
+            get_status=_live_v1_status,
+            get_projection_timeline=_live_timeline,
+        )
+    )
+
+    with patch("webbrowser.open", return_value=True) as browser_open:
+        cli_obj._handle_object_context_command("/object_context monitor")
+
+    output = capsys.readouterr().out
+    assert "Session Dynamics Monitor" in output
+    assert "Browser launch was unavailable" not in output
+    uri = browser_open.call_args.args[0]
+    assert uri.startswith("file://")
+    assert uri.endswith(".html")
+    browser_open.assert_called_once_with(uri, new=2)
+
+
+def test_cli_handler_prints_dashboard_path_fallback_when_browser_is_unavailable(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    cli_obj = HermesCLI.__new__(HermesCLI)
+    cli_obj.agent = SimpleNamespace(
+        context_compressor=SimpleNamespace(
+            name="object_context",
+            get_status=_live_v1_status,
+            get_projection_timeline=_live_timeline,
+        )
+    )
+
+    with patch("webbrowser.open", return_value=False):
+        cli_obj._handle_object_context_command("/object_context monitor")
+
+    output = capsys.readouterr().out
+    assert "Dashboard:" in output
+    assert "Browser launch was unavailable" in output
+
+
+def test_cli_handler_monitors_resumed_session_before_lazy_agent_startup(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _seed_persisted_timeline(tmp_path)
+    cli_obj = HermesCLI.__new__(HermesCLI)
+    cli_obj.agent = None
+    cli_obj.session_id = "resumed-session"
+    cli_obj._session_db = SimpleNamespace(
+        get_conversation_root=lambda _session_id: "conversation-a",
+        get_session_title=lambda session_id: {
+            "session-a": "Alpha title",
+            "conversation-b": "Beta title",
+        }.get(session_id),
+    )
+
+    with patch("webbrowser.open", return_value=True) as browser_open:
+        cli_obj._handle_object_context_command("/object_context monitor")
+
+    output = capsys.readouterr().out
+    assert "active session is unknown" not in output
+    assert "Projects: 1" in output
+    assert "Dashboard:" in output
+    browser_open.assert_called_once()
+
+
+def test_cli_monitor_lists_all_sessions_and_writes_stable_dashboard(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _seed_persisted_timeline(tmp_path)
+    store = ObjectContextStore(
+        tmp_path / "context" / "object_context_v1.sqlite3"
+    )
+    store.record_metrics(
+        "conversation-b",
+        {
+            "raw_context_tokens": 50,
+            "rendered_context_tokens": 20,
+            "tokens_saved": 30,
+        },
+        metadata={
+            "event": "request_projection",
+            "projection_id": "projection-b",
+            "turn_id": "turn-b",
+        },
+    )
+    cli_obj = HermesCLI.__new__(HermesCLI)
+    cli_obj.agent = None
+    cli_obj.session_id = "resumed-session"
+    cli_obj._session_db = SimpleNamespace(
+        get_conversation_root=lambda _session_id: "conversation-a",
+        get_session_title=lambda session_id: {
+            "session-a": "Alpha title",
+            "conversation-b": "Beta title",
+        }.get(session_id),
+    )
+
+    with patch("webbrowser.open", return_value=True):
+        cli_obj._handle_object_context_command("/oc monitor")
+
+    output = capsys.readouterr().out
+    assert "Sessions: 2" in output
+    assert "Projects: 2 total · 1 selected" in output
+    dashboard = (
+        tmp_path
+        / "logs"
+        / "object-context-monitor"
+        / "object_context_monitor_all_sessions.html"
+    )
+    assert dashboard.is_file()
+    dashboard_html = dashboard.read_text(encoding="utf-8")
+    assert "conversation-b" in dashboard_html
+    assert "Alpha title" in dashboard_html
+    assert "Beta title" in dashboard_html
+    assert "全部 CSV" in dashboard_html
+
+
+def test_cli_handler_reads_resumed_session_stats_before_lazy_agent_startup(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _seed_persisted_timeline(tmp_path)
+    cli_obj = HermesCLI.__new__(HermesCLI)
+    cli_obj.agent = None
+    cli_obj.session_id = "resumed-session"
+    cli_obj._session_db = SimpleNamespace(
+        get_conversation_root=lambda _session_id: "conversation-a"
+    )
+
+    cli_obj._handle_object_context_command("/object_context stats")
+
+    output = capsys.readouterr().out
+    assert "Object Context V1 Token Savings" in output
+    assert "Projected requests" in output
+    assert "1" in output
+
+
+def test_slash_worker_shape_monitors_resumed_session_without_live_agent(
+    tmp_path, monkeypatch
+):
+    from tui_gateway.slash_worker import _run
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _seed_persisted_timeline(tmp_path)
+    cli_obj = HermesCLI.__new__(HermesCLI)
+    cli_obj.agent = None
+    cli_obj.session_id = "resumed-session"
+    cli_obj._session_db = SimpleNamespace(
+        get_conversation_root=lambda _session_id: "conversation-a"
+    )
+    cli_obj._pending_resume_sessions = None
+
+    with patch("webbrowser.open", return_value=False):
+        output = _run(cli_obj, "object_context monitor")
+
+    assert "active session is unknown" not in output
+    assert "Projects: 1" in output
+    assert "Dashboard:" in output

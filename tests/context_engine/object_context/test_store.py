@@ -1,3 +1,4 @@
+import json
 import os
 import sqlite3
 
@@ -94,6 +95,127 @@ def test_status_separates_request_projection_metrics_from_delta_metrics(tmp_path
         "compression_ratio": 0.75,
         "hot_tail_tokens": 300,
     }
+
+
+def test_projection_timeline_groups_atomic_metrics_and_marks_legacy_rows(tmp_path):
+    store = ObjectContextStore(tmp_path / "objects.sqlite3")
+    store.record_metrics(
+        "conv-a",
+        {
+            "raw_context_tokens": 100,
+            "rendered_context_tokens": 40,
+            "tokens_saved": 60,
+            "projection_latency_ms": 1.25,
+        },
+        metadata={
+            "event": "request_projection",
+            "projection_id": "projection-1",
+            "projection_sequence": 1,
+            "turn_id": "turn-a",
+            "session_id": "session-a",
+        },
+    )
+    store.record_metrics(
+        "conv-a",
+        {
+            "raw_context_tokens": 200,
+            "rendered_context_tokens": 75,
+            "tokens_saved": 125,
+            "projection_latency_ms": 2.5,
+        },
+        metadata={
+            "event": "request_projection",
+            "projection_id": "projection-2",
+            "projection_sequence": 2,
+            "turn_id": "turn-a",
+            "session_id": "session-a",
+        },
+    )
+    # V1 rows written before projection identity existed remain usable only for
+    # project-level token charts; the monitor must not invent turn or time data.
+    store.record_metric("conv-a", "raw_context_tokens", 20)
+    store.record_metric("conv-a", "rendered_context_tokens", 10)
+    store.record_metric("conv-a", "tokens_saved", 10)
+
+    timeline = store.request_projection_timeline("conv-a")
+
+    assert len(timeline) == 3
+    assert timeline[0] == {
+        "projection_id": "projection-1",
+        "projection_sequence": 1,
+        "turn_id": "turn-a",
+        "session_id": "session-a",
+        "created_at": timeline[0]["created_at"],
+        "legacy": False,
+        "metrics": {
+            "raw_context_tokens": 100.0,
+            "rendered_context_tokens": 40.0,
+            "tokens_saved": 60.0,
+            "projection_latency_ms": 1.25,
+        },
+    }
+    assert timeline[1]["projection_id"] == "projection-2"
+    assert timeline[1]["turn_id"] == "turn-a"
+    assert timeline[1]["metrics"]["tokens_saved"] == 125.0
+    assert timeline[2]["legacy"] is True
+    assert timeline[2]["turn_id"] == ""
+    assert timeline[2]["metrics"] == {
+        "raw_context_tokens": 20.0,
+        "rendered_context_tokens": 10.0,
+        "tokens_saved": 10.0,
+    }
+
+    rows = [
+        row
+        for row in store.metrics("conv-a")
+        if json.loads(row["metadata_json"] or "{}").get("projection_id")
+        == "projection-1"
+    ]
+    assert len(rows) == 4
+    assert len({row["created_at"] for row in rows}) == 1
+
+
+def test_projection_conversations_lists_every_root_in_latest_first_order(tmp_path):
+    store = ObjectContextStore(tmp_path / "objects.sqlite3")
+    for conversation_id, saved in (("conv-old", 10), ("conv-new", 20)):
+        store.record_metrics(
+            conversation_id,
+            {
+                "raw_context_tokens": 100,
+                "rendered_context_tokens": 100 - saved,
+                "tokens_saved": saved,
+            },
+            metadata={
+                "event": "request_projection",
+                "projection_id": f"projection-{conversation_id}",
+            },
+        )
+    store.record_metric("conv-new", "tokens_saved", 5)
+    store.record_metric("not-a-projection", "retrieved_tokens", 999)
+    with sqlite3.connect(store.path) as conn:
+        conn.execute(
+            "UPDATE metrics SET created_at = 100 WHERE conversation_id = 'conv-old'"
+        )
+        conn.execute(
+            "UPDATE metrics SET created_at = 200 WHERE conversation_id = 'conv-new'"
+        )
+
+    conversations = store.request_projection_conversations()
+
+    assert conversations == [
+        {
+            "conversation_id": "conv-new",
+            "projection_count": 2,
+            "first_projection_at": 200.0,
+            "last_projection_at": 200.0,
+        },
+        {
+            "conversation_id": "conv-old",
+            "projection_count": 1,
+            "first_projection_at": 100.0,
+            "last_projection_at": 100.0,
+        },
+    ]
 
 
 def test_physical_dedup_does_not_merge_logical_identity(tmp_path):

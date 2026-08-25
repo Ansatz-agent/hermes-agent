@@ -136,6 +136,35 @@ def test_user_delta_exits_hot_tail_to_stable_in_place_card(tmp_path):
     assert engine.compression_count == 1
 
 
+def test_select_context_records_content_free_projection_identity_and_latency(tmp_path):
+    engine = _started_engine(tmp_path)
+    raw, history, _, _ = _prepare_user_card(engine)
+    engine.select_context(history)
+
+    timeline = engine.get_projection_timeline()
+
+    assert timeline["schema_version"] == 1
+    assert timeline["conversation_id"] == "conv-a"
+    assert timeline["session_id"] == "session-a"
+    assert len(timeline["projections"]) == 2
+    assert [event["projection_sequence"] for event in timeline["projections"]] == [
+        1,
+        2,
+    ]
+    assert {event["turn_id"] for event in timeline["projections"]} == {"turn-2"}
+    assert len(
+        {event["projection_id"] for event in timeline["projections"]}
+    ) == 2
+    for event in timeline["projections"]:
+        metrics = event["metrics"]
+        assert metrics["tokens_saved"] == (
+            metrics["raw_context_tokens"] - metrics["rendered_context_tokens"]
+        )
+        assert metrics["projection_latency_ms"] >= 0
+        assert event["legacy"] is False
+    assert raw not in json.dumps(timeline)
+
+
 def test_summarizer_receives_card_projection_not_automatic_raw_rehydration(
     tmp_path, monkeypatch
 ):

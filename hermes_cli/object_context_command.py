@@ -130,6 +130,7 @@ class ObjectContextCommandResult:
 
     lines: tuple[str, ...]
     changed: bool = False
+    artifact_path: str = ""
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -502,6 +503,125 @@ def _stats_result(
     return ObjectContextCommandResult(tuple(lines))
 
 
+def _monitor_result(
+    active_engine: str,
+    engine_status: Mapping[str, Any] | None,
+    monitor_timeline: Mapping[str, Any] | None,
+) -> ObjectContextCommandResult:
+    lines = ["Object Context V1 Session Dynamics Monitor", "─" * 72]
+    session_timelines = (
+        monitor_timeline.get("sessions")
+        if isinstance(monitor_timeline, Mapping)
+        else None
+    )
+    has_persisted_sessions = bool(
+        isinstance(session_timelines, list)
+        and any(
+            isinstance(item, Mapping)
+            and isinstance(item.get("projections"), list)
+            and item.get("projections")
+            for item in session_timelines
+        )
+    )
+    if active_engine != OBJECT_CONTEXT_ENGINE and not has_persisted_sessions:
+        lines.extend(
+            [
+                f"Unavailable: the active session is {_active_label(active_engine)}.",
+                "Use /object_context on, restart the CLI, and send a message first.",
+            ]
+        )
+        return ObjectContextCommandResult(tuple(lines))
+    if not isinstance(engine_status, Mapping) and not has_persisted_sessions:
+        lines.extend(
+            [
+                "Unavailable: no live Object Context status is available yet.",
+                "Send a message first, then run /object_context monitor again.",
+            ]
+        )
+        return ObjectContextCommandResult(tuple(lines))
+    if (
+        isinstance(engine_status, Mapping)
+        and engine_status.get("object_context_available") is False
+        and not has_persisted_sessions
+    ):
+        lines.extend(
+            [
+                "Unavailable: Object Context storage is not active for this session.",
+                "Check the V1 store initialization warning in the agent log.",
+            ]
+        )
+        return ObjectContextCommandResult(tuple(lines))
+    if not isinstance(monitor_timeline, Mapping):
+        lines.extend(
+            [
+                "Unavailable: the active engine does not expose projection telemetry.",
+                "Restart the CLI after updating Ansatz, then send a message first.",
+            ]
+        )
+        return ObjectContextCommandResult(tuple(lines))
+    projections = monitor_timeline.get("projections")
+    if (
+        (not isinstance(projections, list) or not projections)
+        and not has_persisted_sessions
+    ):
+        lines.extend(
+            [
+                "No request projection has been recorded for this conversation yet.",
+                "Send a message that reaches the model, then run this command again.",
+            ]
+        )
+        return ObjectContextCommandResult(tuple(lines))
+
+    try:
+        from hermes_cli.object_context_monitor import (
+            build_monitor_dashboard_payload,
+            write_monitor_html,
+        )
+
+        payload = build_monitor_dashboard_payload(monitor_timeline)
+        path = write_monitor_html(monitor_timeline)
+    except Exception as exc:
+        raise ObjectContextCommandError(
+            f"Could not create the session dynamics webpage: {exc}"
+        ) from exc
+
+    selected = next(
+        (
+            session
+            for session in payload.get("sessions", [])
+            if session.get("conversation_id")
+            == payload.get("selected_conversation_id")
+        ),
+        {},
+    )
+    global_totals = payload.get("global_totals", {})
+    lines.extend(
+        [
+            f"Sessions: {int(payload.get('session_count', 0)):,}",
+            (
+                f"Projects: {int(global_totals.get('project_count', 0)):,} total"
+                f" · {int(selected.get('project_count', 0)):,} selected"
+            ),
+            f"Turns:    {int(selected.get('turn_count', 0)):,} selected",
+            "Dashboard: " + str(path),
+            "Opening the private local HTML dashboard in your browser…",
+            "Run /object_context monitor again to refresh the snapshot.",
+        ]
+    )
+    project_count = int(selected.get("project_count", 0) or 0)
+    turnless = int(selected.get("turnless_project_count", 0) or 0)
+    timed = int(selected.get("timed_project_count", 0) or 0)
+    legacy = int(selected.get("legacy_project_count", 0) or 0)
+    if turnless or timed < project_count:
+        lines.append(
+            f"Coverage: {project_count - turnless:,}/{project_count:,} projects "
+            f"have turn identity; {timed:,}/{project_count:,} have timing."
+        )
+    if legacy:
+        lines.append(f"Compatibility: {legacy:,} of the uncovered projects are legacy.")
+    return ObjectContextCommandResult(tuple(lines), artifact_path=str(path))
+
+
 def _status_result(
     active_engine: str,
     engine_status: Mapping[str, Any] | None,
@@ -549,7 +669,7 @@ def _status_result(
         [
             "",
             "Usage:",
-            "  /object_context on|off|status|stats",
+            "  /object_context on|off|status|stats|monitor",
             "  /object_context set <parameter> <value>",
             "  /object_context reset [parameter|all]",
             "  /object_context help",
@@ -566,6 +686,7 @@ def _help_result() -> ObjectContextCommandResult:
         "─" * 72,
         "  /object_context                 show status and effective values",
         "  /object_context stats           show live V1 token savings",
+        "  /object_context monitor         open the session dynamics webpage",
         "  /object_context on              select object_context for next launch",
         "  /object_context off             select the built-in compressor",
         "  /object_context set KEY VALUE   persist one validated V1 override",
@@ -584,6 +705,7 @@ def _help_result() -> ObjectContextCommandResult:
             "",
             "Examples:",
             "  /object_context stats",
+            "  /object_context monitor",
             "  /object_context set hot_tail_max_deltas 4",
             "  /object_context set hot_tail_token_budget_ratio 0.15",
             "  /object_context reset hot_tail_max_deltas",
@@ -599,6 +721,7 @@ def run_object_context_command(
     *,
     active_engine: str = "",
     engine_status: Mapping[str, Any] | None = None,
+    monitor_timeline: Mapping[str, Any] | None = None,
 ) -> ObjectContextCommandResult:
     """Execute the configuration command and return terminal-ready text."""
 
@@ -617,6 +740,11 @@ def run_object_context_command(
         if len(args) > 1:
             raise ObjectContextCommandError("Usage: /object_context stats")
         return _stats_result(active_engine, engine_status)
+
+    if action == "monitor":
+        if len(args) > 1:
+            raise ObjectContextCommandError("Usage: /object_context monitor")
+        return _monitor_result(active_engine, engine_status, monitor_timeline)
 
     if action in {"help", "?"}:
         if len(args) > 1:
@@ -696,7 +824,8 @@ def run_object_context_command(
         )
 
     raise ObjectContextCommandError(
-        "Unknown action. Use /object_context [status|stats|on|off|set|reset|help]."
+        "Unknown action. Use /object_context "
+        "[status|stats|monitor|on|off|set|reset|help]."
     )
 
 
@@ -724,3 +853,158 @@ def active_context_engine_status(agent: Any) -> dict[str, Any] | None:
     except Exception:
         return None
     return dict(status) if isinstance(status, Mapping) else None
+
+
+def active_context_engine_monitor(agent: Any) -> dict[str, Any] | None:
+    """Read content-free projection telemetry from the active engine."""
+
+    engine = getattr(agent, "context_compressor", None) if agent is not None else None
+    get_timeline = getattr(engine, "get_projection_timeline", None)
+    if not callable(get_timeline):
+        return None
+    try:
+        timeline = get_timeline()
+    except Exception:
+        return None
+    return dict(timeline) if isinstance(timeline, Mapping) else None
+
+
+def _stored_session_title(
+    session_db: Any,
+    conversation_id: str,
+    projections: list[dict[str, Any]],
+    *,
+    current_session_id: str = "",
+) -> str:
+    """Resolve stored title metadata without reading conversation content.
+
+    New projection events retain the concrete session segment that produced
+    them. Checking those segments newest-first lets compressed conversations
+    use the title carried to their latest continuation while legacy telemetry
+    safely falls back to the stable root row.
+    """
+
+    getter = getattr(session_db, "get_session_title", None)
+    if not callable(getter):
+        return ""
+    candidates = [
+        str(event.get("session_id") or "").strip()
+        for event in reversed(projections)
+        if isinstance(event, Mapping)
+    ]
+    candidates.extend([str(current_session_id or "").strip(), conversation_id])
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        try:
+            title = str(getter(candidate) or "").strip()
+        except Exception:
+            continue
+        if title:
+            return title
+    return ""
+
+
+def persisted_context_engine_telemetry(
+    session_db: Any,
+    session_id: str,
+    *,
+    include_all_sessions: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Load content-free V1 telemetry from the profile store.
+
+    ``HermesCLI`` restores ``session_id`` and transcript history eagerly but
+    builds the agent only on the first model turn. Read-only monitoring must not
+    force that expensive startup merely to query metrics already owned by the
+    profile's Object Context store. The all-session form is used only by the
+    monitor and remains a numeric/identity-only snapshot.
+    """
+
+    current_session_id = str(session_id or "").strip()
+    if not current_session_id and not include_all_sessions:
+        return None
+
+    conversation_id = current_session_id
+    resolver = getattr(session_db, "get_conversation_root", None)
+    if current_session_id and callable(resolver):
+        try:
+            conversation_id = str(resolver(current_session_id) or current_session_id)
+        except Exception:
+            conversation_id = current_session_id
+
+    try:
+        from hermes_constants import get_hermes_home
+        from plugins.context_engine.object_context.store import ObjectContextStore
+
+        store_path = get_hermes_home() / "context" / "object_context_v1.sqlite3"
+        if not store_path.is_file():
+            return None
+        store = ObjectContextStore(store_path)
+        projections = store.request_projection_timeline(conversation_id)
+        if not projections and not include_all_sessions:
+            return None
+        status = store.aggregate_status(conversation_id)
+        session_timelines: list[dict[str, Any]] = []
+        if include_all_sessions:
+            for summary in store.request_projection_conversations():
+                stored_conversation_id = str(summary.get("conversation_id") or "")
+                stored_projections = store.request_projection_timeline(
+                    stored_conversation_id
+                )
+                if not stored_projections:
+                    continue
+                title = _stored_session_title(
+                    session_db,
+                    stored_conversation_id,
+                    stored_projections,
+                    current_session_id=(
+                        current_session_id
+                        if stored_conversation_id == conversation_id
+                        else ""
+                    ),
+                )
+                session_timelines.append(
+                    {
+                        "conversation_id": stored_conversation_id,
+                        "session_id": stored_conversation_id,
+                        "title": title,
+                        "source": "persisted",
+                        "first_projection_at": summary.get("first_projection_at", 0),
+                        "last_projection_at": summary.get("last_projection_at", 0),
+                        "projections": stored_projections,
+                    }
+                )
+            if not session_timelines:
+                return None
+    except Exception:
+        return None
+
+    status.update(
+        {
+            "object_context_version": 1,
+            "object_context_available": True,
+        }
+    )
+    timeline: dict[str, Any] = {
+        "schema_version": 2 if include_all_sessions else 1,
+        "conversation_id": conversation_id,
+        "session_id": current_session_id,
+        "title": _stored_session_title(
+            session_db,
+            conversation_id,
+            projections,
+            current_session_id=current_session_id,
+        ),
+        "source": "persisted",
+        "projections": projections,
+    }
+    if include_all_sessions:
+        timeline.update(
+            {
+                "active_conversation_id": conversation_id,
+                "sessions": session_timelines,
+            }
+        )
+    return status, timeline
