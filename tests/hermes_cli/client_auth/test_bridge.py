@@ -359,3 +359,25 @@ def test_trace_token_bridge_rejects_invalid_or_extra_parameters(params):
     )
 
     assert response["error"]["code"] == "INVALID_PARAMS"
+
+
+@pytest.mark.parametrize("reason", ["rate_limited", "vault_unavailable", "server_unavailable"])
+def test_non_terminal_locked_status_maps_to_auth_required_not_internal_error(monkeypatch, reason):
+    locked = SimpleNamespace(
+        reason=reason,
+        public_dict=lambda: public_status(
+            state="locked",
+            reason=reason,
+            validation_state="degraded",
+            validation_reason=reason,
+        ),
+    )
+    monkeypatch.setattr("hermes_cli.client_auth.bridge.account_status", lambda: locked)
+
+    response = dispatch(
+        {"version": 2, "id": "1", "method": "status", "params": {**NATIVE_CONTEXT}}
+    )
+
+    assert "error" in response, response
+    assert response["error"]["code"] == "AUTH_REQUIRED"
+    assert response["error"]["reason"] == reason

@@ -1406,3 +1406,33 @@ test('local backend preparation does not wait for Trace token acquisition', asyn
     await rm(root, { force: true, recursive: true })
   }
 })
+
+test('desktop trace startup aborts settle the opened store and migration, rebind on owner change, and rotate the ingress bearer on detach', () => {
+  const source = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
+  const ensureStart = source.indexOf('async function ensureDesktopTraceForwarder(')
+  const ensureEnd = source.indexOf('async function prepareDesktopTraceForwarder(')
+  assert.ok(ensureStart >= 0 && ensureEnd > ensureStart)
+  const ensure = source.slice(ensureStart, ensureEnd)
+
+  // A pinned scope string must not keep a stale forwarder bound to an old
+  // same-account session: the early returns must also compare the owner.
+  assert.match(ensure, /sameTraceOwnerIdentity\(desktopTraceContext\.owner, requestedOwner\)/)
+  assert.match(ensure, /owner: \{ \.\.\.owner \}/)
+
+  // Aborting after the store is open must close it and settle the migration
+  // barrier so a rerun never opens a second writer on the same root.
+  assert.match(ensure, /await store\.close\(\)\.catch/)
+  assert.ok(
+    (ensure.match(/await migrationBarrier\?\.catch/g) ?? []).length >= 2,
+    'every post-open abort path must settle the migration barrier'
+  )
+
+  const stopStart = source.indexOf('async function stopDesktopTraceForwarder(')
+  const stopEnd = source.indexOf('async function stopDesktopTraceFacade(')
+  assert.ok(stopStart >= 0 && stopEnd > stopStart)
+  const stop = source.slice(stopStart, stopEnd)
+
+  // Detaching an account/session must rotate the stable ingress bearer so a
+  // surviving old backend cannot inject into a later account.
+  assert.match(stop, /rotateDesktopTraceIngressBearer\(\)/)
+})

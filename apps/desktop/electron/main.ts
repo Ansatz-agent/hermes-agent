@@ -306,7 +306,7 @@ import {
 } from './trace-legacy-owner'
 import { createSafeStorageTraceKeyProtector } from './trace-outbox-crypto'
 import { TraceOutboxStore } from './trace-outbox-store'
-import { type TraceOwner, validateTraceOwner } from './trace-outbox-types'
+import { sameTraceOwnerIdentity, type TraceOwner, validateTraceOwner } from './trace-outbox-types'
 import { TraceRecoveryController, TraceRecoveryLifecycle } from './trace-recovery-controller'
 import { resolveLocalBackendWithTrace, TraceRuntimeStartupRecovery } from './trace-runtime-startup'
 import {
@@ -8951,6 +8951,15 @@ function scheduleDesktopTraceTransportAttachRetry(delayOverride = null) {
   desktopTraceAttachRetryTimer.unref?.()
 }
 
+function rotateDesktopTraceIngressBearer() {
+  const rotated = desktopTraceFacade?.rotateBearer()
+
+  if (rotated) {
+    desktopTraceIngress = rotated
+    scheduleDesktopTraceTransportAttachRetry(0)
+  }
+}
+
 function registerDesktopTraceBackend(child, backend, generation) {
   try {
     desktopTraceBackends.register(child, { generation, root: backend.root })
@@ -9024,14 +9033,24 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
   await ensureDesktopTraceFacade()
   await attachDesktopTraceTransportToRunningBackends()
 
-  if (desktopTraceContext && sameConnectionScope(desktopTraceContext.scope, scope)) {
+  // A pinned runtime scope string can survive a same-account session change;
+  // the forwarder must rebind whenever the requested TraceOwner differs.
+  if (
+    desktopTraceContext &&
+    sameConnectionScope(desktopTraceContext.scope, scope) &&
+    sameTraceOwnerIdentity(desktopTraceContext.owner, requestedOwner)
+  ) {
     return desktopTraceContext
   }
 
   if (desktopTraceStartupPromise) {
     await desktopTraceStartupPromise
 
-    if (desktopTraceContext && sameConnectionScope(desktopTraceContext.scope, scope)) {
+    if (
+      desktopTraceContext &&
+      sameConnectionScope(desktopTraceContext.scope, scope) &&
+      sameTraceOwnerIdentity(desktopTraceContext.owner, requestedOwner)
+    ) {
       return desktopTraceContext
     }
   }
@@ -9041,6 +9060,7 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
   const startup = (async () => {
     const previous = desktopTraceForwarder
     const previousLifecycle = desktopTraceLifecycle
+    const previousOwner = desktopTraceContext?.owner ?? null
 
     desktopTraceForwarder = null
     desktopTraceLifecycle = null
@@ -9054,6 +9074,11 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
     ])
 
     const owner = validateTraceOwner(requestedOwner).owner
+
+    if (previousOwner && !sameTraceOwnerIdentity(previousOwner, owner)) {
+      rotateDesktopTraceIngressBearer()
+    }
+
     const traceOutboxRoot = path.join(app.getPath('userData'), 'trace-outbox')
     const status = desktopAuthCoordinator?.status('local')
 
@@ -9156,6 +9181,11 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
     })
 
     if (generation !== desktopTraceGeneration || !sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope)) {
+      // Another generation owns this outbox root now: close our writer and
+      // settle the migration barrier before aborting so a rerun never races
+      // two stores on one root.
+      await store.close().catch(() => {})
+      await migrationBarrier?.catch(() => {})
       throw new AuthBridgeError('auth_required', 'session_rejected')
     }
 
@@ -9189,6 +9219,8 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
       started = await forwarder.start(owner)
     } catch (error) {
       await forwarder.stop({ flushMs: 0 }).catch(() => {})
+      await store.close().catch(() => {})
+      await migrationBarrier?.catch(() => {})
       throw error
     }
 
@@ -9196,6 +9228,8 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
 
     if (generation !== desktopTraceGeneration || !sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope)) {
       await forwarder.stop({ flushMs: 0 })
+      await store.close().catch(() => {})
+      await migrationBarrier?.catch(() => {})
       throw new AuthBridgeError('auth_required', 'session_rejected')
     }
 
@@ -9204,6 +9238,7 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
     desktopTraceOutboxStore = store
     desktopTraceFacade?.install(started)
     desktopTraceContext = {
+      owner: { ...owner },
       scope: { ...scope }
     }
     lifecycle.start()
@@ -9237,6 +9272,7 @@ async function stopDesktopTraceForwarder(flushMs = 3_000) {
   desktopTraceOutboxStore = null
   desktopTraceContext = null
   desktopTraceFacade?.detach()
+  rotateDesktopTraceIngressBearer()
 
   await Promise.all([lifecycle?.stop() ?? Promise.resolve(), forwarder?.stop({ flushMs }) ?? Promise.resolve()])
 }

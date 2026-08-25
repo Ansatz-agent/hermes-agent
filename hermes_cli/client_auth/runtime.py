@@ -737,6 +737,18 @@ class RuntimeSnapshot:
             raise AuthRequired("runtime_unavailable")
         return self.scope
 
+    def public_dict_v1(self) -> dict[str, object]:
+        """The seven-key wire shape protocol-v1 peers validate strictly."""
+        return {
+            "state": self.state.value,
+            "username": self.username,
+            "runtime_instance_id": self.runtime_instance_id,
+            "epoch": self.epoch,
+            "valid_until": self.valid_until,
+            "session_expires_at": self.session_expires_at,
+            "reason": self.reason,
+        }
+
     def public_dict(self) -> dict[str, object]:
         return {
             "state": self.state.value,
@@ -1865,8 +1877,13 @@ class _OwnerCore:
             refresh_due = (
                 self._next_refresh_at is not None and now >= self._next_refresh_at
             )
+            record = self._record
         if refresh_due:
-            if self.snapshot().principal_key is not None:
+            # An in-process legacy CookieRecord refreshes through the cookie
+            # refresh path; validate_now() would return without rescheduling
+            # and leave the due timestamp in the past, busy-looping at the
+            # broker's 2 Hz maintenance tick.
+            if isinstance(record, (NativeCredentialRecord, LegacyCredentialRecord)):
                 self.validate_now()
             else:
                 self.refresh()
@@ -2015,7 +2032,11 @@ class _OwnerCore:
                     or status.username != record.credential.username
                 ):
                     raise AuthServiceError("invalid_response")
-                updated = NativeCredentialRecord(record.credential, status.server_time)
+                updated = NativeCredentialRecord(
+                    record.credential,
+                    status.server_time,
+                    record.predecessor_principal_key,
+                )
                 with self._lock:
                     if self._record is not record:
                         return self._snapshot
@@ -2030,23 +2051,14 @@ class _OwnerCore:
             status = self._client.legacy_status(record.cookie_record.cookies)
             if status.username != record.cookie_record.username:
                 raise AuthServiceError("invalid_response")
-            installation_id = str(uuid.uuid4())
-            credential = self._client.issue_client_session(
-                record.cookie_record.cookies,
-                installation_id=installation_id,
-                client_version="0.17.0",
-            )
-            updated = NativeCredentialRecord(credential, status.server_time)
+            # A background validation must never mint a native session with a
+            # fabricated installation id. The record stays legacy-only until a
+            # login carrying the real desktop installation/client context
+            # performs the proven upgrade.
             with self._lock:
                 if self._record is not record:
                     return self._snapshot
-                self._replace_record_atomically(updated)
-                self._record = updated
-                snapshot = RuntimeSnapshot.from_native_credential(
-                    updated,
-                    runtime_instance_id=self._snapshot.runtime_instance_id,
-                    epoch=self._snapshot.epoch,
-                ).online(last_validated_at=status.server_time)
+                snapshot = self._snapshot.online(last_validated_at=status.server_time)
                 self._validation_failures = 0
                 self._publish_locked(snapshot)
                 self._schedule_validation_locked(self._clock())
@@ -2120,7 +2132,9 @@ class _OwnerCore:
             raise AuthServiceError("vault_unavailable") from None
 
     def _schedule_validation_locked(self, now: float) -> None:
-        cap = min(300.0, float(2 ** self._validation_failures))
+        # Clamp the exponent before exponentiation: a long outage would
+        # otherwise overflow float conversion and kill the owner broker.
+        cap = min(300.0, 2.0 ** min(self._validation_failures, 16))
         delay = self._jitter(0.0, cap)
         if not isinstance(delay, (float, int)) or isinstance(delay, bool) or not 0.0 <= delay <= cap:
             delay = cap
@@ -2245,7 +2259,8 @@ class _EntryPointOwner(Protocol):
 
 
 _RUNTIME_FRAME_LIMIT = 65_536
-_RUNTIME_PROTOCOL_VERSION = 1
+_RUNTIME_PROTOCOL_VERSION = 2
+_RUNTIME_SUPPORTED_PROTOCOL_VERSIONS = (1, 2)
 _TRACE_INSTALLATION_ID = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
     re.IGNORECASE,
@@ -2285,6 +2300,10 @@ class RemoteRuntimeConsumer:
         return snapshot.scope
 
 
+class _OwnerProtocolRejected(Exception):
+    """An old owner rejected our protocol version before executing anything."""
+
+
 class RemoteRuntimeOwner:
     """A same-OS-user client for the single native auth owner."""
 
@@ -2292,6 +2311,7 @@ class RemoteRuntimeOwner:
         self._endpoint = endpoint
         self._snapshot = RuntimeSnapshot.signed_out(reason="runtime_unavailable")
         self._lock = threading.RLock()
+        self._protocol_version = _RUNTIME_PROTOCOL_VERSION
 
     def refresh(
         self,
@@ -2339,12 +2359,24 @@ class RemoteRuntimeOwner:
         finally:
             password_text = ""
         try:
-            return self._exchange(
-                encoded,
-                timeout=_RUNTIME_LOGIN_TIMEOUT_SECONDS,
-            )
+            try:
+                return self._exchange(
+                    encoded,
+                    timeout=_RUNTIME_LOGIN_TIMEOUT_SECONDS,
+                )
+            except _OwnerProtocolRejected:
+                self._protocol_version = 1
+                retry = self._encode_request(request)
+                try:
+                    return self._exchange(
+                        retry,
+                        timeout=_RUNTIME_LOGIN_TIMEOUT_SECONDS,
+                    )
+                finally:
+                    retry[:] = b"\0" * len(retry)
         finally:
             encoded[:] = b"\0" * len(encoded)
+            request["password"] = ""
 
     def logout(self) -> RuntimeSnapshot:
         return self._request({"operation": "logout"})
@@ -2356,18 +2388,23 @@ class RemoteRuntimeOwner:
         client_version: str,
         telemetry_schema_version: str,
     ) -> TraceCredential:
-        encoded = self._encode_request(
-            {
-                "operation": "trace_token",
-                "installation_id": installation_id,
-                "client_version": client_version,
-                "telemetry_schema_version": telemetry_schema_version,
-            }
-        )
-        response = self._exchange_response(
-            encoded,
-            timeout=_RUNTIME_REQUEST_TIMEOUT_SECONDS,
-        )
+        request: dict[str, object] = {
+            "operation": "trace_token",
+            "installation_id": installation_id,
+            "client_version": client_version,
+            "telemetry_schema_version": telemetry_schema_version,
+        }
+        try:
+            response = self._exchange_response(
+                self._encode_request(request),
+                timeout=_RUNTIME_REQUEST_TIMEOUT_SECONDS,
+            )
+        except _OwnerProtocolRejected:
+            self._protocol_version = 1
+            response = self._exchange_response(
+                self._encode_request(request),
+                timeout=_RUNTIME_REQUEST_TIMEOUT_SECONDS,
+            )
         if set(response) != {"version", "ok", "credential"}:
             raise AuthRequired("runtime_unavailable")
         return _trace_credential_from_wire(
@@ -2406,12 +2443,15 @@ class RemoteRuntimeOwner:
         *,
         timeout: float = _RUNTIME_REQUEST_TIMEOUT_SECONDS,
     ) -> RuntimeSnapshot:
-        encoded = self._encode_request(params)
-        return self._exchange(encoded, timeout=timeout)
+        try:
+            return self._exchange(self._encode_request(params), timeout=timeout)
+        except _OwnerProtocolRejected:
+            self._protocol_version = 1
+            return self._exchange(self._encode_request(params), timeout=timeout)
 
     def _encode_request(self, params: dict[str, object]) -> bytearray:
         request = {
-            "version": _RUNTIME_PROTOCOL_VERSION,
+            "version": self._protocol_version,
             **params,
         }
         encoded = bytearray(
@@ -2474,12 +2514,24 @@ class RemoteRuntimeOwner:
             response = json.loads(raw)
         except (UnicodeError, ValueError):
             raise AuthRequired("runtime_unavailable") from None
-        if not isinstance(response, dict) or response.get("version") != 1:
+        if (
+            not isinstance(response, dict)
+            or response.get("version") not in _RUNTIME_SUPPORTED_PROTOCOL_VERSIONS
+        ):
             raise AuthRequired("runtime_unavailable")
         if response.get("ok") is not True:
             reason = response.get("reason")
             if not isinstance(reason, str) or not reason:
                 reason = "runtime_unavailable"
+            # An old owner rejects an unknown protocol version before it
+            # executes the operation, always answering a version-1 error
+            # frame. Signal the caller to retry once on protocol v1.
+            if (
+                self._protocol_version > 1
+                and response.get("version") == 1
+                and reason == "runtime_unavailable"
+            ):
+                raise _OwnerProtocolRejected()
             raise AuthRequired(reason)
         return response
 
@@ -2682,7 +2734,10 @@ class OwnerBroker:
             request = json.loads(raw)
         except (UnicodeError, ValueError):
             return _runtime_error("runtime_unavailable")
-        if not isinstance(request, dict) or request.get("version") != 1:
+        if not isinstance(request, dict):
+            return _runtime_error("runtime_unavailable")
+        version = request.get("version")
+        if version not in _RUNTIME_SUPPORTED_PROTOCOL_VERSIONS:
             return _runtime_error("runtime_unavailable")
         operation = request.get("operation")
         operation_locked = False
@@ -2699,7 +2754,7 @@ class OwnerBroker:
             if not operation_locked:
                 if operation == "login":
                     request["password"] = ""
-                return _runtime_error("runtime_unavailable")
+                return _runtime_error("runtime_unavailable", version=version)
         try:
             if operation == "status" and set(request) == {"version", "operation"}:
                 snapshot = self._owner.refresh()
@@ -2785,23 +2840,23 @@ class OwnerBroker:
                     telemetry_schema_version=telemetry_schema_version,
                 )
                 return {
-                    "version": 1,
+                    "version": version,
                     "ok": True,
                     "credential": _trace_credential_to_wire(credential),
                 }
             else:
                 raise AuthRequired("runtime_unavailable")
         except AuthRequired as error:
-            return _runtime_error(error.reason or error.code)
+            return _runtime_error(error.reason or error.code, version=version)
         except Exception:
-            return _runtime_error("runtime_unavailable")
+            return _runtime_error("runtime_unavailable", version=version)
         finally:
             if operation_locked:
                 self._operation_lock.release()
         return {
-            "version": 1,
+            "version": version,
             "ok": True,
-            "snapshot": snapshot.public_dict(),
+            "snapshot": snapshot.public_dict() if version >= 2 else snapshot.public_dict_v1(),
         }
 
 
@@ -3152,9 +3207,9 @@ def _snapshot_from_public(value: object) -> RuntimeSnapshot:
     )
 
 
-def _runtime_error(reason: str) -> dict[str, object]:
+def _runtime_error(reason: str, *, version: int = 1) -> dict[str, object]:
     return {
-        "version": 1,
+        "version": version,
         "ok": False,
         "reason": reason,
     }

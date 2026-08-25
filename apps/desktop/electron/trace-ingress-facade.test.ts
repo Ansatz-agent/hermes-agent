@@ -195,3 +195,48 @@ async function post(endpoint: string, bearer: string): Promise<Response> {
     }
   })
 }
+
+test('rotating the ingress bearer denies a surviving old producer while the new bearer keeps working', async () => {
+  const facade = new TraceIngressFacade()
+  const ingress = await facade.start()
+  const received: Buffer[] = []
+
+  const delegate = http.createServer((request, response) => {
+    request.on('error', () => {})
+    response.on('error', () => {})
+    const chunks: Buffer[] = []
+    request.on('data', chunk => chunks.push(Buffer.from(chunk)))
+    request.on('end', () => {
+      received.push(Buffer.concat(chunks))
+      response.writeHead(200, { 'content-length': '0', 'content-type': 'application/x-protobuf' })
+      response.end()
+    })
+  })
+
+  await new Promise<void>((resolve, reject) => {
+    delegate.once('error', reject)
+    delegate.listen(0, '127.0.0.1', resolve)
+  })
+  const address = delegate.address()
+  assert.ok(address && typeof address !== 'string')
+  facade.install({ endpoint: `http://127.0.0.1:${address.port}/v1/traces`, localBearer: 'a'.repeat(43) })
+
+  try {
+    assert.equal((await post(ingress.endpoint, ingress.localBearer)).status, 200)
+
+    const rotated = facade.rotateBearer()
+    assert.ok(rotated, 'a running facade must be able to rotate its bearer')
+    assert.equal(rotated.endpoint, ingress.endpoint)
+    assert.notEqual(rotated.localBearer, ingress.localBearer)
+
+    // The account/session that owned the old bearer is gone: a surviving
+    // producer holding it must be rejected before reaching the delegate.
+    assert.equal((await post(ingress.endpoint, ingress.localBearer)).status, 401)
+    assert.equal((await post(rotated.endpoint, rotated.localBearer)).status, 200)
+    assert.equal(received.length, 2)
+  } finally {
+    facade.detach()
+    await facade.stop()
+    await new Promise<void>(resolve => delegate.close(() => resolve()))
+  }
+})

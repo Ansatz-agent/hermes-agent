@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 
 import { test } from 'vitest'
 
-import { type TraceOwner, validateTraceOwner } from './trace-outbox-types'
+import { sameTraceOwnerIdentity, type TraceOwner, validateTraceOwner } from './trace-outbox-types'
 
 function validOwner(): TraceOwner {
   return {
@@ -76,5 +76,30 @@ test('trusted Trace owners reject UUIDv4 prefixes followed by trailing text', ()
         installationId: `${validOwner().installationId}-suffix`
       }),
     /invalid_account_key/
+  )
+})
+
+test('sameTraceOwnerIdentity compares the full owner identity', () => {
+  const owner = validOwner()
+
+  assert.equal(sameTraceOwnerIdentity(owner, { ...owner }), true)
+  assert.equal(
+    sameTraceOwnerIdentity(owner, { ...owner, sessionId: '99999999-9999-4999-8999-999999999999' }),
+    false
+  )
+  assert.equal(
+    sameTraceOwnerIdentity(owner, { ...owner, accountId: '99999999-9999-4999-8999-999999999999' }),
+    false
+  )
+  assert.equal(
+    sameTraceOwnerIdentity(owner, {
+      ...owner,
+      accountKey: 'account-99999999-9999-4999-8999-999999999999'
+    }),
+    false
+  )
+  assert.equal(
+    sameTraceOwnerIdentity(owner, { ...owner, installationId: '99999999-9999-4999-8999-999999999999' }),
+    false
   )
 })

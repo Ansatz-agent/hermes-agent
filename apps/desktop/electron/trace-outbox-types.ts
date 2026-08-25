@@ -95,3 +95,12 @@ export function validateTraceOwner(owner: TraceOwner): TraceOwnerState {
 
   return { owner: { ...owner }, uploadable: true }
 }
+
+export function sameTraceOwnerIdentity(left: TraceOwner, right: TraceOwner): boolean {
+  return (
+    left.accountKey === right.accountKey &&
+    left.accountId === right.accountId &&
+    left.sessionId === right.sessionId &&
+    left.installationId === right.installationId
+  )
+}

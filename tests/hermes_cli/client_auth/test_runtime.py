@@ -1214,11 +1214,10 @@ def legacy_v1_blob() -> str:
     )
 
 
-def test_legacy_cookie_restores_offline_then_upgrades_atomically_online():
+def test_legacy_cookie_restores_offline_then_stays_legacy_online():
     raw = legacy_v1_blob()
     backend = FakeSecretBackend(raw=raw)
     client = FakeAuthClient()
-    client.native_status_error = AuthServiceError("server_unavailable")
     owner = VaultOwner(
         client,
         secret_backend=backend,
@@ -1230,23 +1229,27 @@ def test_legacy_cookie_restores_offline_then_upgrades_atomically_online():
 
     assert restored.legacy is True
     assert restored.principal_key == "legacy:" + hashlib.sha256(raw.encode()).hexdigest()
-    client.native_status_error = None
-    upgraded = owner.validate_now()
-    assert upgraded.legacy is False
-    assert upgraded.account_id == ACCOUNT_ID
-    assert json.loads(backend.raw)["kind"] == "native"
+    validated = owner.validate_now()
+    assert validated.legacy is True
+    assert validated.validation_state is ValidationState.ONLINE
+    assert validated.principal_key == restored.principal_key
+    assert client.native_issue_calls == 0
+    migrated = json.loads(backend.raw)
+    assert migrated["version"] == 2
+    assert "cookies" in migrated
 
 
-def test_legacy_upgrade_readback_failure_restores_durable_legacy_record_and_keeps_cached_scope():
-    class ReadbackFailBackend(FakeSecretBackend):
-        def read(self) -> str | None:
-            raw = super().read()
-            if raw is not None and json.loads(raw).get("kind") == "native":
-                raise RuntimeError("readback unavailable")
-            return raw
+def test_background_legacy_validation_never_writes_a_native_record():
+    class NativeWriteDetector(FakeSecretBackend):
+        def write(self, raw: str) -> None:
+            payload = json.loads(raw)
+            assert payload.get("kind") != "native", (
+                "background validation must not persist a native record"
+            )
+            super().write(raw)
 
     raw = legacy_v1_blob()
-    backend = ReadbackFailBackend(raw=raw)
+    backend = NativeWriteDetector(raw=raw)
     client = FakeAuthClient()
     owner = VaultOwner(
         client,
@@ -1257,11 +1260,11 @@ def test_legacy_upgrade_readback_failure_restores_durable_legacy_record_and_keep
     restored = owner.refresh()
     migrated_raw = backend.raw
 
-    degraded = owner.validate_now()
+    validated = owner.validate_now()
 
-    assert degraded.scope == restored.scope
-    assert degraded.legacy is True
-    assert degraded.validation_state is ValidationState.DEGRADED
+    assert validated.scope == restored.scope
+    assert validated.legacy is True
+    assert validated.validation_state is ValidationState.ONLINE
     assert migrated_raw is not None
     assert migrated_raw != raw
     assert json.loads(migrated_raw)["version"] == 2
@@ -2442,7 +2445,7 @@ def test_remote_owner_trace_credential_protocol_is_exact_and_installation_bound(
 
     assert result.installation_id == installation_id
     assert json.loads(connection.sent) == {
-        "version": 1,
+        "version": 2,
         "operation": "trace_token",
         "installation_id": installation_id,
         "client_version": "0.17.0",
@@ -3758,3 +3761,227 @@ def test_windows_named_pipe_restricts_dacl_verifies_sid_and_inheritance():
         client.close()
         server_connection.close()
         server.close()
+
+
+def test_native_validation_preserves_predecessor_principal_key_in_persisted_blob():
+    from hermes_cli.client_auth.runtime import (
+        NativeCredentialRecord,
+        _decode_credential_blob,
+        _encode_native_blob,
+    )
+
+    predecessor = "legacy:" + "a" * 64
+    credential = NativeSessionCredential(
+        account_id=ACCOUNT_ID,
+        session_id=NATIVE_SESSION_ID,
+        session_token="session-token-sentinel-1234567890",
+        installation_id=INSTALLATION_ID,
+        username="alice",
+        issued_at="2026-08-24T12:00:00+00:00",
+    )
+    record = NativeCredentialRecord(credential, "2026-08-24T11:00:00+00:00", predecessor)
+    backend = FakeSecretBackend(raw=_encode_native_blob(record))
+    owner = MemoryOwner(
+        FakeAuthClient(),
+        hardener=RecordingHardener(),
+        secret_backend=backend,
+        clock=FakeClock(),
+        jitter=lambda _low, high: high,
+    )
+
+    snapshot = owner.validate_now()
+
+    assert snapshot.validation_state is ValidationState.ONLINE
+    assert snapshot.predecessor_principal_key == predecessor
+    persisted = _decode_credential_blob(backend.raw)
+    assert isinstance(persisted, NativeCredentialRecord)
+    assert persisted.predecessor_principal_key == predecessor
+    assert persisted.last_validated_at == "2026-08-24T12:00:00+00:00"
+
+
+def test_background_legacy_validation_stays_legacy_without_minting_native_session():
+    from hermes_cli.client_auth.runtime import _decode_credential_blob, _encode_cookie_blob
+
+    client = FakeAuthClient()
+    legacy_cookie = CookieRecord(
+        cookies=dict(client.record.cookies),
+        username="alice",
+        session_expires_at=status_at().session_expires_at,
+        principal_key="legacy:" + "b" * 64,
+    )
+    backend = FakeSecretBackend(raw=_encode_cookie_blob(legacy_cookie))
+    owner = MemoryOwner(
+        client,
+        hardener=RecordingHardener(),
+        secret_backend=backend,
+        clock=FakeClock(),
+        jitter=lambda low, _high: low,
+    )
+
+    snapshot = owner.validate_now()
+
+    assert client.native_issue_calls == 0
+    assert snapshot.state is AuthState.AUTHENTICATED
+    assert snapshot.legacy is True
+    assert snapshot.validation_state is ValidationState.ONLINE
+    assert snapshot.account_id is None and snapshot.installation_id is None
+    assert snapshot.principal_key == legacy_cookie.principal_key
+    persisted = _decode_credential_blob(backend.raw)
+    assert isinstance(persisted, CookieRecord)
+    assert persisted.principal_key == legacy_cookie.principal_key
+
+
+def test_validation_backoff_clamps_exponent_during_long_outage():
+    client = FakeAuthClient()
+    clock = FakeClock(100.0)
+    owner = MemoryOwner(
+        client,
+        hardener=RecordingHardener(),
+        secret_backend=FakeSecretBackend(),
+        clock=clock,
+        jitter=lambda _low, high: high,
+    )
+    owner.login(
+        "alice",
+        bytearray(b"secret"),
+        installation_id=INSTALLATION_ID,
+        client_version="0.17.0",
+    )
+    client.native_status_error = AuthServiceError("server_unavailable")
+
+    for _ in range(1100):
+        owner.validate_now()
+
+    snapshot = owner.snapshot()
+    assert snapshot.validation_state is ValidationState.DEGRADED
+    due = owner.next_refresh_at
+    assert due is not None
+    assert clock.now < due <= clock.now + 300.0
+
+
+def test_legacy_cookie_maintenance_refreshes_on_schedule_without_busy_looping():
+    client = FakeAuthClient()
+    clock = FakeClock(100.0)
+    owner = MemoryOwner(
+        client,
+        hardener=RecordingHardener(),
+        secret_backend=FakeSecretBackend(),
+        clock=clock,
+        jitter=lambda low, _high: low,
+    )
+    owner.login("alice", bytearray(b"secret"))
+    assert client.status_calls == 1
+    due = owner.next_refresh_at
+    assert due is not None and due > clock.now
+
+    for _ in range(4):
+        clock.now += 0.5
+        assert owner.maintenance() is True
+    assert client.status_calls == 1
+
+    clock.now = due
+    assert owner.maintenance() is True
+    assert client.status_calls == 2
+    assert client.native_status_calls == 0
+    assert client.native_issue_calls == 0
+    rescheduled = owner.next_refresh_at
+    assert rescheduled is not None and rescheduled > clock.now
+
+    clock.now += 0.5
+    assert owner.maintenance() is True
+    assert client.status_calls == 2
+
+
+LEGACY_SNAPSHOT_WIRE_KEYS = {
+    "state",
+    "username",
+    "runtime_instance_id",
+    "epoch",
+    "valid_until",
+    "session_expires_at",
+    "reason",
+}
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Unix runtime protocol")
+def test_owner_broker_versions_snapshot_shape_for_rolling_upgrade():
+    owner, _secret_backend, _auth_client, _clock = memory_owner_factory()
+    with tempfile.TemporaryDirectory(prefix="ha-proto-") as temporary:
+        endpoint = UnixEndpoint.for_directory(
+            Path(temporary),
+            random_name="aabbccdd00112233445566778899eeff",
+        )
+        broker = OwnerBroker.start(owner, endpoint=endpoint)
+        try:
+
+            def roundtrip(version: object) -> dict[str, object]:
+                connection = endpoint.connect_current(timeout=1.0)
+                try:
+                    connection.sendall(
+                        json.dumps({"version": version, "operation": "status"}).encode("utf-8")
+                        + b"\n"
+                    )
+                    raw = _read_runtime_frame(connection, timeout=1.0)
+                finally:
+                    connection.close()
+                return json.loads(raw)
+
+            v1 = roundtrip(1)
+            assert v1["version"] == 1
+            assert v1["ok"] is True
+            assert set(v1["snapshot"]) == LEGACY_SNAPSHOT_WIRE_KEYS
+
+            v2 = roundtrip(2)
+            assert v2["version"] == 2
+            assert v2["ok"] is True
+            assert LEGACY_SNAPSHOT_WIRE_KEYS < set(v2["snapshot"])
+            assert "principal_key" in v2["snapshot"]
+
+            for invalid in (3, "1", None):
+                rejected = roundtrip(invalid)
+                assert rejected["ok"] is False
+        finally:
+            broker.close()
+
+
+def test_remote_owner_falls_back_to_protocol_v1_for_an_old_owner():
+    signed_out = RuntimeSnapshot.signed_out()
+    legacy_wire = {
+        key: signed_out.public_dict()[key] for key in LEGACY_SNAPSHOT_WIRE_KEYS
+    }
+    sent_frames: list[bytes] = []
+
+    class OldOwnerConnection:
+        def settimeout(self, _timeout):
+            return None
+
+        def sendall(self, data):
+            sent_frames.append(bytes(data))
+
+        def recv(self, _size):
+            request = json.loads(sent_frames[-1])
+            if request.get("version") != 1:
+                return b'{"ok":false,"reason":"runtime_unavailable","version":1}\n'
+            return (
+                json.dumps({"version": 1, "ok": True, "snapshot": legacy_wire}).encode("utf-8")
+                + b"\n"
+            )
+
+        def close(self):
+            return None
+
+    class Endpoint:
+        def connect_current(self, *, timeout):
+            assert timeout > 0
+            return OldOwnerConnection()
+
+    owner = RemoteRuntimeOwner(Endpoint())
+
+    first = owner.refresh(timeout=1.0)
+    assert first.state is AuthState.SIGNED_OUT
+    versions = [json.loads(frame)["version"] for frame in sent_frames]
+    assert versions == [2, 1], "client must probe v2 then fall back to v1 for an old owner"
+
+    owner.refresh(timeout=1.0)
+    versions = [json.loads(frame)["version"] for frame in sent_frames]
+    assert versions == [2, 1, 1], "the downgrade must be sticky for the owner connection"

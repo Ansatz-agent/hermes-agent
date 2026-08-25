@@ -334,7 +334,10 @@ def _validated_public_result(value: object) -> dict[str, object]:
     if reason is not None and reason not in _SAFE_REASONS:
         raise RuntimeError("invalid public result")
     if state == "locked" and reason not in _TERMINAL_REASONS:
-        raise RuntimeError("invalid public result")
+        # A non-terminal lock (rate limit, vault or server outage) is a
+        # legitimate transient state: surface it as AUTH_REQUIRED with its
+        # safe reason instead of an INTERNAL_ERROR.
+        raise AuthRequired(reason if reason in _SAFE_REASONS else "runtime_unavailable")
     if not _has_consistent_public_identity(
         state=state,
         account_id=account_id,

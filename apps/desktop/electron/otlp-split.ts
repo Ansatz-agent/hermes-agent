@@ -56,29 +56,82 @@ export function splitOtlpExportTraceRequest(body: Buffer, maxBytes: number): Spl
     return { batches: [], oversizedSpans: [body], parts: [{ body, kind: 'oversized-span' }] }
   }
 
+  // Batch sizes are computed arithmetically from precomputed field lengths so
+  // packing N spans costs O(N); a batch is only materialized once complete.
+  const requestOverheadBytes = decoded.fields.reduce(
+    (total, field) => (field.number !== 1 || field.wireType !== 2 ? total + field.encoded.length : total),
+    0
+  )
+
   for (const resource of decoded.resources) {
-    let current: EnvelopeUnit[] = []
+    const resourceTotalBytes = resource.fields.reduce((total, field) => total + field.encoded.length, 0)
 
-    for (const unit of resource.units) {
-      const candidate = encodeExport(decoded.fields, resource, [...current, unit])
+    const resourceOverheadBytes = resource.fields.reduce(
+      (total, field) => (field.number !== 2 || field.wireType !== 2 ? total + field.encoded.length : total),
+      0
+    )
 
-      if (candidate.length <= maxBytes) {
-        current.push(unit)
+    const scopeOverheadBytes = new Map<number, number>()
 
-        continue
+    const unitBytes = resource.units.map(unit => {
+      if (unit.kind === 'empty-resource') {
+        return 0
       }
 
+      if (unit.kind === 'empty-scope') {
+        return resource.fields[unit.scopeFieldIndex].encoded.length
+      }
+
+      let overhead = scopeOverheadBytes.get(unit.scopeFieldIndex)
+
+      if (overhead === undefined) {
+        overhead = unit.scopeFields.reduce(
+          (total, field) => (field.number !== 2 || field.wireType !== 2 ? total + field.encoded.length : total),
+          0
+        )
+        scopeOverheadBytes.set(unit.scopeFieldIndex, overhead)
+      }
+
+      const payload = overhead + unit.scopeFields[unit.spanFieldIndex].encoded.length
+
+      return 1 + varintLength(payload) + payload
+    })
+
+    const batchBytes = (unitsPayloadBytes: number, emptyResource: boolean): number => {
+      const payload = emptyResource ? resourceTotalBytes : resourceOverheadBytes + unitsPayloadBytes
+
+      return requestOverheadBytes + 1 + varintLength(payload) + payload
+    }
+
+    let current: EnvelopeUnit[] = []
+    let currentPayloadBytes = 0
+
+    const flush = (): void => {
       if (current.length > 0) {
         const batch = encodeExport(decoded.fields, resource, current)
 
         batches.push(batch)
         parts.push({ body: batch, kind: 'batch' })
+        current = []
+        currentPayloadBytes = 0
+      }
+    }
+
+    for (const [unitIndex, unit] of resource.units.entries()) {
+      const emptyResource = unit.kind === 'empty-resource'
+
+      if (batchBytes(currentPayloadBytes + unitBytes[unitIndex], emptyResource) <= maxBytes) {
+        current.push(unit)
+        currentPayloadBytes += unitBytes[unitIndex]
+
+        continue
       }
 
-      current = []
-      const single = encodeExport(decoded.fields, resource, [unit])
+      flush()
 
-      if (single.length > maxBytes) {
+      if (batchBytes(unitBytes[unitIndex], emptyResource) > maxBytes) {
+        const single = encodeExport(decoded.fields, resource, [unit])
+
         oversizedSpans.push(single)
         parts.push({ body: single, kind: 'oversized-span' })
 
@@ -86,17 +139,25 @@ export function splitOtlpExportTraceRequest(body: Buffer, maxBytes: number): Spl
       }
 
       current.push(unit)
+      currentPayloadBytes = unitBytes[unitIndex]
     }
 
-    if (current.length > 0) {
-      const batch = encodeExport(decoded.fields, resource, current)
-
-      batches.push(batch)
-      parts.push({ body: batch, kind: 'batch' })
-    }
+    flush()
   }
 
   return { batches, oversizedSpans, parts }
+}
+
+function varintLength(value: number): number {
+  let length = 1
+  let remaining = value
+
+  while (remaining >= 0x80) {
+    remaining = Math.floor(remaining / 0x80)
+    length += 1
+  }
+
+  return length
 }
 
 function decodeExportRequest(body: Buffer): DecodedExportRequest | null {

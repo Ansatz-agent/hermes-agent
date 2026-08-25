@@ -1,8 +1,12 @@
 import assert from 'node:assert/strict'
 
-import { test } from 'vitest'
+import { test, vi } from 'vitest'
 
-import { deriveOtlpCorrelation, readFields } from './otlp-correlation'
+import {
+  encodeLengthDelimited as actualEncodeLengthDelimited,
+  deriveOtlpCorrelation,
+  readFields
+} from './otlp-correlation'
 import { splitOtlpExportTraceRequest } from './otlp-split'
 
 function varint(value: number): Buffer {
@@ -346,4 +350,49 @@ test('rejects malformed protobuf deterministically', () => {
     oversizedSpans: [malformed],
     parts: [{ body: malformed, kind: 'oversized-span' }]
   })
+})
+
+test('splitting a large batch materializes only completed batches instead of re-encoding per span', async () => {
+  vi.resetModules()
+  const counters = { encodeLengthDelimited: 0 }
+  const actual = await vi.importActual('./otlp-correlation')
+
+  vi.doMock('./otlp-correlation', () => ({
+    ...actual,
+    encodeLengthDelimited: (fieldNumber: number, value: Buffer) => {
+      counters.encodeLengthDelimited += 1
+
+      return actualEncodeLengthDelimited(fieldNumber, value)
+    }
+  }))
+
+  const { splitOtlpExportTraceRequest: split } = await import('./otlp-split')
+  vi.doUnmock('./otlp-correlation')
+
+  const spanCount = 300
+  const spans = Array.from({ length: spanCount }, (_, index) => span(index % 200, 200))
+  const request = exportRequest({ resource: 'amplification', scope: 'scope', spans })
+  const maxBytes = 8 * 1024
+
+  const result = split(request, maxBytes)
+
+  assert.equal(result.oversizedSpans.length, 0)
+  assert.ok(result.batches.length > 5, `expected a real split, got ${result.batches.length} batches`)
+
+  for (const batch of result.batches) {
+    assert.ok(batch.length <= maxBytes)
+    assert.equal(readResource(batch), 'amplification')
+  }
+
+  const reassembled = result.batches.flatMap(batch => readSpanIds(batch))
+  assert.deepEqual(
+    reassembled,
+    spans.map((_, index) => index % 200)
+  )
+
+  const linearBudget = spanCount * 4 + 64
+  assert.ok(
+    counters.encodeLengthDelimited <= linearBudget,
+    `expected at most ${linearBudget} length-delimited encodes, saw ${counters.encodeLengthDelimited}`
+  )
 })

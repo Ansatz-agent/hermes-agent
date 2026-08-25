@@ -60,6 +60,27 @@ export class TraceIngressFacade {
     return { endpoint: `http://127.0.0.1:${address.port}/v1/traces`, localBearer: this.localBearer }
   }
 
+  // Invalidates the stable bearer when the bound account/session detaches so
+  // a surviving old producer cannot inject into a later account. The endpoint
+  // is unchanged; freshly attached backends receive the rotated bearer.
+  rotateBearer(): TraceIngressEndpoint | null {
+    const server = this.server
+
+    if (server === null) {
+      return null
+    }
+
+    const address = server.address()
+
+    if (!address || typeof address === 'string') {
+      return null
+    }
+
+    this.localBearer = randomBytes(32).toString('base64url')
+
+    return { endpoint: `http://127.0.0.1:${address.port}/v1/traces`, localBearer: this.localBearer }
+  }
+
   install(delegate: Delegate): void {
     validateDelegate(delegate)
     this.generation += 1
