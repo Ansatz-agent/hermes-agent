@@ -173,6 +173,40 @@ test('a matching Gateway receipt owns a trace before local fsync without retaini
   }
 })
 
+test('an unresolved migration barrier keeps capture durable and prevents direct or pumped cloud upload', async () => {
+  const { root, store } = await temporaryStore()
+  const migration = deferred<void>()
+  const upstream: string[] = []
+  const forwarder = new TraceForwarder({
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
+    fetchImpl: async (_input, init) => {
+      upstream.push(Buffer.from(init?.body as Buffer).toString('hex'))
+      const headers = new Headers(init?.headers)
+      return new Response(Buffer.alloc(0), {
+        status: 200,
+        headers: { 'x-trace-batch-id': headers.get('idempotency-key') ?? '', 'x-trace-receipt': 'accepted' }
+      })
+    },
+    installationId,
+    store,
+    uploadBarrier: () => migration.promise
+  })
+  const started = await forwarder.start(validOwner())
+
+  try {
+    assert.equal((await post(started.endpoint, started.localBearer)).status, 200)
+    assert.equal((await store.diagnostics()).pending, 1)
+    assert.deepEqual(upstream, [])
+
+    migration.resolve()
+    await forwarder.pump()
+    assert.deepEqual(upstream, [protobuf.toString('hex')])
+  } finally {
+    await forwarder.stop({ flushMs: 0 })
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
 test.each(['before', 'after'] as const)(
   'a %s-local-commit receipt sync failure does not falsely acknowledge the Gateway winner',
   async phase => {

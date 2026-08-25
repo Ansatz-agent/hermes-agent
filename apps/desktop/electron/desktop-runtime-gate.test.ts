@@ -120,6 +120,8 @@ test('main records real auth owner transitions and migrates them in the backgrou
   const source = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
 
   assert.match(source, /traceMigrationSourceOwner\(status, desktopInstallationId\)/)
-  assert.match(source, /void store\s*\.migrateTrustedSource\(/)
+  assert.match(source, /const migrationBarrier =[\s\S]*?store\.migrateTrustedSource\(/)
+  assert.match(source, /void migrationBarrier\.catch\(/)
+  assert.match(source, /uploadBarrier: migrationBarrier === null \? undefined : \(\) => migrationBarrier/)
   assert.doesNotMatch(source, /await TraceOutboxStore\.migrateTrustedNamespace\(/)
 })

@@ -9088,17 +9088,19 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
       root: path.join(traceOutboxRoot, owner.accountKey)
     })
     const sourceOwner = ownerValidation.uploadable ? traceMigrationSourceOwner(status, desktopInstallationId) : null
-    if (sourceOwner !== null) {
-      void store
-        .migrateTrustedSource({
-          keyProtector: createSafeStorageTraceKeyProtector(safeStorage),
-          removeSourceDirectory: source => fs.promises.rm(source, { force: false, recursive: true }),
-          sourceOwner,
-          sourceRoot: path.join(traceOutboxRoot, sourceOwner.accountKey)
-        })
-        .catch(error => {
-          rememberLog(`[trace] background namespace migration failed: ${String((error as Error)?.message || error)}`)
-        })
+    const migrationBarrier =
+      sourceOwner === null
+        ? null
+        : store.migrateTrustedSource({
+            keyProtector: createSafeStorageTraceKeyProtector(safeStorage),
+            removeSourceDirectory: source => fs.promises.rm(source, { force: false, recursive: true }),
+            sourceOwner,
+            sourceRoot: path.join(traceOutboxRoot, sourceOwner.accountKey)
+          })
+    if (migrationBarrier !== null) {
+      void migrationBarrier.catch(error => {
+        rememberLog(`[trace] background namespace migration failed: ${String((error as Error)?.message || error)}`)
+      })
     }
     // Recovery only rebuilds the index. Start reclaim before the backend can
     // accept the next turn without making a large outbox a backend-start
@@ -9177,7 +9179,8 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
         }
       },
       recovery: controller,
-      store
+      store,
+      uploadBarrier: migrationBarrier === null ? undefined : () => migrationBarrier
     })
 
     let started

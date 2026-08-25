@@ -908,6 +908,39 @@ def test_native_cache_durably_carries_legacy_predecessor_across_commit_restart_a
     )
     assert restarted.refresh().predecessor_principal_key == legacy.principal_key
 
+    replacement = first.login(
+        "alice",
+        bytearray(b"secret"),
+        installation_id=INSTALLATION_ID,
+        client_version="0.17.0",
+    )
+    assert replacement.predecessor_principal_key is None
+
+    switched_backend = FakeSecretBackend()
+    switched_client = FakeAuthClient()
+    switched = VaultOwner(
+        switched_client,
+        secret_backend=switched_backend,
+        clock=FakeClock(),
+        jitter=lambda low, high: (low + high) / 2,
+    )
+    switched.login("alice", bytearray(b"secret"))
+    switched_client.record = CookieRecord(
+        cookies={
+            "__Host-ansatz_sessionid": "different-bootstrap-session",
+            "__Host-ansatz_csrftoken": "different-bootstrap-csrf",
+        },
+        username="alice",
+        session_expires_at=status_at().session_expires_at,
+    )
+    switched_native = switched.login(
+        "alice",
+        bytearray(b"secret"),
+        installation_id=INSTALLATION_ID,
+        client_version="0.17.0",
+    )
+    assert switched_native.predecessor_principal_key is None
+
     failed_backend = FakeSecretBackend()
     failed = VaultOwner(
         client,

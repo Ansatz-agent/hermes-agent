@@ -1605,12 +1605,11 @@ class _OwnerCore:
         record = NativeCredentialRecord(
             credential=credential,
             last_validated_at=credential.issued_at,
-            predecessor_principal_key=(
-                previous.principal_key
-                if isinstance(previous, (CookieRecord, LegacyCredentialRecord))
-                else previous.predecessor_principal_key
-                if isinstance(previous, NativeCredentialRecord)
-                else None
+            predecessor_principal_key=_proven_legacy_predecessor(
+                previous,
+                cookie,
+                expected_installation_id=installation_id,
+                issued_installation_id=credential.installation_id,
             ),
         )
         try:
@@ -3615,6 +3614,37 @@ def _decode_cookie_blob(raw: str) -> CookieRecord:
 
 def _is_legacy_principal_key(value: object) -> bool:
     return isinstance(value, str) and re.fullmatch(r"legacy:[0-9a-f]{64}", value) is not None
+
+
+def _proven_legacy_predecessor(
+    previous: CookieRecord | NativeCredentialRecord | LegacyCredentialRecord | RevocationTombstone | None,
+    bootstrap: CookieRecord,
+    *,
+    expected_installation_id: str,
+    issued_installation_id: str,
+) -> str | None:
+    if expected_installation_id != issued_installation_id:
+        return None
+    if isinstance(previous, LegacyCredentialRecord):
+        prior_cookie = previous.cookie_record
+        principal_key = previous.principal_key
+    elif isinstance(previous, CookieRecord):
+        prior_cookie = previous
+        principal_key = previous.principal_key
+    else:
+        return None
+    if not _is_legacy_principal_key(principal_key):
+        return None
+
+    def digest(record: CookieRecord) -> bytes:
+        return hashlib.sha256(
+            b"\0".join(
+                record.cookies[name].encode("utf-8")
+                for name in (SESSION_COOKIE, CSRF_COOKIE)
+            )
+        ).digest()
+
+    return principal_key if secrets.compare_digest(digest(prior_cookie), digest(bootstrap)) else None
 
 
 def _encode_native_blob(record: NativeCredentialRecord) -> str:

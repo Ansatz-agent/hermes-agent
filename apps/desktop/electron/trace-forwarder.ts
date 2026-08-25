@@ -62,6 +62,7 @@ type TraceForwarderOptions = {
   remoteAddressForRequest?: (request: IncomingMessage) => string | undefined
   store?: TraceOutbox
   upstreamUrl?: string
+  uploadBarrier?: () => Promise<unknown>
 }
 
 export type TerminalTraceRevocation = {
@@ -104,6 +105,7 @@ export class TraceForwarder {
   private readonly remoteAddressForRequest: (request: IncomingMessage) => string | undefined
   private readonly store: TraceOutbox | null
   private readonly upstreamUrl: string
+  private readonly uploadBarrier: (() => Promise<unknown>) | null
   private readonly upstreamControllers = new Set<AbortController>()
   private admissionRequests = 0
   private admissionTail: Promise<void> = Promise.resolve()
@@ -129,6 +131,7 @@ export class TraceForwarder {
     this.remoteAddressForRequest = options.remoteAddressForRequest ?? (request => request.socket.remoteAddress)
     this.store = options.store ?? null
     this.upstreamUrl = options.upstreamUrl ?? DEFAULT_TRACE_UPSTREAM_URL
+    this.uploadBarrier = options.uploadBarrier ?? null
   }
 
   async start(owner: TraceOwner | number): Promise<{ endpoint: string; localBearer: string }> {
@@ -346,7 +349,7 @@ export class TraceForwarder {
       const pending = this.store.beginEnqueue(input)
 
       const cloud =
-        directCandidate && !backlog && validateTraceOwner(this.owner).uploadable
+        directCandidate && this.uploadBarrier === null && !backlog && validateTraceOwner(this.owner).uploadable
           ? this.sendForReceipt({ ...input, batchId: pending.batchId }, generation)
           : null
 
@@ -411,6 +414,8 @@ export class TraceForwarder {
 
     const owner = this.owner
     const generation = this.generation
+    await this.uploadBarrier?.()
+    this.requireActiveOwner(owner, generation)
 
     while (this.admissionOpen && this.owner !== null && this.store !== null) {
       const now = this.clock()
@@ -488,6 +493,8 @@ export class TraceForwarder {
     generation: number
   ): Promise<DurableReceipt> {
     try {
+      this.requireActiveOwner(batch.owner, generation)
+      await this.uploadBarrier?.()
       this.requireActiveOwner(batch.owner, generation)
       const initial = await this.credentialProvider.current()
       this.requireActiveOwner(batch.owner, generation)
