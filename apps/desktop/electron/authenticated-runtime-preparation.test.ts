@@ -21,6 +21,7 @@ function authenticatedStatus(overrides: Partial<BridgeStatus> = {}): BridgeStatu
     last_validated_at: '2026-08-24T12:00:00+00:00',
     legacy: false,
     reason: null,
+    principal_key: `legacy:${'a'.repeat(64)}`,
     ...overrides
   }
 }
@@ -41,6 +42,7 @@ function signedOutStatus(overrides: Partial<BridgeStatus> = {}): BridgeStatus {
     last_validated_at: null,
     legacy: false,
     reason: 'signed_out',
+    principal_key: null,
     ...overrides
   }
 }

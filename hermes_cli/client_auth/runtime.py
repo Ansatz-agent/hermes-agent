@@ -501,6 +501,7 @@ class RuntimeSnapshot:
         now: float,
         runtime_instance_id: str | None = None,
         epoch: int = 1,
+        principal_key: str | None = None,
     ) -> RuntimeSnapshot:
         valid_until = _lease_deadline(status, now=now)
         return cls(
@@ -512,6 +513,8 @@ class RuntimeSnapshot:
             username=status.username,
             session_expires_at=status.session_expires_at,
             reason=None,
+            principal_key=principal_key,
+            legacy=_is_legacy_principal_key(principal_key),
         )
 
     @classmethod
@@ -1564,6 +1567,7 @@ class _OwnerCore:
             self._lock_with_reason("session_rejected")
             raise AuthRequired("session_rejected")
         now = self._clock()
+        record = replace(record, principal_key=f"legacy:{secrets.token_hex(32)}")
         with self._lock:
             try:
                 self._secret_backend.write(_encode_cookie_blob(record))
@@ -1587,6 +1591,7 @@ class _OwnerCore:
                     now=now,
                     runtime_instance_id=self._snapshot.runtime_instance_id,
                     epoch=self._snapshot.epoch + 1,
+                    principal_key=record.principal_key,
                 )
                 self._publish_locked(snapshot)
                 self._schedule_locked(now)
@@ -1700,6 +1705,7 @@ class _OwnerCore:
                         now=now,
                         runtime_instance_id=current.runtime_instance_id,
                         epoch=current.epoch + 1,
+                        principal_key=record.principal_key,
                     )
             except AuthRequired as error:
                 self._publish_locked(current.locked(error.reason or error.code, now=now))
@@ -1709,6 +1715,7 @@ class _OwnerCore:
                 cookies=dict(record.cookies),
                 username=status.username,
                 session_expires_at=snapshot.session_expires_at or status.session_expires_at,
+                principal_key=record.principal_key,
             )
             if shortened_record != record:
                 try:
@@ -1832,7 +1839,11 @@ class _OwnerCore:
                 if isinstance(decoded, CookieRecord):
                     record = LegacyCredentialRecord(
                         cookie_record=decoded,
-                        principal_key="legacy:" + hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+                        principal_key=(
+                            decoded.principal_key
+                            if _is_legacy_principal_key(decoded.principal_key)
+                            else "legacy:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+                        ),
                     )
                 else:
                     record = decoded
@@ -2938,6 +2949,7 @@ def _snapshot_from_public(value: object) -> RuntimeSnapshot:
     valid_until = value["valid_until"]
     expires = value["session_expires_at"]
     reason = value["reason"]
+    principal_key = value.get("principal_key")
     if username is not None and not isinstance(username, str):
         raise AuthRequired("runtime_unavailable")
     if not isinstance(instance, str) or len(instance) != 32:
@@ -2980,6 +2992,22 @@ def _snapshot_from_public(value: object) -> RuntimeSnapshot:
         validation_state = ValidationState(value["validation_state"])
     except (TypeError, ValueError):
         raise AuthRequired("runtime_unavailable") from None
+    if all(item is None for item in (account_id, session_id, installation_id, principal_key)):
+        if legacy:
+            raise AuthRequired("runtime_unavailable")
+    elif legacy:
+        if any(item is not None for item in (account_id, session_id, installation_id)) or not _is_legacy_principal_key(principal_key):
+            raise AuthRequired("runtime_unavailable")
+    else:
+        try:
+            for identifier in (account_id, session_id, installation_id):
+                if not isinstance(identifier, str):
+                    raise AuthRequired("runtime_unavailable")
+                _validate_uuid4(identifier)
+        except AuthRequired:
+            raise AuthRequired("runtime_unavailable") from None
+        if principal_key != f"account:{account_id}":
+            raise AuthRequired("runtime_unavailable")
     return RuntimeSnapshot(
         state=state,
         epoch=epoch,
@@ -3401,11 +3429,15 @@ def runtime_endpoint() -> UnixEndpoint | WindowsNamedPipeEndpoint:
 
 
 def _encode_cookie_blob(record: CookieRecord) -> str:
+    if not _is_legacy_principal_key(record.principal_key):
+        raise AuthRequired("runtime_unavailable")
+
     payload = {
-        "version": 1,
+        "version": 2,
         "cookies": dict(record.cookies),
         "username": record.username,
         "session_expires_at": record.session_expires_at,
+        "principal_key": record.principal_key,
     }
     return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
@@ -3417,18 +3449,24 @@ def _decode_cookie_blob(raw: str) -> CookieRecord:
         payload = json.loads(raw)
     except (TypeError, ValueError):
         raise AuthRequired("runtime_unavailable") from None
-    if not isinstance(payload, dict) or set(payload) != {
+    version = payload.get("version") if isinstance(payload, dict) else None
+    legacy_keys = {
         "version",
         "cookies",
         "username",
         "session_expires_at",
-    }:
-        raise AuthRequired("runtime_unavailable")
-    if payload.get("version") != 1:
+    }
+    current_keys = legacy_keys | {"principal_key"}
+    if not isinstance(payload, dict) or (
+        (version == 1 and set(payload) != legacy_keys)
+        or (version == 2 and set(payload) != current_keys)
+        or version not in {1, 2}
+    ):
         raise AuthRequired("runtime_unavailable")
     cookies = payload.get("cookies")
     username = payload.get("username")
     session_expires_at = payload.get("session_expires_at")
+    principal_key = payload.get("principal_key")
     if not isinstance(cookies, dict) or set(cookies) != {SESSION_COOKIE, CSRF_COOKIE}:
         raise AuthRequired("runtime_unavailable")
     if not isinstance(username, str) or not username:
@@ -3442,7 +3480,16 @@ def _decode_cookie_blob(raw: str) -> CookieRecord:
             raise AuthRequired("runtime_unavailable")
         normalized[name] = value
     _parse_aware_datetime(session_expires_at)
-    return CookieRecord(normalized, username, session_expires_at)
+    if version == 1:
+        principal_key = "legacy:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    elif not _is_legacy_principal_key(principal_key):
+        raise AuthRequired("runtime_unavailable")
+
+    return CookieRecord(normalized, username, session_expires_at, principal_key)
+
+
+def _is_legacy_principal_key(value: object) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"legacy:[0-9a-f]{64}", value) is not None
 
 
 def _encode_native_blob(record: NativeCredentialRecord) -> str:
@@ -3490,7 +3537,7 @@ def _decode_credential_blob(
         raise AuthRequired("runtime_unavailable") from None
     if not isinstance(payload, dict):
         raise AuthRequired("runtime_unavailable")
-    if payload.get("version") == 1:
+    if payload.get("version") in {1, 2} and "cookies" in payload:
         return _decode_cookie_blob(raw)
     if payload.get("version") != 2 or not isinstance(payload.get("kind"), str):
         raise AuthRequired("runtime_unavailable")

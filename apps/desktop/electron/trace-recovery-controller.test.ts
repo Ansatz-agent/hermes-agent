@@ -145,6 +145,7 @@ function fakeTimers() {
       callbacks.delete(entry[0])
       entry[1].run()
     },
+    delays: () => [...callbacks.values()].map(timer => timer.delay),
     pending: () => callbacks.size,
     set(run: () => void, delay: number) {
       const id = ++nextId
@@ -217,13 +218,75 @@ test('lifecycle schedules the exact retry due time and cancels it on stop', asyn
   })
 
   lifecycle.scheduleRetryAt(7_000)
+  now = 7_000
   timers.fireDelay(5_000)
   assert.deepEqual(reasons, ['timer'])
 
-  now = 7_000
   lifecycle.scheduleRetryAt(9_000)
   await lifecycle.stop()
   assert.equal(timers.pending(), 0)
+})
+
+test('lifecycle segments retry deadlines beyond the Node timer ceiling without firing early', async () => {
+  const reasons: string[] = []
+  const timers = fakeTimers()
+  const maximumNodeDelay = 2_147_483_647
+  let now = 10_000
+
+  const lifecycle = new TraceRecoveryLifecycle({
+    clearTimer: timers.clear,
+    clock: () => now,
+    controller: { trigger: reason => reasons.push(reason) },
+    credentialProvider: { current: async () => {}, expiresAt: () => null },
+    setTimer: timers.set
+  })
+
+  lifecycle.scheduleRetryAt(now + maximumNodeDelay + 5_000)
+  assert.deepEqual(timers.delays(), [maximumNodeDelay])
+
+  now += maximumNodeDelay
+  timers.fireDelay(maximumNodeDelay)
+  assert.deepEqual(reasons, [])
+  assert.deepEqual(timers.delays(), [5_000])
+
+  now += 5_000
+  timers.fireDelay(5_000)
+  assert.deepEqual(reasons, ['timer'])
+  await lifecycle.stop()
+})
+
+test('a short-lived token refreshes immediately at most once before using a bounded retry delay', async () => {
+  const timers = fakeTimers()
+  const now = 50_000
+  let tokenCalls = 0
+
+  const lifecycle = new TraceRecoveryLifecycle({
+    clearTimer: timers.clear,
+    clock: () => now,
+    controller: { trigger: () => {} },
+    credentialProvider: {
+      current: async () => {
+        tokenCalls += 1
+      },
+      expiresAt: () => now + 30_000
+    },
+    periodicMs: 30_000,
+    setTimer: timers.set
+  })
+
+  lifecycle.start()
+  await nextTurn()
+  assert.equal(tokenCalls, 1)
+  timers.fireDelay(0)
+  await nextTurn()
+
+  assert.equal(tokenCalls, 2)
+  assert.equal(timers.delays().includes(0), false)
+  assert.equal(
+    timers.delays().some(delay => delay >= 5_000),
+    true
+  )
+  await lifecycle.stop()
 })
 
 test('lifecycle cleanup does not wait for a stopped pump that is still unwinding', async () => {

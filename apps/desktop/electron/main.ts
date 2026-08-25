@@ -294,10 +294,16 @@ import {
 import { createStreamThrottle } from './stream-throttle'
 import { nativeOverlayWidth as computeNativeOverlayWidth, macTitleBarOverlayHeight } from './titlebar-overlay-width'
 import { RefreshingTraceCredentialProvider, TraceForwarder } from './trace-forwarder'
+import {
+  legacyTraceOwnerForPrincipal,
+  migratePreviousLegacyTraceNamespace,
+  previousLegacyTraceAccountKey
+} from './trace-legacy-owner'
 import { createSafeStorageTraceKeyProtector } from './trace-outbox-crypto'
 import { TraceOutboxStore } from './trace-outbox-store'
 import { type TraceOwner, validateTraceOwner } from './trace-outbox-types'
-import { legacyTraceOwner, TraceRecoveryController, TraceRecoveryLifecycle } from './trace-recovery-controller'
+import { TraceRecoveryController, TraceRecoveryLifecycle } from './trace-recovery-controller'
+import { resolveLocalBackendWithTrace, TraceRuntimeStartupRecovery } from './trace-runtime-startup'
 import {
   compareApiUrl,
   parseCompareBehindCount,
@@ -8850,6 +8856,10 @@ let desktopTraceLifecycle = null
 let desktopTraceGeneration = 0
 let desktopTraceStartupPromise = null
 
+const desktopTraceRuntimeStartup = new TraceRuntimeStartupRecovery({
+  isRecoverable: error => !(error instanceof AuthBridgeError)
+})
+
 function traceContextForBackendRoot(root) {
   if (!desktopTraceContext) {
     return null
@@ -8862,18 +8872,21 @@ function traceContextForBackendRoot(root) {
 }
 
 function legacyTraceOwnerForScope(scope): TraceOwner {
-  // This standalone branch has no trusted account/session identity yet. Keep
-  // its opaque auth-runtime digest in a validator-enforced local-only
-  // namespace; Task 19 replaces only this call site with the stable owner.
-  const principalDigest = crypto
-    .createHash('sha256')
-    .update(
-      `legacy-trace-principal-v1\u0000${scope.connection_id}\u0000${scope.runtime_instance_id}\u0000${scope.epoch}\u0000${desktopInstallationId}`,
-      'utf8'
-    )
-    .digest('hex')
+  const status = desktopAuthCoordinator?.status(scope.connection_id)
 
-  return legacyTraceOwner(principalDigest, desktopInstallationId)
+  if (
+    status?.state !== 'authenticated' ||
+    status.runtime_instance_id !== scope.runtime_instance_id ||
+    status.epoch !== scope.epoch ||
+    status.principal_key === null
+  ) {
+    throw new AuthBridgeError('auth_required', 'session_rejected')
+  }
+
+  // This remains validator-enforced local-only. Task 19 replaces the legacy
+  // principal with the trusted account/session owner without re-keying it from
+  // runtime_instance_id, epoch, username, or installation ID.
+  return legacyTraceOwnerForPrincipal(status.principal_key, desktopInstallationId)
 }
 
 async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
@@ -8905,10 +8918,18 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
     ])
 
     const owner = validateTraceOwner(requestedOwner).owner
+    const traceOutboxRoot = path.join(app.getPath('userData'), 'trace-outbox')
+
+    await migratePreviousLegacyTraceNamespace({
+      currentAccountKey: owner.accountKey,
+      previousAccountKey: previousLegacyTraceAccountKey(scope, desktopInstallationId),
+      rename: (source, destination) => fs.promises.rename(source, destination),
+      root: traceOutboxRoot
+    })
 
     const store = await TraceOutboxStore.open({
       keyProtector: createSafeStorageTraceKeyProtector(safeStorage),
-      root: path.join(app.getPath('userData'), 'trace-outbox', owner.accountKey)
+      root: path.join(traceOutboxRoot, owner.accountKey)
     })
 
     const provider = new RefreshingTraceCredentialProvider({
@@ -8958,7 +8979,15 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
       store
     })
 
-    const started = await forwarder.start(owner)
+    let started
+
+    try {
+      started = await forwarder.start(owner)
+    } catch (error) {
+      await forwarder.stop({ flushMs: 0 }).catch(() => {})
+      throw error
+    }
+
     lifecycle = new TraceRecoveryLifecycle({ controller, credentialProvider: provider })
 
     if (generation !== desktopTraceGeneration || !sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope)) {
@@ -8990,7 +9019,12 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
   }
 }
 
+async function prepareDesktopTraceForwarder(scope, owner: TraceOwner) {
+  await desktopTraceRuntimeStartup.prepare(owner.accountKey, () => ensureDesktopTraceForwarder(scope, owner))
+}
+
 async function stopDesktopTraceForwarder(flushMs = 3_000) {
+  await desktopTraceRuntimeStartup.stop()
   desktopTraceGeneration += 1
   const forwarder = desktopTraceForwarder
   const lifecycle = desktopTraceLifecycle
@@ -10291,7 +10325,7 @@ async function spawnPoolBackend(profile, entry) {
 
   const connectionScope = await requireDesktopConnectionScope()
   const scopeToken = issueAuthScopeToken(connectionScope)
-  await ensureDesktopTraceForwarder(connectionScope, legacyTraceOwnerForScope(connectionScope))
+  await prepareDesktopTraceForwarder(connectionScope, legacyTraceOwnerForScope(connectionScope))
 
   // Same update mutual exclusion as the primary window's waitForLocalStart
   // (#73822): pool backends spawn from the same venv, so an ungated respawn
@@ -10629,9 +10663,14 @@ async function startHermes() {
       ensureLocalRuntime: ensureRuntime,
       prepareLocalBackend: async () => {
         await advanceBootProgress('backend.runtime', 'Resolving Hermes runtime', 28)
-        await ensureDesktopTraceForwarder(connectionScope, legacyTraceOwnerForScope(connectionScope))
+        const owner = legacyTraceOwnerForScope(connectionScope)
 
-        return resolveHermesBackend(backendArgs)
+        return resolveLocalBackendWithTrace({
+          key: owner.accountKey,
+          recovery: desktopTraceRuntimeStartup,
+          resolveBackend: () => resolveHermesBackend(backendArgs),
+          startEncryptedTrace: () => ensureDesktopTraceForwarder(connectionScope, owner)
+        })
       },
       resolveRemote: () => {
         // Classify immediately before each throwing resolve. This callback runs

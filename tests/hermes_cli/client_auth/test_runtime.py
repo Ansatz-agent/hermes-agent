@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -1166,6 +1167,44 @@ def test_profiles_share_one_os_user_runtime_and_logout_revokes_both():
         coder.require_authorized("profile.coder", expected=scope, now=102.0)
     with pytest.raises(AuthRequired):
         writer.require_authorized("profile.writer", expected=scope, now=102.0)
+
+
+def test_legacy_principal_key_is_stable_across_runtime_epoch_and_restart_but_isolates_credentials():
+    owner, backend, client, _clock = vault_owner_factory()
+    first = owner.login("alice", bytearray(b"secret"))
+
+    assert first.principal_key is not None
+    assert re.fullmatch(r"legacy:[0-9a-f]{64}", first.principal_key)
+    assert "alice" not in first.principal_key
+    assert "session-1" not in first.principal_key
+    assert first.locked("server_unavailable", now=101.0).principal_key == first.principal_key
+
+    restarted = VaultOwner(
+        client,
+        secret_backend=backend,
+        clock=FakeClock(),
+        jitter=lambda *_: 58.0,
+    ).refresh()
+    assert restarted.runtime_instance_id != first.runtime_instance_id
+    assert restarted.principal_key == first.principal_key
+
+    other_client = FakeAuthClient()
+    other_client.record = CookieRecord(
+        cookies={
+            "__Host-ansatz_sessionid": "session-2",
+            "__Host-ansatz_csrftoken": "csrf-2",
+        },
+        username="alice",
+        session_expires_at=status_at().session_expires_at,
+    )
+    other = VaultOwner(
+        other_client,
+        secret_backend=FakeSecretBackend(),
+        clock=FakeClock(),
+        jitter=lambda *_: 58.0,
+    ).login("alice", bytearray(b"secret"))
+
+    assert other.principal_key != first.principal_key
 
 
 def test_logout_locks_and_clears_secret_even_when_remote_logout_fails():

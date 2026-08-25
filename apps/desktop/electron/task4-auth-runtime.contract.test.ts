@@ -37,6 +37,12 @@ const authenticated: BridgeStatus = {
   username: 'alice',
   epoch: 2,
   valid_until: 4_000_000_000,
+  account_id: '22222222-2222-4222-8222-222222222222',
+  session_id: '33333333-3333-4333-8333-333333333333',
+  installation_id: '11111111-1111-4111-8111-111111111111',
+  principal_key: 'account:22222222-2222-4222-8222-222222222222',
+  validation_state: 'online',
+  last_validated_at: '2026-08-24T12:00:00+00:00',
   reason: null
 }
 

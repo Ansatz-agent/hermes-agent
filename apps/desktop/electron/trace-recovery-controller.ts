@@ -40,6 +40,8 @@ type TraceRecoveryLifecycleOptions = {
 }
 
 const DEFAULT_PERIODIC_RECOVERY_MS = 30_000
+const MAX_TIMER_DELAY_MS = 2_147_483_647
+const MIN_TOKEN_REFRESH_RETRY_MS = 5_000
 const TOKEN_NEAR_EXPIRY_MS = 60_000
 
 export function legacyTraceOwner(principalDigest: string, installationId: string): TraceOwner {
@@ -153,6 +155,7 @@ export class TraceRecoveryLifecycle {
   private retryTimer: TraceTimer | null = null
   private stopped = false
   private tokenFlight: Promise<void> | null = null
+  private immediateTokenRefreshUsed = false
   private tokenTimer: TraceTimer | null = null
 
   constructor(options: TraceRecoveryLifecycleOptions) {
@@ -197,10 +200,24 @@ export class TraceRecoveryLifecycle {
       return
     }
 
-    const delay = Math.max(0, nextRetryAt - this.clock())
+    this.scheduleRetrySegment(nextRetryAt)
+  }
+
+  private scheduleRetrySegment(nextRetryAt: number): void {
+    if (this.stopped) {
+      return
+    }
+
+    const delay = Math.min(MAX_TIMER_DELAY_MS, Math.max(0, nextRetryAt - this.clock()))
+
     this.retryTimer = this.setTimer(() => {
       this.retryTimer = null
-      this.trigger('timer')
+
+      if (nextRetryAt > this.clock()) {
+        this.scheduleRetrySegment(nextRetryAt)
+      } else {
+        this.trigger('timer')
+      }
     }, delay)
   }
 
@@ -276,13 +293,24 @@ export class TraceRecoveryLifecycle {
       return
     }
 
-    this.tokenTimer = this.setTimer(
-      () => {
-        this.tokenTimer = null
-        this.trigger('token-near-expiry')
-        this.acquireToken()
-      },
-      Math.max(0, expiresAt - TOKEN_NEAR_EXPIRY_MS - this.clock())
-    )
+    const untilNearExpiry = expiresAt - TOKEN_NEAR_EXPIRY_MS - this.clock()
+
+    const delay =
+      untilNearExpiry > 0 ? untilNearExpiry : this.immediateTokenRefreshUsed ? MIN_TOKEN_REFRESH_RETRY_MS : 0
+
+    if (untilNearExpiry > 0) {
+      this.immediateTokenRefreshUsed = false
+    }
+
+    this.tokenTimer = this.setTimer(() => {
+      this.tokenTimer = null
+
+      if (delay === 0) {
+        this.immediateTokenRefreshUsed = true
+      }
+
+      this.trigger('token-near-expiry')
+      this.acquireToken()
+    }, delay)
   }
 }

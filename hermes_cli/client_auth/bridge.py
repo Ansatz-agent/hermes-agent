@@ -278,7 +278,6 @@ def _validated_public_result(value: object) -> dict[str, object]:
     account_id = value.get("account_id")
     session_id = value.get("session_id")
     installation_id = value.get("installation_id")
-    principal_key = value.get("principal_key")
     runtime_instance_id = value.get("runtime_instance_id")
     epoch = value.get("epoch")
     valid_until = value.get("valid_until")
@@ -287,6 +286,7 @@ def _validated_public_result(value: object) -> dict[str, object]:
     last_validated_at = value.get("last_validated_at")
     legacy = value.get("legacy")
     reason = value.get("reason")
+    principal_key = value.get("principal_key")
     if state not in _PUBLIC_STATES:
         raise RuntimeError("invalid public result")
     if username is not None and (
@@ -327,6 +327,15 @@ def _validated_public_result(value: object) -> dict[str, object]:
         raise RuntimeError("invalid public result")
     if state == "locked" and reason not in _TERMINAL_REASONS:
         raise RuntimeError("invalid public result")
+    if not _has_consistent_public_identity(
+        state=state,
+        account_id=account_id,
+        session_id=session_id,
+        installation_id=installation_id,
+        principal_key=principal_key,
+        legacy=legacy,
+    ):
+        raise RuntimeError("invalid public result")
     result = dict(value)
     if state == "authenticated" and valid_until != DURABLE_AUTHORIZATION_VALID_UNTIL:
         # Runtime leases use a process-local monotonic clock. Convert the
@@ -337,6 +346,37 @@ def _validated_public_result(value: object) -> dict[str, object]:
         remaining = max(0.0, float(valid_until) - time.monotonic())
         result["valid_until"] = time.time() + remaining
     return result
+
+
+def _has_consistent_public_identity(
+    *,
+    state: object,
+    account_id: object,
+    session_id: object,
+    installation_id: object,
+    principal_key: object,
+    legacy: object,
+) -> bool:
+    if all(value is None for value in (account_id, session_id, installation_id, principal_key)):
+        return state != "authenticated" and legacy is False
+    if legacy is True:
+        return (
+            account_id is None
+            and session_id is None
+            and installation_id is None
+            and isinstance(principal_key, str)
+            and re.fullmatch(r"legacy:[0-9a-f]{64}", principal_key) is not None
+        )
+    uuid4 = r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
+    return (
+        isinstance(account_id, str)
+        and re.fullmatch(uuid4, account_id) is not None
+        and isinstance(session_id, str)
+        and re.fullmatch(uuid4, session_id) is not None
+        and isinstance(installation_id, str)
+        and re.fullmatch(uuid4, installation_id) is not None
+        and principal_key == f"account:{account_id}"
+    )
 
 
 def _native_context(params: Mapping[str, object]) -> dict[str, str]:

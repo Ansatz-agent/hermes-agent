@@ -667,7 +667,37 @@ function isBridgeStatus(value: unknown): value is BridgeStatus {
         value.last_validated_at.length <= 128)) &&
     typeof value.legacy === 'boolean' &&
     (value.reason === null || (typeof value.reason === 'string' && SAFE_REASONS.has(value.reason))) &&
-    (value.state !== 'locked' || (typeof value.reason === 'string' && TERMINAL_REASONS.has(value.reason)))
+    (value.state !== 'locked' || (typeof value.reason === 'string' && TERMINAL_REASONS.has(value.reason))) &&
+    hasConsistentBridgeIdentity(value)
+  )
+}
+
+function hasConsistentBridgeIdentity(value: BridgeStatus): boolean {
+  const emptyIdentity =
+    value.account_id === null &&
+    value.session_id === null &&
+    value.installation_id === null &&
+    value.principal_key === null
+
+  if (emptyIdentity) {
+    return value.state !== 'authenticated' && value.legacy === false
+  }
+
+  if (value.legacy) {
+    return (
+      value.account_id === null &&
+      value.session_id === null &&
+      value.installation_id === null &&
+      typeof value.principal_key === 'string' &&
+      /^legacy:[0-9a-f]{64}$/.test(value.principal_key)
+    )
+  }
+
+  return (
+    isUuidV4(value.account_id) &&
+    isUuidV4(value.session_id) &&
+    isUuidV4(value.installation_id) &&
+    value.principal_key === `account:${value.account_id}`
   )
 }
 

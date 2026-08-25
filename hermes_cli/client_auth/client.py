@@ -117,6 +117,7 @@ class CookieRecord:
     cookies: dict[str, str] = field(repr=False)
     username: str
     session_expires_at: str
+    principal_key: str | None = None
 
 
 @dataclass(frozen=True)
