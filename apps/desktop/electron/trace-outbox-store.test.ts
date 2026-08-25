@@ -1479,3 +1479,309 @@ test('serializes a gated compaction before a concurrent enqueue and preserves bo
   await recovered.acknowledge(second.batchId, receipt(second.batchId, 'accepted'))
   assert.equal((await recovered.peekEligible(Number.MAX_SAFE_INTEGER))?.runId, 'run-lock-third')
 })
+
+test('a partial segment append failure resyncs the offset, clears poisoned dedupe, and allows a safe retry on real disk', async () => {
+  const root = await temporaryOutboxDirectory()
+
+  try {
+    let failNextAppend = false
+
+    const faulty: TraceFileSystem = {
+      ...nodeTraceFileSystem,
+      appendFile: async (path, data) => {
+        if (failNextAppend && path.endsWith('active.segment')) {
+          failNextAppend = false
+          await nodeTraceFileSystem.appendFile(path, data.subarray(0, Math.max(1, Math.floor(data.length / 2))))
+          throw Object.assign(new Error('injected_partial_append'), { code: 'EIO' })
+        }
+
+        await nodeTraceFileSystem.appendFile(path, data)
+      }
+    }
+
+    const store = await TraceOutboxStore.open({
+      expectedOwner: envelope('flush-fault').owner,
+      fs: faulty,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
+
+    failNextAppend = true
+    await assert.rejects(store.enqueue(envelope('flush-fault')), /injected_partial_append/)
+
+    const retried = await store.enqueue(envelope('flush-fault'))
+    const peeked = await store.peekEligible(Number.MAX_SAFE_INTEGER)
+
+    assert.equal(peeked?.batchId, retried.batchId)
+    assert.equal(peeked?.body.toString(), 'trace:flush-fault')
+    assert.equal((await store.diagnostics()).quarantined, 0)
+    await store.close()
+
+    const reopened = await TraceOutboxStore.open({
+      expectedOwner: envelope('flush-fault').owner,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
+
+    const recovered = await reopened.peekEligible(Number.MAX_SAFE_INTEGER)
+
+    assert.equal(recovered?.batchId, retried.batchId)
+    assert.equal(recovered?.body.toString(), 'trace:flush-fault')
+    assert.equal((await reopened.diagnostics()).quarantined, 0)
+    await reopened.close()
+  } finally {
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('a segment sync failure truncates orphan bytes so the next commit journals correct offsets on real disk', async () => {
+  const root = await temporaryOutboxDirectory()
+
+  try {
+    let failNextSync = false
+
+    const faulty: TraceFileSystem = {
+      ...nodeTraceFileSystem,
+      syncFile: async path => {
+        if (failNextSync && path.endsWith('active.segment')) {
+          failNextSync = false
+          throw Object.assign(new Error('injected_sync_failure'), { code: 'EIO' })
+        }
+
+        await nodeTraceFileSystem.syncFile(path)
+      }
+    }
+
+    const store = await TraceOutboxStore.open({
+      expectedOwner: envelope('sync-fault').owner,
+      fs: faulty,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
+
+    failNextSync = true
+    await assert.rejects(store.enqueue(envelope('sync-fault')), /injected_sync_failure/)
+
+    const retried = await store.enqueue(envelope('sync-fault'))
+    const peeked = await store.peekEligible(Number.MAX_SAFE_INTEGER)
+
+    assert.equal(peeked?.batchId, retried.batchId)
+    assert.equal(peeked?.body.toString(), 'trace:sync-fault')
+    assert.equal((await store.diagnostics()).quarantined, 0)
+    await store.close()
+
+    const reopened = await TraceOutboxStore.open({
+      expectedOwner: envelope('sync-fault').owner,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
+
+    assert.equal((await reopened.peekEligible(Number.MAX_SAFE_INTEGER))?.batchId, retried.batchId)
+    assert.equal((await reopened.diagnostics()).quarantined, 0)
+    await reopened.close()
+  } finally {
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('fails the segment closed when the post-failure offset resync itself fails on real disk', async () => {
+  const root = await temporaryOutboxDirectory()
+
+  try {
+    let failNextSync = false
+    let failNextTruncate = false
+
+    const faulty: TraceFileSystem = {
+      ...nodeTraceFileSystem,
+      syncFile: async path => {
+        if (failNextSync && path.endsWith('active.segment')) {
+          failNextSync = false
+          throw Object.assign(new Error('injected_sync_failure'), { code: 'EIO' })
+        }
+
+        await nodeTraceFileSystem.syncFile(path)
+      },
+      truncateFile: async (path, length) => {
+        if (failNextTruncate && path.endsWith('active.segment')) {
+          failNextTruncate = false
+          throw Object.assign(new Error('injected_truncate_failure'), { code: 'EIO' })
+        }
+
+        await nodeTraceFileSystem.truncateFile(path, length)
+      }
+    }
+
+    const store = await TraceOutboxStore.open({
+      expectedOwner: envelope('resync-fault').owner,
+      fs: faulty,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
+
+    failNextSync = true
+    failNextTruncate = true
+    await assert.rejects(store.enqueue(envelope('resync-fault')), /injected_sync_failure/)
+    await assert.rejects(store.enqueue(envelope('resync-fault-second')), /trace_outbox_segment_quarantined/)
+    assert.ok((await store.diagnostics()).quarantined >= 1)
+    await store.close()
+
+    const reopened = await TraceOutboxStore.open({
+      expectedOwner: envelope('resync-fault').owner,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
+
+    const fresh = await reopened.enqueue(envelope('resync-fault-after-reopen'))
+
+    assert.equal(typeof fresh.batchId, 'string')
+    await reopened.close()
+  } finally {
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('a duplicate enqueue during the flushing window joins the in-flight durable commit', async () => {
+  const gate = deferred<void>()
+  const fs = new FakeTraceFileSystem({ 'segment.sync': () => gate.promise })
+  const store = await TraceOutboxStore.open(options({ fs, groupCommitMs: 1 }))
+  const unhandled: unknown[] = []
+
+  const onUnhandled = (error: unknown) => {
+    unhandled.push(error)
+  }
+
+  process.on('unhandledRejection', onUnhandled)
+
+  try {
+    const pending = store.beginEnqueue(envelope('flush-window'))
+    await fs.waitFor('segment.sync')
+
+    const duplicate = store.beginEnqueue(envelope('flush-window'))
+    assert.equal(duplicate.batchId, pending.batchId)
+    gate.resolve()
+
+    const [first, second] = await Promise.all([pending.durable, duplicate.durable])
+    assert.equal(first.batchId, second.batchId)
+
+    const diagnostics = await store.diagnostics()
+    assert.equal(diagnostics.deduplicated, 1)
+    assert.equal(diagnostics.accepted, 1)
+
+    await duplicate.cancelForGatewayReceipt(receipt(first.batchId, 'accepted'))
+    assert.equal((await store.lookupReceipt(first.batchId))?.outcome, 'accepted')
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.deepEqual(unhandled, [])
+  } finally {
+    process.off('unhandledRejection', onUnhandled)
+  }
+})
+
+test('draining many acknowledgements performs a bounded number of segment and journal rewrites', async () => {
+  const fs = new FakeTraceFileSystem()
+  const now = 1_798_000_000_000
+  const store = await TraceOutboxStore.open(options({ fs, groupCommitMs: 0, now: () => now }))
+  const batches = []
+
+  for (let index = 0; index < 32; index += 1) {
+    batches.push(await store.enqueue(envelope(`amplification-${index}`)))
+  }
+
+  const baseline = fs.allEvents.length
+
+  for (const batch of batches.slice(0, 31)) {
+    await store.acknowledge(batch.batchId, { batchId: batch.batchId, outcome: 'accepted', receivedAt: now })
+  }
+
+  const during = fs.allEvents.slice(baseline)
+
+  const segmentRewrites = during.filter(
+    event => event.startsWith('replace:') && event.endsWith('active.segment')
+  ).length
+
+  const journalRewrites = during.filter(
+    event => event.startsWith('replace:') && event.endsWith('index.journal')
+  ).length
+
+  assert.ok(segmentRewrites <= 6, `expected bounded segment rewrites, saw ${segmentRewrites}`)
+  assert.ok(journalRewrites <= 8, `expected bounded journal rewrites, saw ${journalRewrites}`)
+
+  const last = batches[31]
+  await store.acknowledge(last.batchId, { batchId: last.batchId, outcome: 'accepted', receivedAt: now })
+  await store.compactIfIdle()
+
+  assert.equal((await store.diagnostics()).payloadBytes, 0)
+  assert.equal(fs.files.get('/outbox/segments/active.segment'), undefined)
+  assert.equal(await store.peekEligible(Number.MAX_SAFE_INTEGER), undefined)
+})
+
+test('peek serializes with segment compaction instead of quarantining a live record', async () => {
+  class GatedReadFileSystem extends FakeTraceFileSystem {
+    peekGate: Promise<void> | null = null
+    reached: (() => void) | null = null
+
+    async readRange(path: string, offset: number, length: number): Promise<Buffer | null> {
+      if (this.peekGate !== null && path.endsWith('active.segment')) {
+        const gate = this.peekGate
+        this.peekGate = null
+        this.reached?.()
+        await gate
+      }
+
+      return super.readRange(path, offset, length)
+    }
+  }
+
+  const fs = new GatedReadFileSystem()
+  const store = await TraceOutboxStore.open(options({ fs, groupCommitMs: 1 }))
+  const first = await store.enqueue(envelope('race-first'))
+  const second = await store.enqueue(envelope('race-second'))
+  const gate = deferred<void>()
+  const reached = deferred<void>()
+  fs.peekGate = gate.promise
+  fs.reached = () => reached.resolve()
+
+  const peek = store.peekEligible(Number.MAX_SAFE_INTEGER)
+  await reached.promise
+
+  const acked = store.acknowledge(first.batchId, receipt(first.batchId, 'accepted'))
+  await new Promise(resolve => setTimeout(resolve, 20))
+  gate.resolve()
+
+  const head = await peek
+  await acked
+
+  assert.equal(head?.batchId, first.batchId)
+  assert.equal(head?.body.toString(), 'trace:race-first')
+  assert.equal((await store.diagnostics()).quarantined, 0)
+  assert.equal((await store.peekEligible(Number.MAX_SAFE_INTEGER))?.batchId, second.batchId)
+})
+
+test('a transient read failure during peek stays retryable without quarantining the head record', async () => {
+  class FlakyReadFileSystem extends FakeTraceFileSystem {
+    failReads = 0
+
+    async readRange(path: string, offset: number, length: number): Promise<Buffer | null> {
+      if (this.failReads > 0 && path.endsWith('active.segment')) {
+        this.failReads -= 1
+        throw Object.assign(new Error('injected_transient_read'), { code: 'EIO' })
+      }
+
+      return super.readRange(path, offset, length)
+    }
+  }
+
+  const fs = new FlakyReadFileSystem()
+  const store = await TraceOutboxStore.open(options({ fs, groupCommitMs: 1 }))
+  const batch = await store.enqueue(envelope('transient-io'))
+
+  fs.failReads = 1
+  await assert.rejects(store.peekEligible(Number.MAX_SAFE_INTEGER), /injected_transient_read/)
+  assert.equal((await store.diagnostics()).quarantined, 0)
+  assert.equal((await store.peekEligible(Number.MAX_SAFE_INTEGER))?.batchId, batch.batchId)
+})

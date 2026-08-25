@@ -508,17 +508,19 @@ export class TraceJournal {
 
   private constructor(private readonly options: TraceJournalOptions) {}
 
-  async append(operations: readonly TraceJournalOperation[]): Promise<void> {
+  async append(operations: readonly TraceJournalOperation[]): Promise<number> {
     if (operations.length === 0) {
-      return
+      return 0
     }
 
     const encoded = Buffer.from(operations.map(operation => encodeOperationLine(operation)).join(''), 'utf8')
 
     await this.options.fs.appendFile(this.options.path, encoded)
+
+    return encoded.length
   }
 
-  async replace(operations: readonly TraceJournalOperation[]): Promise<void> {
+  async replace(operations: readonly TraceJournalOperation[]): Promise<number> {
     const temporary = `${this.options.path}.compact-${randomUUID()}`
     const encoded = Buffer.from(operations.map(operation => encodeOperationLine(operation)).join(''), 'utf8')
 
@@ -526,6 +528,8 @@ export class TraceJournal {
     await this.options.fs.syncFile(temporary)
     await this.options.fs.replaceFile(temporary, this.options.path)
     await this.options.fs.syncDirectory(dirname(this.options.path))
+
+    return encoded.length
   }
 
   async recover(): Promise<TraceJournalRecovery> {

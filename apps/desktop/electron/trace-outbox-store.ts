@@ -38,6 +38,7 @@ const MAX_RECEIPT_BYTES = 64 * 1024 * 1024
 const MAX_RECEIPT_ENTRIES = 100_000
 const RECORD_PREFIX_BYTES = 25
 const MAX_RECORD_BYTES = RECORD_PREFIX_BYTES + 64 * 1024 + 12 + 16 + 64 * 1024 * 1024 + 32
+const JOURNAL_COMPACT_MIN_BYTES = 64 * 1024
 const KEY_FILE_NAME = 'key.json'
 const SEGMENT_FILE_NAME = 'active.segment'
 const JOURNAL_FILE_NAME = 'index.journal'
@@ -138,6 +139,23 @@ export type TraceOutboxStoreDiagnostics = TraceOutboxDiagnostics & { payloadByte
 
 function sha256(input: Buffer): string {
   return createHash('sha256').update(input).digest('hex')
+}
+
+// Distinguishes a filesystem call that threw (retryable, e.g. EIO) from an
+// integrity failure detected in the data itself (quarantine).
+class TransientTraceIoError extends Error {
+  constructor(readonly causeError: unknown) {
+    super('trace_outbox_transient_io')
+    this.name = 'TransientTraceIoError'
+  }
+}
+
+async function transientIo<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation()
+  } catch (error) {
+    throw new TransientTraceIoError(error)
+  }
 }
 
 function keyJson(wrappedKey: Buffer, accountKey: string): Buffer {
@@ -385,6 +403,7 @@ export class TraceOutboxStore {
   }
 
   private readonly pending: PendingCommit[] = []
+  private readonly flushing = new Map<string, PendingCommit>()
   private readonly dedupe = new Map<string, string>()
   private readonly inflightMutations = new Set<Promise<unknown>>()
   private readonly receipts = new Map<string, ReceiptTombstone>()
@@ -409,6 +428,9 @@ export class TraceOutboxStore {
   private accountKey: string | null
   private ownerJournaled = false
   private legacyOwnerUnknown = false
+  private journalAppendedBytes = 0
+  private journalCompactedBytes = 0
+  private receiptsPrunedSinceJournalCompact = false
 
   private constructor(
     private readonly config: {
@@ -477,6 +499,19 @@ export class TraceOutboxStore {
           batchId: existingBatchId,
           cancelForGatewayReceipt: receipt => this.requestGatewayCancellation(existingPending, receipt),
           durable: existingPending.durable
+        }
+      }
+
+      // A spliced group is no longer in `pending` but is not yet published to
+      // `records`; a duplicate arriving in that window joins the in-flight
+      // durable commit instead of falling through to unknown_trace_batch.
+      const existingFlushing = this.flushing.get(existingBatchId)
+
+      if (existingFlushing !== undefined) {
+        return {
+          batchId: existingBatchId,
+          cancelForGatewayReceipt: receipt => this.requestGatewayCancellation(existingFlushing, receipt),
+          durable: existingFlushing.durable
         }
       }
 
@@ -695,6 +730,13 @@ export class TraceOutboxStore {
       throw new RangeError('invalid_trace_outbox_peek_time')
     }
 
+    // The offset snapshot is only valid while the segment file cannot be
+    // replaced underneath the read, so the disk read shares the writer lock
+    // with compaction and flushes.
+    return this.withWriterLock(() => this.peekEligibleLocked(now))
+  }
+
+  private async peekEligibleLocked(now: number): Promise<DurableTraceBatch | undefined> {
     const head = [...this.records.values()]
       .filter(record => record.state === 'pending')
       .sort(
@@ -709,13 +751,15 @@ export class TraceOutboxStore {
     }
 
     try {
-      const size = await this.config.fs.stat(this.config.segmentPath)
+      const size = await transientIo(() => this.config.fs.stat(this.config.segmentPath))
 
       if (size === null || head.offset + head.encodedBytes > size || head.encodedBytes > MAX_RECORD_BYTES) {
         throw new Error('missing_trace_outbox_segment')
       }
 
-      const segment = await this.config.fs.readRange(this.config.segmentPath, head.offset, head.encodedBytes)
+      const segment = await transientIo(() =>
+        this.config.fs.readRange(this.config.segmentPath, head.offset, head.encodedBytes)
+      )
 
       if (segment === null) {
         throw new Error('trace_outbox_segment_short_read')
@@ -743,7 +787,13 @@ export class TraceOutboxStore {
       }
 
       return { ...decoded.header, body }
-    } catch {
+    } catch (error) {
+      // Transient filesystem failures stay retryable; only integrity or
+      // corruption evidence quarantines the head record.
+      if (error instanceof TransientTraceIoError) {
+        throw error.causeError
+      }
+
       head.state = 'quarantined'
       this.quarantinedSegments = Math.max(this.quarantinedSegments, 1)
 
@@ -800,10 +850,10 @@ export class TraceOutboxStore {
   }
 
   async compactIfIdle(): Promise<boolean> {
-    return this.withMutationGate(() => this.compactIfIdleInternal())
+    return this.withMutationGate(() => this.compactIfIdleInternal(true))
   }
 
-  private async compactIfIdleInternal(): Promise<boolean> {
+  private async compactIfIdleInternal(forced = false): Promise<boolean> {
     if (this.flushPromise !== null || this.pending.length !== 0) {
       return false
     }
@@ -811,16 +861,39 @@ export class TraceOutboxStore {
     return this.withWriterLock(() => {
       this.pruneReceipts(this.config.now())
 
-      return this.compactForCapacity()
+      return this.compactForCapacity(forced)
     })
   }
 
-  private async compactForCapacity(): Promise<boolean> {
+  // Unforced maintenance (after each acknowledgement) reclaims on amortized
+  // thresholds so draining N records rewrites the segment and journal O(log N)
+  // times instead of after every receipt. Forced maintenance (startup/idle
+  // compactIfIdle, capacity pressure) always reclaims what it can.
+  private async compactForCapacity(forced: boolean): Promise<boolean> {
     const reclaimed = await this.reclaimFullyTerminalSegments()
-    const compacted = reclaimed || (!this.config.isConversationStreaming() && (await this.compactSegmentIfNeeded()))
-    await this.compactJournal()
+
+    const compacted =
+      reclaimed ||
+      (!this.config.isConversationStreaming() &&
+        (forced || this.segmentReclaimDue()) &&
+        (await this.compactSegmentIfNeeded()))
+
+    if (forced || compacted || this.receiptsPrunedSinceJournalCompact || this.journalReclaimDue()) {
+      await this.compactJournal()
+    }
 
     return compacted
+  }
+
+  private segmentReclaimDue(): boolean {
+    const live = this.payloadBytes()
+    const dead = this.segmentOffset - live
+
+    return dead > 0 && dead >= live
+  }
+
+  private journalReclaimDue(): boolean {
+    return this.journalAppendedBytes > Math.max(JOURNAL_COMPACT_MIN_BYTES, 2 * this.journalCompactedBytes)
   }
 
   private async recover(): Promise<void> {
@@ -1181,6 +1254,7 @@ export class TraceOutboxStore {
     this.pendingDeadline = null
     group.forEach(item => {
       item.state = 'flushing'
+      this.flushing.set(item.batchId, item)
     })
 
     const currentFlush = this.withWriterLock(() => this.flushGroup(group))
@@ -1189,6 +1263,8 @@ export class TraceOutboxStore {
     try {
       await currentFlush
     } finally {
+      group.forEach(item => this.flushing.delete(item.batchId))
+
       if (this.flushPromise === currentFlush) {
         this.flushPromise = null
       }
@@ -1315,13 +1391,56 @@ export class TraceOutboxStore {
       }
       this.pruneReceipts(this.config.now())
     } catch (error) {
+      await this.resyncSegmentAfterFlushFailure()
+
       for (const item of group) {
+        // Non-durable batches must not leave a poisoned dedupe entry behind:
+        // a later identical enqueue would resolve to a batch that neither the
+        // records index nor the receipt map can serve.
+        if (item.input !== null) {
+          const dedupeKey = this.dedupeKey(item.input)
+
+          if (
+            this.dedupe.get(dedupeKey) === item.batchId &&
+            !this.records.has(item.batchId) &&
+            !this.receipts.has(item.batchId)
+          ) {
+            this.dedupe.delete(dedupeKey)
+          }
+        }
+
         item.input = null
         item.state = 'cancelled'
         item.reject(error)
       }
 
       throw error
+    }
+  }
+
+  private async resyncSegmentAfterFlushFailure(): Promise<void> {
+    if (!this.segmentWritable) {
+      return
+    }
+
+    try {
+      const size = await this.config.fs.stat(this.config.segmentPath)
+
+      if (size === null || size === this.segmentOffset) {
+        return
+      }
+
+      if (size < this.segmentOffset) {
+        throw new Error('trace_outbox_segment_truncated')
+      }
+
+      await this.config.fs.truncateFile(this.config.segmentPath, this.segmentOffset)
+      await this.config.fs.syncFile(this.config.segmentPath)
+    } catch {
+      // The durable end of the segment can no longer be proven; fail the
+      // segment closed rather than journal offsets that may be wrong.
+      this.segmentWritable = false
+      this.quarantinedSegments = Math.max(this.quarantinedSegments, 1)
     }
   }
 
@@ -1821,7 +1940,7 @@ export class TraceOutboxStore {
 
       await this.recordTerminal(oldest, { terminal: 'evicted' })
       this.evictedCapacity += 1
-      await this.compactForCapacity()
+      await this.compactForCapacity(true)
     }
   }
 
@@ -1957,7 +2076,9 @@ export class TraceOutboxStore {
         .map(receipt => this.receiptOperation(receipt))
       retained.push(...receipts)
 
-      await this.config.journal.replace(retained)
+      this.journalCompactedBytes = await this.config.journal.replace(retained)
+      this.journalAppendedBytes = 0
+      this.receiptsPrunedSinceJournalCompact = false
       this.ownerJournaled = this.accountKey !== null || this.legacyOwnerUnknown
     })
 
@@ -2039,6 +2160,8 @@ export class TraceOutboxStore {
       }
     }
 
+    this.receiptsPrunedSinceJournalCompact ||= pruned
+
     return pruned
   }
 
@@ -2087,7 +2210,7 @@ export class TraceOutboxStore {
 
   private async appendAndSyncJournal(operations: TraceJournalOperation[]): Promise<void> {
     const write = this.journalTail.then(async () => {
-      await this.config.journal.append(operations)
+      this.journalAppendedBytes += await this.config.journal.append(operations)
       await this.config.journal.sync()
     })
 
