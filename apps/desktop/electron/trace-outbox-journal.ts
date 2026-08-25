@@ -505,10 +505,13 @@ export class TraceJournal {
   }
 
   private recoveredTornTailOffset: number | null = null
+  private unavailable = false
 
   private constructor(private readonly options: TraceJournalOptions) {}
 
   async append(operations: readonly TraceJournalOperation[]): Promise<number> {
+    this.assertAvailable()
+
     if (operations.length === 0) {
       return 0
     }
@@ -520,7 +523,50 @@ export class TraceJournal {
     return encoded.length
   }
 
+  // Appends and fsyncs as one protocol. If the fsync (or a partial append)
+  // fails, the appended bytes may still become durable during a later sync,
+  // so the tail is truncated back to the pre-append length and that rollback
+  // is itself fsynced. If the rollback cannot be proven durable, the journal
+  // becomes unavailable until reopen instead of guessing.
+  async appendDurable(operations: readonly TraceJournalOperation[]): Promise<number> {
+    this.assertAvailable()
+
+    if (operations.length === 0) {
+      return 0
+    }
+
+    const priorLength = (await this.options.fs.stat(this.options.path)) ?? 0
+
+    try {
+      const appended = await this.append(operations)
+      await this.options.fs.syncFile(this.options.path)
+
+      return appended
+    } catch (error) {
+      try {
+        const currentLength = await this.options.fs.stat(this.options.path)
+
+        if (currentLength !== null && currentLength !== priorLength) {
+          await this.options.fs.truncateFile(this.options.path, priorLength)
+          await this.options.fs.syncFile(this.options.path)
+        }
+      } catch {
+        this.unavailable = true
+        throw new Error('trace_outbox_journal_ambiguous')
+      }
+
+      throw error
+    }
+  }
+
+  private assertAvailable(): void {
+    if (this.unavailable) {
+      throw new Error('trace_outbox_journal_unavailable')
+    }
+  }
+
   async replace(operations: readonly TraceJournalOperation[]): Promise<number> {
+    this.assertAvailable()
     const temporary = `${this.options.path}.compact-${randomUUID()}`
     const encoded = Buffer.from(operations.map(operation => encodeOperationLine(operation)).join(''), 'utf8')
 

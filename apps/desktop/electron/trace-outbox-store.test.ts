@@ -527,9 +527,11 @@ test('a segment or journal sync failure rejects every member of that commit grou
 
   const store = await TraceOutboxStore.open(options({ fs, groupCommitMs: 1 }))
 
+  // The injected sync failure also defeats the rollback fsync, so the store
+  // reports ambiguous journal durability and fails closed.
   await assert.rejects(
     Promise.all([store.enqueue(envelope('one')), store.enqueue(envelope('two'))]),
-    /journal_sync_failed/
+    /trace_outbox_journal_ambiguous/
   )
 })
 
@@ -583,9 +585,11 @@ test('coalesces concurrent identical Gateway receipts and rejects all callers if
   const second = pending.cancelForGatewayReceipt(accepted)
 
   assert.strictEqual(first, second)
-  await assert.rejects(first, /receipt_sync_failed/)
-  await assert.rejects(second, /receipt_sync_failed/)
-  await assert.rejects(pending.durable, /receipt_sync_failed/)
+  // The persistent sync failure also defeats the rollback fsync, so callers
+  // observe the fail-closed ambiguous-durability error.
+  await assert.rejects(first, /trace_outbox_journal_ambiguous/)
+  await assert.rejects(second, /trace_outbox_journal_ambiguous/)
+  await assert.rejects(pending.durable, /trace_outbox_journal_ambiguous|trace_outbox_journal_unavailable/)
   await assert.rejects(
     pending.cancelForGatewayReceipt(receipt(pending.batchId, 'duplicate')),
     /conflicting_gateway_receipt/
@@ -1784,4 +1788,186 @@ test('a transient read failure during peek stays retryable without quarantining 
   await assert.rejects(store.peekEligible(Number.MAX_SAFE_INTEGER), /injected_transient_read/)
   assert.equal((await store.diagnostics()).quarantined, 0)
   assert.equal((await store.peekEligible(Number.MAX_SAFE_INTEGER))?.batchId, batch.batchId)
+})
+
+async function drainLogicalBatches(store: TraceOutboxStore): Promise<string[]> {
+  const drained: string[] = []
+
+  for (;;) {
+    const batch = await store.peekEligible(Number.MAX_SAFE_INTEGER)
+
+    if (batch === undefined) {
+      return drained
+    }
+
+    drained.push(batch.batchId)
+    await store.acknowledge(batch.batchId, { batchId: batch.batchId, outcome: 'accepted', receivedAt: Date.now() })
+  }
+}
+
+test('a journal fsync failure after append rolls back durably so a retry never creates a second logical batch', async () => {
+  const root = await temporaryOutboxDirectory()
+
+  try {
+    let failNextJournalSync = false
+
+    const faulty: TraceFileSystem = {
+      ...nodeTraceFileSystem,
+      syncFile: async path => {
+        if (failNextJournalSync && path.endsWith('index.journal')) {
+          failNextJournalSync = false
+          throw Object.assign(new Error('injected_journal_sync_failure'), { code: 'EIO' })
+        }
+
+        await nodeTraceFileSystem.syncFile(path)
+      }
+    }
+
+    const store = await TraceOutboxStore.open({
+      expectedOwner: envelope('journal-fault').owner,
+      fs: faulty,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
+
+    failNextJournalSync = true
+    await assert.rejects(store.enqueue(envelope('journal-fault')), /injected_journal_sync_failure/)
+
+    const retried = await store.enqueue(envelope('journal-fault'))
+
+    assert.equal((await store.peekEligible(Number.MAX_SAFE_INTEGER))?.batchId, retried.batchId)
+    assert.equal((await store.diagnostics()).quarantined, 0)
+    await store.close()
+
+    const reopened = await TraceOutboxStore.open({
+      expectedOwner: envelope('journal-fault').owner,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
+
+    assert.deepEqual(await drainLogicalBatches(reopened), [retried.batchId])
+    assert.equal((await reopened.diagnostics()).quarantined, 0)
+    await reopened.close()
+  } finally {
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('close and reopen after a rolled-back journal append recovers no phantom batch', async () => {
+  const root = await temporaryOutboxDirectory()
+
+  try {
+    let failNextJournalSync = false
+
+    const faulty: TraceFileSystem = {
+      ...nodeTraceFileSystem,
+      syncFile: async path => {
+        if (failNextJournalSync && path.endsWith('index.journal')) {
+          failNextJournalSync = false
+          throw Object.assign(new Error('injected_journal_sync_failure'), { code: 'EIO' })
+        }
+
+        await nodeTraceFileSystem.syncFile(path)
+      }
+    }
+
+    const store = await TraceOutboxStore.open({
+      expectedOwner: envelope('journal-fault-reopen').owner,
+      fs: faulty,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
+
+    failNextJournalSync = true
+    await assert.rejects(store.enqueue(envelope('journal-fault-reopen')), /injected_journal_sync_failure/)
+    await store.close()
+
+    const reopened = await TraceOutboxStore.open({
+      expectedOwner: envelope('journal-fault-reopen').owner,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
+
+    assert.deepEqual(await drainLogicalBatches(reopened), [])
+
+    const fresh = await reopened.enqueue(envelope('journal-fault-reopen'))
+
+    assert.deepEqual(await drainLogicalBatches(reopened), [fresh.batchId])
+    assert.equal((await reopened.diagnostics()).quarantined, 0)
+    await reopened.close()
+  } finally {
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('fails the store closed when the journal rollback cannot be proven durable', async () => {
+  const root = await temporaryOutboxDirectory()
+
+  try {
+    let failNextJournalSync = false
+    let failNextJournalTruncate = false
+
+    const faulty: TraceFileSystem = {
+      ...nodeTraceFileSystem,
+      syncFile: async path => {
+        if (failNextJournalSync && path.endsWith('index.journal')) {
+          failNextJournalSync = false
+          throw Object.assign(new Error('injected_journal_sync_failure'), { code: 'EIO' })
+        }
+
+        await nodeTraceFileSystem.syncFile(path)
+      },
+      truncateFile: async (path, length) => {
+        if (failNextJournalTruncate && path.endsWith('index.journal')) {
+          failNextJournalTruncate = false
+          throw Object.assign(new Error('injected_journal_truncate_failure'), { code: 'EIO' })
+        }
+
+        await nodeTraceFileSystem.truncateFile(path, length)
+      }
+    }
+
+    const store = await TraceOutboxStore.open({
+      expectedOwner: envelope('journal-ambiguous').owner,
+      fs: faulty,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
+
+    failNextJournalSync = true
+    failNextJournalTruncate = true
+    const first = store.beginEnqueue(envelope('journal-ambiguous'))
+
+    await assert.rejects(first.durable, /trace_outbox_journal_ambiguous/)
+    await assert.rejects(
+      store.enqueue(envelope('journal-ambiguous-second')),
+      /trace_outbox_segment_quarantined|trace_outbox_journal_unavailable/
+    )
+    assert.ok((await store.diagnostics()).quarantined >= 1)
+    await store.close()
+
+    const reopened = await TraceOutboxStore.open({
+      expectedOwner: envelope('journal-ambiguous').owner,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
+
+    const resurrected = await drainLogicalBatches(reopened)
+
+    assert.ok(resurrected.length <= 1, `expected at most one logical batch, saw ${resurrected.length}`)
+    assert.ok(resurrected.every(batchId => batchId === first.batchId))
+
+    const fresh = await reopened.enqueue(envelope('journal-ambiguous-after-reopen'))
+
+    assert.deepEqual(await drainLogicalBatches(reopened), [fresh.batchId])
+    await reopened.close()
+  } finally {
+    await rm(root, { force: true, recursive: true })
+  }
 })

@@ -1308,6 +1308,8 @@ export class TraceOutboxStore {
   }
 
   private async flushGroup(group: PendingCommit[]): Promise<void> {
+    let groupStartOffset: number | null = null
+
     try {
       if (!this.segmentWritable) {
         throw new Error('trace_outbox_segment_quarantined')
@@ -1319,6 +1321,7 @@ export class TraceOutboxStore {
         this.config.now()
       )
       let offset = this.segmentOffset
+      groupStartOffset = offset
       const pendingOperations: TraceJournalPendingOperation[] = []
 
       for (const record of records) {
@@ -1391,6 +1394,13 @@ export class TraceOutboxStore {
       }
       this.pruneReceipts(this.config.now())
     } catch (error) {
+      // If the failure came after the group's segment records were synced
+      // (journal phase), the rolled-back group must also release its segment
+      // bytes so a retry or reopen never sees a second copy of the batch.
+      if (groupStartOffset !== null) {
+        this.segmentOffset = groupStartOffset
+      }
+
       await this.resyncSegmentAfterFlushFailure()
 
       for (const item of group) {
@@ -2210,8 +2220,20 @@ export class TraceOutboxStore {
 
   private async appendAndSyncJournal(operations: TraceJournalOperation[]): Promise<void> {
     const write = this.journalTail.then(async () => {
-      this.journalAppendedBytes += await this.config.journal.append(operations)
-      await this.config.journal.sync()
+      try {
+        this.journalAppendedBytes += await this.config.journal.appendDurable(operations)
+      } catch (error) {
+        const message = (error as Error).message
+
+        if (message === 'trace_outbox_journal_ambiguous' || message === 'trace_outbox_journal_unavailable') {
+          // Journal durability can no longer be proven; refuse ordinary
+          // admission until the store is reopened and recovers from disk.
+          this.segmentWritable = false
+          this.quarantinedSegments = Math.max(this.quarantinedSegments, 1)
+        }
+
+        throw error
+      }
     })
 
     this.journalTail = write.catch(() => undefined)
