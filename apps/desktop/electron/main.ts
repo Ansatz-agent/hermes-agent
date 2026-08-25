@@ -15344,9 +15344,7 @@ guardedHandle('hermes:auth:status', async (_event, connectionId) => {
 guardedHandle('hermes:auth:login', async (_event, username, password, connectionId) => {
   const { coordinator, id } = await resolveDesktopAuthConnection(connectionId)
 
-  const status = await coordinator.login(username, password, id, {
-    recoverRuntimeBeforeSubmit: id === 'local'
-  })
+  const status = await coordinator.login(username, password, id)
 
   return desktopStatusForRenderer(status, id)
 })

@@ -109,6 +109,32 @@ def test_login_response_contains_scope_but_no_secret(monkeypatch):
     assert captured == [bytearray(b"\0" * 6)]
 
 
+@pytest.mark.parametrize("reason", ["invalid_csrf", "invalid_redirect"])
+def test_login_internal_response_failure_is_not_reported_as_a_dead_runtime(
+    monkeypatch, reason
+):
+    # A malformed authentication response must surface as invalid_response so
+    # the desktop does not misread it as a dead local runtime and start
+    # rebuilding a perfectly healthy bridge.
+    def login(username: str, password: bytearray, **_context: str):
+        raise AuthRequired(reason)
+
+    monkeypatch.setattr("hermes_cli.client_auth.bridge.account_login", login)
+    response = dispatch(
+        {
+            "version": 2,
+            "id": "1",
+            "method": "login",
+            "params": {"username": "alice", "password": "secret", **NATIVE_CONTEXT},
+        }
+    )
+
+    assert response["error"] == {
+        "code": "AUTH_REQUIRED",
+        "reason": "invalid_response",
+    }
+
+
 def test_public_bridge_status_rejects_extra_or_secret_fields():
     with pytest.raises(RuntimeError):
         _validated_public_result({**public_status(), "session_token": "secret-sentinel"})

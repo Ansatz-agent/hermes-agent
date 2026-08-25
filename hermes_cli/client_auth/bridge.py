@@ -204,7 +204,14 @@ def dispatch(request: object) -> dict[str, object]:
             _native_context(params)
         result = METHODS[method](params)
     except AuthRequired as error:
-        reason = error.reason if error.reason in _SAFE_REASONS else "runtime_unavailable"
+        reason = error.reason
+        if reason in _INTERNAL_RESPONSE_REASONS:
+            # A malformed authentication response is a service anomaly, not a
+            # dead local runtime; reporting it as runtime_unavailable would
+            # send the desktop into pointless bridge recovery.
+            reason = "invalid_response"
+        if reason not in _SAFE_REASONS:
+            reason = "runtime_unavailable"
         return _error(request_id, "AUTH_REQUIRED", reason=reason)
     except ValueError:
         return _error(request_id, "INVALID_PARAMS")

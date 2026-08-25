@@ -30,6 +30,9 @@ type AuthBridgeLike = {
   status: () => Promise<BridgeStatus>
   login: (username: string, password: string) => Promise<BridgeStatus>
   logout: () => Promise<BridgeStatus>
+  // Local liveness only: true means the bridge process is already known dead
+  // and can be replaced without any I/O. Never derived from a network probe.
+  isUnavailable?: () => boolean
 }
 
 type AuthBridgeRecovery = (
@@ -39,10 +42,6 @@ type AuthBridgeRecovery = (
 
 type AuthRefreshOptions = {
   recoverRuntime?: boolean
-}
-
-type AuthLoginOptions = {
-  recoverRuntimeBeforeSubmit?: boolean
 }
 
 type AuthCoordinatorOptions = {
@@ -193,12 +192,7 @@ export class AuthCoordinator {
     })
   }
 
-  async login(
-    username: string,
-    password: string,
-    connectionId = LOCAL_CONNECTION_ID,
-    options: AuthLoginOptions = {}
-  ): Promise<BridgeStatus> {
+  async login(username: string, password: string, connectionId = LOCAL_CONNECTION_ID): Promise<BridgeStatus> {
     return this.runExclusive(async () => {
       let bridge = this.bridges.get(connectionId)
 
@@ -206,31 +200,22 @@ export class AuthCoordinator {
         return this.applyFailure(new AuthBridgeError('runtime_unavailable', 'runtime_unavailable'), connectionId)
       }
 
-      if (
-        connectionId === LOCAL_CONNECTION_ID &&
-        options.recoverRuntimeBeforeSubmit &&
-        this.recoverBridge
-      ) {
+      // A bridge that is already known dead locally cannot deliver the
+      // password, so it is safe to replace before the single submission.
+      // Anything less certain (a stale locked snapshot, a network failure)
+      // must never veto or repeat the submission.
+      if (connectionId === LOCAL_CONNECTION_ID && this.recoverBridge && bridge.isUnavailable?.()) {
         try {
-          await bridge.status()
-        } catch (error) {
-          if (safeReason(error) !== 'runtime_unavailable') {
-            return this.applyFailure(error, connectionId)
+          const replacement = await this.recoverBridge(connectionId, bridge)
+
+          if (!replacement) {
+            return this.applyFailure(new AuthBridgeError('runtime_unavailable', 'runtime_unavailable'), connectionId)
           }
 
-          try {
-            const replacement = await this.recoverBridge(connectionId, bridge)
-
-            if (!replacement) {
-              return this.applyFailure(error, connectionId)
-            }
-
-            this.bridges.set(connectionId, replacement)
-            bridge = replacement
-            await bridge.status()
-          } catch (recoveryError) {
-            return this.applyFailure(recoveryError, connectionId)
-          }
+          this.bridges.set(connectionId, replacement)
+          bridge = replacement
+        } catch (recoveryError) {
+          return this.applyFailure(recoveryError, connectionId)
         }
       }
 
