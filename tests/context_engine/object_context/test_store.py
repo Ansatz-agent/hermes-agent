@@ -46,6 +46,54 @@ def _registered_json(store, *, delta_id="turn-1:user:0", conversation="conv-a"):
     return observed, delta, detected, record
 
 
+def _registered_multi_object_delta(store):
+    messages = (
+        {
+            "role": "tool",
+            "content": '{"alpha":1,"items":[1,2,3]}',
+            "tool_call_id": "call-a",
+            "timestamp": 1.0,
+        },
+        {
+            "role": "tool",
+            "content": '{"beta":2,"items":[4,5,6]}',
+            "tool_call_id": "call-b",
+            "timestamp": 2.0,
+        },
+    )
+    observed = ContextDelta(
+        delta_id="turn-1:inference:1",
+        kind="inference",
+        conversation_id="conv-a",
+        session_id="session-a",
+        turn_id="turn-1",
+        sequence=1,
+        messages=messages,
+        inference_id="inference-1",
+    )
+    delta = store.register_delta(
+        delta_id=observed.delta_id,
+        conversation_id=observed.conversation_id,
+        session_id=observed.session_id,
+        turn_id=observed.turn_id,
+        kind=observed.kind,
+        inference_id=observed.inference_id,
+        turn_sequence=observed.sequence,
+        raw_view=observed.messages,
+    )
+    detected = detect_delta_objects(observed, min_tokens=1)
+    records = [
+        store.register_object(
+            conversation_id=observed.conversation_id,
+            session_id=observed.session_id,
+            delta=delta,
+            detected=item,
+        )
+        for item in detected
+    ]
+    return observed, delta, detected, records
+
+
 def test_exact_blob_is_hash_verified_and_conversation_authorized(tmp_path):
     store = ObjectContextStore(tmp_path / "context" / "objects.sqlite3")
     _, _, _, record = _registered_json(store)
@@ -232,6 +280,109 @@ def test_physical_dedup_does_not_merge_logical_identity(tmp_path):
         assert (
             conn.execute("SELECT COUNT(*) FROM object_occurrences").fetchone()[0] == 2
         )
+
+
+def test_multi_object_delta_refs_are_rebuilt_from_authoritative_occurrences(tmp_path):
+    store = ObjectContextStore(tmp_path / "objects.sqlite3")
+    _, delta, detected, records = _registered_multi_object_delta(store)
+
+    expected_refs = tuple(record.object_ref for record in records)
+    assert len(detected) == len(expected_refs) == 2
+    assert store.get_delta(delta.delta_id).object_refs == expected_refs
+    assert (
+        tuple(row["object_ref"] for row in store.occurrences_for_delta(delta.delta_id))
+        == expected_refs
+    )
+
+    # Idempotently encountering an existing occurrence must retain the full
+    # authoritative list rather than reintroducing the caller's stale snapshot.
+    with sqlite3.connect(store.path) as conn:
+        conn.execute(
+            "UPDATE deltas SET object_refs_json = ? WHERE delta_id = ?",
+            (f'["{records[-1].object_ref}"]', delta.delta_id),
+        )
+    store.register_object(
+        conversation_id="conv-a",
+        session_id="session-a",
+        delta=delta,
+        detected=detected[0],
+    )
+    assert store.get_delta(delta.delta_id).object_refs == expected_refs
+
+
+def test_store_startup_repairs_legacy_delta_object_ref_cache_once(tmp_path):
+    path = tmp_path / "objects.sqlite3"
+    store = ObjectContextStore(path)
+    _, delta, _, records = _registered_multi_object_delta(store)
+    expected_refs = tuple(record.object_ref for record in records)
+    empty_delta = store.register_delta(
+        delta_id="turn-2:user:0",
+        conversation_id="conv-a",
+        session_id="session-a",
+        turn_id="turn-2",
+        kind="user",
+        inference_id="",
+        turn_sequence=0,
+        raw_view=({"role": "user", "content": "ordinary prose", "timestamp": 3.0},),
+    )
+
+    with sqlite3.connect(path) as conn:
+        raw_snapshot = conn.execute(
+            "SELECT delta_id, raw_view_json, compressed_view_json "
+            "FROM deltas ORDER BY delta_id"
+        ).fetchall()
+        occurrence_snapshot = conn.execute(
+            "SELECT occurrence_key, delta_id, object_ref, message_key, "
+            "span_start, span_end FROM object_occurrences ORDER BY occurrence_key"
+        ).fetchall()
+        version_snapshot = conn.execute(
+            "SELECT object_ref, object_id, version, sha256 "
+            "FROM object_versions ORDER BY object_ref"
+        ).fetchall()
+        conn.execute(
+            "UPDATE deltas SET object_refs_json = ? WHERE delta_id IN (?, ?)",
+            (
+                '["object://obj_000000000000000000000000@v1"]',
+                delta.delta_id,
+                empty_delta.delta_id,
+            ),
+        )
+        conn.execute(
+            "DELETE FROM schema_meta "
+            "WHERE key = 'object_refs_json_rebuilt_from_occurrences_v1'"
+        )
+
+    reopened = ObjectContextStore(path)
+
+    assert reopened.get_delta(delta.delta_id).object_refs == expected_refs
+    assert reopened.get_delta(empty_delta.delta_id).object_refs == ()
+    with sqlite3.connect(path) as conn:
+        marker = conn.execute(
+            "SELECT value FROM schema_meta "
+            "WHERE key = 'object_refs_json_rebuilt_from_occurrences_v1'"
+        ).fetchone()
+        assert (
+            conn.execute(
+                "SELECT delta_id, raw_view_json, compressed_view_json "
+                "FROM deltas ORDER BY delta_id"
+            ).fetchall()
+            == raw_snapshot
+        )
+        assert (
+            conn.execute(
+                "SELECT occurrence_key, delta_id, object_ref, message_key, "
+                "span_start, span_end FROM object_occurrences ORDER BY occurrence_key"
+            ).fetchall()
+            == occurrence_snapshot
+        )
+        assert (
+            conn.execute(
+                "SELECT object_ref, object_id, version, sha256 "
+                "FROM object_versions ORDER BY object_ref"
+            ).fetchall()
+            == version_snapshot
+        )
+    assert marker == ("1",)
 
 
 def test_explicit_version_is_immutable_and_records_relations(tmp_path):

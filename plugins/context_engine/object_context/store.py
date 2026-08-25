@@ -27,6 +27,7 @@ from .models import (
 
 
 SCHEMA_VERSION = 1
+OBJECT_REFS_REPAIR_KEY = "object_refs_json_rebuilt_from_occurrences_v1"
 REQUEST_PROJECTION_METRIC_NAMES = frozenset(
     {
         "raw_context_tokens",
@@ -219,6 +220,11 @@ class ObjectContextStore:
                     ON deltas(conversation_id, global_sequence);
                 CREATE INDEX IF NOT EXISTS idx_occurrence_message
                     ON object_occurrences(conversation_id, message_key);
+                CREATE INDEX IF NOT EXISTS idx_occurrence_delta
+                    ON object_occurrences(
+                        delta_id, message_ordinal, part_ordinal, span_start,
+                        span_end, occurrence_key
+                    );
                 CREATE INDEX IF NOT EXISTS idx_version_activity
                     ON object_versions(activity_state, location);
                 CREATE INDEX IF NOT EXISTS idx_retrieval_turn
@@ -238,6 +244,23 @@ class ObjectContextStore:
                     f"Unsupported Object Context V1 schema {row['value']} "
                     f"(expected {SCHEMA_VERSION})"
                 )
+            conn.commit()
+            repair = conn.execute(
+                "SELECT value FROM schema_meta WHERE key = ?",
+                (OBJECT_REFS_REPAIR_KEY,),
+            ).fetchone()
+            if repair is None or str(repair["value"]) != "1":
+                conn.execute("BEGIN IMMEDIATE")
+                repair = conn.execute(
+                    "SELECT value FROM schema_meta WHERE key = ?",
+                    (OBJECT_REFS_REPAIR_KEY,),
+                ).fetchone()
+                if repair is None or str(repair["value"]) != "1":
+                    self._rebuild_all_delta_object_refs(conn)
+                    conn.execute(
+                        "INSERT OR REPLACE INTO schema_meta(key, value) VALUES(?, '1')",
+                        (OBJECT_REFS_REPAIR_KEY,),
+                    )
         try:
             os.chmod(self.path, 0o600)
         except OSError:
@@ -369,6 +392,57 @@ class ObjectContextStore:
             ).fetchone()
         return self._delta_from_row(row) if row is not None else None
 
+    @staticmethod
+    def _sync_delta_object_refs(conn: sqlite3.Connection, delta_id: str) -> None:
+        """Rebuild one Delta's denormalized ref cache from occurrence truth."""
+
+        rows = conn.execute(
+            "SELECT object_ref FROM object_occurrences WHERE delta_id = ? "
+            "ORDER BY message_ordinal, part_ordinal, span_start, span_end, "
+            "occurrence_key",
+            (delta_id,),
+        ).fetchall()
+        refs = list(dict.fromkeys(str(row["object_ref"]) for row in rows))
+        encoded = canonical_json(refs)
+        conn.execute(
+            "UPDATE deltas SET object_refs_json = ? "
+            "WHERE delta_id = ? AND object_refs_json != ?",
+            (encoded, delta_id, encoded),
+        )
+
+    @staticmethod
+    def _rebuild_all_delta_object_refs(conn: sqlite3.Connection) -> None:
+        """Repair legacy caches once without touching object or occurrence rows."""
+
+        refs_by_delta: dict[str, list[str]] = {}
+        seen_by_delta: dict[str, set[str]] = {}
+        for row in conn.execute(
+            "SELECT delta_id, object_ref FROM object_occurrences "
+            "ORDER BY delta_id, message_ordinal, part_ordinal, span_start, "
+            "span_end, occurrence_key"
+        ).fetchall():
+            delta_id = str(row["delta_id"])
+            object_ref = str(row["object_ref"])
+            seen = seen_by_delta.setdefault(delta_id, set())
+            if object_ref in seen:
+                continue
+            seen.add(object_ref)
+            refs_by_delta.setdefault(delta_id, []).append(object_ref)
+
+        updates = []
+        for row in conn.execute(
+            "SELECT delta_id, object_refs_json FROM deltas"
+        ).fetchall():
+            delta_id = str(row["delta_id"])
+            encoded = canonical_json(refs_by_delta.get(delta_id, []))
+            if str(row["object_refs_json"]) != encoded:
+                updates.append((encoded, delta_id))
+        if updates:
+            conn.executemany(
+                "UPDATE deltas SET object_refs_json = ? WHERE delta_id = ?",
+                updates,
+            )
+
     def list_deltas(self, conversation_id: str) -> list[DeltaRecord]:
         with self._connect() as conn:
             rows = conn.execute(
@@ -439,12 +513,16 @@ class ObjectContextStore:
         try:
             conn.execute("BEGIN IMMEDIATE")
             existing_occurrence = conn.execute(
-                "SELECT object_ref FROM object_occurrences WHERE occurrence_key = ?",
+                "SELECT object_ref, delta_id FROM object_occurrences "
+                "WHERE occurrence_key = ?",
                 (detected.occurrence_key,),
             ).fetchone()
             if existing_occurrence is not None:
+                if str(existing_occurrence["delta_id"]) != delta.delta_id:
+                    raise RuntimeError(
+                        "object occurrence identity collision with a different Delta"
+                    )
                 existing_ref = str(existing_occurrence["object_ref"])
-                conn.commit()
             else:
                 conn.execute(
                     "INSERT OR IGNORE INTO blobs("
@@ -552,15 +630,9 @@ class ObjectContextStore:
                         now,
                     ),
                 )
-                refs = list(delta.object_refs)
-                if object_ref not in refs:
-                    refs.append(object_ref)
-                    conn.execute(
-                        "UPDATE deltas SET object_refs_json = ? WHERE delta_id = ?",
-                        (canonical_json(refs), delta.delta_id),
-                    )
                 existing_ref = object_ref
-                conn.commit()
+            self._sync_delta_object_refs(conn, delta.delta_id)
+            conn.commit()
         except Exception:
             conn.rollback()
             raise
