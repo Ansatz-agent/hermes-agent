@@ -30,6 +30,9 @@ type AuthBridgeLike = {
   status: () => Promise<BridgeStatus>
   login: (username: string, password: string) => Promise<BridgeStatus>
   logout: () => Promise<BridgeStatus>
+  // Local liveness only: true means the bridge process is already known dead
+  // and can be replaced without any I/O. Never derived from a network probe.
+  isUnavailable?: () => boolean
 }
 
 type AuthBridgeRecovery = (
@@ -191,10 +194,29 @@ export class AuthCoordinator {
 
   async login(username: string, password: string, connectionId = LOCAL_CONNECTION_ID): Promise<BridgeStatus> {
     return this.runExclusive(async () => {
-      const bridge = this.bridges.get(connectionId)
+      let bridge = this.bridges.get(connectionId)
 
       if (!bridge) {
         return this.applyFailure(new AuthBridgeError('runtime_unavailable', 'runtime_unavailable'), connectionId)
+      }
+
+      // A bridge that is already known dead locally cannot deliver the
+      // password, so it is safe to replace before the single submission.
+      // Anything less certain (a stale locked snapshot, a network failure)
+      // must never veto or repeat the submission.
+      if (connectionId === LOCAL_CONNECTION_ID && this.recoverBridge && bridge.isUnavailable?.()) {
+        try {
+          const replacement = await this.recoverBridge(connectionId, bridge)
+
+          if (!replacement) {
+            return this.applyFailure(new AuthBridgeError('runtime_unavailable', 'runtime_unavailable'), connectionId)
+          }
+
+          this.bridges.set(connectionId, replacement)
+          bridge = replacement
+        } catch (recoveryError) {
+          return this.applyFailure(recoveryError, connectionId)
+        }
       }
 
       try {
@@ -227,6 +249,24 @@ export class AuthCoordinator {
       try {
         return await this.applyStatus(await bridge.logout(), connectionId)
       } catch (error) {
+        if (
+          connectionId === LOCAL_CONNECTION_ID &&
+          safeReason(error) === 'runtime_unavailable' &&
+          this.recoverBridge
+        ) {
+          try {
+            const replacement = await this.recoverBridge(connectionId, bridge)
+
+            if (replacement) {
+              this.bridges.set(connectionId, replacement)
+
+              return await this.applyStatus(await replacement.logout(), connectionId)
+            }
+          } catch (recoveryError) {
+            return this.applyFailure(recoveryError, connectionId)
+          }
+        }
+
         return this.applyFailure(error, connectionId)
       }
     })
@@ -347,6 +387,13 @@ export class AuthCoordinator {
     }
 
     await this.requireConnection(required.connection_id)
+  }
+
+  async requireCurrentScope(connectionId = LOCAL_CONNECTION_ID): Promise<ConnectionScope> {
+    const current = this.scope(connectionId)
+    await this.requireScope(current)
+
+    return current!
   }
 
   private async requireConnection(connectionId: string | null): Promise<void> {

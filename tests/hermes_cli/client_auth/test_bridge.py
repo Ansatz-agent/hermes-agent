@@ -109,6 +109,32 @@ def test_login_response_contains_scope_but_no_secret(monkeypatch):
     assert captured == [bytearray(b"\0" * 6)]
 
 
+@pytest.mark.parametrize("reason", ["invalid_csrf", "invalid_redirect"])
+def test_login_internal_response_failure_is_not_reported_as_a_dead_runtime(
+    monkeypatch, reason
+):
+    # A malformed authentication response must surface as invalid_response so
+    # the desktop does not misread it as a dead local runtime and start
+    # rebuilding a perfectly healthy bridge.
+    def login(username: str, password: bytearray, **_context: str):
+        raise AuthRequired(reason)
+
+    monkeypatch.setattr("hermes_cli.client_auth.bridge.account_login", login)
+    response = dispatch(
+        {
+            "version": 2,
+            "id": "1",
+            "method": "login",
+            "params": {"username": "alice", "password": "secret", **NATIVE_CONTEXT},
+        }
+    )
+
+    assert response["error"] == {
+        "code": "AUTH_REQUIRED",
+        "reason": "invalid_response",
+    }
+
+
 def test_public_bridge_status_rejects_extra_or_secret_fields():
     with pytest.raises(RuntimeError):
         _validated_public_result({**public_status(), "session_token": "secret-sentinel"})
@@ -381,6 +407,36 @@ def test_non_terminal_locked_status_maps_to_auth_required_not_internal_error(mon
     assert "error" in response, response
     assert response["error"]["code"] == "AUTH_REQUIRED"
     assert response["error"]["reason"] == reason
+
+
+@pytest.mark.parametrize("reason", ["invalid_csrf", "invalid_redirect"])
+def test_internal_auth_response_failure_is_reported_as_invalid_response(monkeypatch, reason):
+    locked = SimpleNamespace(
+        reason=reason,
+        public_dict=lambda: public_status(
+            state="locked",
+            username=None,
+            account_id=None,
+            session_id=None,
+            installation_id=None,
+            principal_key=None,
+            valid_until=0.0,
+            validation_state="degraded",
+            validation_reason=reason,
+            legacy=False,
+            reason=reason,
+        ),
+    )
+    monkeypatch.setattr("hermes_cli.client_auth.bridge.account_status", lambda **_context: locked)
+
+    response = dispatch(
+        {"version": 2, "id": "1", "method": "status", "params": {**NATIVE_CONTEXT}}
+    )
+
+    assert response["error"] == {
+        "code": "AUTH_REQUIRED",
+        "reason": "invalid_response",
+    }
 
 
 def test_status_forwards_the_validated_native_context_for_silent_legacy_upgrade(monkeypatch):

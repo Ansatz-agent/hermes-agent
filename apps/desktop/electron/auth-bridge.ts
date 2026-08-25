@@ -255,6 +255,10 @@ export class DesktopAuthBridge {
     this.child.on('close', () => this.failRuntime())
   }
 
+  isUnavailable(): boolean {
+    return this.unavailable
+  }
+
   status(): Promise<BridgeStatus> {
     return this.invoke({ method: 'status', params: this.nativeClientContext })
   }

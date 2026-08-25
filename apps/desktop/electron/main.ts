@@ -976,11 +976,7 @@ async function requireDesktopConnectionScope(connectionId = 'local') {
     throw new AuthBridgeError('runtime_unavailable', 'runtime_unavailable')
   }
 
-  await desktopAuthCoordinator.refresh(connectionId)
-  const scope = desktopAuthCoordinator.scope(connectionId)
-  await desktopAuthCoordinator.requireScope(scope)
-
-  return scope!
+  return desktopAuthCoordinator.requireCurrentScope(connectionId)
 }
 
 function desktopOwnsIpcSender(event: any) {
@@ -15347,6 +15343,7 @@ guardedHandle('hermes:auth:status', async (_event, connectionId) => {
 })
 guardedHandle('hermes:auth:login', async (_event, username, password, connectionId) => {
   const { coordinator, id } = await resolveDesktopAuthConnection(connectionId)
+
   const status = await coordinator.login(username, password, id)
 
   return desktopStatusForRenderer(status, id)

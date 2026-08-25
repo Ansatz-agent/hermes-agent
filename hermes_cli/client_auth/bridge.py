@@ -87,6 +87,7 @@ _VALIDATION_REASONS = frozenset(
 _TERMINAL_REASONS = frozenset(
     {"signed_out", "session_revoked", "account_disabled", "account_revoked"}
 )
+_INTERNAL_RESPONSE_REASONS = frozenset({"invalid_csrf", "invalid_redirect"})
 
 
 def _status(params: Mapping[str, object]) -> dict[str, object]:
@@ -203,7 +204,14 @@ def dispatch(request: object) -> dict[str, object]:
             _native_context(params)
         result = METHODS[method](params)
     except AuthRequired as error:
-        reason = error.reason if error.reason in _SAFE_REASONS else "runtime_unavailable"
+        reason = error.reason
+        if reason in _INTERNAL_RESPONSE_REASONS:
+            # A malformed authentication response is a service anomaly, not a
+            # dead local runtime; reporting it as runtime_unavailable would
+            # send the desktop into pointless bridge recovery.
+            reason = "invalid_response"
+        if reason not in _SAFE_REASONS:
+            reason = "runtime_unavailable"
         return _error(request_id, "AUTH_REQUIRED", reason=reason)
     except ValueError:
         return _error(request_id, "INVALID_PARAMS")
@@ -424,7 +432,12 @@ def _native_context(params: Mapping[str, object]) -> dict[str, str]:
 def _bridge_public_snapshot(value: object) -> dict[str, object]:
     if not isinstance(value, dict):
         raise RuntimeError("invalid public result")
-    return {key: value.get(key) for key in _PUBLIC_KEYS}
+    result = {key: value.get(key) for key in _PUBLIC_KEYS}
+    if result["reason"] in _INTERNAL_RESPONSE_REASONS:
+        result["reason"] = "invalid_response"
+    if result["validation_reason"] in _INTERNAL_RESPONSE_REASONS:
+        result["validation_reason"] = "invalid_response"
+    return result
 
 
 def _validated_trace_result(

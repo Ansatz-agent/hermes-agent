@@ -244,6 +244,14 @@ class AuthClient:
         except (AttributeError, UnicodeDecodeError):
             raise AuthServiceError("invalid_credentials") from None
 
+        # A prior login can leave a still-valid Django session in the jar (a
+        # native sign-out only revokes the bearer session), and the login page
+        # rendered for an authenticated session does not carry the single
+        # login CSRF form. Every credential submission starts from a clean jar.
+        self._http.cookies.clear()
+        if self._fallback_http is not None:
+            self._fallback_http.cookies.clear()
+
         login_page = self._request("GET", LOGIN_PATH)
         if login_page.status_code != 200 or not _is_content_type(login_page, "text/html"):
             raise AuthServiceError("invalid_response")

@@ -288,6 +288,48 @@ def test_login_rejects_missing_csrf_without_posting_password():
     assert len(requests) == 1
 
 
+def test_second_login_ignores_stale_session_cookies_from_a_prior_login():
+    # A native sign-out revokes the bearer session but never clears the
+    # client's browser-style cookie jar, so the next login-page GET used to
+    # carry the still-valid Django session and receive the authenticated page
+    # variant, which has no login CSRF form. Every credential submission must
+    # start from a clean jar.
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "GET" and request.url.path == "/auth/login/":
+            if "cookie" in request.headers:
+                return html_response(csrf=None)
+            token = "csrf-1" if len(requests) == 1 else "csrf-2"
+            return html_response(
+                csrf=token,
+                cookie=f"__Host-ansatz_csrftoken={token}; Secure; Path=/",
+            )
+        if request.method == "POST" and request.url.path == "/auth/login/":
+            posts = sum(1 for item in requests if item.method == "POST")
+            return redirect_response(
+                cookies=(
+                    f"__Host-ansatz_sessionid=session-{posts}; Secure; HttpOnly; Path=/",
+                )
+            )
+        return json_response(200, valid_status_body())
+
+    client = AuthClient(transport=httpx.MockTransport(handler))
+
+    client.login("alice", bytearray(b"secret"))
+    result = client.login("alice", bytearray(b"secret"))
+
+    assert result.username == "alice"
+    login_gets = [
+        item
+        for item in requests
+        if item.method == "GET" and item.url.path == "/auth/login/"
+    ]
+    assert len(login_gets) == 2
+    assert "cookie" not in login_gets[1].headers
+
+
 def test_status_rejects_unauthenticated_response_with_typed_error():
     client, _ = make_client([json_response(401, {"authenticated": False})])
 

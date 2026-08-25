@@ -75,7 +75,14 @@ function fixedBridge(status: BridgeStatus) {
   return {
     status: vi.fn(async () => status),
     login: vi.fn(async () => status),
-    logout: vi.fn(async () => ({ ...status, state: 'signed_out' as const, username: null, valid_until: 0 }))
+    logout: vi.fn(
+      async (): Promise<BridgeStatus> => ({
+        ...status,
+        state: 'signed_out',
+        username: null,
+        valid_until: 0
+      })
+    )
   }
 }
 
@@ -109,6 +116,24 @@ test('stores a full scope only after the bridge reports authenticated', async ()
     epoch: 2
   })
   await assert.doesNotReject(coordinator.require('local', 'local'))
+})
+
+test('requiring the current scope does not refresh or rebroadcast authentication', async () => {
+  const { bridge, coordinator } = fixture(authenticated)
+  const events: BridgeStatus[] = []
+  coordinator.subscribe(status => events.push(status))
+  await coordinator.start()
+  events.length = 0
+
+  const scope = await coordinator.requireCurrentScope('local')
+
+  assert.deepEqual(scope, {
+    connection_id: 'local',
+    runtime_instance_id: 'runtime-1',
+    epoch: 2
+  })
+  assert.equal(bridge.status.mock.calls.length, 1)
+  assert.deepEqual(events, [])
 })
 
 test('retains local scope for a finite degraded cached native status', async () => {
@@ -154,6 +179,33 @@ test('logout invalidates and emits locked before cleanup or bridge logout', asyn
 
   assert.deepEqual(order, ['event:locked', 'cleanup', 'bridge:logout', 'event:signed_out'])
   assert.equal(coordinator.scope('local'), null)
+})
+
+test('logout recovers an unavailable local bridge and finishes signed out', async () => {
+  const bridge = fixedBridge(authenticated)
+  const replacement = fixedBridge(authenticated)
+  replacement.logout.mockResolvedValue(signedOut)
+
+  const cleanup = vi.fn(async () => {})
+  const recoverBridge = vi.fn(async () => replacement)
+  const coordinator = new AuthCoordinator(bridge, {
+    cleanup,
+    pollIntervalMs: 0,
+    recoverBridge
+  })
+
+  await coordinator.start()
+  bridge.logout.mockRejectedValueOnce(new AuthBridgeError('runtime_unavailable', 'runtime_unavailable'))
+
+  const result = await coordinator.logout()
+
+  assert.equal(result.state, 'signed_out')
+  assert.equal(result.reason, 'signed_out')
+  assert.equal(coordinator.status().state, 'signed_out')
+  assert.equal(coordinator.scope('local'), null)
+  assert.equal(cleanup.mock.calls.length, 1)
+  assert.deepEqual(recoverBridge.mock.calls, [['local', bridge]])
+  assert.equal(replacement.logout.mock.calls.length, 1)
 })
 
 test('serializes refresh behind logout cleanup so polling cannot restore a revoked scope', async () => {
@@ -356,6 +408,69 @@ test('login failure never rebuilds the bridge or replays the password', async ()
   assert.equal(result.state, 'locked')
   assert.deepEqual(bridge.login.mock.calls, [['alice', 'password-sentinel']])
   assert.equal(recoverBridge.mock.calls.length, 0)
+})
+
+test('login submits the password without any pre-submit status probe', async () => {
+  const bridge = fixedBridge(signedOut)
+  const recoverBridge = vi.fn(async () => fixedBridge(signedOut))
+  const coordinator = new AuthCoordinator(bridge, { pollIntervalMs: 0, recoverBridge })
+  await coordinator.start()
+  const statusCallsAfterStart = bridge.status.mock.calls.length
+  // A stale locked snapshot (e.g. a malformed earlier auth response) must not
+  // be able to veto a fresh credential submission.
+  bridge.status.mockRejectedValue(new AuthBridgeError('auth_required', 'invalid_response'))
+  bridge.login.mockResolvedValueOnce(authenticated)
+
+  const result = await coordinator.login('alice', 'password-sentinel')
+
+  assert.equal(result.state, 'authenticated')
+  assert.equal(bridge.status.mock.calls.length, statusCallsAfterStart)
+  assert.deepEqual(bridge.login.mock.calls, [['alice', 'password-sentinel']])
+  assert.equal(recoverBridge.mock.calls.length, 0)
+})
+
+test('login recovers a locally dead bridge and submits the password exactly once', async () => {
+  let dead = false
+  const bridge = { ...fixedBridge(signedOut), isUnavailable: () => dead }
+  const replacement = fixedBridge(signedOut)
+  const recoverBridge = vi.fn(async () => replacement)
+  const coordinator = new AuthCoordinator(bridge, { pollIntervalMs: 0, recoverBridge })
+  await coordinator.start()
+  dead = true
+  replacement.login.mockResolvedValueOnce(authenticated)
+
+  const result = await coordinator.login('alice', 'password-sentinel')
+
+  assert.equal(result.state, 'authenticated')
+  assert.equal(bridge.login.mock.calls.length, 0)
+  assert.deepEqual(replacement.login.mock.calls, [['alice', 'password-sentinel']])
+  assert.deepEqual(recoverBridge.mock.calls, [['local', bridge]])
+})
+
+test('failed pre-submit recovery locks without submitting the password and does not wedge retries', async () => {
+  const bridge = { ...fixedBridge(signedOut), isUnavailable: () => true }
+  const replacement = fixedBridge(signedOut)
+
+  const recoverBridge = vi
+    .fn(async () => replacement)
+    .mockRejectedValueOnce(new AuthBridgeError('runtime_unavailable', 'runtime_unavailable'))
+
+  const coordinator = new AuthCoordinator(bridge, { pollIntervalMs: 0, recoverBridge })
+  await coordinator.start()
+  replacement.login.mockResolvedValueOnce(authenticated)
+
+  const failed = await coordinator.login('alice', 'password-sentinel')
+
+  assert.equal(failed.state, 'locked')
+  assert.equal(failed.reason, 'runtime_unavailable')
+  assert.equal(bridge.login.mock.calls.length, 0)
+  assert.equal(replacement.login.mock.calls.length, 0)
+
+  const retried = await coordinator.login('alice', 'password-sentinel')
+
+  assert.equal(retried.state, 'authenticated')
+  assert.equal(bridge.login.mock.calls.length, 0)
+  assert.deepEqual(replacement.login.mock.calls, [['alice', 'password-sentinel']])
 })
 
 test('connection and both policies require exact connection scopes', async () => {
