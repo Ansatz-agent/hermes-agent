@@ -133,7 +133,7 @@ def test_status_dispatches_restored_native_snapshot_with_finite_durable_lease(mo
         last_validated_at="2026-08-24T12:00:00+00:00",
     )
     restored = RuntimeSnapshot.from_native_credential(record).degraded("server_unavailable")
-    monkeypatch.setattr("hermes_cli.client_auth.bridge.account_status", lambda: restored)
+    monkeypatch.setattr("hermes_cli.client_auth.bridge.account_status", lambda **_context: restored)
 
     response = dispatch(
         {"version": 2, "id": "1", "method": "status", "params": NATIVE_CONTEXT}
@@ -163,7 +163,7 @@ def test_status_dispatches_explicit_terminal_snapshot_with_matching_identity(
             reason=reason,
         )
     )
-    monkeypatch.setattr("hermes_cli.client_auth.bridge.account_status", lambda: terminal)
+    monkeypatch.setattr("hermes_cli.client_auth.bridge.account_status", lambda **_context: terminal)
 
     response = dispatch(
         {"version": 2, "id": "1", "method": "status", "params": NATIVE_CONTEXT}
@@ -175,7 +175,7 @@ def test_status_dispatches_explicit_terminal_snapshot_with_matching_identity(
 def test_bridge_translates_runtime_lease_to_unix_epoch(monkeypatch):
     monkeypatch.setattr(
         "hermes_cli.client_auth.bridge.account_status",
-        lambda: SimpleNamespace(
+        lambda **_context: SimpleNamespace(
             reason=None,
             public_dict=lambda: {**public_status(valid_until=160.0), "session_expires_at": "2026-08-18T13:00:00+00:00"}
         ),
@@ -191,7 +191,7 @@ def test_bridge_translates_runtime_lease_to_unix_epoch(monkeypatch):
 
 
 def test_bridge_redacts_runtime_exception_text(monkeypatch):
-    def fail():
+    def fail(**_context):
         raise RuntimeError("agent_history_sessionid=do-not-leak")
 
     monkeypatch.setattr("hermes_cli.client_auth.bridge.account_status", fail)
@@ -207,7 +207,7 @@ def test_bridge_redacts_runtime_exception_text(monkeypatch):
 def test_bridge_escalates_exhausted_local_runtime_recovery(monkeypatch):
     monkeypatch.setattr(
         "hermes_cli.client_auth.bridge.account_status",
-        lambda: SimpleNamespace(
+        lambda **_context: SimpleNamespace(
             reason="runtime_unavailable",
             public_dict=lambda: pytest.fail(
                 "an unavailable snapshot must not look like a successful status"
@@ -372,7 +372,7 @@ def test_non_terminal_locked_status_maps_to_auth_required_not_internal_error(mon
             validation_reason=reason,
         ),
     )
-    monkeypatch.setattr("hermes_cli.client_auth.bridge.account_status", lambda: locked)
+    monkeypatch.setattr("hermes_cli.client_auth.bridge.account_status", lambda **_context: locked)
 
     response = dispatch(
         {"version": 2, "id": "1", "method": "status", "params": {**NATIVE_CONTEXT}}
@@ -381,3 +381,20 @@ def test_non_terminal_locked_status_maps_to_auth_required_not_internal_error(mon
     assert "error" in response, response
     assert response["error"]["code"] == "AUTH_REQUIRED"
     assert response["error"]["reason"] == reason
+
+
+def test_status_forwards_the_validated_native_context_for_silent_legacy_upgrade(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def status(**kwargs: object):
+        captured.update(kwargs)
+        return SimpleNamespace(reason=None, public_dict=lambda: public_status())
+
+    monkeypatch.setattr("hermes_cli.client_auth.bridge.account_status", status)
+
+    response = dispatch(
+        {"version": 2, "id": "1", "method": "status", "params": {**NATIVE_CONTEXT}}
+    )
+
+    assert "result" in response, response
+    assert captured == NATIVE_CONTEXT

@@ -89,8 +89,15 @@ _TERMINAL_REASONS = frozenset(
 )
 
 
-def _status(_params: Mapping[str, object]) -> dict[str, object]:
-    snapshot = account_status()
+def _status(params: Mapping[str, object]) -> dict[str, object]:
+    # The desktop's validated installation/client context lets the owner
+    # perform the silent legacy-to-native upgrade on the first successful
+    # online validation without fabricating an identity.
+    context = _native_context(params)
+    snapshot = account_status(
+        installation_id=context["installation_id"],
+        client_version=context["client_version"],
+    )
     if snapshot.reason == "runtime_unavailable":
         raise AuthRequired("runtime_unavailable")
     return _validated_public_result(_bridge_public_snapshot(snapshot.public_dict()))

@@ -1700,10 +1700,22 @@ class _OwnerCore:
             raise AuthRequired(reason) from None
         return snapshot
 
-    def refresh(self) -> RuntimeSnapshot:
+    def refresh(
+        self,
+        *,
+        installation_id: str | None = None,
+        client_version: str | None = None,
+    ) -> RuntimeSnapshot:
         if not self._refresh_lock.acquire(blocking=False):
             return self.snapshot()
         try:
+            if isinstance(installation_id, str) and isinstance(client_version, str):
+                record = self._load_record()
+
+                if isinstance(record, LegacyCredentialRecord):
+                    return self._validate_now_locked(
+                        native_context=(installation_id, client_version)
+                    )
             return self._refresh_once()
         finally:
             self._refresh_lock.release()
@@ -2014,7 +2026,10 @@ class _OwnerCore:
         finally:
             self._refresh_lock.release()
 
-    def _validate_now_locked(self) -> RuntimeSnapshot:
+    def _validate_now_locked(
+        self,
+        native_context: tuple[str, str] | None = None,
+    ) -> RuntimeSnapshot:
         record = self._load_record()
         if not isinstance(record, (NativeCredentialRecord, LegacyCredentialRecord)):
             return self.snapshot()
@@ -2051,10 +2066,45 @@ class _OwnerCore:
             status = self._client.legacy_status(record.cookie_record.cookies)
             if status.username != record.cookie_record.username:
                 raise AuthServiceError("invalid_response")
-            # A background validation must never mint a native session with a
-            # fabricated installation id. The record stays legacy-only until a
-            # login carrying the real desktop installation/client context
-            # performs the proven upgrade.
+
+            if native_context is not None:
+                # A foreground caller supplied its real, already-validated
+                # installation/client context, so the proven upgrade can run:
+                # never fabricate an installation id here.
+                installation_id, client_version = native_context
+                credential = self._client.issue_client_session(
+                    record.cookie_record.cookies,
+                    installation_id=installation_id,
+                    client_version=client_version,
+                )
+                if (
+                    credential.installation_id != installation_id
+                    or credential.username != record.cookie_record.username
+                ):
+                    raise AuthServiceError("invalid_response")
+                updated = NativeCredentialRecord(
+                    credential,
+                    status.server_time,
+                    record.principal_key,
+                )
+                with self._lock:
+                    if self._record is not record:
+                        return self._snapshot
+                    self._replace_record_atomically(updated)
+                    self._record = updated
+                    snapshot = RuntimeSnapshot.from_native_credential(
+                        updated,
+                        runtime_instance_id=self._snapshot.runtime_instance_id,
+                        epoch=self._snapshot.epoch,
+                    ).online(last_validated_at=status.server_time)
+                    self._validation_failures = 0
+                    self._publish_locked(snapshot)
+                    self._schedule_validation_locked(self._clock())
+                    return self._snapshot
+
+            # Background validation never mints a native session with a
+            # fabricated installation id: without a caller-supplied context
+            # the record stays legacy-only.
             with self._lock:
                 if self._record is not record:
                     return self._snapshot
@@ -2317,8 +2367,30 @@ class RemoteRuntimeOwner:
         self,
         *,
         timeout: float = _RUNTIME_REQUEST_TIMEOUT_SECONDS,
+        installation_id: str | None = None,
+        client_version: str | None = None,
     ) -> RuntimeSnapshot:
-        return self._request({"operation": "status"}, timeout=timeout)
+        def params() -> dict[str, object]:
+            request: dict[str, object] = {"operation": "status"}
+
+            # An old owner cannot perform the upgrade and rejects unknown
+            # request keys, so the context rides only on protocol v2.
+            if (
+                self._protocol_version >= 2
+                and installation_id is not None
+                and client_version is not None
+            ):
+                request.update(
+                    installation_id=installation_id,
+                    client_version=client_version,
+                )
+            return request
+
+        try:
+            return self._exchange(self._encode_request(params()), timeout=timeout)
+        except _OwnerProtocolRejected:
+            self._protocol_version = 1
+            return self._exchange(self._encode_request(params()), timeout=timeout)
 
     def snapshot(self) -> RuntimeSnapshot:
         with self._lock:
@@ -2758,6 +2830,25 @@ class OwnerBroker:
         try:
             if operation == "status" and set(request) == {"version", "operation"}:
                 snapshot = self._owner.refresh()
+            elif operation == "status" and set(request) == {
+                "version",
+                "operation",
+                "installation_id",
+                "client_version",
+            }:
+                installation_id = request.get("installation_id")
+                client_version = request.get("client_version")
+                if (
+                    not isinstance(installation_id, str)
+                    or _TRACE_INSTALLATION_ID.fullmatch(installation_id) is None
+                    or not isinstance(client_version, str)
+                    or re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}", client_version) is None
+                ):
+                    raise AuthRequired("runtime_unavailable")
+                snapshot = self._owner.refresh(
+                    installation_id=installation_id,
+                    client_version=client_version,
+                )
             elif operation == "logout" and set(request) == {"version", "operation"}:
                 snapshot = self._owner.logout()  # type: ignore[attr-defined]
             elif operation == "login" and set(request) in (
@@ -3249,7 +3340,20 @@ def _refresh_entrypoint_owner(
     owner: _EntryPointOwner,
     *,
     timeout: float = _RUNTIME_RECOVERY_PROBE_SECONDS,
+    installation_id: str | None = None,
+    client_version: str | None = None,
 ) -> RuntimeSnapshot:
+    if installation_id is not None and client_version is not None:
+        if isinstance(owner, RemoteRuntimeOwner):
+            return owner.refresh(
+                timeout=timeout,
+                installation_id=installation_id,
+                client_version=client_version,
+            )
+        return owner.refresh(
+            installation_id=installation_id,
+            client_version=client_version,
+        )
     if isinstance(owner, RemoteRuntimeOwner):
         return owner.refresh(timeout=timeout)
     return owner.refresh()
@@ -3444,7 +3548,11 @@ def _trace_credential_from_wire(
     )
 
 
-def account_status() -> RuntimeSnapshot:
+def account_status(
+    *,
+    installation_id: str | None = None,
+    client_version: str | None = None,
+) -> RuntimeSnapshot:
     with _entrypoint_owner_lock:
         owner = _entrypoint_owner
     if owner is None:
@@ -3456,12 +3564,20 @@ def account_status() -> RuntimeSnapshot:
             return _safe_status_failure(error.reason)
         owner = _adopt_entrypoint_owner(owner)
     try:
-        snapshot = _refresh_entrypoint_owner(owner)
+        snapshot = _refresh_entrypoint_owner(
+            owner,
+            installation_id=installation_id,
+            client_version=client_version,
+        )
     except AuthRequired as error:
         if error.reason == "runtime_unavailable":
             try:
                 owner = _recover_entrypoint_owner(owner)
-                return _refresh_entrypoint_owner(owner)
+                return _refresh_entrypoint_owner(
+                    owner,
+                    installation_id=installation_id,
+                    client_version=client_version,
+                )
             except AuthRequired as recovery_error:
                 return _safe_status_failure(recovery_error.reason)
         return _safe_status_failure(error.reason)
@@ -3471,7 +3587,11 @@ def account_status() -> RuntimeSnapshot:
     ):
         try:
             owner = _recover_entrypoint_owner(owner)
-            return _refresh_entrypoint_owner(owner)
+            return _refresh_entrypoint_owner(
+                owner,
+                installation_id=installation_id,
+                client_version=client_version,
+            )
         except AuthRequired as error:
             return _safe_status_failure(error.reason)
     return snapshot

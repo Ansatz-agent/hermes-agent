@@ -3985,3 +3985,212 @@ def test_remote_owner_falls_back_to_protocol_v1_for_an_old_owner():
     owner.refresh(timeout=1.0)
     versions = [json.loads(frame)["version"] for frame in sent_frames]
     assert versions == [2, 1, 1], "the downgrade must be sticky for the owner connection"
+
+
+def _seeded_legacy_backend(client: FakeAuthClient, principal_key: str) -> FakeSecretBackend:
+    from hermes_cli.client_auth.runtime import _encode_cookie_blob
+
+    return FakeSecretBackend(
+        raw=_encode_cookie_blob(
+            CookieRecord(
+                cookies=dict(client.record.cookies),
+                username="alice",
+                session_expires_at=status_at().session_expires_at,
+                principal_key=principal_key,
+            )
+        )
+    )
+
+
+def test_status_refresh_with_real_context_upgrades_legacy_record_atomically():
+    from hermes_cli.client_auth.runtime import NativeCredentialRecord, _decode_credential_blob
+
+    client = FakeAuthClient()
+    legacy_key = "legacy:" + "c" * 64
+    backend = _seeded_legacy_backend(client, legacy_key)
+    owner = MemoryOwner(
+        client,
+        hardener=RecordingHardener(),
+        secret_backend=backend,
+        clock=FakeClock(),
+        jitter=lambda low, _high: low,
+    )
+
+    restored = owner.refresh()
+    assert restored.legacy is True
+    assert client.native_issue_calls == 0
+
+    upgraded = owner.refresh(installation_id=INSTALLATION_ID, client_version="0.17.0")
+
+    assert client.native_issue_calls == 1
+    assert upgraded.state is AuthState.AUTHENTICATED
+    assert upgraded.legacy is False
+    assert upgraded.account_id == ACCOUNT_ID
+    assert upgraded.installation_id == INSTALLATION_ID
+    assert upgraded.predecessor_principal_key == legacy_key
+    assert upgraded.validation_state is ValidationState.ONLINE
+    assert upgraded.runtime_instance_id == restored.runtime_instance_id
+    assert upgraded.epoch == restored.epoch
+
+    persisted = _decode_credential_blob(backend.raw)
+    assert isinstance(persisted, NativeCredentialRecord)
+    assert persisted.credential.installation_id == INSTALLATION_ID
+    assert persisted.predecessor_principal_key == legacy_key
+
+    assert owner.validate_now().legacy is False
+    assert client.native_issue_calls == 1
+
+
+def test_context_refresh_outage_keeps_legacy_local_authorization_until_recovery():
+    from hermes_cli.client_auth.runtime import _decode_credential_blob
+
+    class FlakyUpgradeClient(FakeAuthClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail_issue = False
+
+        def issue_client_session(self, cookies, *, installation_id, client_version):
+            if self.fail_issue:
+                raise AuthServiceError("server_unavailable")
+            return super().issue_client_session(
+                cookies, installation_id=installation_id, client_version=client_version
+            )
+
+    client = FlakyUpgradeClient()
+    legacy_key = "legacy:" + "d" * 64
+    backend = _seeded_legacy_backend(client, legacy_key)
+    owner = MemoryOwner(
+        client,
+        hardener=RecordingHardener(),
+        secret_backend=backend,
+        clock=FakeClock(),
+        jitter=lambda low, _high: low,
+    )
+
+    client.status_error = AuthServiceError("server_unavailable")
+    degraded = owner.refresh(installation_id=INSTALLATION_ID, client_version="0.17.0")
+    assert degraded.state is AuthState.AUTHENTICATED
+    assert degraded.legacy is True
+    assert degraded.validation_state is ValidationState.DEGRADED
+    assert client.native_issue_calls == 0
+
+    client.status_error = None
+    client.fail_issue = True
+    still_legacy = owner.refresh(installation_id=INSTALLATION_ID, client_version="0.17.0")
+    assert still_legacy.state is AuthState.AUTHENTICATED
+    assert still_legacy.legacy is True
+    assert still_legacy.validation_state is ValidationState.DEGRADED
+    assert isinstance(_decode_credential_blob(backend.raw), CookieRecord)
+
+    client.fail_issue = False
+    upgraded = owner.refresh(installation_id=INSTALLATION_ID, client_version="0.17.0")
+    assert upgraded.legacy is False
+    assert upgraded.installation_id == INSTALLATION_ID
+    assert upgraded.predecessor_principal_key == legacy_key
+
+
+def test_runtime_never_fabricates_installation_ids():
+    import hermes_cli.client_auth.runtime as runtime_module
+
+    source = Path(runtime_module.__file__).read_text()
+    assert "uuid.uuid4" not in source
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Unix runtime protocol")
+def test_owner_broker_status_with_native_context_performs_legacy_upgrade():
+    client = FakeAuthClient()
+    legacy_key = "legacy:" + "e" * 64
+    owner = MemoryOwner(
+        client,
+        hardener=RecordingHardener(),
+        secret_backend=_seeded_legacy_backend(client, legacy_key),
+        clock=FakeClock(),
+        jitter=lambda low, _high: low,
+    )
+    with tempfile.TemporaryDirectory(prefix="ha-upg-") as temporary:
+        endpoint = UnixEndpoint.for_directory(
+            Path(temporary),
+            random_name="00112233445566778899aabbccddeeff",
+        )
+        broker = OwnerBroker.start(owner, endpoint=endpoint)
+        try:
+
+            def roundtrip(request: dict[str, object]) -> dict[str, object]:
+                connection = endpoint.connect_current(timeout=1.0)
+                try:
+                    connection.sendall(json.dumps(request).encode("utf-8") + b"\n")
+                    raw = _read_runtime_frame(connection, timeout=1.0)
+                finally:
+                    connection.close()
+                return json.loads(raw)
+
+            malformed = roundtrip(
+                {
+                    "version": 2,
+                    "operation": "status",
+                    "installation_id": "not-a-uuid",
+                    "client_version": "0.17.0",
+                }
+            )
+            assert malformed["ok"] is False
+            assert client.native_issue_calls == 0
+
+            upgraded = roundtrip(
+                {
+                    "version": 2,
+                    "operation": "status",
+                    "installation_id": INSTALLATION_ID,
+                    "client_version": "0.17.0",
+                }
+            )
+            assert upgraded["ok"] is True
+            assert upgraded["snapshot"]["legacy"] is False
+            assert upgraded["snapshot"]["installation_id"] == INSTALLATION_ID
+            assert upgraded["snapshot"]["predecessor_principal_key"] == legacy_key
+            assert client.native_issue_calls == 1
+        finally:
+            broker.close()
+
+
+def test_remote_owner_sends_native_context_only_on_protocol_v2():
+    signed_out = RuntimeSnapshot.signed_out()
+    legacy_wire = {
+        key: signed_out.public_dict()[key] for key in LEGACY_SNAPSHOT_WIRE_KEYS
+    }
+    sent_frames: list[bytes] = []
+
+    class OldOwnerConnection:
+        def settimeout(self, _timeout):
+            return None
+
+        def sendall(self, data):
+            sent_frames.append(bytes(data))
+
+        def recv(self, _size):
+            request = json.loads(sent_frames[-1])
+            if request.get("version") != 1 or set(request) != {"version", "operation"}:
+                return b'{"ok":false,"reason":"runtime_unavailable","version":1}\n'
+            return (
+                json.dumps({"version": 1, "ok": True, "snapshot": legacy_wire}).encode("utf-8")
+                + b"\n"
+            )
+
+        def close(self):
+            return None
+
+    class Endpoint:
+        def connect_current(self, *, timeout):
+            assert timeout > 0
+            return OldOwnerConnection()
+
+    owner = RemoteRuntimeOwner(Endpoint())
+    result = owner.refresh(timeout=1.0, installation_id=INSTALLATION_ID, client_version="0.17.0")
+
+    assert result.state is AuthState.SIGNED_OUT
+    requests = [json.loads(frame) for frame in sent_frames]
+    assert [request["version"] for request in requests] == [2, 1]
+    assert requests[0]["installation_id"] == INSTALLATION_ID
+    assert requests[0]["client_version"] == "0.17.0"
+    assert set(requests[1]) == {"version", "operation"}, (
+        "an old owner cannot upgrade, so the v1 fallback must drop the context"
+    )
