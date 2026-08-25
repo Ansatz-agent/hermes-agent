@@ -60,12 +60,14 @@ async function post(
       response => {
         const chunks: Buffer[] = []
 
+        response.on('error', reject)
         response.on('data', chunk => chunks.push(Buffer.from(chunk)))
         response.on('end', () => resolve({ body: Buffer.concat(chunks), status: response.statusCode ?? 0 }))
       }
     )
 
     request.on('error', reject)
+    request.on('socket', socket => socket.on('error', reject))
     request.end(body)
   })
 }
@@ -367,6 +369,11 @@ test('stop consumes only expected socket errors with oversized and held requests
     })
     request.on('error', error => {
       assert.ok(['ECONNRESET', 'EPIPE'].includes((error as NodeJS.ErrnoException).code ?? ''))
+    })
+    request.on('socket', socket => {
+      socket.on('error', error => {
+        assert.ok(['ECONNRESET', 'EPIPE'].includes((error as NodeJS.ErrnoException).code ?? ''))
+      })
     })
     request.write(body)
     request.flushHeaders()
