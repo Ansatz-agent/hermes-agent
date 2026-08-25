@@ -294,6 +294,7 @@ import {
 } from './ssh-connection'
 import { createStreamThrottle } from './stream-throttle'
 import { nativeOverlayWidth as computeNativeOverlayWidth, macTitleBarOverlayHeight } from './titlebar-overlay-width'
+import { attachTraceBackends, TraceTransportUnavailableError } from './trace-backend-attacher'
 import { TraceBackendRegistry } from './trace-backend-registry'
 import { RefreshingTraceCredentialProvider, TraceForwarder } from './trace-forwarder'
 import { TraceIngressFacade } from './trace-ingress-facade'
@@ -733,25 +734,29 @@ async function writeBackendScopeToken(child, token) {
 
 async function writeBackendTraceTransport(child, root) {
   if (!desktopTraceIngress || !child?.stdin || child.stdin.destroyed || !child.stdin.writable) {
-    throw new AuthBridgeError('runtime_unavailable', 'runtime_unavailable')
+    throw new TraceTransportUnavailableError('trace_transport_pipe_unavailable')
   }
 
-  const frame = encodeTraceTransportRegistration({
-    endpoint: desktopTraceIngress.endpoint,
-    installationId: desktopInstallationId,
-    localBearer: desktopTraceIngress.localBearer,
-    pluginsToml: path.join(root, 'config', 'ansatz-voice-trace', 'plugins.toml')
-  })
-
-  await new Promise<void>((resolve, reject) => {
-    child.stdin.write(frame, error => {
-      if (error) {
-        reject(new AuthBridgeError('runtime_unavailable', 'runtime_unavailable'))
-      } else {
-        resolve()
-      }
+  try {
+    const frame = encodeTraceTransportRegistration({
+      endpoint: desktopTraceIngress.endpoint,
+      installationId: desktopInstallationId,
+      localBearer: desktopTraceIngress.localBearer,
+      pluginsToml: path.join(root, 'config', 'ansatz-voice-trace', 'plugins.toml')
     })
-  })
+
+    await new Promise<void>((resolve, reject) => {
+      child.stdin.write(frame, error => {
+        if (error) {
+          reject(error)
+        } else {
+          resolve()
+        }
+      })
+    })
+  } catch {
+    throw new TraceTransportUnavailableError('trace_transport_pipe_unavailable')
+  }
 }
 
 function sameConnectionScope(left, right) {
@@ -8912,7 +8917,16 @@ async function attachDesktopTraceTransportToRunningBackends() {
     return
   }
 
-  await Promise.all(backends.map(backend => writeBackendTraceTransport(backend.child, backend.root)))
+  const result = await attachTraceBackends(
+    backends,
+    backend => writeBackendTraceTransport(backend.child, backend.root),
+    diagnostic => rememberLog(`[trace] ${diagnostic}`)
+  )
+
+  if (result.failed > 0 && result.succeeded === 0) {
+    throw new TraceTransportUnavailableError('trace_transport_attach_unavailable')
+  }
+
   desktopTraceAttachRetryAttempt = 0
 }
 
@@ -8953,6 +8967,8 @@ function unregisterDesktopTraceBackend(child, generation) {
   if (desktopTraceBackends.active().length === 0 && desktopTraceAttachRetryTimer) {
     clearTimeout(desktopTraceAttachRetryTimer)
     desktopTraceAttachRetryTimer = null
+  } else if (!desktopTraceAttachRetryTimer) {
+    scheduleDesktopTraceTransportAttachRetry(30_000)
   }
 }
 
@@ -8970,8 +8986,8 @@ async function ensureDesktopTraceFacade() {
     const ingress = await facade.start()
     desktopTraceFacade = facade
     desktopTraceIngress = ingress
-    await attachDesktopTraceTransportToRunningBackends()
     scheduleDesktopTraceTransportAttachRetry(30_000)
+    await attachDesktopTraceTransportToRunningBackends()
 
     return ingress
   })()
