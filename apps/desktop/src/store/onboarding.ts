@@ -14,7 +14,7 @@ import {
 import { isProviderSetupErrorMessage } from '@/lib/provider-setup-errors'
 import { evaluateRuntimeReadiness, type RuntimeReadinessResult } from '@/lib/runtime-readiness'
 import { setMainModelAssignment } from '@/store/cron-model-impact'
-import { notify, notifyError } from '@/store/notifications'
+import { dismissNotification, notify, notifyError } from '@/store/notifications'
 import type { ModelOptionProvider, OAuthProvider, OAuthStartResponse } from '@/types/hermes'
 
 type PkceStart = Extract<OAuthStartResponse, { flow: 'pkce' }>
@@ -83,6 +83,7 @@ export interface OnboardingContext {
 
 const CONFIGURED_CACHE_KEY = 'hermes-desktop-onboarded-v1'
 const SKIP_CACHE_KEY = 'hermes-onboarding-skipped-v1'
+const RUNTIME_NOT_READY_NOTIFICATION_ID = 'runtime-not-ready'
 const POLL_MS = 2000
 const COPY_FLASH_MS = 1500
 export const DEFAULT_ONBOARDING_REASON = 'No inference provider is configured.'
@@ -523,6 +524,11 @@ export async function refreshOnboarding(ctx: OnboardingContext) {
   const runtime = await checkRuntime(ctx)
 
   if (runtime.ready) {
+    // A fallback probe can surface a persistent warning while an updated local
+    // runtime is still bootstrapping. Gateway reconnect re-runs this check;
+    // once the backend answers authoritatively, resolve the warning instead of
+    // leaving stale failure UI behind after recovery.
+    dismissNotification(RUNTIME_NOT_READY_NOTIFICATION_ID)
     completeDesktopOnboarding()
     ctx.onCompleted?.()
 
@@ -537,7 +543,7 @@ export async function refreshOnboarding(ctx: OnboardingContext) {
     // notification with a stable id so repeated calls during an outage dedup
     // instead of stacking toasts.
     notify({
-      id: 'runtime-not-ready',
+      id: RUNTIME_NOT_READY_NOTIFICATION_ID,
       kind: 'error',
       title: 'Runtime not ready',
       message:
