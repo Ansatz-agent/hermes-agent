@@ -110,13 +110,33 @@ export interface LocalDataDigestOptions {
   python: string
 }
 
+export interface PhysicalFileEvidence {
+  sha256: string
+  size: number
+}
+
+export interface SQLiteFileEvidence {
+  logical_sha256: string
+  physical: {
+    main: PhysicalFileEvidence
+    shm?: PhysicalFileEvidence
+    wal?: PhysicalFileEvidence
+  }
+}
+
+export interface LocalDataEvidence {
+  artifacts: Record<string, PhysicalFileEvidence>
+  sqlite: Record<string, SQLiteFileEvidence>
+}
+
 /**
  * Hash only explicit user-data allowlists. Credential stores are deliberately
- * absent. SQLite hashes are logical dumps, so an ordinary WAL checkpoint or
- * WAL/SHM removal during backend shutdown cannot masquerade as data loss.
+ * absent. SQLite content is compared through logical dumps, while physical
+ * main/WAL/SHM evidence proves presence without brittle byte equality across
+ * ordinary checkpoints.
  */
-export function localDataDigests(options: LocalDataDigestOptions): Record<string, string> {
-  const digests = new Map<string, string>()
+export function localDataDigests(options: LocalDataDigestOptions): LocalDataEvidence {
+  const sqlite = new Map<string, SQLiteFileEvidence>()
   const databasePaths = [path.join(options.hermesHome, 'state.db'), path.join(options.hermesHome, 'projects.db')]
   const profilesRoot = path.join(options.hermesHome, 'profiles')
   if (fs.existsSync(profilesRoot)) {
@@ -131,10 +151,27 @@ export function localDataDigests(options: LocalDataDigestOptions): Record<string
 
   for (const databasePath of databasePaths) {
     if (fs.existsSync(databasePath)) {
-      digests.set(reportPath(options, databasePath) + '#logical', logicalSqliteDigest(databasePath, options.python))
+      const reportKey = reportPath(options, databasePath)
+      const physical: SQLiteFileEvidence['physical'] = {
+        main: physicalFileEvidence(databasePath)
+      }
+      for (const [name, suffix] of [
+        ['wal', '-wal'],
+        ['shm', '-shm']
+      ] as const) {
+        const sidecarPath = `${databasePath}${suffix}`
+        if (fs.existsSync(sidecarPath)) {
+          physical[name] = physicalFileEvidence(sidecarPath)
+        }
+      }
+      sqlite.set(reportKey, {
+        logical_sha256: logicalSqliteDigest(databasePath, options.python),
+        physical
+      })
     }
   }
 
+  const artifacts = new Map<string, PhysicalFileEvidence>()
   const byteRoots = [
     path.join(options.hermesHome, 'kanban', 'attachments'),
     path.join(options.hermesHome, 'exports'),
@@ -146,16 +183,43 @@ export function localDataDigests(options: LocalDataDigestOptions): Record<string
     }
   }
   for (const root of byteRoots) {
-    collectByteDigests(root, options, digests)
+    collectByteDigests(root, options, artifacts)
   }
 
-  const result = Object.fromEntries([...digests.entries()].sort(([left], [right]) => left.localeCompare(right)))
-  for (const key of Object.keys(result)) {
+  const result: LocalDataEvidence = {
+    artifacts: Object.fromEntries([...artifacts.entries()].sort(([left], [right]) => left.localeCompare(right))),
+    sqlite: Object.fromEntries([...sqlite.entries()].sort(([left], [right]) => left.localeCompare(right)))
+  }
+  for (const key of [...Object.keys(result.artifacts), ...Object.keys(result.sqlite)]) {
     if (/(?:credential|keyring|auth-credential-store|(?:^|\/)auth\.json$|(?:^|\/)\.env$)/i.test(key)) {
       throw new Error(`Credential-store path entered local-data digest report: ${key}`)
     }
   }
   return result
+}
+
+export function assertLocalDataPreserved(before: LocalDataEvidence, after: LocalDataEvidence): void {
+  assertSameKeys('SQLite database', before.sqlite, after.sqlite)
+  assertSameKeys('artifact', before.artifacts, after.artifacts)
+
+  for (const [databasePath, expected] of Object.entries(before.sqlite)) {
+    const observed = after.sqlite[databasePath]!
+    if (observed.logical_sha256 !== expected.logical_sha256) {
+      throw new Error(`SQLite logical content changed: ${databasePath}`)
+    }
+    for (const sidecar of ['wal', 'shm'] as const) {
+      if (expected.physical[sidecar] && !observed.physical[sidecar]) {
+        throw new Error(`SQLite sidecar was removed: ${databasePath}-${sidecar}`)
+      }
+    }
+  }
+
+  for (const [artifactPath, expected] of Object.entries(before.artifacts)) {
+    const observed = after.artifacts[artifactPath]!
+    if (observed.sha256 !== expected.sha256 || observed.size !== expected.size) {
+      throw new Error(`Local artifact changed: ${artifactPath}`)
+    }
+  }
 }
 
 export function assertSensitiveValuesAbsent(logRoots: string[], sensitiveValues: readonly string[]): void {
@@ -188,7 +252,11 @@ function logicalSqliteDigest(databasePath: string, python: string): string {
   return result.stdout.trim()
 }
 
-function collectByteDigests(root: string, options: LocalDataDigestOptions, output: Map<string, string>): void {
+function collectByteDigests(
+  root: string,
+  options: LocalDataDigestOptions,
+  output: Map<string, PhysicalFileEvidence>
+): void {
   if (!fs.existsSync(root)) {
     return
   }
@@ -203,7 +271,27 @@ function collectByteDigests(root: string, options: LocalDataDigestOptions, outpu
     return
   }
   if (stats.isFile()) {
-    output.set(reportPath(options, root), createHash('sha256').update(fs.readFileSync(root)).digest('hex'))
+    output.set(reportPath(options, root), physicalFileEvidence(root))
+  }
+}
+
+function physicalFileEvidence(filePath: string): PhysicalFileEvidence {
+  const stats = fs.lstatSync(filePath)
+  if (!stats.isFile() || stats.isSymbolicLink()) {
+    throw new Error(`Evidence target must be a regular file: ${filePath}`)
+  }
+
+  return {
+    sha256: createHash('sha256').update(fs.readFileSync(filePath)).digest('hex'),
+    size: stats.size
+  }
+}
+
+function assertSameKeys(kind: string, before: Record<string, unknown>, after: Record<string, unknown>): void {
+  const expected = Object.keys(before).sort()
+  const observed = Object.keys(after).sort()
+  if (expected.length !== observed.length || expected.some((value, index) => value !== observed[index])) {
+    throw new Error(`${kind} set changed: expected ${expected.join(', ')}, observed ${observed.join(', ')}`)
   }
 }
 

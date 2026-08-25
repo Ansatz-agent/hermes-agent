@@ -93,6 +93,12 @@ export type TraceForwarderSummary = TraceForwarderQueueSummary & {
   reason: 'stopped'
 }
 
+export function isExpectedTraceShutdownError(error: unknown, stopping: boolean): boolean {
+  const code = (error as NodeJS.ErrnoException | null)?.code
+
+  return stopping && (code === 'ECONNRESET' || code === 'EPIPE')
+}
+
 export class TraceForwarder {
   private readonly credentialProvider: TraceCredentialProvider
   private readonly fetchImpl: FetchLike
@@ -107,6 +113,7 @@ export class TraceForwarder {
   private localBearer = ''
   private retryTimer: ReturnType<typeof setTimeout> | null = null
   private server: http.Server | null = null
+  private stopping = false
 
   constructor(options: TraceForwarderOptions) {
     this.credentialProvider = options.credentialProvider
@@ -127,8 +134,19 @@ export class TraceForwarder {
     this.activeEpoch = epoch
     this.localBearer = randomBytes(32).toString('base64url')
     this.admissionOpen = true
+    this.stopping = false
 
     const server = http.createServer((request, response) => {
+      request.on('error', error => {
+        if (!isExpectedTraceShutdownError(error, this.stopping)) {
+          throw error
+        }
+      })
+      response.on('error', error => {
+        if (!isExpectedTraceShutdownError(error, this.stopping)) {
+          throw error
+        }
+      })
       void this.handle(request, response, epoch)
     })
 
@@ -162,6 +180,7 @@ export class TraceForwarder {
   }
 
   async stop({ flushMs }: { flushMs: number }): Promise<TraceForwarderSummary> {
+    this.stopping = true
     this.admissionOpen = false
     this.clearRetryTimer()
     const server = this.server

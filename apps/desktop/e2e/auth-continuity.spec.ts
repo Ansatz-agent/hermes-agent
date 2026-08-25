@@ -1,16 +1,19 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import fs from 'node:fs'
+import net from 'node:net'
 import path from 'node:path'
 
 import type { ElectronApplication, Page } from '@playwright/test'
 
 import {
+  assertLocalDataPreserved,
   assertSensitiveValuesAbsent,
   authStatus,
   type AuthStatus,
   backendProcessIds,
   localDataDigests,
+  type LocalDataEvidence,
   protectedIpcRejections
 } from './auth-assertions'
 import { type FixedAuthContractServer, startFixedAuthContractServer } from './fixed-auth-contract-server'
@@ -57,12 +60,16 @@ test.setTimeout(300_000)
 
 test('cached authorization restarts offline and silently revalidates', async () => {
   allowErrorBanners()
+  await test.step('fixture construction failure rolls back every acquired resource', async () => {
+    await assertFixtureConstructionRollback()
+    await assertCleanupContinuesAfterFailure()
+  })
   const fixture = await launchAuthenticatedFixture()
 
   try {
     await login(fixture)
     await createConversation(fixture.page, SENTINEL)
-    createLocalArtifacts(fixture)
+    await createLocalArtifacts(fixture, SENTINEL)
     const before = localDigests(fixture)
 
     fixture.server.setMode('timeout')
@@ -80,7 +87,7 @@ test('cached authorization restarts offline and silently revalidates', async () 
         intervals: [100, 250, 500, 1_000]
       })
       .toBe('online')
-    expect(localDigests(fixture)).toEqual(before)
+    assertLocalDataPreserved(before, localDigests(fixture))
 
     for (const [mode, reason] of [
       ['timeout', null],
@@ -138,7 +145,9 @@ test('sign out clears access but preserves every local user artifact', async () 
 
   try {
     await login(fixture)
-    createLocalArtifacts(fixture)
+    const conversation = 'signout preservation conversation'
+    await createConversation(fixture.page, conversation)
+    await createLocalArtifacts(fixture, conversation)
     const before = localDigests(fixture)
     assertRequiredDigestCoverage(before)
     expect(fs.existsSync(fixture.credentialStorePath)).toBe(true)
@@ -159,7 +168,7 @@ test('sign out clears access but preserves every local user artifact', async () 
       expect(rejection).not.toBe('ALLOWED')
       expect(rejection).toContain('AUTH_REQUIRED')
     }
-    expect(localDigests(fixture)).toEqual(before)
+    assertLocalDataPreserved(before, localDigests(fixture))
     expect(JSON.stringify(before)).not.toMatch(/credential|keyring/i)
     assertNoCredentialDiagnostics(fixture)
   } finally {
@@ -174,7 +183,9 @@ for (const reason of ['account_disabled', 'account_revoked', 'session_revoked'] 
 
     try {
       await login(fixture)
-      createLocalArtifacts(fixture)
+      const conversation = `${reason} preservation conversation`
+      await createConversation(fixture.page, conversation)
+      await createLocalArtifacts(fixture, conversation)
       const before = localDigests(fixture)
       const expectedIdentity = fixture.server.currentIdentity()
       await fixture.page.evaluate(expectedReason => {
@@ -221,7 +232,7 @@ for (const reason of ['account_disabled', 'account_revoked', 'session_revoked'] 
           { timeout: 10_000 }
         )
         .toBe(1)
-      expect(localDigests(fixture)).toEqual(before)
+      assertLocalDataPreserved(before, localDigests(fixture))
       assertNoCredentialDiagnostics(fixture)
     } finally {
       await fixture.cleanup()
@@ -229,91 +240,236 @@ for (const reason of ['account_disabled', 'account_revoked', 'session_revoked'] 
   })
 }
 
-async function launchAuthenticatedFixture(): Promise<AuthenticatedFixture> {
+interface FixtureFailureSnapshot {
+  appPid: number
+  mockPort: number
+  root: string
+  runtimeRoot: string
+  serverPort: number
+}
+
+async function assertFixtureConstructionRollback(): Promise<void> {
+  let observed: FixtureFailureSnapshot | undefined
+  let returned: AuthenticatedFixture | undefined
+  let thrown: unknown
+  const launchWithFault = launchAuthenticatedFixture as unknown as (options: {
+    afterLaunch(snapshot: FixtureFailureSnapshot): never
+  }) => Promise<AuthenticatedFixture>
+
+  try {
+    returned = await launchWithFault({
+      afterLaunch: snapshot => {
+        observed = snapshot
+        throw new Error('fixture-construction-fault')
+      }
+    })
+  } catch (error) {
+    thrown = error
+  } finally {
+    await returned?.cleanup()
+  }
+
+  expect(String(thrown)).toContain('fixture-construction-fault')
+  expect(observed).toBeDefined()
+  expect(fs.existsSync(observed!.root)).toBe(false)
+  expect(authOwnerRows().some(row => row.command.includes(observed!.runtimeRoot))).toBe(false)
+  expect(processExists(observed!.appPid)).toBe(false)
+  await expect.poll(() => tcpPortClosed(observed!.serverPort), { timeout: 5_000 }).toBe(true)
+  await expect.poll(() => tcpPortClosed(observed!.mockPort), { timeout: 5_000 }).toBe(true)
+}
+
+async function assertCleanupContinuesAfterFailure(): Promise<void> {
+  const calls: string[] = []
+  let thrown: unknown
+
+  try {
+    await cleanupAuthenticatedResources({
+      mock: {
+        close: async () => {
+          calls.push('mock')
+          throw new Error('injected mock cleanup failure')
+        }
+      } as unknown as MockServer,
+      sandbox: {
+        cleanup: () => calls.push('sandbox')
+      } as unknown as Sandbox,
+      server: {
+        close: async () => {
+          calls.push('auth')
+        }
+      } as unknown as ControllableAuthServer
+    })
+  } catch (error) {
+    thrown = error
+  }
+
+  expect(thrown).toBeInstanceOf(AggregateError)
+  expect(String(thrown)).toContain('Authenticated fixture cleanup failed')
+  expect(calls.sort()).toEqual(['auth', 'mock', 'sandbox'])
+}
+
+function processExists(pid: number): boolean {
+  const result = spawnSync('ps', ['-p', String(pid), '-o', 'pid='], { encoding: 'utf8' })
+
+  return result.status === 0 && result.stdout.trim() === String(pid)
+}
+
+function tcpPortClosed(port: number): Promise<boolean> {
+  return new Promise(resolve => {
+    const socket = net.createConnection({ host: '127.0.0.1', port })
+    socket.once('connect', () => {
+      socket.destroy()
+      resolve(false)
+    })
+    socket.once('error', () => resolve(true))
+  })
+}
+
+async function launchAuthenticatedFixture(
+  options: { afterLaunch?(snapshot: FixtureFailureSnapshot): void } = {}
+): Promise<AuthenticatedFixture> {
   if (!fs.existsSync(PYTHON)) {
     throw new Error(`Hermes E2E Python is unavailable: ${PYTHON}`)
   }
 
-  const sandbox = createSandbox('auth-continuity')
-  const certPath = path.join(sandbox.root, 'auth-cert.pem')
-  const keyPath = path.join(sandbox.root, 'auth-key.pem')
-  execFileSync(
-    'openssl',
-    [
-      'req',
-      '-x509',
-      '-newkey',
-      'rsa:2048',
-      '-nodes',
-      '-days',
-      '1',
-      '-subj',
-      '/CN=c2sml.cn',
-      '-addext',
-      'subjectAltName=DNS:c2sml.cn',
-      '-keyout',
+  let sandbox: Sandbox | undefined
+  let server: ControllableAuthServer | undefined
+  let mock: MockServer | undefined
+  let runtimeRoot: string | undefined
+  let launched: Awaited<ReturnType<typeof launchDesktop>> | undefined
+
+  try {
+    sandbox = createSandbox('auth-continuity')
+    const certPath = path.join(sandbox.root, 'auth-cert.pem')
+    const keyPath = path.join(sandbox.root, 'auth-key.pem')
+    execFileSync(
+      'openssl',
+      [
+        'req',
+        '-x509',
+        '-newkey',
+        'rsa:2048',
+        '-nodes',
+        '-days',
+        '1',
+        '-subj',
+        '/CN=c2sml.cn',
+        '-addext',
+        'subjectAltName=DNS:c2sml.cn',
+        '-keyout',
+        keyPath,
+        '-out',
+        certPath
+      ],
+      { stdio: 'ignore' }
+    )
+
+    server = (await startFixedAuthContractServer({
+      certPath,
       keyPath,
-      '-out',
-      certPath
-    ],
-    { stdio: 'ignore' }
-  )
+      listenPort: 0
+    })) as ControllableAuthServer
+    mock = await startMockServer()
+    writeMockProviderConfig(sandbox.hermesHome, mock.url)
+    writeEnvFile(sandbox.hermesHome)
 
-  const server = (await startFixedAuthContractServer({
-    certPath,
-    keyPath,
-    listenPort: 0
-  })) as ControllableAuthServer
-  const mock = await startMockServer()
-  writeMockProviderConfig(sandbox.hermesHome, mock.url)
-  writeEnvFile(sandbox.hermesHome)
+    const credentialStorePath = path.join(sandbox.root, 'auth-credential-store.json')
+    const isolation = `auth-continuity-${randomBytes(16).toString('hex')}`
+    runtimeRoot = createInstrumentedRuntimeRoot({
+      sandbox,
+      serverPort: server.listenPort,
+      certPath,
+      credentialStorePath,
+      isolation
+    })
+    const environment = buildAppEnv(sandbox, {
+      HERMES_DESKTOP_CWD: sandbox.root,
+      HERMES_DESKTOP_HERMES_ROOT: runtimeRoot,
+      HERMES_AUTH_RUNTIME_NAMESPACE: isolation,
+      HERMES_AUTH_KEYRING_SERVICE: `cn.c2sml.test.${randomBytes(8).toString('hex')}`
+    })
+    launched = await launchDesktop(environment)
 
-  const credentialStorePath = path.join(sandbox.root, 'auth-credential-store.json')
-  const isolation = `auth-continuity-${randomBytes(16).toString('hex')}`
-  const runtimeRoot = createInstrumentedRuntimeRoot({
-    sandbox,
-    serverPort: server.listenPort,
-    certPath,
-    credentialStorePath,
-    isolation
-  })
-  const environment = buildAppEnv(sandbox, {
-    HERMES_DESKTOP_CWD: sandbox.root,
-    HERMES_DESKTOP_HERMES_ROOT: runtimeRoot,
-    HERMES_AUTH_RUNTIME_NAMESPACE: isolation,
-    HERMES_AUTH_KEYRING_SERVICE: `cn.c2sml.test.${randomBytes(8).toString('hex')}`
-  })
-  let launched = await launchDesktop(environment)
-
-  const fixture: AuthenticatedFixture = {
-    app: launched.app,
-    page: launched.page,
-    sandbox,
-    server,
-    mock,
-    credentialStorePath,
-    environment,
-    runtimeRoot,
-    restart: async () => {
-      await closeDesktopApp(fixture.app, { timeoutMs: 15_000 })
-      launched = await launchDesktop(environment)
-      fixture.app = launched.app
-      fixture.page = launched.page
-    },
-    cleanup: async () => {
-      try {
+    const fixture: AuthenticatedFixture = {
+      app: launched.app,
+      page: launched.page,
+      sandbox,
+      server,
+      mock,
+      credentialStorePath,
+      environment,
+      runtimeRoot,
+      restart: async () => {
         await closeDesktopApp(fixture.app, { timeoutMs: 15_000 })
-      } catch {
-        // A failed assertion may have already closed the app.
-      }
-      await stopNewAuthOwners(runtimeRoot)
-      await mock.close()
-      await server.close()
-      sandbox.cleanup()
+        launched = await launchDesktop(environment)
+        fixture.app = launched.app
+        fixture.page = launched.page
+      },
+      cleanup: () => cleanupAuthenticatedResources({ app: fixture.app, mock, runtimeRoot, sandbox, server })
+    }
+
+    options.afterLaunch?.({
+      appPid: fixture.app.process().pid!,
+      mockPort: Number(new URL(mock.url).port),
+      root: sandbox.root,
+      runtimeRoot,
+      serverPort: server.listenPort
+    })
+
+    return fixture
+  } catch (error) {
+    try {
+      await cleanupAuthenticatedResources({ app: launched?.app, mock, runtimeRoot, sandbox, server })
+    } catch (cleanupError) {
+      throw new AggregateError([error, ...aggregateErrors(cleanupError)], 'Fixture construction and rollback failed')
+    }
+
+    throw error
+  }
+}
+
+async function cleanupAuthenticatedResources(resources: {
+  app?: ElectronApplication
+  mock?: MockServer
+  runtimeRoot?: string
+  sandbox?: Sandbox
+  server?: ControllableAuthServer
+}): Promise<void> {
+  const errors: unknown[] = []
+  if (resources.app) {
+    try {
+      await closeDesktopApp(resources.app, { timeoutMs: 15_000 })
+    } catch (error) {
+      errors.push(new Error(`desktop cleanup failed: ${String(error)}`))
     }
   }
 
-  return fixture
+  const settled = await Promise.allSettled([
+    resources.runtimeRoot ? stopNewAuthOwners(resources.runtimeRoot) : Promise.resolve(),
+    resources.mock ? resources.mock.close() : Promise.resolve(),
+    resources.server ? resources.server.close() : Promise.resolve()
+  ])
+  for (const [index, result] of settled.entries()) {
+    if (result.status === 'rejected') {
+      errors.push(
+        new Error(`${['auth owner', 'mock server', 'auth server'][index]} cleanup failed: ${String(result.reason)}`)
+      )
+    }
+  }
+
+  try {
+    resources.sandbox?.cleanup()
+  } catch (error) {
+    errors.push(new Error(`sandbox cleanup failed: ${String(error)}`))
+  }
+
+  if (errors.length > 0) {
+    throw new AggregateError(errors, 'Authenticated fixture cleanup failed')
+  }
+}
+
+function aggregateErrors(error: unknown): unknown[] {
+  return error instanceof AggregateError ? [...error.errors] : [error]
 }
 
 function createInstrumentedRuntimeRoot(options: {
@@ -494,7 +650,7 @@ async function validationState(page: Page): Promise<string> {
   return authStatus(page).then(status => status.validation_state)
 }
 
-function createLocalArtifacts(fixture: AuthenticatedFixture): void {
+async function createLocalArtifacts(fixture: AuthenticatedFixture, conversationText: string): Promise<void> {
   const attachmentPath = path.join(
     fixture.sandbox.hermesHome,
     'kanban',
@@ -514,45 +670,76 @@ function createLocalArtifacts(fixture: AuthenticatedFixture): void {
     fs.mkdirSync(path.dirname(filePath), { recursive: true })
   }
   fs.writeFileSync(attachmentPath, Buffer.from([0, 1, 2, 3, 255]))
-  fs.writeFileSync(exportPath, JSON.stringify({ conversation: 'preserve on auth transition' }) + '\n', 'utf8')
   fs.writeFileSync(outboxPath, JSON.stringify({ batch_id: 'auth-continuity-batch', trace: 'preserve' }) + '\n', 'utf8')
 
   const rootStateDatabase = path.join(fixture.sandbox.hermesHome, 'state.db')
-  const profileStateDatabase = path.join(fixture.sandbox.hermesHome, 'profiles', 'research', 'state.db')
-  fs.mkdirSync(path.dirname(profileStateDatabase), { recursive: true })
-  const profileSeed = spawnSync(
+  const projectAndProfile = spawnSync(
     PYTHON,
     [
       '-c',
-      'import sqlite3,sys; source=sqlite3.connect(sys.argv[1]); target=sqlite3.connect(sys.argv[2]); source.backup(target); target.close(); source.close()',
-      rootStateDatabase,
-      profileStateDatabase
+      [
+        'import sys',
+        'from pathlib import Path',
+        'from hermes_cli.profiles import create_profile',
+        'from hermes_cli.projects_db import connect, create_project, list_projects',
+        'from hermes_state import SessionDB',
+        'home=Path(sys.argv[1])',
+        'profile=home/"profiles"/"research"',
+        'profile.exists() or create_profile("research", no_skills=True)',
+        'profile_db=SessionDB(profile/"state.db")',
+        'profile_db.close()',
+        'projects=connect(home/"projects.db")',
+        'list_projects(projects) or create_project(projects, name="Auth Continuity Project", folders=[sys.argv[2]])',
+        'projects.close()'
+      ].join('; '),
+      fixture.sandbox.hermesHome,
+      fixture.sandbox.root
     ],
-    { encoding: 'utf8' }
+    {
+      cwd: fixture.runtimeRoot,
+      encoding: 'utf8',
+      env: { ...process.env, HERMES_HOME: fixture.sandbox.hermesHome }
+    }
   )
-  if (profileSeed.status !== 0) {
-    throw new Error(`Unable to seed the profile SessionDB checkpoint: ${profileSeed.stderr.trim()}`)
+  if (projectAndProfile.status !== 0) {
+    throw new Error(`Unable to create authoritative project/profile artifacts: ${projectAndProfile.stderr.trim()}`)
   }
 
-  const databases = [rootStateDatabase, path.join(fixture.sandbox.hermesHome, 'projects.db'), profileStateDatabase]
-  for (const databasePath of databases) {
-    fs.mkdirSync(path.dirname(databasePath), { recursive: true })
-    const result = spawnSync(
-      PYTHON,
-      [
-        '-c',
-        'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("CREATE TABLE IF NOT EXISTS auth_continuity_e2e (value TEXT PRIMARY KEY)"); c.execute("INSERT OR IGNORE INTO auth_continuity_e2e VALUES (?)", ("preserve",)); c.commit(); c.close()',
-        databasePath
-      ],
-      { encoding: 'utf8' }
-    )
-    if (result.status !== 0) {
-      throw new Error(`Unable to create SQLite preservation artifact ${databasePath}: ${result.stderr.trim()}`)
+  const exportScript = [
+    'import json,sqlite3,sys',
+    'from pathlib import Path',
+    'from hermes_state import SessionDB',
+    'database=Path(sys.argv[1])',
+    'needle=sys.argv[2]',
+    'conn=sqlite3.connect(f"file:{database}?mode=ro", uri=True)',
+    'row=conn.execute("SELECT session_id FROM messages WHERE content LIKE ? ORDER BY id DESC LIMIT 1", (f"%{needle}%",)).fetchone()',
+    'conn.close()',
+    'assert row, "real conversation row not found"',
+    'db=SessionDB(database, read_only=True)',
+    'payload=db.export_session(row[0])',
+    'db.close()',
+    'assert payload and any(needle in str(message.get("content") or "") for message in payload["messages"]), "conversation export did not contain sentinel"',
+    'Path(sys.argv[3]).write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True)+"\\n", encoding="utf-8")'
+  ].join('; ')
+  const deadline = Date.now() + 10_000
+  let exportResult: ReturnType<typeof spawnSync>
+  do {
+    exportResult = spawnSync(PYTHON, ['-c', exportScript, rootStateDatabase, conversationText, exportPath], {
+      cwd: fixture.runtimeRoot,
+      encoding: 'utf8',
+      env: { ...process.env, HERMES_HOME: fixture.sandbox.hermesHome }
+    })
+    if (exportResult.status === 0) {
+      break
     }
+    await new Promise(resolve => setTimeout(resolve, 100))
+  } while (Date.now() < deadline)
+  if (exportResult.status !== 0) {
+    throw new Error(`Unable to query/export the real conversation: ${String(exportResult.stderr).trim()}`)
   }
 }
 
-function localDigests(fixture: AuthenticatedFixture): Record<string, string> {
+function localDigests(fixture: AuthenticatedFixture): LocalDataEvidence {
   return localDataDigests({
     hermesHome: fixture.sandbox.hermesHome,
     userDataDir: fixture.sandbox.userDataDir,
@@ -560,21 +747,27 @@ function localDigests(fixture: AuthenticatedFixture): Record<string, string> {
   })
 }
 
-function assertRequiredDigestCoverage(digests: Record<string, string>): void {
-  const keys = Object.keys(digests)
+function assertRequiredDigestCoverage(digests: LocalDataEvidence): void {
+  const sqliteKeys = Object.keys(digests.sqlite)
+  const artifactKeys = Object.keys(digests.artifacts)
+  for (const expected of [/hermes\/state\.db$/, /hermes\/projects\.db$/, /hermes\/profiles\/research\/state\.db$/]) {
+    expect(
+      sqliteKeys.some(key => expected.test(key)),
+      `SQLite evidence did not cover ${expected}`
+    ).toBe(true)
+  }
   for (const expected of [
-    /hermes\/state\.db#logical$/,
-    /hermes\/projects\.db#logical$/,
-    /hermes\/profiles\/research\/state\.db#logical$/,
     /hermes\/kanban\/attachments\/.*attachment-preservation\.bin$/,
     /hermes\/exports\/conversation\.json$/,
     /desktop\/trace-outbox\/.*0000000000000001\.jsonl$/
   ]) {
     expect(
-      keys.some(key => expected.test(key)),
-      `Digest report did not cover ${expected}`
+      artifactKeys.some(key => expected.test(key)),
+      `Artifact evidence did not cover ${expected}`
     ).toBe(true)
   }
+  expect(digests.sqlite['hermes/state.db'].physical.wal).toBeDefined()
+  expect(digests.sqlite['hermes/state.db'].physical.shm).toBeDefined()
 }
 
 function assertNoCredentialDiagnostics(fixture: AuthenticatedFixture): void {

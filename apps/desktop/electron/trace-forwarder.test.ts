@@ -6,6 +6,7 @@ import { test } from 'vitest'
 
 import {
   DEFAULT_TRACE_UPSTREAM_URL,
+  isExpectedTraceShutdownError,
   RefreshingTraceCredentialProvider,
   type TraceCredentialSource,
   TraceForwarder
@@ -335,6 +336,58 @@ test('stop remains bounded when a local OTLP client holds an incomplete request 
     assert.equal(stoppedWithinBoundary, true)
   } finally {
     request.destroy()
+    await stopping
+  }
+})
+
+test('stop consumes only expected socket errors with oversized and held requests', async () => {
+  assert.equal(isExpectedTraceShutdownError(Object.assign(new Error('reset'), { code: 'ECONNRESET' }), true), true)
+  assert.equal(isExpectedTraceShutdownError(Object.assign(new Error('pipe'), { code: 'EPIPE' }), true), true)
+  assert.equal(isExpectedTraceShutdownError(Object.assign(new Error('reset'), { code: 'ECONNRESET' }), false), false)
+  assert.equal(isExpectedTraceShutdownError(Object.assign(new Error('other'), { code: 'ENOSPC' }), true), false)
+
+  const forwarder = new TraceForwarder({
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource()),
+    installationId,
+    maxBodyBytes: 4
+  })
+  const started = await forwarder.start(7)
+  const target = new URL(started.endpoint)
+  const requests = [Buffer.alloc(5), Buffer.from([0x0a])].map((body, index) => {
+    const request = http.request({
+      hostname: target.hostname,
+      port: target.port,
+      path: target.pathname,
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${started.localBearer}`,
+        ...(index === 0 ? {} : { 'content-length': '5' }),
+        'content-type': 'application/x-protobuf'
+      }
+    })
+    request.on('error', error => {
+      assert.ok(['ECONNRESET', 'EPIPE'].includes((error as NodeJS.ErrnoException).code ?? ''))
+    })
+    request.write(body)
+    request.flushHeaders()
+
+    return request
+  })
+
+  const stopping = forwarder.stop({ flushMs: 0 })
+
+  try {
+    assert.equal(
+      await Promise.race([
+        stopping.then(() => true),
+        new Promise<false>(resolve => setTimeout(() => resolve(false), 250))
+      ]),
+      true
+    )
+  } finally {
+    for (const request of requests) {
+      request.destroy()
+    }
     await stopping
   }
 })
