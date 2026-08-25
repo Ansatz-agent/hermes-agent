@@ -3081,7 +3081,12 @@ except Exception:
     # in the unusable "Ansatz product requires the NeMo Relay runtime"
     # state again.
     $isWindowsX64 = $false
-    if ($IsWindows -or $env:OS -eq "Windows_NT") {
+    # Windows PowerShell 5.1 does not define the PowerShell 7 `$IsWindows`
+    # automatic variable.  The bootstrap child also runs with a deliberately
+    # reduced environment, so retain the stable Windows markers as a fallback
+    # instead of silently skipping the native Relay dependency.
+    $isWindows = [bool]($IsWindows -or $env:OS -eq "Windows_NT" -or $env:SystemRoot -or $env:WINDIR)
+    if ($isWindows) {
         $isWindowsX64 = ($env:PROCESSOR_ARCHITECTURE -eq "AMD64" -or $env:PROCESSOR_ARCHITEW6432 -eq "AMD64")
     }
     if ($isWindowsX64 -and -not $NoVenv) {

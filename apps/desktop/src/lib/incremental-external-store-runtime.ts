@@ -33,7 +33,13 @@ const shallowEqual = (a: object, b: object): boolean => {
   return true
 }
 
-const getThreadListAdapter = (store: ExternalStoreAdapter) => store.adapters?.threadList ?? {}
+// Keep the fallback adapter referentially stable.  assistant-ui treats an
+// adapter identity change as a store update; allocating `{}` here on every
+// render can therefore publish a fresh snapshot even when the transcript did
+// not change and trip React's getSnapshot loop guard.
+const EMPTY_THREAD_LIST_ADAPTER = {}
+const getThreadListAdapter = (store: ExternalStoreAdapter) =>
+  store.adapters?.threadList ?? EMPTY_THREAD_LIST_ADAPTER
 
 /**
  * Write only the items whose (message, parentId) pair actually moved.
