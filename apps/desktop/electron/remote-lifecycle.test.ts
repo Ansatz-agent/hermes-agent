@@ -41,7 +41,7 @@ function ownedLock(over: any = {}) {
     pid: 333,
     port: 40000,
     profile: '',
-    hermesPath: '~/.local/bin/hermes',
+    hermesPath: '~/.local/bin/ansatz',
     hermesHome: '~/.hermes',
     logPath: spawnLogPath(OWNERSHIP_ID, SPAWN_NONCE),
     tokenFingerprint: fingerprintToken('stored-token'),
@@ -82,6 +82,50 @@ function fakeSsh(rules: any[] = []) {
 test('locateHermes prefers the explicit profile path when executable', async () => {
   const ssh = fakeSsh([[/\[ -x .*\/opt\/hermes/, 'OK']])
   assert.equal(await locateHermes(ssh, '/opt/hermes'), '/opt/hermes')
+})
+
+test('locateHermes prefers ansatz and does not probe hermes after finding it', async () => {
+  const ssh = fakeSsh([
+    [/command -v ansatz/, '/home/u/.local/bin/ansatz\n'],
+    [/command -v hermes/, '/home/u/.local/bin/hermes\n'],
+    [/\[ -x .*\.local\/bin\/ansatz/, 'OK']
+  ])
+
+  assert.equal(await locateHermes(ssh, ''), '/home/u/.local/bin/ansatz')
+  assert.ok(!ssh.calls.some(command => /command -v hermes/.test(command)))
+})
+
+test('locateHermes falls back to hermes when ansatz is unavailable', async () => {
+  const ssh = fakeSsh([
+    [/command -v ansatz/, ''],
+    [/command -v hermes/, '/home/u/.local/bin/hermes\n'],
+    [/\[ -x .*\.local\/bin\/hermes/, 'OK']
+  ])
+
+  assert.equal(await locateHermes(ssh, ''), '/home/u/.local/bin/hermes')
+  assert.ok(ssh.calls.some(command => /command -v ansatz/.test(command)))
+})
+
+test('locateHermes checks the canonical installer path before legacy discovery', async () => {
+  const ssh = fakeSsh([
+    [/command -v ansatz/, ''],
+    [/\[ -x .*\.local\/bin\/ansatz/, 'OK'],
+    [/command -v hermes/, '/home/u/.local/bin/hermes\n']
+  ])
+
+  assert.equal(await locateHermes(ssh, ''), '~/.local/bin/ansatz')
+  assert.ok(!ssh.calls.some(command => /command -v hermes/.test(command)))
+})
+
+test('locateHermes checks the canonical venv shim before legacy discovery', async () => {
+  const ssh = fakeSsh([
+    [/command -v ansatz/, ''],
+    [/\[ -x .*venv\/bin\/ansatz/, 'OK'],
+    [/command -v hermes/, '/home/u/.local/bin/hermes\n']
+  ])
+
+  assert.equal(await locateHermes(ssh, ''), '~/.hermes/hermes-agent/venv/bin/ansatz')
+  assert.ok(!ssh.calls.some(command => /command -v hermes/.test(command)))
 })
 
 test('locateHermes throws (no silent fallback) when an EXPLICIT path is not executable', async () => {

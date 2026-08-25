@@ -3,6 +3,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
+import { resolveAnsatzCliPath } from './ansatz-product'
 import { AUTH_BRIDGE_PROTOCOL_VERSION, buildAuthBridgeEnvironment } from './auth-bridge'
 import { execProbeSync, PROBE_TIMEOUT_MS } from './backend-probes'
 
@@ -187,7 +188,9 @@ export function authRuntimeRequiredPaths(
   ]
 
   if (requireLauncher) {
-    required.push(path.join(activeRoot, 'bin', platform === 'win32' ? 'hermes.cmd' : 'hermes'))
+    const canonical = path.join(activeRoot, 'bin', platform === 'win32' ? 'ansatz.cmd' : 'ansatz')
+    const legacy = path.join(activeRoot, 'bin', platform === 'win32' ? 'hermes.cmd' : 'hermes')
+    required.push(resolveAnsatzCliPath(canonical, legacy, isRegularFile))
   }
 
   return required

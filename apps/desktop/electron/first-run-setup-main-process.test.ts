@@ -39,7 +39,7 @@ test('a first-run bootstrap-needed remote apply connects without ensuring or boo
   const ensureLocalRuntime = vi.fn(async backend => {
     await runBootstrap()
 
-    return { ...backend, command: 'hermes' }
+    return { ...backend, command: 'ansatz' }
   })
 
   const teardownPrimaryBackend = vi.fn(async () => {})

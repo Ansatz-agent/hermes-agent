@@ -300,7 +300,10 @@ function publishAuthContract(activeRoot: string, source: { commit: string; archi
     ''
   ].join('\r\n')
 
-  writeAtomic(path.join(activeRoot, 'bin', 'hermes.cmd'), launcher)
+  const legacyLauncher = ['@echo off', 'call "%~dp0ansatz.cmd" %*', ''].join('\r\n')
+
+  writeAtomic(path.join(activeRoot, 'bin', 'ansatz.cmd'), launcher)
+  writeAtomic(path.join(activeRoot, 'bin', 'hermes.cmd'), legacyLauncher)
   writeAtomic(
     path.join(activeRoot, '.hermes-auth-bootstrap-complete'),
     `${JSON.stringify({

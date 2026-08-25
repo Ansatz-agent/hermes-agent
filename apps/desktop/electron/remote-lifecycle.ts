@@ -127,13 +127,13 @@ function expandRemotePath(p) {
   return shq(p)
 }
 
-// Resolve the remote hermes executable. An EXPLICIT path is honored strictly
+// Resolve the remote CLI executable. An EXPLICIT path is honored strictly
 // (throws a path-naming error if not executable — never silently falls back to a
 // different install). A BLANK path auto-detects: login-shell `command -v` (a
 // non-login `ssh host cmd` PATH misses user installs), then known install paths.
 async function locateHermes(ssh, remoteHermesPath) {
   const resolveLauncher = async (candidate: string) => {
-    // Return the candidate path directly. The hermes binary or wrapper script
+    // Return the candidate path directly. The CLI binary or wrapper script
     // is executable and handles argument forwarding (e.g. `exec <python> <script> "$@"`)
     // correctly on its own. Previously, this function followed `exec` wrappers and
     // returned only the python interpreter, which broke:
@@ -161,54 +161,72 @@ async function locateHermes(ssh, remoteHermesPath) {
     }
 
     const err: any = new Error(
-      `The Hermes path you set is not an executable on the remote host: "${remoteHermesPath}". ` +
-        'Check the path (it must be the full path to the `hermes` binary on the remote, e.g. ' +
-        '~/hermes-agent/.venv/bin/hermes), or clear it to auto-detect.'
+      `The Ansatz CLI path you set is not executable on the remote host: "${remoteHermesPath}". ` +
+        'Check the path (it must be the full path to the `ansatz` binary on the remote, e.g. ' +
+        '~/.local/bin/ansatz), or clear it to auto-detect.'
     )
 
     err.kind = 'hermes-not-found'
     throw err
   }
 
-  const candidates: string[] = []
+  const locateFamily = async (command: string, fallbackCandidates: string[]) => {
+    const candidates: string[] = []
 
-  try {
-    const found = (await ssh.exec(`bash -lc ${shq('command -v hermes')}`)).trim()
+    try {
+      const found = (await ssh.exec(`bash -lc ${shq(`command -v ${command}`)}`)).trim()
 
-    if (found) {
-      candidates.push(found.split('\n').pop().trim())
+      if (found) {
+        candidates.push(found.split('\n').pop().trim())
+      }
+    } catch {
+      // Ignore a failed login-shell probe and continue through known paths.
     }
-  } catch {
-    // ignore
+
+    candidates.push(...fallbackCandidates)
+
+    for (const candidate of candidates) {
+      if (candidate && (await isExecutable(candidate))) {
+        return resolveLauncher(candidate)
+      }
+    }
+
+    return null
   }
 
-  // Fallback candidates when the login-shell probe misses: the installer's
-  // command locations (scripts/install.sh) — per-user, root/FHS, legacy venv.
-  candidates.push('~/.local/bin/hermes')
-  candidates.push('/usr/local/bin/hermes')
-  candidates.push('~/.hermes/hermes-agent/venv/bin/hermes')
+  const canonical = await locateFamily('ansatz', [
+    '~/.local/bin/ansatz',
+    '/usr/local/bin/ansatz',
+    '~/.hermes/hermes-agent/venv/bin/ansatz'
+  ])
 
-  for (const candidate of candidates) {
-    if (!candidate) {
-      continue
-    }
+  if (canonical) {
+    return canonical
+  }
 
-    if (await isExecutable(candidate)) {
-      return resolveLauncher(candidate)
-    }
+  // Phase-one compatibility boundary for remote hosts that have not yet
+  // installed the canonical launcher. Delete this family as one block later.
+  const legacy = await locateFamily('hermes', [
+    '~/.local/bin/hermes',
+    '/usr/local/bin/hermes',
+    '~/.hermes/hermes-agent/venv/bin/hermes'
+  ])
+
+  if (legacy) {
+    return legacy
   }
 
   const err: any = new Error(
-    'Hermes is not installed on the remote host (could not find a `hermes` executable). ' +
+    'Ansatz is not installed on the remote host (could not find an `ansatz` executable). ' +
       'Install it on the remote with:  curl -fsSL https://hermes-agent.nousresearch.com/install.sh | sh  ' +
-      '— or set the Hermes path explicitly in the SSH connection settings.'
+      '— or set the Ansatz CLI path explicitly in the SSH connection settings.'
   )
 
   err.kind = 'hermes-not-found'
   throw err
 }
 
-// Probe the resolved binary's version string (first line of `<hermes> --version`,
+// Probe the resolved binary's version string (first line of `<ansatz> --version`,
 // e.g. "Hermes Agent v0.18.2 ..."), or '' on failure. Surfaces WHICH hermes a
 // connection uses, so a stale/unexpected install is visible.
 async function probeHermesVersion(ssh, hermesPath) {
@@ -247,7 +265,7 @@ async function probeRemoteHermesHome(ssh) {
 
     return out || '~/.hermes'
   } catch (cause) {
-    const error: any = new Error('Could not resolve the remote Hermes home.')
+    const error: any = new Error('Could not resolve the remote runtime home.')
     error.kind = 'transient-transport-error'
     error.cause = cause
     throw error
@@ -510,8 +528,8 @@ async function scrapeReadyPort(ssh, logPath, { timeoutMs = DEFAULT_READY_TIMEOUT
 async function spawnRemoteDashboard(ssh, { hermesPath, profile, token, ownershipId }) {
   if (!(await remoteSupportsSshOwnership(ssh, hermesPath))) {
     const err: any = new Error(
-      'The remote Hermes install does not support --ssh-session-token-file and --ssh-owner-nonce. ' +
-        'Update Hermes on the remote host to continue using Desktop SSH mode.'
+      'The remote Ansatz install does not support --ssh-session-token-file and --ssh-owner-nonce. ' +
+        'Update Ansatz on the remote host to continue using Desktop SSH mode.'
     )
 
     err.kind = 'update-required'

@@ -3100,9 +3100,12 @@ function Write-AuthBootstrapComplete {
 
         $binDir = Join-Path $InstallDir "bin"
         New-Item -ItemType Directory -Force -Path $binDir | Out-Null
-        $launcherPath = Join-Path $binDir "hermes.cmd"
+        $launcherPath = Join-Path $binDir "ansatz.cmd"
         $launcher = "@echo off`r`nset `"PYTHONPATH=%~dp0..`"`r`n`"%~dp0..\auth-venv\Scripts\python.exe`" -m hermes_cli.main %*`r`n"
         Write-AtomicAuthBytes -Path $launcherPath -Bytes ([System.Text.Encoding]::ASCII.GetBytes($launcher))
+        $legacyLauncherPath = Join-Path $binDir "hermes.cmd"
+        $legacyLauncher = "@echo off`r`ncall `"%~dp0ansatz.cmd`" %*`r`n"
+        Write-AtomicAuthBytes -Path $legacyLauncherPath -Bytes ([System.Text.Encoding]::ASCII.GetBytes($legacyLauncher))
 
         $marker = [ordered]@{
             schemaVersion = 2

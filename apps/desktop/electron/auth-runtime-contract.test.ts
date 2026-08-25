@@ -34,7 +34,7 @@ function createManagedFixture(prefix = 'hermes-auth-contract-') {
   writeFile(activeRoot, 'hermes_cli/main.py')
   writeFile(activeRoot, 'hermes_cli/client_auth/bridge.py')
   writeFile(activeRoot, 'hermes_cli/client_auth/cli.py')
-  writeFile(activeRoot, 'bin/hermes.cmd')
+  writeFile(activeRoot, 'bin/ansatz.cmd')
   writeFile(activeRoot, 'desktop_auth_runtime/uv.lock', lockContents)
   writeFile(
     activeRoot,
@@ -96,6 +96,33 @@ test('schema-2 managed auth contract matches current packaged payload and lock',
     assert.equal(result.reason, null)
     assert.equal(result.pythonPath, path.join(fixture.activeRoot, 'auth-venv', 'python.exe'))
     assert.deepEqual(result.marker, fixture.marker)
+  } finally {
+    fs.rmSync(fixture.tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('managed auth contract accepts a legacy launcher only as a compatibility fallback', () => {
+  const fixture = createManagedFixture()
+
+  try {
+    fs.rmSync(path.join(fixture.activeRoot, 'bin', 'ansatz.cmd'))
+    writeFile(fixture.activeRoot, 'bin/hermes.cmd')
+
+    assert.equal(validateFixture(fixture).ok, true)
+  } finally {
+    fs.rmSync(fixture.tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('managed auth contract skips an invalid canonical launcher before legacy fallback', () => {
+  const fixture = createManagedFixture()
+
+  try {
+    fs.rmSync(path.join(fixture.activeRoot, 'bin', 'ansatz.cmd'))
+    fs.mkdirSync(path.join(fixture.activeRoot, 'bin', 'ansatz.cmd'))
+    writeFile(fixture.activeRoot, 'bin/hermes.cmd')
+
+    assert.equal(validateFixture(fixture).ok, true)
   } finally {
     fs.rmSync(fixture.tempRoot, { recursive: true, force: true })
   }
