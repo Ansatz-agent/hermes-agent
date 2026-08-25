@@ -29,6 +29,7 @@ def public_status(**overrides: object) -> dict[str, object]:
         "session_id": "33333333-3333-4333-8333-333333333333",
         "installation_id": NATIVE_CONTEXT["installation_id"],
         "principal_key": "account:22222222-2222-4222-8222-222222222222",
+        "predecessor_principal_key": None,
         "runtime_instance_id": "runtime-1",
         "epoch": 2,
         "valid_until": 60.0,

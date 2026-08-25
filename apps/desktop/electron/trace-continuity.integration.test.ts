@@ -629,7 +629,7 @@ test('trusted migration streams records, merges an existing same-account target,
     })
     const diagnostics = await merged.diagnostics()
     assert.equal(diagnostics.tombstones, 1)
-    assert.equal((await merged.peekEligible(Number.MAX_SAFE_INTEGER))?.batchId === pending.batchId, false)
+    assert.equal((await merged.peekEligible(Number.MAX_SAFE_INTEGER))?.batchId, pending.batchId)
     const ids: string[] = []
     for (;;) {
       const batch = await merged.peekEligible(Number.MAX_SAFE_INTEGER)
@@ -640,7 +640,64 @@ test('trusted migration streams records, merges an existing same-account target,
       await merged.acknowledge(batch.batchId, { batchId: batch.batchId, outcome: 'accepted', receivedAt: Date.now() })
     }
     assert.ok(ids.includes(pending.batchId))
+    assert.equal(ids[0], pending.batchId)
     await merged.close()
+  } finally {
+    await rm(userData, { force: true, recursive: true })
+  }
+})
+
+test('receipt-only migration recomputes target dedupe after source payload compaction', async () => {
+  const userData = await temporaryUserData()
+  const sourceOwner: TraceOwner = {
+    accountId: null,
+    accountKey: `legacy-${'f'.repeat(64)}`,
+    installationId,
+    sessionId: null
+  }
+  const targetOwner = owner('a')
+  const sourceRoot = join(userData, 'trace-outbox', sourceOwner.accountKey)
+  const targetRoot = join(userData, 'trace-outbox', targetOwner.accountKey)
+  const sourceEnvelope = envelopeForOwner(sourceOwner, payload('receipt-only'), 9)
+
+  try {
+    const source = await TraceOutboxStore.open({
+      expectedOwner: sourceOwner,
+      keyProtector: protector(),
+      root: sourceRoot
+    })
+    const accepted = await source.enqueue(sourceEnvelope)
+    await source.acknowledge(accepted.batchId, {
+      batchId: accepted.batchId,
+      outcome: 'accepted',
+      receivedAt: Date.now()
+    })
+    await source.compactIfIdle()
+    assert.equal((await source.diagnostics()).payloadBytes, 0)
+    await source.close()
+    await assert.rejects(readFile(join(sourceRoot, 'segments', 'active.segment')), /ENOENT/)
+
+    assert.equal(
+      await TraceOutboxStore.migrateTrustedNamespace({
+        keyProtector: protector(),
+        removeSourceDirectory: path => rm(path, { force: false, recursive: true }),
+        sourceOwner,
+        sourceRoot,
+        targetOwner,
+        targetRoot
+      }),
+      true
+    )
+
+    const target = await TraceOutboxStore.open({
+      expectedOwner: targetOwner,
+      keyProtector: protector(),
+      root: targetRoot
+    })
+    const duplicate = await target.enqueue({ ...sourceEnvelope, owner: targetOwner })
+    assert.equal(duplicate.batchId, accepted.batchId)
+    assert.equal((await target.diagnostics()).tombstones, 1)
+    await target.close()
   } finally {
     await rm(userData, { force: true, recursive: true })
   }

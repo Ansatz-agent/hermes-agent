@@ -38,6 +38,7 @@ _PUBLIC_KEYS = frozenset(
         "session_id",
         "installation_id",
         "principal_key",
+        "predecessor_principal_key",
         "runtime_instance_id",
         "epoch",
         "valid_until",
@@ -287,6 +288,7 @@ def _validated_public_result(value: object) -> dict[str, object]:
     legacy = value.get("legacy")
     reason = value.get("reason")
     principal_key = value.get("principal_key")
+    predecessor_principal_key = value.get("predecessor_principal_key")
     if state not in _PUBLIC_STATES:
         raise RuntimeError("invalid public result")
     if username is not None and (
@@ -295,7 +297,13 @@ def _validated_public_result(value: object) -> dict[str, object]:
         raise RuntimeError("invalid public result")
     if any(
         item is not None and (not isinstance(item, str) or not item or len(item) > 256)
-        for item in (account_id, session_id, installation_id, principal_key)
+        for item in (
+            account_id,
+            session_id,
+            installation_id,
+            principal_key,
+            predecessor_principal_key,
+        )
     ):
         raise RuntimeError("invalid public result")
     if (
@@ -334,6 +342,11 @@ def _validated_public_result(value: object) -> dict[str, object]:
         installation_id=installation_id,
         principal_key=principal_key,
         legacy=legacy,
+    ):
+        raise RuntimeError("invalid public result")
+    if predecessor_principal_key is not None and (
+        legacy is not False
+        or re.fullmatch(r"legacy:[0-9a-f]{64}", predecessor_principal_key) is None
     ):
         raise RuntimeError("invalid public result")
     result = dict(value)

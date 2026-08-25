@@ -85,6 +85,14 @@ interface StoredRecord {
 interface ReceiptTombstone extends DurableReceipt {
   accountKey: string | null
   dedupeKey: string | null
+  entrypoint: TraceEnvelopeInput['entrypoint'] | null
+  hermesSessionId: string | null
+  payloadSha256: string | null
+  runId: string | null
+}
+
+type ReceiptDedupeIdentity = Pick<TraceEnvelopeInput, 'entrypoint' | 'hermesSessionId' | 'runId'> & {
+  payloadSha256: string
 }
 
 export interface TraceFreeSpace {
@@ -575,7 +583,7 @@ export class TraceOutboxStore {
         } else if (record.state === 'receipt') {
           const receipt = source.receipts.get(record.batch.batchId)
           if (receipt !== undefined) {
-            await this.importMigratedReceipt(receipt, this.dedupeKey({ ...record.batch, owner: this.targetOwner() }))
+            await this.importMigratedReceipt(receipt)
             migratedReceipts.add(receipt.batchId)
           }
         }
@@ -583,8 +591,8 @@ export class TraceOutboxStore {
       }
 
       for (const receipt of source.receipts.values()) {
-        if (!migratedReceipts.has(receipt.batchId) && receipt.dedupeKey !== null) {
-          await this.importMigratedReceipt(receipt, receipt.dedupeKey)
+        if (!migratedReceipts.has(receipt.batchId)) {
+          await this.importMigratedReceipt(receipt)
           await new Promise<void>(resolve => setImmediate(resolve))
         }
       }
@@ -683,7 +691,12 @@ export class TraceOutboxStore {
 
     const head = [...this.records.values()]
       .filter(record => record.state === 'pending')
-      .sort((left, right) => left.batch.sequence - right.batch.sequence)[0]
+      .sort(
+        (left, right) =>
+          left.batch.createdAt - right.batch.createdAt ||
+          left.batch.sequence - right.batch.sequence ||
+          left.batch.batchId.localeCompare(right.batch.batchId)
+      )[0]
 
     if (head === undefined || head.batch.nextRetryAt > now) {
       return undefined
@@ -745,12 +758,16 @@ export class TraceOutboxStore {
       throw new Error('unknown_trace_batch')
     }
 
-    await this.persistReceipt(
-      receipt,
-      record === undefined
-        ? existing!
-        : { accountKey: record.batch.owner.accountKey, dedupeKey: this.dedupeKey(record.batch) }
-    )
+    const dedupeIdentity =
+      record === undefined ? this.completeReceiptIdentity(existing!) : this.receiptDedupeIdentity(record.batch)
+    if (dedupeIdentity === null) {
+      throw new Error('invalid_trace_receipt_identity')
+    }
+    await this.persistReceipt(receipt, {
+      accountKey: record?.batch.owner.accountKey ?? existing!.accountKey,
+      dedupeKey: record === undefined ? existing!.dedupeKey : this.dedupeKey(record.batch),
+      ...dedupeIdentity
+    })
     await this.compactIfIdleInternal()
   }
 
@@ -827,7 +844,11 @@ export class TraceOutboxStore {
           accountKey: operation.accountKey ?? null,
           batchId: operation.batchId,
           dedupeKey: operation.dedupeKey ?? null,
+          entrypoint: (operation.entrypoint as TraceEnvelopeInput['entrypoint'] | undefined) ?? null,
+          hermesSessionId: operation.hermesSessionId ?? null,
           outcome: operation.outcome,
+          payloadSha256: operation.payloadSha256 ?? null,
+          runId: operation.runId ?? null,
           receivedAt: operation.receivedAt
         }
         const prior = this.receipts.get(operation.batchId)
@@ -836,13 +857,25 @@ export class TraceOutboxStore {
           (prior.outcome !== tombstone.outcome ||
             prior.receivedAt !== tombstone.receivedAt ||
             (prior.accountKey !== null && tombstone.accountKey !== null && prior.accountKey !== tombstone.accountKey) ||
-            (prior.dedupeKey !== null && tombstone.dedupeKey !== null && prior.dedupeKey !== tombstone.dedupeKey))
+            (prior.dedupeKey !== null && tombstone.dedupeKey !== null && prior.dedupeKey !== tombstone.dedupeKey) ||
+            (prior.entrypoint !== null && tombstone.entrypoint !== null && prior.entrypoint !== tombstone.entrypoint) ||
+            (prior.hermesSessionId !== null &&
+              tombstone.hermesSessionId !== null &&
+              prior.hermesSessionId !== tombstone.hermesSessionId) ||
+            (prior.payloadSha256 !== null &&
+              tombstone.payloadSha256 !== null &&
+              prior.payloadSha256 !== tombstone.payloadSha256) ||
+            (prior.runId !== null && tombstone.runId !== null && prior.runId !== tombstone.runId))
         ) {
           throw new Error('conflicting_gateway_receipt')
         }
         if (prior !== undefined) {
           tombstone.accountKey ??= prior.accountKey
           tombstone.dedupeKey ??= prior.dedupeKey
+          tombstone.entrypoint ??= prior.entrypoint
+          tombstone.hermesSessionId ??= prior.hermesSessionId
+          tombstone.payloadSha256 ??= prior.payloadSha256
+          tombstone.runId ??= prior.runId
         }
         if (tombstone.accountKey !== null) {
           this.bindRecoveredAccount(tombstone.accountKey)
@@ -891,6 +924,10 @@ export class TraceOutboxStore {
         }
         receipt.accountKey = record.header.owner.accountKey
         receipt.dedupeKey = dedupeKey
+        receipt.entrypoint = record.header.entrypoint
+        receipt.hermesSessionId = record.header.hermesSessionId
+        receipt.payloadSha256 = record.header.payloadSha256
+        receipt.runId = record.header.runId
       }
 
       this.records.set(record.header.batchId, {
@@ -1231,7 +1268,8 @@ export class TraceOutboxStore {
             op: 'receipt',
             ...item.cancellation,
             accountKey: batch.owner.accountKey,
-            dedupeKey: this.dedupeKey(batch)
+            dedupeKey: this.dedupeKey(batch),
+            ...this.receiptDedupeIdentity(batch)
           }
         ]
       })
@@ -1260,7 +1298,8 @@ export class TraceOutboxStore {
           this.receipts.set(receipt.batchId, {
             ...receipt,
             accountKey: record.batch.owner.accountKey,
-            dedupeKey
+            dedupeKey,
+            ...this.receiptDedupeIdentity(record.batch)
           })
           this.dedupe.set(dedupeKey, receipt.batchId)
         }
@@ -1400,9 +1439,14 @@ export class TraceOutboxStore {
     )
   }
 
-  private async importMigratedReceipt(receipt: ReceiptTombstone, dedupeKey: string): Promise<void> {
+  private async importMigratedReceipt(receipt: ReceiptTombstone): Promise<void> {
     return this.withMutationGate(() =>
       this.withWriterLock(async () => {
+        const identity = this.completeReceiptIdentity(receipt)
+        if (identity === null) {
+          throw new Error('trace_receipt_migration_identity_unavailable')
+        }
+        const dedupeKey = this.dedupeKeyForIdentity(this.config.expectedAccountKey, identity)
         const existing = this.receipts.get(receipt.batchId)
         if (existing !== undefined) {
           if (existing.outcome !== receipt.outcome || existing.receivedAt !== receipt.receivedAt) {
@@ -1414,11 +1458,12 @@ export class TraceOutboxStore {
         if (duplicate !== undefined && duplicate !== receipt.batchId) {
           return
         }
-        await this.appendExtendedReceipt(receipt, this.config.expectedAccountKey, dedupeKey)
+        await this.appendExtendedReceipt(receipt, this.config.expectedAccountKey, dedupeKey, identity)
         this.receipts.set(receipt.batchId, {
           accountKey: this.config.expectedAccountKey,
           batchId: receipt.batchId,
           dedupeKey,
+          ...identity,
           outcome: receipt.outcome,
           receivedAt: receipt.receivedAt
         })
@@ -1502,7 +1547,8 @@ export class TraceOutboxStore {
         }
         await this.persistReceipt(receipt, {
           accountKey: input.owner.accountKey,
-          dedupeKey: this.dedupeKey(input)
+          dedupeKey: this.dedupeKey(input),
+          ...this.receiptDedupeIdentity(input)
         })
         await this.compactIfIdleInternal()
         item.reject(new Error('local_commit_cancelled'))
@@ -1530,7 +1576,8 @@ export class TraceOutboxStore {
       }
       await this.persistReceipt(receipt, {
         accountKey: record.batch.owner.accountKey,
-        dedupeKey: this.dedupeKey(record.batch)
+        dedupeKey: this.dedupeKey(record.batch),
+        ...this.receiptDedupeIdentity(record.batch)
       })
       await this.compactIfIdleInternal()
     }
@@ -1538,7 +1585,7 @@ export class TraceOutboxStore {
 
   private async persistReceipt(
     receipt: DurableReceipt,
-    identity: { accountKey: string | null; dedupeKey: string | null }
+    identity: { accountKey: string | null; dedupeKey: string | null } & ReceiptDedupeIdentity
   ): Promise<void> {
     const existing = this.receipts.get(receipt.batchId)
 
@@ -1559,9 +1606,10 @@ export class TraceOutboxStore {
         identity.dedupeKey !== null &&
         (existing.accountKey === null || existing.dedupeKey === null)
       ) {
-        await this.appendExtendedReceipt(receipt, identity.accountKey, identity.dedupeKey)
+        await this.appendExtendedReceipt(receipt, identity.accountKey, identity.dedupeKey, identity)
         existing.accountKey = identity.accountKey
         existing.dedupeKey = identity.dedupeKey
+        Object.assign(existing, this.receiptDedupeIdentity(identity))
         this.dedupe.set(identity.dedupeKey, receipt.batchId)
       }
 
@@ -1572,7 +1620,7 @@ export class TraceOutboxStore {
       throw new Error('invalid_trace_receipt_identity')
     }
 
-    await this.appendExtendedReceipt(receipt, identity.accountKey, identity.dedupeKey)
+    await this.appendExtendedReceipt(receipt, identity.accountKey, identity.dedupeKey, identity)
     this.receipts.set(receipt.batchId, { ...receipt, ...identity })
     this.dedupe.set(identity.dedupeKey, receipt.batchId)
     const record = this.records.get(receipt.batchId)
@@ -1583,8 +1631,15 @@ export class TraceOutboxStore {
     this.pruneReceipts(this.config.now())
   }
 
-  private async appendExtendedReceipt(receipt: DurableReceipt, accountKey: string, dedupeKey: string): Promise<void> {
-    await this.appendAndSyncJournal(this.withOwnerOperation([{ op: 'receipt', ...receipt, accountKey, dedupeKey }]))
+  private async appendExtendedReceipt(
+    receipt: DurableReceipt,
+    accountKey: string,
+    dedupeKey: string,
+    identity: ReceiptDedupeIdentity
+  ): Promise<void> {
+    await this.appendAndSyncJournal(
+      this.withOwnerOperation([{ op: 'receipt', ...receipt, accountKey, dedupeKey, ...identity }])
+    )
     this.ownerJournaled = true
   }
 
@@ -1657,12 +1712,49 @@ export class TraceOutboxStore {
   ): string {
     const payloadSha256 = input.payloadSha256 ?? sha256(input.body ?? Buffer.alloc(0))
 
+    return this.dedupeKeyForIdentity(input.owner.accountKey, {
+      entrypoint: input.entrypoint,
+      hermesSessionId: input.hermesSessionId,
+      payloadSha256,
+      runId: input.runId
+    })
+  }
+
+  private dedupeKeyForIdentity(accountKey: string, identity: ReceiptDedupeIdentity): string {
     return sha256(
       Buffer.from(
-        `${input.owner.accountKey}\u0000${input.entrypoint}\u0000${input.hermesSessionId}\u0000${input.runId}\u0000${payloadSha256}`,
+        `${accountKey}\u0000${identity.entrypoint}\u0000${identity.hermesSessionId}\u0000${identity.runId}\u0000${identity.payloadSha256}`,
         'utf8'
       )
     )
+  }
+
+  private receiptDedupeIdentity(
+    input: Pick<TraceEnvelopeInput, 'entrypoint' | 'hermesSessionId' | 'runId'> & {
+      body?: Buffer
+      payloadSha256?: string
+    }
+  ): ReceiptDedupeIdentity {
+    return {
+      entrypoint: input.entrypoint,
+      hermesSessionId: input.hermesSessionId,
+      payloadSha256: input.payloadSha256 ?? sha256(input.body ?? Buffer.alloc(0)),
+      runId: input.runId
+    }
+  }
+
+  private completeReceiptIdentity(receipt: ReceiptTombstone): ReceiptDedupeIdentity | null {
+    return receipt.entrypoint !== null &&
+      receipt.hermesSessionId !== null &&
+      receipt.payloadSha256 !== null &&
+      receipt.runId !== null
+      ? {
+          entrypoint: receipt.entrypoint,
+          hermesSessionId: receipt.hermesSessionId,
+          payloadSha256: receipt.payloadSha256,
+          runId: receipt.runId
+        }
+      : null
   }
 
   private async readStoredBatch(batchId: string): Promise<DurableTraceBatch> {
@@ -1892,6 +1984,8 @@ export class TraceOutboxStore {
   }
 
   private receiptOperation(receipt: ReceiptTombstone): TraceJournalReceiptOperation {
+    const identity = this.completeReceiptIdentity(receipt)
+
     return receipt.accountKey === null || receipt.dedupeKey === null
       ? {
           op: 'receipt',
@@ -1904,6 +1998,7 @@ export class TraceOutboxStore {
           accountKey: receipt.accountKey,
           batchId: receipt.batchId,
           dedupeKey: receipt.dedupeKey,
+          ...(identity ?? {}),
           outcome: receipt.outcome,
           receivedAt: receipt.receivedAt
         }

@@ -154,6 +154,7 @@ class LockedWaitingResult(StrEnum):
 class NativeCredentialRecord:
     credential: NativeSessionCredential
     last_validated_at: str
+    predecessor_principal_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -544,6 +545,7 @@ class RuntimeSnapshot:
     session_id: str | None = None
     installation_id: str | None = None
     principal_key: str | None = None
+    predecessor_principal_key: str | None = None
     validation_state: ValidationState = ValidationState.UNKNOWN
     validation_reason: str | None = None
     last_validated_at: str | None = None
@@ -635,6 +637,7 @@ class RuntimeSnapshot:
             session_id=credential.session_id,
             installation_id=credential.installation_id,
             principal_key=f"account:{credential.account_id}",
+            predecessor_principal_key=record.predecessor_principal_key,
             validation_state=ValidationState.UNKNOWN,
             last_validated_at=record.last_validated_at,
         )
@@ -747,6 +750,7 @@ class RuntimeSnapshot:
             "session_id": self.session_id,
             "installation_id": self.installation_id,
             "principal_key": self.principal_key,
+            "predecessor_principal_key": self.predecessor_principal_key,
             "validation_state": self.validation_state.value,
             "validation_reason": self.validation_reason,
             "last_validated_at": self.last_validated_at,
@@ -1584,6 +1588,7 @@ class _OwnerCore:
             raise AuthRequired("runtime_unavailable")
         self._check_login_rate_limit()
         self._prepare_cookie_acquisition()
+        previous = self._load_record()
         try:
             cookie = self._client.login(username, password)
             credential = self._client.issue_client_session(
@@ -1600,6 +1605,13 @@ class _OwnerCore:
         record = NativeCredentialRecord(
             credential=credential,
             last_validated_at=credential.issued_at,
+            predecessor_principal_key=(
+                previous.principal_key
+                if isinstance(previous, (CookieRecord, LegacyCredentialRecord))
+                else previous.predecessor_principal_key
+                if isinstance(previous, NativeCredentialRecord)
+                else None
+            ),
         )
         try:
             # This is the local mutation commit. It deliberately shares the
@@ -3033,6 +3045,7 @@ def _snapshot_from_public(value: object) -> RuntimeSnapshot:
         "session_id",
         "installation_id",
         "principal_key",
+        "predecessor_principal_key",
         "validation_state",
         "validation_reason",
         "last_validated_at",
@@ -3051,6 +3064,7 @@ def _snapshot_from_public(value: object) -> RuntimeSnapshot:
     expires = value["session_expires_at"]
     reason = value["reason"]
     principal_key = value.get("principal_key")
+    predecessor_principal_key = value.get("predecessor_principal_key")
     if username is not None and not isinstance(username, str):
         raise AuthRequired("runtime_unavailable")
     if not isinstance(instance, str) or len(instance) != 32:
@@ -3085,9 +3099,18 @@ def _snapshot_from_public(value: object) -> RuntimeSnapshot:
     validation_reason = value["validation_reason"]
     last_validated_at = value["last_validated_at"]
     legacy = value["legacy"]
-    if any(item is not None and not isinstance(item, str) for item in (
-        account_id, session_id, installation_id, principal_key, validation_reason, last_validated_at
-    )) or not isinstance(legacy, bool):
+    if any(
+        item is not None and not isinstance(item, str)
+        for item in (
+            account_id,
+            session_id,
+            installation_id,
+            principal_key,
+            predecessor_principal_key,
+            validation_reason,
+            last_validated_at,
+        )
+    ) or not isinstance(legacy, bool):
         raise AuthRequired("runtime_unavailable")
     try:
         validation_state = ValidationState(value["validation_state"])
@@ -3122,6 +3145,7 @@ def _snapshot_from_public(value: object) -> RuntimeSnapshot:
         session_id=session_id,
         installation_id=installation_id,
         principal_key=principal_key,
+        predecessor_principal_key=predecessor_principal_key,
         validation_state=validation_state,
         validation_reason=validation_reason,
         last_validated_at=last_validated_at,
@@ -3597,7 +3621,7 @@ def _encode_native_blob(record: NativeCredentialRecord) -> str:
     credential = record.credential
     return json.dumps(
         {
-            "version": 2,
+            "version": 3,
             "kind": "native",
             "account_id": credential.account_id,
             "session_id": credential.session_id,
@@ -3606,6 +3630,7 @@ def _encode_native_blob(record: NativeCredentialRecord) -> str:
             "username": credential.username,
             "issued_at": credential.issued_at,
             "last_validated_at": record.last_validated_at,
+            "predecessor_principal_key": record.predecessor_principal_key,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -3640,7 +3665,7 @@ def _decode_credential_blob(
         raise AuthRequired("runtime_unavailable")
     if payload.get("version") in {1, 2} and "cookies" in payload:
         return _decode_cookie_blob(raw)
-    if payload.get("version") != 2 or not isinstance(payload.get("kind"), str):
+    if payload.get("version") not in {2, 3} or not isinstance(payload.get("kind"), str):
         raise AuthRequired("runtime_unavailable")
     if payload["kind"] == "revoked":
         if set(payload) != {
@@ -3657,10 +3682,20 @@ def _decode_credential_blob(
         _validate_uuid4(session_id)
         _parse_aware_datetime(revoked_at)
         return RevocationTombstone(account_id, session_id, reason, revoked_at)
-    if payload["kind"] != "native" or set(payload) != {
+    native_v2_keys = {
         "version", "kind", "account_id", "session_id", "session_token",
         "installation_id", "username", "issued_at", "last_validated_at",
+    }
+    native_v3_keys = native_v2_keys | {"predecessor_principal_key"}
+    if payload["kind"] != "native" or frozenset(payload) not in {
+        frozenset(native_v2_keys),
+        frozenset(native_v3_keys),
     }:
+        raise AuthRequired("runtime_unavailable")
+    predecessor_principal_key = payload.get("predecessor_principal_key")
+    if predecessor_principal_key is not None and not _is_legacy_principal_key(
+        predecessor_principal_key
+    ):
         raise AuthRequired("runtime_unavailable")
     fields = (
         payload["account_id"], payload["session_id"], payload["session_token"],
@@ -3687,6 +3722,7 @@ def _decode_credential_blob(
             issued_at=issued_at,
         ),
         last_validated_at,
+        predecessor_principal_key,
     )
 
 

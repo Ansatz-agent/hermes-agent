@@ -5,6 +5,7 @@ export type BridgeStatus = {
   session_id: string | null
   installation_id: string | null
   principal_key: string | null
+  predecessor_principal_key?: string | null
   runtime_instance_id: string
   epoch: number
   valid_until: number

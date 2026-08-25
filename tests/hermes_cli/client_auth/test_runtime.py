@@ -879,6 +879,63 @@ def test_native_cache_restores_before_network_after_process_restart():
     assert client.native_status_calls == 0
 
 
+def test_native_cache_durably_carries_legacy_predecessor_across_commit_restart_and_write_failure(
+):
+    backend = FakeSecretBackend()
+    client = FakeAuthClient()
+    first = VaultOwner(
+        client,
+        secret_backend=backend,
+        clock=FakeClock(),
+        jitter=lambda low, high: (low + high) / 2,
+    )
+    legacy = first.login("alice", bytearray(b"secret"))
+
+    native = first.login(
+        "alice",
+        bytearray(b"secret"),
+        installation_id=INSTALLATION_ID,
+        client_version="0.17.0",
+    )
+    assert native.predecessor_principal_key == legacy.principal_key
+    assert json.loads(backend.raw)["predecessor_principal_key"] == legacy.principal_key
+
+    restarted = VaultOwner(
+        client,
+        secret_backend=backend,
+        clock=FakeClock(),
+        jitter=lambda *_: 1.0,
+    )
+    assert restarted.refresh().predecessor_principal_key == legacy.principal_key
+
+    failed_backend = FakeSecretBackend()
+    failed = VaultOwner(
+        client,
+        secret_backend=failed_backend,
+        clock=FakeClock(),
+        jitter=lambda low, high: (low + high) / 2,
+    )
+    failed_legacy = failed.login("alice", bytearray(b"secret"))
+    durable_legacy_blob = failed_backend.raw
+    failed_backend.fail_writes = True
+    with pytest.raises(AuthRequired):
+        failed.login(
+            "alice",
+            bytearray(b"secret"),
+            installation_id=INSTALLATION_ID,
+            client_version="0.17.0",
+        )
+    assert failed_backend.raw == durable_legacy_blob
+    failed_backend.fail_writes = False
+    recovered = VaultOwner(
+        client,
+        secret_backend=failed_backend,
+        clock=FakeClock(),
+        jitter=lambda low, high: (low + high) / 2,
+    )
+    assert recovered.refresh().principal_key == failed_legacy.principal_key
+
+
 def test_stale_native_validation_cannot_replace_newer_login_record():
     owner, backend, client, clock = blocking_native_owner_factory()
     owner.login(

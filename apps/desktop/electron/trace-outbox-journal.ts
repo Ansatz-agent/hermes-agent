@@ -288,8 +288,12 @@ export interface TraceJournalReceiptOperation {
   batchId: string
   accountKey?: string
   dedupeKey?: string
+  entrypoint?: string
+  hermesSessionId?: string
   outcome: 'accepted' | 'duplicate'
   receivedAt: number
+  runId?: string
+  payloadSha256?: string
 }
 
 export interface TraceJournalTerminalOperation {
@@ -402,11 +406,20 @@ function isReceiptOperation(value: unknown): value is TraceJournalReceiptOperati
     return true
   }
 
-  return (
-    keys.length === 6 &&
+  const extended =
     isCanonicalTraceAccountKey(operation.accountKey) &&
     typeof operation.dedupeKey === 'string' &&
     /^[0-9a-f]{64}$/.test(operation.dedupeKey)
+
+  return (
+    (keys.length === 6 && extended) ||
+    (keys.length === 10 &&
+      extended &&
+      ['cli', 'dashboard', 'desktop', 'voice'].includes(String(operation.entrypoint)) &&
+      typeof operation.hermesSessionId === 'string' &&
+      typeof operation.runId === 'string' &&
+      typeof operation.payloadSha256 === 'string' &&
+      /^[0-9a-f]{64}$/.test(operation.payloadSha256))
   )
 }
 

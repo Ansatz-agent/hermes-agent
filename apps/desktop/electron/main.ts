@@ -37,7 +37,7 @@ import {
   resolveAnsatzDesktopRuntimeRoot,
   resolveAnsatzSshControlDirectory
 } from './ansatz-product'
-import { AuthBridgeError, type BridgeStatus, DesktopAuthBridge } from './auth-bridge'
+import { AuthBridgeError, DesktopAuthBridge } from './auth-bridge'
 import { AuthCoordinator } from './auth-coordinator'
 import { isAuthRuntimeUsable } from './auth-runtime-contract'
 import {
@@ -299,13 +299,10 @@ import { TraceBackendRegistry } from './trace-backend-registry'
 import { RefreshingTraceCredentialProvider, TraceForwarder } from './trace-forwarder'
 import { TraceIngressFacade } from './trace-ingress-facade'
 import {
-  clearTraceNamespaceTransition,
   migratePreviousLegacyTraceNamespace,
   previousLegacyTraceAccountKey,
-  readTraceNamespaceTransition,
-  traceNamespaceTransition,
-  traceOwnerFromScope,
-  writeTraceNamespaceTransition
+  traceMigrationSourceOwner,
+  traceOwnerFromScope
 } from './trace-legacy-owner'
 import { createSafeStorageTraceKeyProtector } from './trace-outbox-crypto'
 import { TraceOutboxStore } from './trace-outbox-store'
@@ -714,8 +711,6 @@ const AUTH_BOOTSTRAP_COMPLETE_MARKER = path.join(ACTIVE_HERMES_ROOT, '.hermes-au
 let desktopAuthBridge: DesktopAuthBridge | null = null
 let desktopAuthCoordinator: AuthCoordinator | null = null
 let desktopAuthStartupPromise: Promise<void> | null = null
-let previousLocalAuthStatus: BridgeStatus | null = null
-let desktopTraceTransitionWrite: Promise<void> = Promise.resolve()
 const desktopRuntimeGate = new DesktopRuntimeGate()
 let desktopCapabilityShellEnabled = false
 let desktopDisplayListenersRegistered = false
@@ -934,22 +929,6 @@ async function startDesktopAuthRuntime() {
       desktopAuthCoordinator = coordinator
       coordinator.subscribe((status, connectionId) => {
         broadcastDesktopAuthStatus(status, connectionId)
-
-        if (connectionId === 'local') {
-          const scope = coordinator.scope(connectionId)
-          const transition = scope
-            ? traceNamespaceTransition(previousLocalAuthStatus, status, scope, desktopInstallationId)
-            : null
-          previousLocalAuthStatus = status
-          if (transition !== null) {
-            const root = path.join(app.getPath('userData'), 'trace-outbox')
-            desktopTraceTransitionWrite = writeTraceNamespaceTransition(root, transition).catch(error => {
-              rememberLog(
-                `[trace] failed to persist namespace transition: ${String((error as Error)?.message || error)}`
-              )
-            })
-          }
-        }
 
         if (connectionId === 'local' && status.state === 'authenticated') {
           enableDesktopCapabilityShell()
@@ -9108,26 +9087,14 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
       keyProtector: createSafeStorageTraceKeyProtector(safeStorage),
       root: path.join(traceOutboxRoot, owner.accountKey)
     })
-    await desktopTraceTransitionWrite
-    const transition = ownerValidation.uploadable ? await readTraceNamespaceTransition(traceOutboxRoot, owner) : null
-    if (transition !== null) {
-      const sourceOwner: TraceOwner = {
-        accountId: null,
-        accountKey: transition.sourceAccountKey,
-        installationId: transition.installationId,
-        sessionId: null
-      }
+    const sourceOwner = ownerValidation.uploadable ? traceMigrationSourceOwner(status, desktopInstallationId) : null
+    if (sourceOwner !== null) {
       void store
         .migrateTrustedSource({
           keyProtector: createSafeStorageTraceKeyProtector(safeStorage),
           removeSourceDirectory: source => fs.promises.rm(source, { force: false, recursive: true }),
           sourceOwner,
           sourceRoot: path.join(traceOutboxRoot, sourceOwner.accountKey)
-        })
-        .then(async migrated => {
-          if (migrated) {
-            await clearTraceNamespaceTransition(traceOutboxRoot)
-          }
         })
         .catch(error => {
           rememberLog(`[trace] background namespace migration failed: ${String((error as Error)?.message || error)}`)

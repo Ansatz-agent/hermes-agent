@@ -622,13 +622,14 @@ function isPlainObject(value: unknown): value is Record<string, any> {
 function isBridgeStatus(value: unknown): value is BridgeStatus {
   if (
     !isPlainObject(value) ||
-    !sameKeys(value, [
+    (!sameKeys(value, [
       'state',
       'username',
       'account_id',
       'session_id',
       'installation_id',
       'principal_key',
+      'predecessor_principal_key',
       'runtime_instance_id',
       'epoch',
       'valid_until',
@@ -637,7 +638,23 @@ function isBridgeStatus(value: unknown): value is BridgeStatus {
       'last_validated_at',
       'legacy',
       'reason'
-    ])
+    ]) &&
+      !sameKeys(value, [
+        'state',
+        'username',
+        'account_id',
+        'session_id',
+        'installation_id',
+        'principal_key',
+        'runtime_instance_id',
+        'epoch',
+        'valid_until',
+        'validation_state',
+        'validation_reason',
+        'last_validated_at',
+        'legacy',
+        'reason'
+      ]))
   ) {
     return false
   }
@@ -650,6 +667,7 @@ function isBridgeStatus(value: unknown): value is BridgeStatus {
     isOptionalBoundedString(value.session_id) &&
     isOptionalBoundedString(value.installation_id) &&
     isOptionalBoundedString(value.principal_key) &&
+    (value.predecessor_principal_key === undefined || isOptionalBoundedString(value.predecessor_principal_key)) &&
     typeof value.runtime_instance_id === 'string' &&
     value.runtime_instance_id.length > 0 &&
     value.runtime_instance_id.length <= 128 &&
@@ -691,6 +709,14 @@ function hasConsistentBridgeIdentity(value: Record<string, any>): boolean {
       typeof value.principal_key === 'string' &&
       /^legacy:[0-9a-f]{64}$/.test(value.principal_key)
     )
+  }
+
+  if (
+    value.predecessor_principal_key !== undefined &&
+    value.predecessor_principal_key !== null &&
+    !/^legacy:[0-9a-f]{64}$/.test(value.predecessor_principal_key)
+  ) {
+    return false
   }
 
   return (
