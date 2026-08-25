@@ -410,6 +410,25 @@ test('login failure never rebuilds the bridge or replays the password', async ()
   assert.equal(recoverBridge.mock.calls.length, 0)
 })
 
+test('login can recover an unavailable local bridge before submitting the password once', async () => {
+  const bridge = fixedBridge(signedOut)
+  const replacement = fixedBridge(signedOut)
+  const recoverBridge = vi.fn(async () => replacement)
+  const coordinator = new AuthCoordinator(bridge, { pollIntervalMs: 0, recoverBridge })
+  await coordinator.start()
+  bridge.status.mockRejectedValueOnce(new AuthBridgeError('runtime_unavailable', 'runtime_unavailable'))
+  replacement.login.mockResolvedValueOnce(authenticated)
+
+  const result = await coordinator.login('alice', 'password-sentinel', 'local', {
+    recoverRuntimeBeforeSubmit: true
+  })
+
+  assert.equal(result.state, 'authenticated')
+  assert.equal(bridge.login.mock.calls.length, 0)
+  assert.deepEqual(replacement.login.mock.calls, [['alice', 'password-sentinel']])
+  assert.deepEqual(recoverBridge.mock.calls, [['local', bridge]])
+})
+
 test('connection and both policies require exact connection scopes', async () => {
   const { coordinator } = fixture(authenticated)
   await coordinator.start()

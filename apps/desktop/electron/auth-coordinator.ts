@@ -41,6 +41,10 @@ type AuthRefreshOptions = {
   recoverRuntime?: boolean
 }
 
+type AuthLoginOptions = {
+  recoverRuntimeBeforeSubmit?: boolean
+}
+
 type AuthCoordinatorOptions = {
   clock?: () => number
   cleanup?: (connectionId: string, status: BridgeStatus) => Promise<void> | void
@@ -189,12 +193,45 @@ export class AuthCoordinator {
     })
   }
 
-  async login(username: string, password: string, connectionId = LOCAL_CONNECTION_ID): Promise<BridgeStatus> {
+  async login(
+    username: string,
+    password: string,
+    connectionId = LOCAL_CONNECTION_ID,
+    options: AuthLoginOptions = {}
+  ): Promise<BridgeStatus> {
     return this.runExclusive(async () => {
-      const bridge = this.bridges.get(connectionId)
+      let bridge = this.bridges.get(connectionId)
 
       if (!bridge) {
         return this.applyFailure(new AuthBridgeError('runtime_unavailable', 'runtime_unavailable'), connectionId)
+      }
+
+      if (
+        connectionId === LOCAL_CONNECTION_ID &&
+        options.recoverRuntimeBeforeSubmit &&
+        this.recoverBridge
+      ) {
+        try {
+          await bridge.status()
+        } catch (error) {
+          if (safeReason(error) !== 'runtime_unavailable') {
+            return this.applyFailure(error, connectionId)
+          }
+
+          try {
+            const replacement = await this.recoverBridge(connectionId, bridge)
+
+            if (!replacement) {
+              return this.applyFailure(error, connectionId)
+            }
+
+            this.bridges.set(connectionId, replacement)
+            bridge = replacement
+            await bridge.status()
+          } catch (recoveryError) {
+            return this.applyFailure(recoveryError, connectionId)
+          }
+        }
       }
 
       try {
