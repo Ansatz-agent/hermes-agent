@@ -42,6 +42,7 @@ import { AuthCoordinator } from './auth-coordinator'
 import { isAuthRuntimeUsable } from './auth-runtime-contract'
 import {
   encodeScopeTokenRegistration,
+  encodeTraceTransportRegistration,
   issueAuthScopeToken,
   sanitizeAnsatzAuthChildEnvironment,
   sanitizeAuthChildEnvironment
@@ -294,6 +295,7 @@ import {
 import { createStreamThrottle } from './stream-throttle'
 import { nativeOverlayWidth as computeNativeOverlayWidth, macTitleBarOverlayHeight } from './titlebar-overlay-width'
 import { RefreshingTraceCredentialProvider, TraceForwarder } from './trace-forwarder'
+import { TraceIngressFacade } from './trace-ingress-facade'
 import {
   legacyTraceOwnerForPrincipal,
   migratePreviousLegacyTraceNamespace,
@@ -717,6 +719,29 @@ async function writeBackendScopeToken(child, token) {
   }
 
   const frame = encodeScopeTokenRegistration(token)
+  await new Promise<void>((resolve, reject) => {
+    child.stdin.write(frame, error => {
+      if (error) {
+        reject(new AuthBridgeError('runtime_unavailable', 'runtime_unavailable'))
+      } else {
+        resolve()
+      }
+    })
+  })
+}
+
+async function writeBackendTraceTransport(child, root) {
+  if (!desktopTraceIngress || !child?.stdin || child.stdin.destroyed || !child.stdin.writable) {
+    throw new AuthBridgeError('runtime_unavailable', 'runtime_unavailable')
+  }
+
+  const frame = encodeTraceTransportRegistration({
+    endpoint: desktopTraceIngress.endpoint,
+    installationId: desktopInstallationId,
+    localBearer: desktopTraceIngress.localBearer,
+    pluginsToml: path.join(root, 'config', 'ansatz-voice-trace', 'plugins.toml')
+  })
+
   await new Promise<void>((resolve, reject) => {
     child.stdin.write(frame, error => {
       if (error) {
@@ -8853,6 +8878,11 @@ const desktopInstallationId = loadOrCreateInstallationId(DESKTOP_INSTALLATION_PA
 let desktopTraceContext = null
 let desktopTraceForwarder = null
 let desktopTraceLifecycle = null
+let desktopTraceFacade: TraceIngressFacade | null = null
+let desktopTraceIngress = null
+let desktopTraceFacadeStartupPromise = null
+let desktopTraceAttachRetryTimer = null
+let desktopTraceAttachRetryAttempt = 0
 let desktopTraceGeneration = 0
 let desktopTraceStartupPromise = null
 
@@ -8861,13 +8891,71 @@ const desktopTraceRuntimeStartup = new TraceRuntimeStartupRecovery({
 })
 
 function traceContextForBackendRoot(root) {
-  if (!desktopTraceContext) {
+  if (!desktopTraceIngress) {
     return null
   }
 
   return {
-    ...desktopTraceContext,
+    endpoint: desktopTraceIngress.endpoint,
+    installationId: desktopInstallationId,
+    localAuthorization: `Bearer ${desktopTraceIngress.localBearer}`,
     pluginsToml: path.join(root, 'config', 'ansatz-voice-trace', 'plugins.toml')
+  }
+}
+
+async function attachDesktopTraceTransportToRunningBackends() {
+  const children = [
+    backendConnectionState.getProcess(),
+    ...[...backendPool.values()].map(entry => entry.process)
+  ].filter(Boolean)
+
+  await Promise.all(children.map(child => writeBackendTraceTransport(child, ACTIVE_HERMES_ROOT)))
+  desktopTraceAttachRetryAttempt = 0
+}
+
+function scheduleDesktopTraceTransportAttachRetry() {
+  if (desktopTraceAttachRetryTimer || !desktopTraceIngress) {
+    return
+  }
+
+  const delay = Math.min(30_000, 1_000 * 2 ** desktopTraceAttachRetryAttempt)
+  desktopTraceAttachRetryAttempt = Math.min(5, desktopTraceAttachRetryAttempt + 1)
+  desktopTraceAttachRetryTimer = setTimeout(() => {
+    desktopTraceAttachRetryTimer = null
+    void attachDesktopTraceTransportToRunningBackends().catch(() => {
+      scheduleDesktopTraceTransportAttachRetry()
+    })
+  }, delay)
+  desktopTraceAttachRetryTimer.unref?.()
+}
+
+async function ensureDesktopTraceFacade() {
+  if (desktopTraceFacade && desktopTraceIngress) {
+    return desktopTraceIngress
+  }
+
+  if (desktopTraceFacadeStartupPromise) {
+    return desktopTraceFacadeStartupPromise
+  }
+
+  const startup = (async () => {
+    const facade = new TraceIngressFacade()
+    const ingress = await facade.start()
+    desktopTraceFacade = facade
+    desktopTraceIngress = ingress
+    await attachDesktopTraceTransportToRunningBackends()
+
+    return ingress
+  })()
+
+  desktopTraceFacadeStartupPromise = startup
+
+  try {
+    return await startup
+  } finally {
+    if (desktopTraceFacadeStartupPromise === startup) {
+      desktopTraceFacadeStartupPromise = null
+    }
   }
 }
 
@@ -8890,6 +8978,9 @@ function legacyTraceOwnerForScope(scope): TraceOwner {
 }
 
 async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
+  await ensureDesktopTraceFacade()
+  await attachDesktopTraceTransportToRunningBackends()
+
   if (desktopTraceContext && sameConnectionScope(desktopTraceContext.scope, scope)) {
     return desktopTraceContext
   }
@@ -8911,6 +9002,7 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
     desktopTraceForwarder = null
     desktopTraceLifecycle = null
     desktopTraceContext = null
+    desktopTraceFacade?.detach()
 
     await Promise.all([
       previousLifecycle?.stop() ?? Promise.resolve(),
@@ -8997,10 +9089,8 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
 
     desktopTraceForwarder = forwarder
     desktopTraceLifecycle = lifecycle
+    desktopTraceFacade?.install(started)
     desktopTraceContext = {
-      endpoint: started.endpoint,
-      installationId: desktopInstallationId,
-      localAuthorization: `Bearer ${started.localBearer}`,
       scope: { ...scope }
     }
     lifecycle.start()
@@ -9032,8 +9122,24 @@ async function stopDesktopTraceForwarder(flushMs = 3_000) {
   desktopTraceForwarder = null
   desktopTraceLifecycle = null
   desktopTraceContext = null
+  desktopTraceFacade?.detach()
 
   await Promise.all([lifecycle?.stop() ?? Promise.resolve(), forwarder?.stop({ flushMs }) ?? Promise.resolve()])
+}
+
+async function stopDesktopTraceFacade() {
+  const facade = desktopTraceFacade
+  desktopTraceFacade = null
+  desktopTraceIngress = null
+  desktopTraceFacadeStartupPromise = null
+  desktopTraceAttachRetryAttempt = 0
+
+  if (desktopTraceAttachRetryTimer) {
+    clearTimeout(desktopTraceAttachRetryTimer)
+    desktopTraceAttachRetryTimer = null
+  }
+
+  await facade?.stop()
 }
 
 const sshBootstrapCoordinator = createBootstrapCoordinator()
@@ -10395,6 +10501,12 @@ async function spawnPoolBackend(profile, entry) {
   await claimBackendChild(child, `${backend.command} ${backend.args.join(' ')}`, profile, backendNonce)
   await writeBackendScopeToken(child, scopeToken)
 
+  if (desktopTraceIngress) {
+    await writeBackendTraceTransport(child, ACTIVE_HERMES_ROOT).catch(() => {
+      scheduleDesktopTraceTransportAttachRetry()
+    })
+  }
+
   child.stdout.on('data', rememberLog)
   child.stderr.on('data', rememberLog)
 
@@ -10502,6 +10614,7 @@ function stopAllPoolBackends() {
 
 const backendShutdown = createBackendShutdownCoordinator(async () => {
   await stopDesktopTraceForwarder(3_000)
+  await stopDesktopTraceFacade()
   const primary = backendConnectionState.invalidate()
   const pooled = [...backendPool.values()].map(entry => entry.process).filter(Boolean)
 
@@ -10737,6 +10850,13 @@ async function startHermes() {
 
     await claimBackendChild(hermesProcess, `${backend.command} ${backend.args.join(' ')}`, profile, backendNonce)
     await writeBackendScopeToken(hermesProcess, scopeToken)
+
+    if (desktopTraceIngress) {
+      await writeBackendTraceTransport(hermesProcess, ACTIVE_HERMES_ROOT).catch(() => {
+        scheduleDesktopTraceTransportAttachRetry()
+      })
+    }
+
     const processOwner = backendConnectionState.attachProcess(connectionAttempt, hermesProcess)
 
     if (!processOwner) {

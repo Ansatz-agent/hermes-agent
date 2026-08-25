@@ -19,12 +19,13 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Protocol, TypeVar
+from urllib.parse import urlsplit
 
 from hermes_cli.client_auth.client import (
     CSRF_COOKIE,
@@ -196,6 +197,15 @@ class BackendScopeTokenRegistration:
     connection_id: str
     auth: AuthScope
     ttl_seconds: float
+
+
+@dataclass(frozen=True)
+class TraceTransportRegistration:
+    endpoint: str
+    authorization: str = field(repr=False)
+    installation_id: str = ""
+    entrypoint: str = "desktop"
+    plugins_toml: str = ""
 
 
 @dataclass(frozen=True)
@@ -377,6 +387,73 @@ def parse_backend_scope_token_registration(
         connection_id=connection_id,
         auth=auth,
         ttl_seconds=float(ttl_seconds),
+    )
+
+
+def parse_trace_transport_registration(value: object) -> TraceTransportRegistration:
+    expected_keys = {
+        "version",
+        "operation",
+        "endpoint",
+        "authorization",
+        "installation_id",
+        "entrypoint",
+        "plugins_toml",
+    }
+    if not isinstance(value, dict) or set(value) != expected_keys:
+        raise AuthRequired("runtime_unavailable")
+    if value.get("version") != 1 or value.get("operation") != "register_trace_transport":
+        raise AuthRequired("runtime_unavailable")
+
+    endpoint = value.get("endpoint")
+    authorization = value.get("authorization")
+    installation_id = value.get("installation_id")
+    entrypoint = value.get("entrypoint")
+    plugins_toml = value.get("plugins_toml")
+    if not all(
+        isinstance(item, str)
+        for item in (endpoint, authorization, installation_id, entrypoint, plugins_toml)
+    ):
+        raise AuthRequired("runtime_unavailable")
+    assert isinstance(endpoint, str)
+    assert isinstance(authorization, str)
+    assert isinstance(installation_id, str)
+    assert isinstance(entrypoint, str)
+    assert isinstance(plugins_toml, str)
+
+    try:
+        parsed = urlsplit(endpoint)
+        port = parsed.port
+        identity = uuid.UUID(installation_id)
+    except (ValueError, AttributeError):
+        raise AuthRequired("runtime_unavailable") from None
+    if not (
+        parsed.scheme == "http"
+        and parsed.hostname == "127.0.0.1"
+        and port is not None
+        and 1 <= port <= 65535
+        and parsed.path == "/v1/traces"
+        and not parsed.username
+        and not parsed.password
+        and not parsed.query
+        and not parsed.fragment
+        and re.fullmatch(r"Bearer [A-Za-z0-9_-]{43}", authorization)
+        and identity.version == 4
+        and str(identity) == installation_id.lower()
+        and entrypoint == "desktop"
+        and plugins_toml.replace("\\", "/").endswith(
+            "/ansatz-voice-trace/plugins.toml"
+        )
+        and len(plugins_toml) <= 2_048
+    ):
+        raise AuthRequired("runtime_unavailable")
+
+    return TraceTransportRegistration(
+        endpoint=endpoint,
+        authorization=authorization,
+        installation_id=installation_id,
+        entrypoint=entrypoint,
+        plugins_toml=plugins_toml,
     )
 
 
@@ -3721,6 +3798,19 @@ def register_backend_scope_token(value: object) -> BackendScopeGrant:
     )
 
 
+def register_backend_trace_transport(value: object) -> None:
+    registration = parse_trace_transport_registration(value)
+    from agent.relay_runtime import register_ansatz_product_trace_transport
+
+    register_ansatz_product_trace_transport(
+        endpoint=registration.endpoint,
+        authorization=registration.authorization,
+        installation_id=registration.installation_id,
+        entrypoint=registration.entrypoint,
+        plugins_toml=registration.plugins_toml,
+    )
+
+
 def _run_backend_scope_token_control(stream: Any) -> None:
     try:
         while True:
@@ -3734,7 +3824,10 @@ def _run_backend_scope_token_control(stream: Any) -> None:
                 break
             try:
                 value = json.loads(raw)
-                register_backend_scope_token(value)
+                if isinstance(value, dict) and value.get("operation") == "register_trace_transport":
+                    register_backend_trace_transport(value)
+                else:
+                    register_backend_scope_token(value)
             except (AuthRequired, UnicodeError, ValueError):
                 break
     finally:

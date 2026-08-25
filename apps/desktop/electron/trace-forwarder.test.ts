@@ -187,7 +187,11 @@ test.each(['before', 'after'] as const)(
     const started = await forwarder.start(validOwner())
 
     try {
-      assert.equal((await post(started.endpoint, started.localBearer)).status, 507)
+      const response = await post(started.endpoint, started.localBearer)
+      assert.equal(response.status, 503)
+      assert.equal(response.headers['content-type'], 'application/x-protobuf')
+      assert.equal(response.headers['retry-after'], '1')
+      assert.deepEqual(response.body.subarray(0, 2), Buffer.from([0x08, 0x0e]))
     } finally {
       await forwarder.stop({ flushMs: 0 })
     }
@@ -788,7 +792,7 @@ async function post(
     ...overrides.headers
   }
 
-  return new Promise<{ body: Buffer; status: number }>((resolve, reject) => {
+  return new Promise<{ body: Buffer; headers: http.IncomingHttpHeaders; status: number }>((resolve, reject) => {
     const request = http.request(
       {
         hostname: target.hostname,
@@ -802,7 +806,9 @@ async function post(
 
         response.on('error', reject)
         response.on('data', chunk => chunks.push(Buffer.from(chunk)))
-        response.on('end', () => resolve({ body: Buffer.concat(chunks), status: response.statusCode ?? 0 }))
+        response.on('end', () =>
+          resolve({ body: Buffer.concat(chunks), headers: response.headers, status: response.statusCode ?? 0 })
+        )
       }
     )
 

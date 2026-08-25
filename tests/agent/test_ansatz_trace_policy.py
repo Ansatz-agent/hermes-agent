@@ -49,6 +49,35 @@ def test_product_trace_requires_hash_verified_marker_and_loopback_forwarder(
     assert not ansatz_product_trace_enabled()
 
 
+def test_main_control_can_register_product_transport_after_backend_start(monkeypatch):
+    from agent import ansatz_trace_policy
+
+    for name in (
+        "HERMES_NEMO_RELAY_PLUGINS_TOML",
+        "ANSATZ_TRACE_LOCAL_ENDPOINT",
+        "ANSATZ_TRACE_LOCAL_AUTHORIZATION",
+        "ANSATZ_TRACE_INSTALLATION_ID",
+        "ANSATZ_TRACE_ENTRYPOINT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    assert not ansatz_trace_policy.ansatz_product_trace_requested()
+    ansatz_trace_policy.register_product_trace_transport(
+        endpoint="http://127.0.0.1:49152/v1/traces",
+        authorization="Bearer " + "a" * 43,
+        installation_id="11111111-1111-4111-8111-111111111111",
+        entrypoint="desktop",
+        plugins_toml=str(PRODUCT_CONFIG),
+    )
+    try:
+        assert ansatz_trace_policy.ansatz_product_trace_enabled()
+        endpoint = ansatz_trace_policy.product_plugins_config()["components"][0]["config"][
+            "opentelemetry"
+        ]["endpoints"][0]
+        assert endpoint["endpoint"] == "http://127.0.0.1:49152/v1/traces"
+    finally:
+        ansatz_trace_policy.clear_registered_product_trace_transport_for_tests()
+
 def test_full_semantic_trace_survives_credential_and_audio_redaction():
     from agent.ansatz_trace_policy import REDACTED, redact_trace_value
 

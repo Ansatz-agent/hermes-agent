@@ -11,9 +11,11 @@ import copy
 import hashlib
 import os
 import re
+import threading
 import tomllib
 import uuid
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -45,6 +47,19 @@ _PRIVATE_KEY_RE = re.compile(
     re.DOTALL,
 )
 _LOCAL_BEARER_RE = re.compile(r"Bearer [A-Za-z0-9_-]{43}\Z")
+
+
+@dataclass(frozen=True)
+class _ProductTraceTransport:
+    endpoint: str
+    authorization: str = field(repr=False)
+    installation_id: str = ""
+    entrypoint: str = "desktop"
+    plugins_toml: str = ""
+
+
+_TRANSPORT_LOCK = threading.RLock()
+_REGISTERED_PRODUCT_TRANSPORT: _ProductTraceTransport | None = None
 
 _SECRET_KEYS = frozenset(
     {
@@ -88,7 +103,7 @@ def _normalized_key(value: Any) -> str:
 
 
 def _product_config_path() -> Path | None:
-    raw = os.environ.get("HERMES_NEMO_RELAY_PLUGINS_TOML", "").strip()
+    raw = _transport_value("plugins_toml", "HERMES_NEMO_RELAY_PLUGINS_TOML")
     if not raw:
         return None
     path = Path(raw).expanduser()
@@ -169,6 +184,9 @@ def _load_sealed_product_config(path: Path) -> dict[str, Any] | None:
 
 def ansatz_product_trace_requested() -> bool:
     """Return whether a Desktop/Voice child declared any product trace state."""
+    with _TRANSPORT_LOCK:
+        if _REGISTERED_PRODUCT_TRANSPORT is not None:
+            return True
     return any(
         os.environ.get(name, "").strip()
         for name in (
@@ -185,12 +203,10 @@ def ansatz_product_trace_enabled() -> bool:
     path = _product_config_path()
     if path is None or _load_sealed_product_config(path) is None:
         return False
-    endpoint = os.environ.get("ANSATZ_TRACE_LOCAL_ENDPOINT", "").strip()
-    authorization = os.environ.get(
-        "ANSATZ_TRACE_LOCAL_AUTHORIZATION", ""
-    ).strip()
-    installation_id = os.environ.get("ANSATZ_TRACE_INSTALLATION_ID", "").strip()
-    entrypoint = os.environ.get("ANSATZ_TRACE_ENTRYPOINT", "").strip()
+    endpoint = _transport_value("endpoint", "ANSATZ_TRACE_LOCAL_ENDPOINT")
+    authorization = _transport_value("authorization", "ANSATZ_TRACE_LOCAL_AUTHORIZATION")
+    installation_id = _transport_value("installation_id", "ANSATZ_TRACE_INSTALLATION_ID")
+    entrypoint = _transport_value("entrypoint", "ANSATZ_TRACE_ENTRYPOINT")
     return bool(
         _valid_loopback_endpoint(endpoint)
         and _LOCAL_BEARER_RE.fullmatch(authorization)
@@ -219,11 +235,55 @@ def product_plugins_config() -> dict[str, Any]:
         or endpoints[0].get("endpoint") != PRODUCT_ENDPOINT_PLACEHOLDER
     ):
         raise RuntimeError("Ansatz product Relay endpoint contract is invalid")
-    endpoints[0]["endpoint"] = os.environ["ANSATZ_TRACE_LOCAL_ENDPOINT"]
-    endpoints[0]["resource_attributes"]["ansatz.installation.id"] = os.environ[
-        "ANSATZ_TRACE_INSTALLATION_ID"
-    ]
+    endpoints[0]["endpoint"] = _transport_value("endpoint", "ANSATZ_TRACE_LOCAL_ENDPOINT")
+    endpoints[0]["resource_attributes"]["ansatz.installation.id"] = _transport_value(
+        "installation_id", "ANSATZ_TRACE_INSTALLATION_ID"
+    )
     return config
+
+
+def product_trace_authorization() -> str:
+    if not ansatz_product_trace_enabled():
+        raise RuntimeError("Ansatz product trace runtime validation failed")
+    return _transport_value("authorization", "ANSATZ_TRACE_LOCAL_AUTHORIZATION")
+
+
+def register_product_trace_transport(
+    *,
+    endpoint: str,
+    authorization: str,
+    installation_id: str,
+    entrypoint: str,
+    plugins_toml: str,
+) -> None:
+    candidate = _ProductTraceTransport(
+        endpoint=endpoint,
+        authorization=authorization,
+        installation_id=installation_id,
+        entrypoint=entrypoint,
+        plugins_toml=plugins_toml,
+    )
+    global _REGISTERED_PRODUCT_TRANSPORT
+    with _TRANSPORT_LOCK:
+        previous = _REGISTERED_PRODUCT_TRANSPORT
+        _REGISTERED_PRODUCT_TRANSPORT = candidate
+        if not ansatz_product_trace_enabled():
+            _REGISTERED_PRODUCT_TRANSPORT = previous
+            raise ValueError("invalid product trace transport")
+
+
+def clear_registered_product_trace_transport_for_tests() -> None:
+    global _REGISTERED_PRODUCT_TRANSPORT
+    with _TRANSPORT_LOCK:
+        _REGISTERED_PRODUCT_TRANSPORT = None
+
+
+def _transport_value(attribute: str, environment: str) -> str:
+    with _TRANSPORT_LOCK:
+        transport = _REGISTERED_PRODUCT_TRANSPORT
+        if transport is not None:
+            return str(getattr(transport, attribute)).strip()
+    return os.environ.get(environment, "").strip()
 
 
 def _redact_string(value: str) -> str:

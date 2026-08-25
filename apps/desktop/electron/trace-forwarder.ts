@@ -5,6 +5,7 @@ import type { TraceCredential } from './auth-bridge'
 import { deriveOtlpCorrelation } from './otlp-correlation'
 import { splitOtlpExportTraceRequest } from './otlp-split'
 import type { TraceCredentialProvider } from './trace-credential-provider'
+import { respondTraceUnavailable } from './trace-ingress-facade'
 import type { PendingLocalCommit, TraceOutboxStoreDiagnostics } from './trace-outbox-store'
 import type { DurableReceipt, DurableTraceBatch, TraceEnvelopeInput, TraceOwner } from './trace-outbox-types'
 import { isCanonicalUuidV4, validateTraceOwner } from './trace-outbox-types'
@@ -255,7 +256,7 @@ export class TraceForwarder {
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     try {
       if (!this.admissionOpen || this.owner === null || this.store === null) {
-        return respond(response, 503)
+        return respondTraceUnavailable(response)
       }
 
       if (!isLoopback(this.remoteAddressForRequest(request))) {
@@ -317,7 +318,7 @@ export class TraceForwarder {
       respond(response, rejectedOversize ? 413 : 200, !rejectedOversize)
     } catch (error) {
       if (!response.headersSent) {
-        respond(response, isStorageFailure(error) ? 507 : 503)
+        respondTraceUnavailable(response)
       } else {
         response.end()
       }
@@ -783,13 +784,6 @@ async function readBoundedBody(request: IncomingMessage, maxBytes: number): Prom
   }
 
   return Buffer.concat(chunks, size)
-}
-
-function isStorageFailure(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error.message === 'storage_unavailable' || error.message === 'trace_durability_unavailable')
-  )
 }
 
 function emptyDiagnostics(): TraceOutboxStoreDiagnostics {

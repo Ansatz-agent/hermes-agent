@@ -57,6 +57,7 @@ from hermes_cli.client_auth.runtime import (
     require_authorized,
     resolve_owner,
     parse_backend_scope_token_registration,
+    parse_trace_transport_registration,
     runtime_endpoint,
     start_runtime_owner,
     wait_until_authorized,
@@ -178,6 +179,64 @@ def test_scope_token_control_frame_is_closed_and_rejects_schema_drift():
         parse_backend_scope_token_registration({**frame, "unknown": True})
     with pytest.raises(AuthRequired):
         parse_backend_scope_token_registration({**frame, "ttl_seconds": 61})
+
+
+def test_trace_transport_control_frame_is_closed_and_loopback_only():
+    frame = {
+        "version": 1,
+        "operation": "register_trace_transport",
+        "endpoint": "http://127.0.0.1:49152/v1/traces",
+        "authorization": "Bearer " + "a" * 43,
+        "installation_id": "11111111-1111-4111-8111-111111111111",
+        "entrypoint": "desktop",
+        "plugins_toml": "/opt/Ansatz/config/ansatz-voice-trace/plugins.toml",
+    }
+
+    parsed = parse_trace_transport_registration(frame)
+    assert parsed.endpoint == frame["endpoint"]
+    assert "a" * 43 not in repr(parsed)
+
+    with pytest.raises(AuthRequired):
+        parse_trace_transport_registration({**frame, "endpoint": "https://example.com/v1/traces"})
+    with pytest.raises(AuthRequired):
+        parse_trace_transport_registration({**frame, "unknown": True})
+
+
+def test_running_backend_control_attaches_trace_transport_without_restart(monkeypatch):
+    from agent import relay_runtime
+    from hermes_cli.client_auth import runtime
+
+    registrations = []
+    monkeypatch.setattr(
+        relay_runtime,
+        "register_ansatz_product_trace_transport",
+        lambda **transport: registrations.append(transport),
+    )
+    frame = json.dumps(
+        {
+            "version": 1,
+            "operation": "register_trace_transport",
+            "endpoint": "http://127.0.0.1:49152/v1/traces",
+            "authorization": "Bearer " + "a" * 43,
+            "installation_id": "11111111-1111-4111-8111-111111111111",
+            "entrypoint": "desktop",
+            "plugins_toml": "/opt/Ansatz/config/ansatz-voice-trace/plugins.toml",
+        }
+    ).encode() + b"\n"
+
+    class Stream:
+        sent = False
+
+        def readline(self, _limit):
+            if self.sent:
+                return b""
+            self.sent = True
+            return frame
+
+    runtime._run_backend_scope_token_control(Stream())
+
+    assert len(registrations) == 1
+    assert registrations[0]["endpoint"] == "http://127.0.0.1:49152/v1/traces"
 
 
 def test_scope_token_control_eof_revokes_every_registered_bearer(monkeypatch):

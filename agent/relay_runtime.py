@@ -1413,9 +1413,26 @@ def _activate_ansatz_product_trace(host: RelayHost | None) -> None:
     if not ansatz_trace_policy.ansatz_product_trace_enabled():
         raise RuntimeError("Ansatz product trace runtime validation failed")
     if not isinstance(host, RelayRuntime):
-        raise RuntimeError("Ansatz product requires the NeMo Relay runtime")
+        logger.warning("Ansatz product trace is unavailable: NeMo Relay runtime is not active")
+        return
     product_plugin = importlib.import_module("plugins.observability.nemo_relay")
-    product_plugin.activate_ansatz_product(host)
+    try:
+        product_plugin.activate_ansatz_product(host)
+    except Exception:
+        logger.warning(
+            "Ansatz product trace attach failed; local conversation remains available",
+            exc_info=True,
+        )
+
+
+def register_ansatz_product_trace_transport(**transport: str) -> None:
+    """Attach Desktop's validated loopback exporter without restarting Hermes."""
+    from agent import ansatz_trace_policy
+
+    ansatz_trace_policy.register_product_trace_transport(**transport)
+    host = get_runtime(create=False)
+    if host is not None:
+        _activate_ansatz_product_trace(host)
 
 
 def relay_instrumentation_enabled() -> bool:
