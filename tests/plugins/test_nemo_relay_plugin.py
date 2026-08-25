@@ -510,6 +510,45 @@ def test_dynamic_product_attach_failure_does_not_stop_local_relay_conversation(
     host.shutdown()
 
 
+def test_repeated_dynamic_registration_recovers_once_without_duplicate_subscriber(
+    tmp_path, monkeypatch
+):
+    fake = _FakeNemoRelay()
+    plugin = _fresh_plugin(monkeypatch, fake)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "retry-profile"))
+    host = relay_runtime.get_runtime()
+    assert host is not None
+    original_factory = fake.OpenTelemetrySubscriber
+    attempts = 0
+
+    def transient_factory(config):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("transient subscriber failure")
+        return original_factory(config)
+
+    fake.OpenTelemetrySubscriber = transient_factory
+    transport = {
+        "endpoint": "http://127.0.0.1:49152/v1/traces",
+        "authorization": "Bearer " + "a" * 43,
+        "installation_id": "11111111-1111-4111-8111-111111111111",
+        "entrypoint": "desktop",
+        "plugins_toml": str(REPO_ROOT / "config" / "ansatz-voice-trace" / "plugins.toml"),
+    }
+
+    try:
+        relay_runtime.register_ansatz_product_trace_transport(**transport)
+        relay_runtime.register_ansatz_product_trace_transport(**transport)
+        relay_runtime.register_ansatz_product_trace_transport(**transport)
+
+        assert attempts == 2
+        assert len([event for event in fake.events if event[0] == "otel.register"]) == 1
+        assert plugin._get_runtime(profile_key=host.profile_key, host=host) is not None
+    finally:
+        ansatz_trace_policy.clear_registered_product_trace_transport_for_tests()
+
+
 def test_shared_metrics_and_rich_plugin_share_one_core_session(
     tmp_path,
     monkeypatch,

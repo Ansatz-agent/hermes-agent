@@ -239,6 +239,61 @@ def test_running_backend_control_attaches_trace_transport_without_restart(monkey
     assert registrations[0]["endpoint"] == "http://127.0.0.1:49152/v1/traces"
 
 
+def test_invalid_trace_control_frame_isolated_from_scope_and_later_registration(
+    monkeypatch,
+):
+    from agent import relay_runtime
+    from hermes_cli.client_auth import runtime
+
+    current = AuthScope("0123456789abcdef0123456789abcdef", 7)
+    registry = BackendScopeTokenRegistry(authorize=lambda _boundary, *, expected: expected)
+    monkeypatch.setattr(runtime, "backend_scope_tokens", registry)
+    registered = []
+    monkeypatch.setattr(
+        relay_runtime,
+        "register_ansatz_product_trace_transport",
+        lambda **transport: registered.append(transport),
+    )
+    bearer = _scope_bearer()
+    scope_frame = {
+        "version": 1,
+        "operation": "register_scope_token",
+        "bearer": bearer,
+        "connection_id": "local",
+        "runtime_instance_id": current.runtime_instance_id,
+        "epoch": current.epoch,
+        "ttl_seconds": 60,
+    }
+    trace_frame = {
+        "version": 1,
+        "operation": "register_trace_transport",
+        "endpoint": "http://127.0.0.1:49152/v1/traces",
+        "authorization": "Bearer " + "a" * 43,
+        "installation_id": "11111111-1111-4111-8111-111111111111",
+        "entrypoint": "desktop",
+        "plugins_toml": "/opt/Ansatz/config/ansatz-voice-trace/plugins.toml",
+    }
+    frames = [scope_frame, {**trace_frame, "endpoint": "https://invalid.example/v1/traces"}, trace_frame]
+
+    class ObservingStream:
+        index = 0
+
+        def readline(self, _limit):
+            if self.index == 2:
+                assert registry.authorize(bearer, "dashboard.api.request").auth == current
+            if self.index == 3:
+                assert len(registered) == 1
+                return b""
+            frame = json.dumps(frames[self.index]).encode() + b"\n"
+            self.index += 1
+            return frame
+
+    stream = ObservingStream()
+    runtime._run_backend_scope_token_control(stream)
+    assert stream.index == 3
+    assert len(registered) == 1
+
+
 def test_scope_token_control_eof_revokes_every_registered_bearer(monkeypatch):
     from hermes_cli.client_auth import runtime
 

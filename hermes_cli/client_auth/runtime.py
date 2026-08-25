@@ -3824,12 +3824,22 @@ def _run_backend_scope_token_control(stream: Any) -> None:
                 break
             try:
                 value = json.loads(raw)
-                if isinstance(value, dict) and value.get("operation") == "register_trace_transport":
-                    register_backend_trace_transport(value)
-                else:
-                    register_backend_scope_token(value)
-            except (AuthRequired, UnicodeError, ValueError):
+            except (UnicodeError, ValueError):
                 break
+            if isinstance(value, dict) and value.get("operation") == "register_trace_transport":
+                try:
+                    register_backend_trace_transport(value)
+                except Exception:
+                    # Trace is optional to local conversation. A malformed
+                    # or transiently failed Trace registration cannot revoke
+                    # already-installed backend scope grants or terminate the
+                    # stdin control loop; a later idempotent frame may recover.
+                    continue
+            else:
+                try:
+                    register_backend_scope_token(value)
+                except (AuthRequired, UnicodeError, ValueError):
+                    break
     finally:
         backend_scope_tokens.clear()
 

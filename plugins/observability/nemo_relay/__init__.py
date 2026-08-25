@@ -634,6 +634,9 @@ def activate_ansatz_product(host: relay_runtime.RelayRuntime) -> None:
         _SESSION_INITIALIZER_NAME,
         _prepare_core_session,
     )
+    with _LOCK:
+        if _RUNTIMES.get(host.profile_key) is _INIT_FAILED:
+            _RUNTIMES.pop(host.profile_key, None)
     runtime = _get_runtime(profile_key=host.profile_key, host=host)
     if runtime is None or not runtime.settings.product_mode:
         raise RuntimeError("Ansatz product Relay exporter failed to initialize")

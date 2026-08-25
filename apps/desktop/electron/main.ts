@@ -294,6 +294,7 @@ import {
 } from './ssh-connection'
 import { createStreamThrottle } from './stream-throttle'
 import { nativeOverlayWidth as computeNativeOverlayWidth, macTitleBarOverlayHeight } from './titlebar-overlay-width'
+import { TraceBackendRegistry } from './trace-backend-registry'
 import { RefreshingTraceCredentialProvider, TraceForwarder } from './trace-forwarder'
 import { TraceIngressFacade } from './trace-ingress-facade'
 import {
@@ -8883,6 +8884,7 @@ let desktopTraceIngress = null
 let desktopTraceFacadeStartupPromise = null
 let desktopTraceAttachRetryTimer = null
 let desktopTraceAttachRetryAttempt = 0
+const desktopTraceBackends = new TraceBackendRegistry<any>()
 let desktopTraceGeneration = 0
 let desktopTraceStartupPromise = null
 
@@ -8904,29 +8906,54 @@ function traceContextForBackendRoot(root) {
 }
 
 async function attachDesktopTraceTransportToRunningBackends() {
-  const children = [
-    backendConnectionState.getProcess(),
-    ...[...backendPool.values()].map(entry => entry.process)
-  ].filter(Boolean)
+  const backends = desktopTraceBackends.active()
 
-  await Promise.all(children.map(child => writeBackendTraceTransport(child, ACTIVE_HERMES_ROOT)))
-  desktopTraceAttachRetryAttempt = 0
-}
-
-function scheduleDesktopTraceTransportAttachRetry() {
-  if (desktopTraceAttachRetryTimer || !desktopTraceIngress) {
+  if (backends.length === 0) {
     return
   }
 
-  const delay = Math.min(30_000, 1_000 * 2 ** desktopTraceAttachRetryAttempt)
-  desktopTraceAttachRetryAttempt = Math.min(5, desktopTraceAttachRetryAttempt + 1)
+  await Promise.all(backends.map(backend => writeBackendTraceTransport(backend.child, backend.root)))
+  desktopTraceAttachRetryAttempt = 0
+}
+
+function scheduleDesktopTraceTransportAttachRetry(delayOverride = null) {
+  if (desktopTraceAttachRetryTimer || !desktopTraceIngress || desktopTraceBackends.active().length === 0) {
+    return
+  }
+
+  const delay = delayOverride ?? Math.min(30_000, 1_000 * 2 ** desktopTraceAttachRetryAttempt)
   desktopTraceAttachRetryTimer = setTimeout(() => {
     desktopTraceAttachRetryTimer = null
-    void attachDesktopTraceTransportToRunningBackends().catch(() => {
-      scheduleDesktopTraceTransportAttachRetry()
-    })
+    void attachDesktopTraceTransportToRunningBackends().then(
+      () => scheduleDesktopTraceTransportAttachRetry(30_000),
+      () => {
+        desktopTraceAttachRetryAttempt = Math.min(5, desktopTraceAttachRetryAttempt + 1)
+        scheduleDesktopTraceTransportAttachRetry()
+      }
+    )
   }, delay)
   desktopTraceAttachRetryTimer.unref?.()
+}
+
+function registerDesktopTraceBackend(child, backend, generation) {
+  try {
+    desktopTraceBackends.register(child, { generation, root: backend.root })
+  } catch {
+    return false
+  }
+
+  scheduleDesktopTraceTransportAttachRetry(30_000)
+
+  return true
+}
+
+function unregisterDesktopTraceBackend(child, generation) {
+  desktopTraceBackends.unregister(child, generation)
+
+  if (desktopTraceBackends.active().length === 0 && desktopTraceAttachRetryTimer) {
+    clearTimeout(desktopTraceAttachRetryTimer)
+    desktopTraceAttachRetryTimer = null
+  }
 }
 
 async function ensureDesktopTraceFacade() {
@@ -8944,6 +8971,7 @@ async function ensureDesktopTraceFacade() {
     desktopTraceFacade = facade
     desktopTraceIngress = ingress
     await attachDesktopTraceTransportToRunningBackends()
+    scheduleDesktopTraceTransportAttachRetry(30_000)
 
     return ingress
   })()
@@ -9133,6 +9161,7 @@ async function stopDesktopTraceFacade() {
   desktopTraceIngress = null
   desktopTraceFacadeStartupPromise = null
   desktopTraceAttachRetryAttempt = 0
+  desktopTraceBackends.clear()
 
   if (desktopTraceAttachRetryTimer) {
     clearTimeout(desktopTraceAttachRetryTimer)
@@ -10500,9 +10529,12 @@ async function spawnPoolBackend(profile, entry) {
   entry.token = scopeToken.bearer
   await claimBackendChild(child, `${backend.command} ${backend.args.join(' ')}`, profile, backendNonce)
   await writeBackendScopeToken(child, scopeToken)
+  const traceBackendGeneration = backendNonce
 
-  if (desktopTraceIngress) {
-    await writeBackendTraceTransport(child, ACTIVE_HERMES_ROOT).catch(() => {
+  const traceBackendRegistered = registerDesktopTraceBackend(child, backend, traceBackendGeneration)
+
+  if (desktopTraceIngress && traceBackendRegistered) {
+    await writeBackendTraceTransport(child, backend.root).catch(() => {
       scheduleDesktopTraceTransportAttachRetry()
     })
   }
@@ -10518,12 +10550,14 @@ async function spawnPoolBackend(profile, entry) {
   })
 
   child.once('error', error => {
+    unregisterDesktopTraceBackend(child, traceBackendGeneration)
     rememberLog(`Hermes backend for profile "${profile}" failed to start: ${error.message}`)
     releaseBackendChild(child)
     backendPool.delete(profile)
     rejectStart?.(error)
   })
   child.once('exit', (code, signal) => {
+    unregisterDesktopTraceBackend(child, traceBackendGeneration)
     rememberLog(`Hermes backend for profile "${profile}" exited (${signal || code})`)
     releaseBackendChild(child)
     backendPool.delete(profile)
@@ -10851,12 +10885,6 @@ async function startHermes() {
     await claimBackendChild(hermesProcess, `${backend.command} ${backend.args.join(' ')}`, profile, backendNonce)
     await writeBackendScopeToken(hermesProcess, scopeToken)
 
-    if (desktopTraceIngress) {
-      await writeBackendTraceTransport(hermesProcess, ACTIVE_HERMES_ROOT).catch(() => {
-        scheduleDesktopTraceTransportAttachRetry()
-      })
-    }
-
     const processOwner = backendConnectionState.attachProcess(connectionAttempt, hermesProcess)
 
     if (!processOwner) {
@@ -10864,6 +10892,16 @@ async function startHermes() {
       await waitForBackendExit(hermesProcess)
       releaseBackendChild(hermesProcess)
       throw new Error('Hermes backend start was superseded by a newer connection attempt.')
+    }
+
+    const traceBackendGeneration = `${processOwner.generation}:${backendNonce}`
+
+    const traceBackendRegistered = registerDesktopTraceBackend(hermesProcess, backend, traceBackendGeneration)
+
+    if (desktopTraceIngress && traceBackendRegistered) {
+      await writeBackendTraceTransport(hermesProcess, backend.root).catch(() => {
+        scheduleDesktopTraceTransportAttachRetry()
+      })
     }
 
     hermesProcess.stdout.on('data', rememberLog)
@@ -10876,6 +10914,7 @@ async function startHermes() {
     })
 
     hermesProcess.once('error', error => {
+      unregisterDesktopTraceBackend(hermesProcess, traceBackendGeneration)
       releaseBackendChild(hermesProcess)
 
       if (!backendConnectionState.clearForCurrentProcess(processOwner)) {
@@ -10899,6 +10938,7 @@ async function startHermes() {
       rejectBackendStart?.(error)
     })
     hermesProcess.once('exit', (code, signal) => {
+      unregisterDesktopTraceBackend(hermesProcess, traceBackendGeneration)
       releaseBackendChild(hermesProcess)
 
       if (!backendConnectionState.clearForCurrentProcess(processOwner)) {
