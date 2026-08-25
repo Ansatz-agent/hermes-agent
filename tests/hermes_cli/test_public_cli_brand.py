@@ -142,6 +142,14 @@ def test_public_surfaces_do_not_recommend_legacy_cli():
                 "docker exec hermes ",
                 "docker exec <container> ",
             )
+            candidate = candidate.replace(
+                "docker exec -u hermes ",
+                "docker exec -u <user> ",
+            )
+            candidate = candidate.replace(
+                "sudo -u hermes ",
+                "sudo -u <user> ",
+            )
             candidate = SLACK_PROTOCOL.sub("/<slash-command>", candidate)
             if COMMAND.search(candidate):
                 relative = path.relative_to(ROOT)
