@@ -67,7 +67,7 @@ Once `himalaya` works from your own shell, the agent can use it too — the bund
 The Himalaya path is pull-based: the agent only sees mail when it looks. Add a [cron job](automate-with-cron.md) so it looks regularly:
 
 ```
-hermes cron add
+ansatz cron add
 ```
 
 A prompt along these lines works well:

@@ -21,7 +21,7 @@ Skills（技能）是按需加载的知识文档，用于教会 Hermes 如何处
 /skills
 
 # 或通过 CLI：
-hermes skills list
+ansatz skills list
 ```
 
 输出包含名称和描述的紧凑列表：
@@ -90,13 +90,13 @@ Skills 采用 token 高效的加载模式，agent 不会一次性加载所有内
 
 ```bash
 # 安装官方可选 skill
-hermes skills install official/research/arxiv
+ansatz skills install official/research/arxiv
 
 # 在聊天会话中从 Hub 安装
 /skills install official/creative/songwriting-and-ai-music
 
 # 从 HTTP(S) URL 安装 SKILL.md 及其引用的支持文件
-hermes skills install https://sharethis.chat/SKILL.md
+ansatz skills install https://sharethis.chat/SKILL.md
 /skills install https://example.com/SKILL.md --name my-skill
 ```
 
@@ -113,7 +113,7 @@ hermes skills install https://sharethis.chat/SKILL.md
 
 ```bash
 # 确认已安装
-hermes skills list | grep arxiv
+ansatz skills list | grep arxiv
 
 # 或在聊天中
 /skills search arxiv
@@ -159,10 +159,10 @@ metadata:
 
 ```bash
 # 对特定 skill 进行交互式配置
-hermes skills config gif-search
+ansatz skills config gif-search
 
 # 查看所有 skill 配置
-hermes config get skills.config
+ansatz config get skills.config
 ```
 
 ---
@@ -235,7 +235,7 @@ For API details, load the reference: `skill_view("my-skill", "references/api-doc
 开启新会话并测试你的 skill：
 
 ```bash
-hermes chat -q "/my-skill help me with the thing"
+ansatz chat -q "/my-skill help me with the thing"
 ```
 
 Skill 会自动出现——无需注册。放入 `~/.hermes/skills/` 即可立即生效。
@@ -251,7 +251,7 @@ Agent 也可以使用 `skill_manage` 自行创建和更新 skills。解决复杂
 控制哪些 skills 在哪些平台上可用：
 
 ```bash
-hermes skills
+ansatz skills
 ```
 
 这会打开一个交互式 TUI，你可以按平台（CLI、Telegram、Discord 等）启用或禁用 skills。当你希望某些 skills 仅在特定场景下可用时非常有用——例如，在 Telegram 上禁用开发类 skills。

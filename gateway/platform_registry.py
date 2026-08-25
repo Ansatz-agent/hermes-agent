@@ -76,7 +76,7 @@ class PlatformEntry:
 
     # PASSIVE dependency probe: returns True when the platform's dependencies
     # are available RIGHT NOW.  Must be side-effect free — it is called from
-    # status displays (``hermes setup``, ``hermes status``, the dashboard
+    # status displays (``ansatz setup``, ``ansatz status``, the dashboard
     # readiness probe) and the config enablement pass, none of which may
     # trigger a pip install.  Put install logic in ``ensure_deps_fn`` instead.
     check_fn: Callable[[], bool]
@@ -108,7 +108,7 @@ class PlatformEntry:
     # If None, falls back to ``validate_config`` or ``check_fn``.
     is_connected: Optional[Callable[[Any], bool]] = None
 
-    # Env vars this platform needs (for ``hermes setup`` display).
+    # Env vars this platform needs (for ``ansatz setup`` display).
     required_env: list = field(default_factory=list)
 
     # Hint shown when check_fn returns False.
@@ -124,7 +124,7 @@ class PlatformEntry:
     source: str = "plugin"
 
     # Name of the plugin manifest that registered this entry (empty for
-    # built-ins).  Used by ``hermes gateway setup`` to auto-enable the
+    # built-ins).  Used by ``ansatz gateway setup`` to auto-enable the
     # owning plugin when the user configures its platform.
     plugin_name: str = ""
 
@@ -250,11 +250,11 @@ class PlatformRegistry:
         # specific SDKs at module level (lark_oapi, microsoft_teams, discord.py,
         # slack_bolt, ...). Eagerly loading all ~20 bundled platform plugins at
         # plugin-discovery time added several seconds to *every* `hermes`
-        # invocation -- including plain `hermes chat`, which never touches any
+        # invocation -- including plain `ansatz chat`, which never touches any
         # gateway platform. Discovery now registers a cheap deferred loader per
         # platform; the real module is imported only when a registry lookup
         # actually asks for that platform (gateway start, cron delivery,
-        # `hermes setup`/`gateway status`, send_message).
+        # `ansatz setup`/`gateway status`, send_message).
         self._deferred: dict[str, Callable[[], None]] = {}
         self._scoped_deferred: dict[str, dict[str, Callable[[], None]]] = {}
         self._inflight: dict[tuple[Optional[str], str], threading.Event] = {}
@@ -480,7 +480,7 @@ class PlatformRegistry:
 
         Used by the iterate-all accessors (``all_entries``/``plugin_entries``),
         which are only called by paths that genuinely need every adapter:
-        gateway startup, ``hermes setup``/``gateway status``, channel
+        gateway startup, ``ansatz setup``/``gateway status``, channel
         directory.  CLI chat never iterates the full set.
         """
         active_scope = self.current_scope_key()

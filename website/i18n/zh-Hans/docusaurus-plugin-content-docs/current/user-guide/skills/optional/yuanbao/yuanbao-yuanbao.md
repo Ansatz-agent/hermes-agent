@@ -14,7 +14,7 @@ Yuanbao（元宝）群组：@提及用户、查询信息/成员。
 
 | | |
 |---|---|
-| 来源 | 可选 — 使用 `hermes skills install official/yuanbao/yuanbao` 安装 |
+| 来源 | 可选 — 使用 `ansatz skills install official/yuanbao/yuanbao` 安装 |
 | 路径 | `optional-skills/yuanbao` |
 | 版本 | `1.0.0` |
 | 平台 | linux, macos, windows |

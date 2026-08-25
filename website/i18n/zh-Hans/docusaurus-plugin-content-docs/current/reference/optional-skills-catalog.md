@@ -1,7 +1,7 @@
 ---
 sidebar_position: 9
 title: "可选技能目录"
-description: "hermes-agent 附带的官方可选技能 — 通过 hermes skills install official/<category>/<skill> 安装"
+description: "hermes-agent 附带的官方可选技能 — 通过 ansatz skills install official/<category>/<skill> 安装"
 ---
 
 # 可选技能目录
@@ -9,14 +9,14 @@ description: "hermes-agent 附带的官方可选技能 — 通过 hermes skills 
 可选技能随 hermes-agent 一起发布，位于 `optional-skills/` 目录下，但**默认未激活**。请显式安装：
 
 ```bash
-hermes skills install official/<category>/<skill>
+ansatz skills install official/<category>/<skill>
 ```
 
 示例：
 
 ```bash
-hermes skills install official/blockchain/solana
-hermes skills install official/mlops/flash-attention
+ansatz skills install official/blockchain/solana
+ansatz skills install official/mlops/flash-attention
 ```
 
 下方每个技能均链接至专属页面，包含完整定义、配置和使用说明。
@@ -24,7 +24,7 @@ hermes skills install official/mlops/flash-attention
 卸载方式：
 
 ```bash
-hermes skills uninstall <skill-name>
+ansatz skills uninstall <skill-name>
 ```
 
 ## autonomous-ai-agents

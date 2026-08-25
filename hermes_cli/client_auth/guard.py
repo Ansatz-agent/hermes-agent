@@ -4,6 +4,8 @@ import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
 
+from hermes_cli.cli_identity import CANONICAL_COMMAND
+
 
 AUTH_FREE = frozenset(
     {
@@ -66,7 +68,8 @@ def enforce_direct_entrypoint(boundary: str) -> None:
         authorize_entrypoint(boundary, interactive=False)
     except AuthRequired as error:
         print(
-            f"AUTH_REQUIRED {error.reason or error.code}; run `hermes login`",
+            f"AUTH_REQUIRED {error.reason or error.code}; "
+            f"run `{CANONICAL_COMMAND} login`",
             file=sys.stderr,
         )
         raise SystemExit(AUTH_EXIT_CODE) from None

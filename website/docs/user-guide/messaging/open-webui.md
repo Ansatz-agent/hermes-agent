@@ -33,20 +33,20 @@ Open WebUI talks to Hermes server-to-server, so you do not need `API_SERVER_CORS
 ### 1. Enable the API server
 
 ```bash
-hermes config set API_SERVER_ENABLED true
-hermes config set API_SERVER_KEY your-secret-key
+ansatz config set API_SERVER_ENABLED true
+ansatz config set API_SERVER_KEY your-secret-key
 ```
 
-`hermes config set` auto-routes the flag to `config.yaml` and the secret to `~/.hermes/.env`. If the gateway is already running, restart it so the change takes effect:
+`ansatz config set` auto-routes the flag to `config.yaml` and the secret to `~/.hermes/.env`. If the gateway is already running, restart it so the change takes effect:
 
 ```bash
-hermes gateway stop && hermes gateway
+ansatz gateway stop && ansatz gateway
 ```
 
 ### 2. Start Hermes Agent gateway
 
 ```bash
-hermes gateway
+ansatz gateway
 ```
 
 You should see:
@@ -240,14 +240,14 @@ To run separate Hermes instances per user — each with their own config, memory
 `API_SERVER_*` are env vars, not YAML config keys, so write them to each profile's `.env`. Pick ports outside the default-platform range (`8644` is the webhook adapter, `8645` is wecom-callback, `8646` is msgraph-webhook), e.g. `8650+`:
 
 ```bash
-hermes profile create alice
+ansatz profile create alice
 cat >> ~/.hermes/profiles/alice/.env <<EOF
 API_SERVER_ENABLED=true
 API_SERVER_PORT=8650
 API_SERVER_KEY=alice-secret
 EOF
 
-hermes profile create bob
+ansatz profile create bob
 cat >> ~/.hermes/profiles/bob/.env <<EOF
 API_SERVER_ENABLED=true
 API_SERVER_PORT=8651
@@ -258,8 +258,8 @@ EOF
 ### 2. Start each gateway
 
 ```bash
-hermes -p alice gateway &
-hermes -p bob gateway &
+ansatz -p alice gateway &
+ansatz -p bob gateway &
 ```
 
 ### 3. Add connections in Open WebUI
@@ -276,7 +276,7 @@ The model dropdown will show `alice` and `bob` as distinct models. You can assig
 :::tip Custom Model Names
 The model name defaults to the profile name. To override it, set `API_SERVER_MODEL_NAME` in the profile's `.env`:
 ```bash
-hermes -p alice config set API_SERVER_MODEL_NAME "Alice's Agent"
+ansatz -p alice config set API_SERVER_MODEL_NAME "Alice's Agent"
 ```
 :::
 

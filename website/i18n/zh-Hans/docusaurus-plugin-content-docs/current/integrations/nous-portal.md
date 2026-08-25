@@ -11,10 +11,10 @@ description: "一个订阅，300+ 前沿模型，以及 Tool Gateway —— 运�
 如果你只有时间配置一件事，就配置这个。最快路径：
 
 ```bash
-hermes setup --portal
+ansatz setup --portal
 ```
 
-这条命令会完成 Portal OAuth 认证，让你选择一个 Nous 模型，在 `config.yaml` 中将 Nous 设为推理提供商，并开启 Tool Gateway。完成后即可立即运行 `hermes chat`。
+这条命令会完成 Portal OAuth 认证，让你选择一个 Nous 模型，在 `config.yaml` 中将 Nous 设为推理提供商，并开启 Tool Gateway。完成后即可立即运行 `ansatz chat`。
 
 还没有订阅？前往 [portal.nousresearch.com/manage-subscription](https://portal.nousresearch.com/manage-subscription) 注册，然后回来运行上面的命令。
 
@@ -88,7 +88,7 @@ Portal 自身的[模型信息页](https://portal.nousresearch.com/info)也有相
 ### 全新安装——一条命令
 
 ```bash
-hermes setup --portal
+ansatz setup --portal
 ```
 
 一次性完成全部配置：
@@ -98,7 +98,7 @@ hermes setup --portal
 3. 让你从精选列表中选择一个 Nous 模型（也可跳过以保留当前模型）
 4. 在 `~/.hermes/config.yaml` 中将 Nous 设为推理提供商（当你选择模型时）
 5. 开启 Tool Gateway（网页、图像、TTS、浏览器路由）
-6. 返回终端，即可运行 `hermes chat`
+6. 返回终端，即可运行 `ansatz chat`
 
 如果还没有订阅，请先在 [portal.nousresearch.com/manage-subscription](https://portal.nousresearch.com/manage-subscription) 注册。
 
@@ -107,12 +107,12 @@ hermes setup --portal
 如果你已经配置了 OpenRouter、Anthropic 或其他提供商，想在此基础上添加 Portal：
 
 ```bash
-hermes model
+ansatz model
 # 从提供商列表中选择 "Nous Portal"
 # 浏览器打开，登录，完成
 ```
 
-你现有的提供商配置保持不变。可以在会话中途用 `/model` 切换，或在会话间用 `hermes model` 切换——Portal 成为你的可用提供商之一，而非唯一选项。
+你现有的提供商配置保持不变。可以在会话中途用 `/model` 切换，或在会话间用 `ansatz model` 切换——Portal 成为你的可用提供商之一，而非唯一选项。
 
 ### 无头环境 / SSH / 远程配置
 
@@ -127,15 +127,15 @@ OAuth 需要浏览器，但回调的 loopback 运行在 Hermes 所在的机器�
 ### 查看当前配置状态
 
 ```bash
-hermes portal            # 登录 Nous Portal 并完成配置（一键引导）
-hermes portal info       # 登录状态、订阅信息、模型与 gateway 路由
-hermes portal tools      # 详细的 Tool Gateway 目录及每个工具的路由信息
-hermes portal open       # 在浏览器中打开订阅管理页面
+ansatz portal            # 登录 Nous Portal 并完成配置（一键引导）
+ansatz portal info       # 登录状态、订阅信息、模型与 gateway 路由
+ansatz portal tools      # 详细的 Tool Gateway 目录及每个工具的路由信息
+ansatz portal open       # 在浏览器中打开订阅管理页面
 ```
 
-`hermes portal`（不带子命令）是 `hermes auth add nous --type oauth` 的易记别名——它会登录、让你选择 Nous 模型、把 Nous 设为推理服务商，并提供 Tool Gateway 启用选项（与 `hermes setup --portal` 等价，与首次快速设置走的是同一套 Nous 流程）。
+`ansatz portal`（不带子命令）是 `ansatz auth add nous --type oauth` 的易记别名——它会登录、让你选择 Nous 模型、把 Nous 设为推理服务商，并提供 Tool Gateway 启用选项（与 `ansatz setup --portal` 等价，与首次快速设置走的是同一套 Nous 流程）。
 
-`hermes portal info` 给出高层概览：
+`ansatz portal info` 给出高层概览：
 
 ```
   Nous Portal
@@ -173,15 +173,15 @@ hermes portal open       # 在浏览器中打开订阅管理页面
 在会话外（完整配置向导，适合添加新提供商时使用）：
 
 ```bash
-hermes model
+ansatz model
 ```
 
 ### 将 gateway 与自有后端混用
 
-如果你已有 Browserbase 账号并希望继续使用，同时通过 Nous 路由网页搜索和图像生成，这是支持的。使用 `hermes tools` 为每个工具单独选择后端：
+如果你已有 Browserbase 账号并希望继续使用，同时通过 Nous 路由网页搜索和图像生成，这是支持的。使用 `ansatz tools` 为每个工具单独选择后端：
 
 ```bash
-hermes tools
+ansatz tools
 # → 网页搜索       → "Nous Subscription"
 # → 图像生成       → "Nous Subscription"
 # → 浏览器         → "Browserbase"（你的现有密钥）
@@ -195,11 +195,11 @@ Tool Gateway 是按工具单独选择启用的，而非全部或全不。完整�
 随时管理套餐、查看用量或升级/取消：
 
 - **网页端：** [portal.nousresearch.com/manage-subscription](https://portal.nousresearch.com/manage-subscription)
-- **CLI 快捷方式：** `hermes portal open`（在默认浏览器中打开同一页面）
+- **CLI 快捷方式：** `ansatz portal open`（在默认浏览器中打开同一页面）
 
 ## 配置参考
 
-运行 `hermes setup --portal` 后，`~/.hermes/config.yaml` 将如下所示：
+运行 `ansatz setup --portal` 后，`~/.hermes/config.yaml` 将如下所示：
 
 ```yaml
 model:
@@ -230,23 +230,23 @@ OAuth refresh token 单独存储在 `~/.hermes/auth.json`（不在 `config.yaml`
 
 Hermes 在每次推理调用时从存储的 Portal refresh token 生成短期 JWT，而非复用长期 API 密钥。令牌生命周期完全自动管理——刷新、生成、在瞬时 401 时重试——你无需关心这些细节。
 
-如果 Portal 使 refresh token 失效（修改密码、手动撤销、会话过期），失效的 refresh token 会被**本地隔离**，Hermes 停止重放该令牌，你不会看到一连串相同的 401 错误。下一次调用会显示清晰的"需要重新认证"提示。运行 `hermes auth add nous` 重新登录；隔离状态在下次成功登录时自动清除。
+如果 Portal 使 refresh token 失效（修改密码、手动撤销、会话过期），失效的 refresh token 会被**本地隔离**，Hermes 停止重放该令牌，你不会看到一连串相同的 401 错误。下一次调用会显示清晰的"需要重新认证"提示。运行 `ansatz auth add nous` 重新登录；隔离状态在下次成功登录时自动清除。
 
 ## 故障排查
 
-### `hermes portal info` 显示"not logged in"
+### `ansatz portal info` 显示"not logged in"
 
 你尚未完成 OAuth 流程，或 refresh token 已被清除。运行：
 
 ```bash
-hermes portal
+ansatz portal
 ```
 
-或使用 `hermes model` 重新选择 Nous Portal。
+或使用 `ansatz model` 重新选择 Nous Portal。
 
 ### 会话中途收到"需要重新认证"提示
 
-你的 Portal refresh token 已失效（修改密码、手动撤销或会话过期）。运行 `hermes auth add nous`，下一次请求将使用新凭证。旧令牌的隔离状态在成功重新登录后自动清除。
+你的 Portal refresh token 已失效（修改密码、手动撤销或会话过期）。运行 `ansatz auth add nous`，下一次请求将使用新凭证。旧令牌的隔离状态在成功重新登录后自动清除。
 
 ### 想使用 Portal 未暴露的特定提供商模型
 
@@ -260,7 +260,7 @@ Portal 会为每个模型选择合适的后端——部分模型通过 OpenRoute
 
 ### 账单未出现在我的 Portal 账号中
 
-先检查 `hermes portal info`——如果显示你正在使用其他提供商（`Model: currently openrouter` 而非 `using Nous as inference provider`），说明本地配置已偏离。运行 `hermes model`，选择 Nous Portal，下一次请求将通过你的订阅路由。
+先检查 `ansatz portal info`——如果显示你正在使用其他提供商（`Model: currently openrouter` 而非 `using Nous as inference provider`），说明本地配置已偏离。运行 `ansatz model`，选择 Nous Portal，下一次请求将通过你的订阅路由。
 
 ## 另请参阅
 

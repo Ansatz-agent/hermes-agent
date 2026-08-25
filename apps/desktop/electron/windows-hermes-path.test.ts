@@ -138,6 +138,15 @@ test('resolveVenvHermesCommand: returns the resolved python backend descriptor w
   assert.deepEqual(result.env, { FAKE_ENV: '1' })
 })
 
+test('resolveVenvHermesCommand: recognizes the canonical ansatz.exe shim', () => {
+  const deps = makeDeps()
+  const result = resolveVenvHermesCommand('/root/venv/Scripts/ansatz.exe', ['serve'], deps)
+
+  assert.ok(result)
+  assert.equal(result.command, '/root/venv/Scripts/python.exe')
+  assert.deepEqual(result.args, ['-m', 'hermes_cli.main', 'serve'])
+})
+
 test('resolveVenvHermesCommand: is case-insensitive on hermes.exe and the Scripts dir name', () => {
   const deps = makeDeps()
 

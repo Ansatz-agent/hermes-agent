@@ -93,7 +93,7 @@ DEFAULT_CONFIG = {
         # so the requesting turn is not amputated by restart_drain_timeout.
         # 0 = legacy behaviour (enter stop()/drain immediately). Default
         # 30 min is a safety valve for wedged agents, not a target latency —
-        # an interactive `hermes gateway restart` must never block for hours
+        # an interactive `ansatz gateway restart` must never block for hours
         # on a turn that wedged (#79133). Long unattended turns can raise
         # this in config.yaml.
         "restart_after_turn_timeout": 1800,
@@ -242,7 +242,7 @@ DEFAULT_CONFIG = {
         # Long-lived reconnect-loop escalation (seconds). A platform that has
         # been continuously failing/reconnecting for this long gets
         # needs_attention flagged in gateway runtime status (visible in
-        # `hermes status` / fleet monitoring). Retries never stop — this is a
+        # `ansatz status` / fleet monitoring). Retries never stop — this is a
         # signal, not a circuit breaker. 0 = disable.
         "reconnect_attention_after": 7200,
         # Freshness window for the gateway auto-continue note (seconds).
@@ -490,7 +490,7 @@ DEFAULT_CONFIG = {
     #   - enabled: True -> False   (opt-in; most users never use /rollback)
     #   - max_snapshots: 50 -> 20  (now actually enforced via ref rewrite)
     #   - auto_prune:   False -> True (orphans/stale pruned automatically)
-    # Opt in via ``hermes chat --checkpoints`` or set enabled=True here.
+    # Opt in via ``ansatz chat --checkpoints`` or set enabled=True here.
     "checkpoints": {
         "enabled": False,
         # Max checkpoints to keep per working directory.  Pre-v2 this only
@@ -520,7 +520,7 @@ DEFAULT_CONFIG = {
         # external volume / network share / VPN is simply not mounted yet —
         # and this sweep runs unattended, so it must never guess. Orphan
         # cleanup is only available via the explicit
-        # ``hermes checkpoints prune`` command (add ``--keep-orphans`` to
+        # ``ansatz checkpoints prune`` command (add ``--keep-orphans`` to
         # skip it), where a human is looking at the output.
         "auto_prune": True,
         "retention_days": 7,
@@ -555,7 +555,7 @@ DEFAULT_CONFIG = {
     # small so a slow/dead server adds little to first-response latency.
     "mcp_discovery_timeout": 1.5,
 
-    # Single-query (``hermes -q/-z "..."``) variant of mcp_discovery_timeout.
+    # Single-query (``ansatz -q/-z "..."``) variant of mcp_discovery_timeout.
     # In one-shot mode there is only ONE turn, so the between-turns late-binding
     # refresh never runs: a server that misses the small interactive bound is
     # invisible to the LLM for the whole session.  This larger bound gives slow
@@ -1028,7 +1028,7 @@ DEFAULT_CONFIG = {
         },
         # Triage specifier — flesh out a rough one-liner in the Kanban
         # Triage column into a concrete spec, then promote it to ``todo``.
-        # Invoked by ``hermes kanban specify`` (single id or --all). Set a
+        # Invoked by ``ansatz kanban specify`` (single id or --all). Set a
         # cheap, capable model here (gemini-flash works well); the main
         # model is overkill for short spec expansion.
         "triage_specifier": {
@@ -1042,7 +1042,7 @@ DEFAULT_CONFIG = {
         },
         # Kanban decomposer — decomposes a triage task into a graph of
         # child tasks routed to specialist profiles by description.
-        # Invoked by ``hermes kanban decompose`` and the kanban
+        # Invoked by ``ansatz kanban decompose`` and the kanban
         # auto-decompose dispatcher tick. Returns a JSON task graph;
         # uses more tokens than the specifier so allow more headroom.
         "kanban_decomposer": {
@@ -1056,7 +1056,7 @@ DEFAULT_CONFIG = {
         },
         # Profile describer — auto-generates a 1-2 sentence description
         # of what a profile is good at. Invoked by
-        # ``hermes profile describe <name> --auto`` and the dashboard's
+        # ``ansatz profile describe <name> --auto`` and the dashboard's
         # auto-generate button. Short, cheap call.
         "profile_describer": {
             "provider": "auto",
@@ -1082,7 +1082,7 @@ DEFAULT_CONFIG = {
         # Curator — skill-usage review fork. Timeout is generous because the
         # review pass can take several minutes on reasoning models (umbrella
         # building over hundreds of candidate skills). "auto" = use main chat
-        # model; override via `hermes model` → auxiliary → Curator to route
+        # model; override via `ansatz model` → auxiliary → Curator to route
         # to a cheaper aux model (e.g. openrouter google/gemini-3-flash-preview).
         "curator": {
             "provider": "auto",
@@ -1180,18 +1180,18 @@ DEFAULT_CONFIG = {
         # Set false to restore the legacy c-j submit fallback on unusual POSIX
         # PTYs whose plain Enter arrives as LF instead of CR.
         "cli_multiline_shortcuts": True,
-        # Which interface bare `hermes` (and `hermes chat`) launches by default:
+        # Which interface bare `hermes` (and `ansatz chat`) launches by default:
         #   "cli" — the classic prompt_toolkit REPL (default, preserves prior behavior)
         #   "tui" — the modern Ink TUI (same as passing `--tui`)
         # Explicit flags always win over this setting: `--cli` forces the classic
         # REPL and `--tui` (or HERMES_TUI=1) forces the TUI regardless of config.
         "interface": "cli",
-        # When true, `hermes --tui` auto-resumes the most recent human-
+        # When true, `ansatz --tui` auto-resumes the most recent human-
         # facing session on launch instead of forging a fresh one.
-        # Mirrors `hermes -c` muscle memory.  Default off so existing
+        # Mirrors `ansatz -c` muscle memory.  Default off so existing
         # users aren't surprised.  HERMES_TUI_RESUME=<id> always wins.
         "tui_auto_resume_recent": False,
-        # When true (default), `hermes --tui` drops a one-time hint
+        # When true (default), `ansatz --tui` drops a one-time hint
         # ("subagents working · /agents to watch live") the first time a turn
         # starts delegating, nudging the user toward the live spawn-tree
         # dashboard. Set false to suppress the hint.
@@ -1384,7 +1384,7 @@ DEFAULT_CONFIG = {
         "copy_shortcut": "auto",  # "auto" (platform default) | "ctrl_c" | "ctrl_shift_c" | "disabled"
         # Petdex animated mascot (https://github.com/crafter-station/petdex).
         # A purely cosmetic sprite that reacts to agent activity across the
-        # CLI, TUI, and desktop app. Manage with `hermes pets`. Disabled until
+        # CLI, TUI, and desktop app. Manage with `ansatz pets`. Disabled until
         # a pet is installed + selected (no effect on prompt caching — this is
         # a display concern only).
         "pet": {
@@ -1976,7 +1976,7 @@ DEFAULT_CONFIG = {
     # and patch drift. Runs inactivity-triggered from session start — no
     # cron daemon.
     #
-    # See `hermes curator status` for the last run summary.
+    # See `ansatz curator status` for the last run summary.
     "curator": {
         "enabled": True,
         # How long to wait between curator runs (hours).  Default: 7 days.
@@ -1993,12 +1993,12 @@ DEFAULT_CONFIG = {
         # (mark stale / archive long-unused skills) and skips the forked
         # aux-model review entirely — no umbrella-building, no aux-model cost.
         # Set to true to opt back into merging overlapping skills into
-        # class-level umbrellas. `hermes curator run --consolidate` overrides
+        # class-level umbrellas. `ansatz curator run --consolidate` overrides
         # this for a single invocation.
         "consolidate": False,
         # Also prune (archive) bundled built-in skills after the inactivity
         # period, not just agent-created ones. ON by default. Built-ins are
-        # normally restored on every `hermes update`, so pruning them only
+        # normally restored on every `ansatz update`, so pruning them only
         # sticks because a suppression list tells the re-seeder to leave them
         # archived. Hub-installed skills are NEVER pruned here — they have an
         # external upstream owner. Built-ins accrue usage telemetry and their
@@ -2010,7 +2010,7 @@ DEFAULT_CONFIG = {
         # Pre-run backup: before every real curator pass (dry-run is
         # skipped), snapshot ~/.hermes/skills/ into
         # ~/.hermes/skills/.curator_backups/<utc-iso>/skills.tar.gz so the
-        # user can roll back with `hermes curator rollback`.
+        # user can roll back with `ansatz curator rollback`.
         "backup": {
             "enabled": True,
             "keep": 5,  # retain last N regular snapshots
@@ -2282,7 +2282,7 @@ DEFAULT_CONFIG = {
             "transport_fallback": "deny",
         },
         # Writes to agent-instruction files (AGENTS.md/CLAUDE.md/SOUL.md/
-        # .cursorrules, project-local .hermes config) always require human
+        # .cursorrules, project-local .ansatz config) always require human
         # approval — even under auto-approve/yolo. Extra patterns are
         # fnmatch globs matched against the basename (e.g. "*.mdc").
         "protected_instruction_files": True,
@@ -2299,7 +2299,7 @@ DEFAULT_CONFIG = {
         # Acknowledged supply-chain security advisories. Each entry is the
         # ID of an advisory the user has read and acted on (uninstalled the
         # compromised package, rotated credentials). Acked advisories no
-        # longer trigger the startup banner. Add via `hermes doctor --ack
+        # longer trigger the startup banner. Add via `ansatz doctor --ack
         # <id>`; remove by editing the list directly. See
         # ``hermes_cli/security_advisories.py`` for the catalog.
         "acked_advisories": [],
@@ -2421,7 +2421,7 @@ DEFAULT_CONFIG = {
     # Kanban multi-agent coordination — controls the dispatcher loop that
     # spawns workers for ready tasks. The dispatcher ticks every N seconds
     # (default 60), reclaims stale claims, promotes dependency-satisfied
-    # todos to ready, and fires `hermes -p <assignee> chat -q ...` for
+    # todos to ready, and fires `ansatz -p <assignee> chat -q ...` for
     # each claimable ready task. One dispatcher per profile is sufficient;
     # running more than one on the same kanban.db will race for claims.
     "kanban": {
@@ -2476,7 +2476,7 @@ DEFAULT_CONFIG = {
         "max_in_progress_per_profile": None,
         # When true, the kanban dispatcher auto-runs the decomposer on
         # tasks that land in Triage (every dispatcher tick). When false,
-        # decomposition is manual via `hermes kanban decompose <id>` or
+        # decomposition is manual via `ansatz kanban decompose <id>` or
         # the dashboard's Decompose button.
         "auto_decompose": True,
         # Max triage tasks to decompose per dispatcher tick. Prevents a
@@ -2583,7 +2583,7 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "url": "",
         # Disk cache TTL in hours.  Beyond this, the CLI refetches on the
-        # next /model or `hermes model` invocation; network failures
+        # next /model or `ansatz model` invocation; network failures
         # silently fall back to the stale cache.
         "ttl_hours": 1,
         # Optional per-provider override URLs for third parties that want
@@ -2770,7 +2770,7 @@ DEFAULT_CONFIG = {
         # the breaker never tripped — e.g. the ~150s wedged-event-loop cycle in
         # #81642 (stall -> ~90s liveness-watchdog hard-exit -> respawn ->
         # auto-resume replays the same session), which also makes
-        # `hermes update` hang because it can never drain the gateway.
+        # `ansatz update` hang because it can never drain the gateway.
         "restart_loop_guard": {
             "max_restarts": 3,
             "window_seconds": 60,
@@ -2915,7 +2915,7 @@ DEFAULT_CONFIG = {
         # silently deleting it could surprise users.  Opt in explicitly.
         "auto_prune": False,
         # How many inactive days of ended-session history to keep. Matches
-        # the default of ``hermes sessions prune``.
+        # the default of ``ansatz sessions prune``.
         "retention_days": 90,
         # When true, auto-archive (soft-hide, never delete) sessions that
         # haven't been touched in ``auto_archive_days`` days, once per
@@ -2953,10 +2953,10 @@ DEFAULT_CONFIG = {
         # that drops duplicate content copies and stops trigram-indexing tool
         # output (typically reclaims ~60%+ of state.db on heavy users). It is
         # OPT-IN: existing databases keep their working legacy index until the
-        # user runs `hermes sessions optimize-storage`, because the rebuild is
+        # user runs `ansatz sessions optimize-storage`, because the rebuild is
         # disk-heavy and long on large DBs (see that command's disk preflight).
         #
-        #   "advise" (default): `hermes update` prints a one-line notice with
+        #   "advise" (default): `ansatz update` prints a one-line notice with
         #     the reclaimable size and the command, when a legacy index is
         #     detected. Nothing is changed automatically.
         #   "require": the notice is shown as a REQUIRED upgrade (firmer copy),
@@ -2988,7 +2988,7 @@ DEFAULT_CONFIG = {
         # may hold and still be resumed interactively (CLI/TUI/desktop).
         "max_resume_messages": 20000,
         # Max active messages a single session may hold for an in-memory
-        # (non-streaming) export such as `hermes sessions export`. Checked
+        # (non-streaming) export such as `ansatz sessions export`. Checked
         # per session, so full-DB backups of many small sessions still work.
         "max_export_messages": 20000,
     },
@@ -3014,14 +3014,14 @@ DEFAULT_CONFIG = {
         },
     },
 
-    # ``hermes doctor`` behaviour.
+    # ``ansatz doctor`` behaviour.
     "doctor": {
-        # Per-probe timeout (seconds) for the opt-in `hermes doctor --live`
+        # Per-probe timeout (seconds) for the opt-in `ansatz doctor --live`
         # real-call backend probes (Firecrawl/FAL/browser/MCP/TTS/STT).
         "live_probe_timeout": 10,
     },
 
-    # ``hermes update`` behaviour.
+    # ``ansatz update`` behaviour.
     "updates": {
         # Pre-update safety backup — ONE consolidated mechanism, three modes:
         #
@@ -3032,9 +3032,9 @@ DEFAULT_CONFIG = {
         #     warning so the snapshot stays fast. Restore via ``/snapshot``.
         #     This is the #15733 (lost pairing data) / #34600 (emptied cron
         #     jobs) safety net.
-        #   full — the quick snapshot PLUS a full ``hermes backup``-style zip
+        #   full — the quick snapshot PLUS a full ``ansatz backup``-style zip
         #     of HERMES_HOME into <HERMES_HOME>/backups/, restorable with
-        #     ``hermes import``. Can add minutes on large homes. This is the
+        #     ``ansatz import``. Can add minutes on large homes. This is the
         #     #48200 (wrong-path wipe) safety net. ``--backup`` forces this
         #     for a single run.
         #   off — no pre-update backup of any kind. ``--no-backup`` forces
@@ -3047,7 +3047,7 @@ DEFAULT_CONFIG = {
         # Values below 1 are floored to 1 — the backup just created is
         # always preserved. The quick snapshot always keeps exactly 1.
         "backup_keep": 5,
-        # What `hermes update` does with uncommitted local changes to the
+        # What `ansatz update` does with uncommitted local changes to the
         # source tree when it runs NON-interactively — i.e. triggered from
         # the desktop/chat app or the gateway, where there's no TTY to answer
         # a restore prompt. Interactive (terminal) updates are unaffected:
@@ -3063,7 +3063,7 @@ DEFAULT_CONFIG = {
         #               ignored paths — node_modules, venv, build outputs —
         #               are never touched.
         "non_interactive_local_changes": "stash",
-        # Refresh an already-installed cua-driver during `hermes update`.
+        # Refresh an already-installed cua-driver during `ansatz update`.
         # The refresh is best-effort and macOS-only. Turn this off if the
         # upstream installer is not appropriate for the machine, for example
         # on non-admin accounts where `/Applications` is not writable.
@@ -3129,7 +3129,7 @@ DEFAULT_CONFIG = {
     # X (Twitter) Search via xAI's built-in x_search Responses tool.
     # The tool registers when xAI credentials are available (SuperGrok
     # OAuth or XAI_API_KEY) AND the x_search toolset is enabled in
-    # `hermes tools`. These settings tune the backing Responses API call.
+    # `ansatz tools`. These settings tune the backing Responses API call.
     "x_search": {
         # xAI model used for the Responses call. grok-4.5 is the
         # recommended default; any Grok model with x_search tool
@@ -3199,7 +3199,7 @@ DEFAULT_CONFIG = {
             # https://vault.bitwarden.eu for EU Cloud, or your own URL
             # for self-hosted Bitwarden.  Plumbed into the bws subprocess
             # as BWS_SERVER_URL.  Prompted for during
-            # `hermes secrets bitwarden setup`.
+            # `ansatz secrets bitwarden setup`.
             "server_url": "",
         },
         "onepassword": {
@@ -3289,7 +3289,7 @@ DEFAULT_CONFIG = {
     # leaks tokens that only work behind the configured trusted proxy boundary
     # (CA private key + proxy endpoint integrity are part of that boundary).
     #
-    # Configure with `hermes egress setup`.  Disabled by default — the rest of
+    # Configure with `ansatz egress setup`.  Disabled by default — the rest of
     # Hermes works exactly as before with `enabled: false`.
     "proxy": {
         # Master switch.  When false, iron-proxy is never started, no docker
@@ -3340,7 +3340,7 @@ DEFAULT_CONFIG = {
     },
 
     # Hermes Desktop (Electron app) launch options. These only affect
-    # `hermes desktop`; they do not touch the CLI/gateway.
+    # `ansatz desktop`; they do not touch the CLI/gateway.
     "desktop": {
         # Git repository discovery for the Desktop Projects sidebar. Empty
         # roots preserve the historical bounded scan of the user's home.
@@ -3834,7 +3834,7 @@ OPTIONAL_ENV_VARS = {
         "category": "provider",
     },
     "AZURE_FOUNDRY_BASE_URL": {
-        "description": "Azure Foundry base URL (set via 'hermes model' for endpoint-specific config)",
+        "description": "Azure Foundry base URL (set via 'ansatz model' for endpoint-specific config)",
         "prompt": "Azure Foundry base URL",
         "url": None,
         "password": False,

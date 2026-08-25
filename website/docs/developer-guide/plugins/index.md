@@ -32,7 +32,7 @@ Hermes has several distinct pluggable interfaces — some use Python `register_*
 | **External tools via MCP** (filesystem, GitHub, Linear, any MCP server) | [MCP](/user-guide/features/mcp) — declare `mcp_servers.<name>` in `config.yaml` |
 | **Gateway event hooks** (fire on startup, session events, commands) | [Event Hooks](/user-guide/features/hooks#gateway-event-hooks) — drop `HOOK.yaml` + `handler.py` into `~/.hermes/hooks/<name>/` |
 | **Shell hooks** (run a shell command on events) | [Shell Hooks](/user-guide/features/hooks#shell-hooks) — declare under `hooks:` in `config.yaml` |
-| **Additional skill sources** (custom GitHub repos, private skill indexes) | [Skills](/user-guide/features/skills) — `hermes skills tap add <repo>` · [Publishing a tap](/user-guide/features/skills#publishing-a-custom-skill-tap) |
+| **Additional skill sources** (custom GitHub repos, private skill indexes) | [Skills](/user-guide/features/skills) — `ansatz skills tap add <repo>` · [Publishing a tap](/user-guide/features/skills#publishing-a-custom-skill-tap) |
 | A first-class **core** inference provider (not a plugin) | [Adding Providers](/developer-guide/adding-providers) |
 
 See the full [Pluggable interfaces table](/user-guide/features/plugins#pluggable-interfaces--where-to-go-for-each) for a consolidated view of every extension surface including config-driven (TTS, STT, MCP, shell hooks) and drop-in directory (gateway hooks) styles.
@@ -62,9 +62,9 @@ my-portable-plugin/
 Install and activate a portable package through the normal workflow:
 
 ```bash
-hermes plugins install owner/repository --no-enable
-hermes plugins list
-hermes plugins enable <plugin-name>
+ansatz plugins install owner/repository --no-enable
+ansatz plugins list
+ansatz plugins enable <plugin-name>
 ```
 
 Portable packages are disabled after installation unless you explicitly enable
@@ -181,14 +181,14 @@ cd ~/.hermes/plugins/calculator
 
 ### Validate with Plugin Doctor
 
-`hermes plugins doctor [path-or-id]` runs the same directory discovery,
+`ansatz plugins doctor [path-or-id]` runs the same directory discovery,
 manifest parser, namespaced import, `register(ctx)`, hook registry, and tool
 registry used by Hermes itself. It reports invalid hook names, callbacks that do
 not accept `**kwargs`, registration failures, and drift between declared and
 registered tools/hooks. Pass `--ci` to exit non-zero on an error:
 
 ```bash
-hermes plugins doctor . --ci
+ansatz plugins doctor . --ci
 ```
 
 Doctor uses a temporary `HERMES_HOME`, restores plugin registration state after
@@ -269,7 +269,7 @@ calculator = "my_pkg:register"
 ```
 
 Hermes reads these from installed metadata without importing your code, so
-`hermes plugins capabilities` and the consent flow stay accurate for pip
+`ansatz plugins capabilities` and the consent flow stay accurate for pip
 installs.
 
 ### Manifest v2 reference
@@ -285,7 +285,7 @@ this Hermes understands still loads with a warning.
 | `manifest_version` | int | Manifest **file-format** version. Absent = `1`. Current max: `2`. Independent from `api_version`. |
 | `api_version` | int | Runtime **plugin API generation** the plugin targets (ctx surface / hook signatures). Deliberately a separate axis from `manifest_version` — an `api_version: 1` plugin can use a v2 manifest. |
 | `requires_plugins` | list | Inter-plugin dependencies: `- id: other-plugin` with optional `version_range: ">=1.0,<2"`. **Advisory**: a missing dependency logs a clear warning but the plugin still loads — probe at runtime with `ctx.has_plugin("other-plugin")`. Load **order** honors these edges: when A requires B, B's `register()` runs before A's (topological sort, alphabetical tiebreak; cycles warn and fall back to alphabetical order). |
-| `python_dependencies` | list of str | Declared pip requirements (e.g. `"requests>=2.0,<3"`). **Declaration seam only** — Hermes validates them, and `hermes plugins install` / `hermes plugins doctor` surface missing ones with a `pip install` hint, but Hermes **never auto-installs** them. Pin upper bounds. |
+| `python_dependencies` | list of str | Declared pip requirements (e.g. `"requests>=2.0,<3"`). **Declaration seam only** — Hermes validates them, and `ansatz plugins install` / `ansatz plugins doctor` surface missing ones with a `pip install` hint, but Hermes **never auto-installs** them. Pin upper bounds. |
 | `config_schema` | mapping | JSON-schema-ish description of keys under `plugins.entries.<id>.settings`: `api_url: {type: str, default: "", description: "...", required: false}`. Validated at load; mismatches log actionable warnings naming the key and expected type — never load failures. Types: `str`, `int`, `float`, `bool`, `list`, `dict` (plus JSON-schema aliases). |
 | `license` | str | SPDX-style license id (e.g. `MIT`). |
 | `homepage` | str | Project URL. |
@@ -601,7 +601,7 @@ Plugins (1):
 If your plugin doesn't show up — or shows up but isn't loading — set `HERMES_PLUGINS_DEBUG=1` to get verbose discovery logs on stderr:
 
 ```bash
-HERMES_PLUGINS_DEBUG=1 hermes plugins list
+HERMES_PLUGINS_DEBUG=1 ansatz plugins list
 ```
 
 You'll see, for every plugin source (bundled, user, project, entry-points):
@@ -616,12 +616,12 @@ You'll see, for every plugin source (bundled, user, project, entry-points):
 The same logs are always written to `~/.hermes/logs/agent.log` at WARNING level (failures only) and DEBUG level (everything) when the env var is set. So if you can't run with the env var (e.g. from inside the gateway), tail the log file instead:
 
 ```bash
-hermes logs --level WARNING | grep -i plugin
+ansatz logs --level WARNING | grep -i plugin
 ```
 
 Common reasons a plugin doesn't appear:
 
-- **Not enabled in config** — plugins are opt-in. Run `hermes plugins enable <name>` (the name comes from the `plugins list` output, which can be `<category>/<plugin>` for nested layouts).
+- **Not enabled in config** — plugins are opt-in. Run `ansatz plugins enable <name>` (the name comes from the `plugins list` output, which can be `<category>/<plugin>` for nested layouts).
 - **Wrong directory layout:** Native packages use `~/.hermes/plugins/<plugin-name>/plugin.yaml` (flat) or one category level. Portable packages use root `plugin.json` in the same locations. Anything deeper is ignored.
 - **Missing `__init__.py`:** Native packages need both `plugin.yaml` and `__init__.py` with a `register(ctx)` function. Portable packages do not import Python and do not require `__init__.py`.
 - **Wrong `kind`** — gateway adapters need `kind: platform` in their manifest. Memory providers are auto-detected as `kind: exclusive` and routed through the `memory.provider` config instead of `plugins.enabled`.
@@ -714,7 +714,7 @@ requires_env:
 
 If `WEATHER_API_KEY` isn't set, the plugin is disabled with a clear message. No crash, no error in the agent — just "Plugin weather disabled (missing: WEATHER_API_KEY)".
 
-When users run `hermes plugins install`, they're **prompted interactively** for any missing `requires_env` variables. Values are saved to `.env` automatically.
+When users run `ansatz plugins install`, they're **prompted interactively** for any missing `requires_env` variables. Values are saved to `.env` automatically.
 
 For a better install experience, use the rich format with descriptions and signup URLs:
 
@@ -863,7 +863,7 @@ per-plugin opt-in in `config.yaml`:
 ```yaml
 plugins:
   entries:
-    my-plugin:                    # the plugin's registry key from `hermes plugins list`
+    my-plugin:                    # the plugin's registry key from `ansatz plugins list`
       allow_tool_override: true
 ```
 
@@ -875,7 +875,7 @@ like `shell_exec` or `write_file` could intercept everything the model
 routes through it. Bundled plugins are exempt: an override there is a
 maintainer decision. If config cannot be loaded, the gate fails closed.
 
-You normally never edit this key by hand. `hermes plugins enable <name>`
+You normally never edit this key by hand. `ansatz plugins enable <name>`
 asks whether to grant the capability when enabling a non-bundled plugin
 (defaulting to no), and the `--allow-tool-override` /
 `--no-allow-tool-override` flags skip the prompt for scripted installs.
@@ -920,7 +920,7 @@ Most hooks are fire-and-forget observers — their return values are ignored. Th
 
 All callbacks should accept `**kwargs` for forward compatibility. If a hook callback crashes, it's logged and skipped. Other hooks and the agent continue normally.
 
-The kanban lifecycle hooks fire **after** the board DB change commits, so a callback always sees durable state and can never hold the SQLite write lock. Because kanban workers run as separate `hermes -p <profile> chat -q` subprocesses, `kanban_task_claimed` fires in the **dispatcher** process while `kanban_task_completed` / `kanban_task_blocked` fire in the **worker** process — hook in the dispatcher to observe every transition centrally, or in the worker for per-task in-session context.
+The kanban lifecycle hooks fire **after** the board DB change commits, so a callback always sees durable state and can never hold the SQLite write lock. Because kanban workers run as separate `ansatz -p <profile> chat -q` subprocesses, `kanban_task_claimed` fires in the **dispatcher** process while `kanban_task_completed` / `kanban_task_blocked` fire in the **worker** process — hook in the dispatcher to observe every transition centrally, or in the worker for per-task in-session context.
 
 The **API request hooks** are observers for the raw provider request, one level below the per-turn `pre_llm_call` / `post_llm_call` pair: a single turn that calls tools makes several API requests, and these hooks fire around each one. They exist for observability plugins (tracing, cost accounting, latency dashboards). The `request` and `response` kwargs are sanitized, size-capped JSON views of the provider payload (sensitive keys redacted, long strings truncated, SDK objects normalized), and `usage` is a plain token-summary dict. Every payload carries the correlation fields `turn_id`, `api_request_id`, `task_id`, `session_id`, and `api_call_count`, so a plugin can stitch requests, tool calls, and turns together. `api_request_error` fires when a provider call raises and adds `status_code`, `retry_count` / `max_retries`, `retryable`, `reason`, and an `error` dict with `type` and `message`.
 
@@ -1075,7 +1075,7 @@ The canonical list of kinds is `VALID_MIDDLEWARE` in `hermes_cli/middleware.py`:
 
 ### Register CLI commands
 
-Plugins can add their own `hermes <plugin>` subcommand tree:
+Plugins can add their own `ansatz <plugin>` subcommand tree:
 
 ```python
 def _my_command(args):
@@ -1203,7 +1203,7 @@ This is the public, stable interface for tool dispatch from plugin commands. Plu
 
 ### Act from inside a hook (profile + tools)
 
-`ctx._cli_ref` is only populated in an **interactive CLI** session. It is `None` in the gateway, in non-interactive `hermes chat -q` runs, and in **kanban-spawned worker sessions** — so any plugin logic that reaches through `_cli_ref` silently no-ops in exactly those contexts. Two stable, session-agnostic APIs cover what hooks actually need:
+`ctx._cli_ref` is only populated in an **interactive CLI** session. It is `None` in the gateway, in non-interactive `ansatz chat -q` runs, and in **kanban-spawned worker sessions** — so any plugin logic that reaches through `_cli_ref` silently no-ops in exactly those contexts. Two stable, session-agnostic APIs cover what hooks actually need:
 
 - **`ctx.profile_name`** — the active profile name (e.g. `"default"`, or the assignee profile in a kanban worker). Derived from `HERMES_HOME`, so it works everywhere with no `_cli_ref` dependency.
 - **`ctx.dispatch_tool(name, args)`** — invoke any registered tool (built-in or plugin), including the `kanban_*` tools, `delegate_task`, `terminal`, `read_file`, etc. Works from hook callbacks regardless of which process the hook fires in.
@@ -1221,7 +1221,7 @@ def register(ctx):
     ctx.register_hook("kanban_task_blocked", on_blocked)
 ```
 
-For running a full `hermes <subcommand>` (e.g. `hermes kanban show`), shell out with the `terminal` tool via `ctx.dispatch_tool("terminal", {"command": "hermes kanban show ..."})` — there is no in-process slash-command bridge for headless worker sessions, and tools are the supported way to drive Hermes from a hook.
+For running a full `ansatz <subcommand>` (e.g. `ansatz kanban show`), shell out with the `terminal` tool via `ctx.dispatch_tool("terminal", {"command": "ansatz kanban show ..."})` — there is no in-process slash-command bridge for headless worker sessions, and tools are the supported way to drive Hermes from a hook.
 
 ### Handle Slack Block Kit button clicks
 
@@ -1329,7 +1329,7 @@ def register(ctx):
         check_fn=check_requirements,
         required_env=["MYPLATFORM_TOKEN"],
         # Auto-populate PlatformConfig.extra from env so env-only setups
-        # show up in `hermes gateway status` without SDK instantiation.
+        # show up in `ansatz gateway status` without SDK instantiation.
         env_enablement_fn=_env_enablement,
         # Opt in to cron delivery: `deliver=myplatform` routes to this var.
         cron_deliver_env_var="MYPLATFORM_HOME_CHANNEL",
@@ -1521,9 +1521,9 @@ Supports all the same events as Python plugin hooks (`pre_tool_call`, `post_tool
 If you maintain a GitHub repo of skills (or want to pull from a community index beyond the built-in sources), add it as a **tap**:
 
 ```bash
-hermes skills tap add myorg/skills-repo
-hermes skills search my-workflow --source myorg/skills-repo
-hermes skills install myorg/skills-repo/my-workflow
+ansatz skills tap add myorg/skills-repo
+ansatz skills search my-workflow --source myorg/skills-repo
+ansatz skills install myorg/skills-repo/my-workflow
 ```
 
 Publishing your own tap is just a GitHub repo with `skills/<skill-name>/SKILL.md` directories — no server or registry signup needed.

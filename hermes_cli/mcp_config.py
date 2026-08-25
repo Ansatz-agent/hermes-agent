@@ -1,7 +1,7 @@
 """
-MCP Server Management CLI — ``hermes mcp`` subcommand.
+MCP Server Management CLI — ``ansatz mcp`` subcommand.
 
-Implements ``hermes mcp add/remove/list/test/configure`` for interactive
+Implements ``ansatz mcp add/remove/list/test/configure`` for interactive
 MCP server lifecycle management (issue #690 Phase 2).
 
 Relies on tools/mcp_tool.py for connection/discovery and keeps
@@ -381,7 +381,7 @@ def _probe_single_server(
 def _oauth_tokens_present(name: str) -> bool:
     """Return True if an OAuth token file exists on disk for ``name``.
 
-    Used after ``hermes mcp login`` to distinguish a genuine authentication
+    Used after ``ansatz mcp login`` to distinguish a genuine authentication
     from a probe that succeeded only because the server allowed
     initialize/tools-list without auth (so no token was ever acquired).
     """
@@ -410,7 +410,7 @@ def _unwrap_exception_group(exc: BaseException) -> Exception:
     return RuntimeError(str(exc))
 
 
-# ─── hermes mcp add ──────────────────────────────────────────────────────────
+# ─── ansatz mcp add ──────────────────────────────────────────────────────────
 
 def cmd_mcp_add(args):
     """Add a new MCP server with discovery-first tool selection."""
@@ -451,9 +451,9 @@ def cmd_mcp_add(args):
     if not url and not command:
         _error("Must specify --url <endpoint>, --command <cmd>, or --preset <name>")
         _info("Examples:")
-        _info('  hermes mcp add ink --url "https://mcp.ml.ink/mcp"')
-        _info('  hermes mcp add github --command npx --args @modelcontextprotocol/server-github')
-        _info('  hermes mcp add myserver --preset mypreset')
+        _info('  ansatz mcp add ink --url "https://mcp.ml.ink/mcp"')
+        _info('  ansatz mcp add github --command npx --args @modelcontextprotocol/server-github')
+        _info('  ansatz mcp add myserver --preset mypreset')
         return
 
     # Check if server already exists
@@ -547,7 +547,7 @@ def cmd_mcp_add(args):
             server_config["enabled"] = False
             if _save_mcp_server(name, server_config):
                 _success(f"Saved '{name}' to config (disabled)")
-                _info("Fix the issue, then: hermes mcp test " + name)
+                _info("Fix the issue, then: ansatz mcp test " + name)
         return
 
     if not tools:
@@ -617,7 +617,7 @@ def cmd_mcp_add(args):
         _info("Start a new session to use these tools.")
 
 
-# ─── hermes mcp remove ───────────────────────────────────────────────────────
+# ─── ansatz mcp remove ───────────────────────────────────────────────────────
 
 def cmd_mcp_remove(args):
     """Remove an MCP server from config."""
@@ -640,7 +640,7 @@ def cmd_mcp_remove(args):
 
     # Clean up OAuth tokens if they exist — route through MCPOAuthManager so
     # any provider instance cached in the current process (e.g. from an
-    # earlier `hermes mcp test` in the same session) is evicted too.
+    # earlier `ansatz mcp test` in the same session) is evicted too.
     try:
         from tools.mcp_oauth_manager import get_manager
         get_manager().remove(name)
@@ -649,7 +649,7 @@ def cmd_mcp_remove(args):
         pass
 
 
-# ─── hermes mcp list ──────────────────────────────────────────────────────────
+# ─── ansatz mcp list ──────────────────────────────────────────────────────────
 
 def cmd_mcp_list(args=None):
     """List all configured MCP servers."""
@@ -660,8 +660,8 @@ def cmd_mcp_list(args=None):
         _info("No MCP servers configured.")
         print()
         _info("Add one with:")
-        _info('  hermes mcp add <name> --url <endpoint>')
-        _info('  hermes mcp add <name> --command <cmd> --args <args...>')
+        _info('  ansatz mcp add <name> --url <endpoint>')
+        _info('  ansatz mcp add <name> --command <cmd> --args <args...>')
         print()
         return
 
@@ -718,7 +718,7 @@ def cmd_mcp_list(args=None):
     print()
 
 
-# ─── hermes mcp test ──────────────────────────────────────────────────────────
+# ─── ansatz mcp test ──────────────────────────────────────────────────────────
 
 def cmd_mcp_test(args):
     """Test connection to an MCP server."""
@@ -782,15 +782,15 @@ def cmd_mcp_test(args):
     print()
 
 
-# ─── hermes mcp login ────────────────────────────────────────────────────────
+# ─── ansatz mcp login ────────────────────────────────────────────────────────
 
 def _reauth_oauth_server(name: str, server_config: dict) -> bool:
     """Force a fresh OAuth flow for one server. Returns True on success.
 
     Wipes cached OAuth state (disk + in-process MCPOAuthManager cache),
     re-probes to trigger the browser flow, and verifies a token actually
-    landed before reporting success. Shared by ``hermes mcp login`` and
-    ``hermes mcp reauth`` so both behave identically for a single server.
+    landed before reporting success. Shared by ``ansatz mcp login`` and
+    ``ansatz mcp reauth`` so both behave identically for a single server.
     """
     url = server_config.get("url")
     if not url:
@@ -798,7 +798,7 @@ def _reauth_oauth_server(name: str, server_config: dict) -> bool:
         return False
     if server_config.get("auth") != "oauth":
         _error(f"Server '{name}' is not configured for OAuth (auth={server_config.get('auth')})")
-        _info("Use `hermes mcp remove` + `hermes mcp add` to reconfigure auth.")
+        _info("Use `ansatz mcp remove` + `ansatz mcp add` to reconfigure auth.")
         return False
 
     # Wipe both disk and in-memory cache so the next probe forces a fresh
@@ -819,7 +819,7 @@ def _reauth_oauth_server(name: str, server_config: dict) -> bool:
     # window (300s in mcp_oauth) plus headroom — matching the GUI re-auth
     # path in web_server.py so CLI and dashboard behave identically.
     #
-    # force_interactive_oauth: `hermes mcp login` is *explicitly* user-
+    # force_interactive_oauth: `ansatz mcp login` is *explicitly* user-
     # initiated even when stdin isn't a TTY (Hermes desktop / agent-
     # spawned terminals). Without this, OAuth refuses before opening a
     # browser because _is_interactive() only checks sys.stdin.isatty().
@@ -864,7 +864,7 @@ def _reauth_oauth_server(name: str, server_config: dict) -> bool:
             print(color("          client_id: \"<your-oauth-client-id>\"", Colors.DIM))
             print(color("          client_secret: \"<your-oauth-client-secret>\"", Colors.DIM))
             print()
-            _info("Then re-run `hermes mcp login " + name + "`.")
+            _info("Then re-run `ansatz mcp login " + name + "`.")
             return False
         if tools:
             _success(f"Authenticated — {len(tools)} tool(s) available")
@@ -912,8 +912,8 @@ def cmd_mcp_login(args):
 def cmd_mcp_reauth(args):
     """Re-authenticate one OAuth MCP server, or all of them sequentially.
 
-    ``hermes mcp reauth <name>`` re-auths a single server (same as ``login``).
-    ``hermes mcp reauth --all`` discovers every ``auth: oauth`` server in
+    ``ansatz mcp reauth <name>`` re-auths a single server (same as ``login``).
+    ``ansatz mcp reauth --all`` discovers every ``auth: oauth`` server in
     config and re-auths them ONE AT A TIME.
 
     Serial-by-design: a human can only complete one browser OAuth flow at a
@@ -948,7 +948,7 @@ def cmd_mcp_reauth(args):
 
     if not name:
         _error("Specify a server name, or use --all to re-auth every OAuth server.")
-        _info("Usage: hermes mcp reauth <name>   |   hermes mcp reauth --all")
+        _info("Usage: ansatz mcp reauth <name>   |   ansatz mcp reauth --all")
         return
     if name not in servers:
         _error(f"Server '{name}' not found in config.")
@@ -959,13 +959,13 @@ def cmd_mcp_reauth(args):
     _reauth_oauth_server(name, servers[name])
 
 
-# ─── hermes mcp configure ────────────────────────────────────────────────────
+# ─── ansatz mcp configure ────────────────────────────────────────────────────
 
 def cmd_mcp_configure(args):
     """Reconfigure which tools are enabled for an existing MCP server."""
     import sys as _sys
     if not _sys.stdin.isatty():
-        print("Error: 'hermes mcp configure' requires an interactive terminal.", file=_sys.stderr)
+        print("Error: 'ansatz mcp configure' requires an interactive terminal.", file=_sys.stderr)
         _sys.exit(1)
     name = args.name
     servers = _get_mcp_servers()
@@ -1071,7 +1071,7 @@ def cmd_mcp_configure(args):
 # ─── Dispatcher ───────────────────────────────────────────────────────────────
 
 def mcp_command(args):
-    """Main dispatcher for ``hermes mcp`` subcommands."""
+    """Main dispatcher for ``ansatz mcp`` subcommands."""
     action = getattr(args, "mcp_action", None)
 
     if action == "serve":
@@ -1119,17 +1119,17 @@ def mcp_command(args):
         from hermes_cli.mcp_picker import run_picker
         run_picker()
         print(color("  Commands:", Colors.CYAN))
-        _info("hermes mcp                                    Open the catalog picker (default)")
-        _info("hermes mcp catalog                            List Nous-approved MCPs")
-        _info("hermes mcp install <name>                     Install a catalog MCP")
-        _info("hermes mcp serve                              Run as MCP server")
-        _info("hermes mcp add <name> --url <endpoint>        Add a custom MCP server")
-        _info("hermes mcp add <name> --command <cmd>         Add a stdio server")
-        _info("hermes mcp add <name> --preset <preset>       Add from a known preset")
-        _info("hermes mcp remove <name>                      Remove a server")
-        _info("hermes mcp list                               List configured servers")
-        _info("hermes mcp test <name>                        Test connection")
-        _info("hermes mcp configure <name>                   Toggle tools")
-        _info("hermes mcp login <name>                       Re-authenticate OAuth")
-        _info("hermes mcp reauth <name> | --all              Re-auth one or all OAuth servers")
+        _info("ansatz mcp                                    Open the catalog picker (default)")
+        _info("ansatz mcp catalog                            List Nous-approved MCPs")
+        _info("ansatz mcp install <name>                     Install a catalog MCP")
+        _info("ansatz mcp serve                              Run as MCP server")
+        _info("ansatz mcp add <name> --url <endpoint>        Add a custom MCP server")
+        _info("ansatz mcp add <name> --command <cmd>         Add a stdio server")
+        _info("ansatz mcp add <name> --preset <preset>       Add from a known preset")
+        _info("ansatz mcp remove <name>                      Remove a server")
+        _info("ansatz mcp list                               List configured servers")
+        _info("ansatz mcp test <name>                        Test connection")
+        _info("ansatz mcp configure <name>                   Toggle tools")
+        _info("ansatz mcp login <name>                       Re-authenticate OAuth")
+        _info("ansatz mcp reauth <name> | --all              Re-auth one or all OAuth servers")
         print()

@@ -14,7 +14,7 @@ description: "使用 LoRA、QLoRA 及 25+ 种方法对 LLM 进行参数高效微
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/mlops/peft` 安装 |
+| 来源 | 可选 — 通过 `ansatz skills install official/mlops/peft` 安装 |
 | 路径 | `optional-skills/mlops/peft` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |

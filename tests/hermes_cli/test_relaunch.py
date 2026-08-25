@@ -7,30 +7,49 @@ import pytest
 from hermes_cli import relaunch as relaunch_mod
 
 
-class TestResolveHermesBin:
+class TestResolveCliBin:
     def test_prefers_absolute_argv0_when_executable(self, monkeypatch):
-        fake = "/nix/store/abc/bin/hermes"
+        fake = "/nix/store/abc/bin/ansatz-wrapper"
         monkeypatch.setattr(sys, "argv", [fake])
         monkeypatch.setattr(relaunch_mod.os.path, "isfile", lambda p: p == fake)
         monkeypatch.setattr(relaunch_mod.os, "access", lambda p, mode: p == fake)
-        assert relaunch_mod.resolve_hermes_bin() == fake
+        assert relaunch_mod.resolve_cli_bin() == fake
 
     def test_resolves_relative_argv0(self, monkeypatch, tmp_path):
-        fake = tmp_path / "hermes"
+        fake = tmp_path / "profile-wrapper"
         fake.write_text("#!/bin/sh\n")
         fake.chmod(0o755)
         monkeypatch.setattr(sys, "argv", [str(fake.name)])
         monkeypatch.chdir(tmp_path)
-        # Ensure we don't accidentally match a real 'hermes' on PATH
+        # Ensure we don't accidentally match a real CLI on PATH.
         monkeypatch.setattr(relaunch_mod.shutil, "which", lambda _name: None)
-        assert relaunch_mod.resolve_hermes_bin() == str(fake)
+        assert relaunch_mod.resolve_cli_bin() == str(fake)
 
-    def test_falls_back_to_path_which(self, monkeypatch):
-        monkeypatch.setattr(sys, "argv", ["-c"])  # not a real path
-        monkeypatch.setattr(
-            relaunch_mod.shutil, "which", lambda name: "/usr/bin/hermes" if name == "hermes" else None
-        )
-        assert relaunch_mod.resolve_hermes_bin() == "/usr/bin/hermes"
+    def test_prefers_ansatz_on_path(self, monkeypatch):
+        seen = []
+
+        def which(name):
+            seen.append(name)
+            return {"ansatz": "/usr/bin/ansatz", "hermes": "/usr/bin/hermes"}.get(name)
+
+        monkeypatch.setattr(sys, "argv", ["hermes"])
+        monkeypatch.setattr(relaunch_mod.shutil, "which", which)
+
+        assert relaunch_mod.resolve_cli_bin() == "/usr/bin/ansatz"
+        assert seen == ["ansatz"]
+
+    def test_falls_back_to_legacy_alias(self, monkeypatch):
+        seen = []
+
+        def which(name):
+            seen.append(name)
+            return "/usr/bin/hermes" if name == "hermes" else None
+
+        monkeypatch.setattr(sys, "argv", ["hermes"])
+        monkeypatch.setattr(relaunch_mod.shutil, "which", which)
+
+        assert relaunch_mod.resolve_cli_bin() == "/usr/bin/hermes"
+        assert seen == ["ansatz", "hermes"]
 
 
 class TestExtractInheritedFlags:
@@ -69,13 +88,13 @@ class TestInheritedFlagTable:
 
 class TestBuildRelaunchArgv:
     def test_uses_bin_when_available(self, monkeypatch):
-        monkeypatch.setattr(relaunch_mod, "resolve_hermes_bin", lambda: "/usr/bin/hermes")
+        monkeypatch.setattr(relaunch_mod, "resolve_cli_bin", lambda: "/usr/bin/ansatz")
         argv = relaunch_mod.build_relaunch_argv(["--resume", "abc"])
-        assert argv[0] == "/usr/bin/hermes"
+        assert argv[0] == "/usr/bin/ansatz"
 
 
     def test_preserves_inherited_flags(self, monkeypatch):
-        monkeypatch.setattr(relaunch_mod, "resolve_hermes_bin", lambda: "/usr/bin/hermes")
+        monkeypatch.setattr(relaunch_mod, "resolve_cli_bin", lambda: "/usr/bin/ansatz")
         original = ["--tui", "--dev", "--profile", "work", "sessions", "browse"]
         argv = relaunch_mod.build_relaunch_argv(["--resume", "abc"], original_argv=original)
         assert "--tui" in argv
@@ -89,13 +108,13 @@ class TestBuildRelaunchArgv:
         assert "browse" not in argv
 
     def test_can_disable_preserve(self, monkeypatch):
-        monkeypatch.setattr(relaunch_mod, "resolve_hermes_bin", lambda: "/usr/bin/hermes")
+        monkeypatch.setattr(relaunch_mod, "resolve_cli_bin", lambda: "/usr/bin/ansatz")
         original = ["--tui", "chat"]
         argv = relaunch_mod.build_relaunch_argv(
             ["--resume", "abc"], preserve_inherited=False, original_argv=original
         )
         assert "--tui" not in argv
-        assert argv == ["/usr/bin/hermes", "--resume", "abc"]
+        assert argv == ["/usr/bin/ansatz", "--resume", "abc"]
 
 
 class TestRelaunch:
@@ -107,12 +126,12 @@ class TestRelaunch:
             raise SystemExit(0)
 
         monkeypatch.setattr(relaunch_mod.os, "execvp", fake_execvp)
-        monkeypatch.setattr(relaunch_mod, "resolve_hermes_bin", lambda: "/usr/bin/hermes")
+        monkeypatch.setattr(relaunch_mod, "resolve_cli_bin", lambda: "/usr/bin/ansatz")
 
         with pytest.raises(SystemExit):
             relaunch_mod.relaunch(["--resume", "abc"])
 
-        assert calls == [("/usr/bin/hermes", ["/usr/bin/hermes", "--resume", "abc"])]
+        assert calls == [("/usr/bin/ansatz", ["/usr/bin/ansatz", "--resume", "abc"])]
 
     @pytest.mark.windows_only
     def test_windows_uses_subprocess_not_execvp(self, monkeypatch):
@@ -126,14 +145,14 @@ class TestRelaunch:
         platform only re-asserted the branch we wrote, never the constraint
         that motivated it.
         """
-        monkeypatch.setattr(relaunch_mod, "resolve_hermes_bin", lambda: r"C:\Users\test\hermes.exe")
+        monkeypatch.setattr(relaunch_mod, "resolve_cli_bin", lambda: r"C:\Users\test\ansatz.exe")
         # Pin sys.argv: relaunch() preserves inherited flags from the LIVE
         # argv, so under pytest it happily inherited the runner's own
         # "-m 'windows_only and not integration'" and the assertion below saw
         # them in the child argv. Nothing to do with Windows — it only showed
         # up here because this is the first lane that actually executes the
         # test, and -m is how that lane selects it.
-        monkeypatch.setattr(relaunch_mod.sys, "argv", [r"C:\Users\test\hermes.exe"])
+        monkeypatch.setattr(relaunch_mod.sys, "argv", [r"C:\Users\test\ansatz.exe"])
 
         import subprocess as _subprocess
 
@@ -161,12 +180,12 @@ class TestRelaunch:
 
         assert exc_info.value.code == 0
         assert execvp_calls == []
-        assert captured_argv == [[r"C:\Users\test\hermes.exe", "chat"]]
+        assert captured_argv == [[r"C:\Users\test\ansatz.exe", "chat"]]
 
     @pytest.mark.windows_only
     def test_windows_propagates_child_exit_code(self, monkeypatch):
         """A non-zero exit from the child should flow through to sys.exit."""
-        monkeypatch.setattr(relaunch_mod, "resolve_hermes_bin", lambda: r"C:\hermes.exe")
+        monkeypatch.setattr(relaunch_mod, "resolve_cli_bin", lambda: r"C:\ansatz.exe")
 
         import subprocess as _subprocess
 
@@ -183,8 +202,8 @@ class TestRelaunch:
         assert exc_info.value.code == 42
 
 
-class TestResolveHermesBinWindowsPyGuard:
-    """On Windows, resolve_hermes_bin MUST NOT return a .py path.
+class TestResolveCliBinWindowsPyGuard:
+    """On Windows, resolve_cli_bin MUST NOT return a .py path.
     os.access(x, os.X_OK) returns True for .py files on Windows because
     PATHEXT includes .py when the Python launcher is installed — but
     subprocess.run can't actually exec a .py directly, so the relaunch
@@ -211,7 +230,7 @@ class TestResolveHermesBinWindowsPyGuard:
             lambda name: r"C:\venv\Scripts\hermes.exe" if name == "hermes" else None,
         )
 
-        bin_path = relaunch_mod.resolve_hermes_bin()
+        bin_path = relaunch_mod.resolve_cli_bin()
         # Must NOT be the .py — must be the hermes.exe PATH entry.
         assert bin_path == r"C:\venv\Scripts\hermes.exe"
 
@@ -220,11 +239,11 @@ class TestResolveHermesBinWindowsPyGuard:
         """POSIX behaviour unchanged: argv[0] pointing at an executable
         script (including .py with a shebang + chmod +x) is fine to return
         because POSIX exec can route through the shebang line."""
-        script = tmp_path / "hermes"
+        script = tmp_path / "ansatz-wrapper"
         script.write_text("#!/usr/bin/env python3\n")
         script.chmod(0o755)
         monkeypatch.setattr(relaunch_mod.sys, "argv", [str(script), "chat"])
-        assert relaunch_mod.resolve_hermes_bin() == str(script)
+        assert relaunch_mod.resolve_cli_bin() == str(script)
 
     @pytest.mark.windows_only
     def test_windows_py_argv0_with_no_hermes_on_path_returns_none(self, monkeypatch, tmp_path):
@@ -237,4 +256,4 @@ class TestResolveHermesBinWindowsPyGuard:
         monkeypatch.setattr(relaunch_mod.sys, "argv", [str(script), "chat"])
         monkeypatch.setattr(relaunch_mod.shutil, "which", lambda name: None)
 
-        assert relaunch_mod.resolve_hermes_bin() is None
+        assert relaunch_mod.resolve_cli_bin() is None

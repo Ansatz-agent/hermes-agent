@@ -26,8 +26,12 @@ def test_scanner_finds_packaged_direct_service_and_ui_entries(tmp_path):
 name = "fixture"
 version = "1"
 [project.scripts]
+ansatz = "pkg.cli:main"
+ansatz-agent = "run_agent:main"
+ansatz-acp = "acp_adapter.entry:main"
 hermes = "pkg.cli:main"
 hermes-agent = "run_agent:main"
+hermes-acp = "acp_adapter.entry:main"
 """.strip(),
     )
     _write(
@@ -79,8 +83,12 @@ hermes-agent = "run_agent:main"
     discovered = scan_entrypoints(tmp_path)
 
     assert {
+        "pyproject:ansatz",
+        "pyproject:ansatz-agent",
+        "pyproject:ansatz-acp",
         "pyproject:hermes",
         "pyproject:hermes-agent",
+        "pyproject:hermes-acp",
         "python:run_agent.py",
         "python:pkg/__main__.py",
         "shell:docker/entrypoint.sh",
@@ -94,6 +102,17 @@ hermes-agent = "run_agent:main"
         "python:scripts/keystroke_diagnostic.py",
         "python:cron/scripts/classify_items.py",
     }.issubset(discovered)
+
+
+def test_manifest_marks_canonical_and_legacy_cli_interactive():
+    payload = entrypoint_scanner._manifest_payload(
+        {"pyproject:ansatz", "pyproject:hermes", "pyproject:ansatz-agent"}
+    )
+    entries = {item["id"]: item for item in payload["entrypoints"]}
+
+    assert entries["pyproject:ansatz"]["interactive"] is True
+    assert entries["pyproject:hermes"]["interactive"] is True
+    assert entries["pyproject:ansatz-agent"]["interactive"] is False
 
 
 def test_distribution_scanner_finds_every_shipped_direct_python_script(tmp_path):
@@ -159,9 +178,9 @@ def test_console_wrappers_guard_before_capability_target_import(monkeypatch):
     sys.modules.pop("acp_adapter.entry", None)
 
     with pytest.raises(SystemExit) as agent_error:
-        wrappers.hermes_agent()
+        wrappers.ansatz_agent()
     with pytest.raises(SystemExit) as acp_error:
-        wrappers.hermes_acp()
+        wrappers.ansatz_acp()
 
     assert agent_error.value.code == acp_error.value.code == 20
     assert guarded == ["console.hermes_agent", "console.hermes_acp"]
@@ -238,7 +257,7 @@ def test_packaged_direct_scripts_reject_before_capability_import(
     assert result.returncode == 20
     assert result.stdout == "CAPABILITY_MODULES=\n"
     assert result.stderr == (
-        "AUTH_REQUIRED runtime_unavailable; run `hermes login`\n"
+        "AUTH_REQUIRED runtime_unavailable; run `ansatz login`\n"
     )
 
 
@@ -342,7 +361,7 @@ def test_legacy_gateway_launcher_exits_locked_before_dotenv_import():
     assert result.returncode == 20
     assert result.stdout == "dotenv_loaded=False\n"
     assert result.stderr == (
-        "AUTH_REQUIRED runtime_unavailable; run `hermes login`\n"
+        "AUTH_REQUIRED runtime_unavailable; run `ansatz login`\n"
     )
 
 

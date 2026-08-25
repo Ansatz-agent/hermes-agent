@@ -40,7 +40,7 @@ description: "如何为 Hermes Agent 做贡献 — 开发环境配置、代码�
 
 ### 使用标准安装器
 
-对大多数贡献者来说，最好的开发启动方式和用户安装方式相同：运行标准安装器，然后在它克隆出的仓库里开发。安装器会创建 Hermes venv、配置 `hermes` 命令、为 `hermes update` 写入安装方式标记，并把完整 git 项目克隆到 `$HERMES_HOME/hermes-agent`（通常是 `~/.hermes/hermes-agent`）。这样你的开发环境会和 CLI、updater、lazy dependency installer、gateway、docs 默认假设的布局一致。
+对大多数贡献者来说，最好的开发启动方式和用户安装方式相同：运行标准安装器，然后在它克隆出的仓库里开发。安装器会创建 Hermes venv、配置 `hermes` 命令、为 `ansatz update` 写入安装方式标记，并把完整 git 项目克隆到 `$HERMES_HOME/hermes-agent`（通常是 `~/.hermes/hermes-agent`）。这样你的开发环境会和 CLI、updater、lazy dependency installer、gateway、docs 默认假设的布局一致。
 
 ```bash
 curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
@@ -94,8 +94,8 @@ echo 'OPENROUTER_API_KEY=sk-or-v1-your-key' >> ~/.hermes/.env
 
 ```bash
 # 标准安装器已经把 `hermes` 放到了 PATH 上。
-hermes doctor
-hermes chat -q "Hello"
+ansatz doctor
+ansatz chat -q "Hello"
 ```
 
 如果你使用了手动克隆备用路径，可以在 checkout 中运行 `./hermes`，或显式把这个 clone 的 venv 链接到 PATH：
@@ -237,7 +237,7 @@ fix(security): prevent shell injection in sudo password piping
 ## 报告问题
 
 - 使用 [GitHub Issues](https://github.com/NousResearch/hermes-agent/issues)
-- 请包含：操作系统、Python 版本、Hermes 版本（`hermes version`）、完整错误堆栈
+- 请包含：操作系统、Python 版本、Hermes 版本（`ansatz version`）、完整错误堆栈
 - 包含复现步骤
 - 创建前请检查是否已有重复 issue
 - 安全漏洞请私下报告

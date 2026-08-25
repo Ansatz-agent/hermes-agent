@@ -1,4 +1,4 @@
-"""``hermes slack`` subcommand parser.
+"""``ansatz slack`` subcommand parser.
 
 Extracted verbatim from ``hermes_cli/main.py:main()`` (god-file Phase 2).
 Handler injected to avoid importing ``main``.

@@ -1209,7 +1209,7 @@ class GatewayConfig:
         loop_watchdog = _coerce_bool(loop_watchdog_raw, True)
         if multiplex_profiles is None and isinstance(nested_gateway, dict):
             # Also honor gateway.multiplex_profiles written by
-            # ``hermes config set gateway.multiplex_profiles true``.
+            # ``ansatz config set gateway.multiplex_profiles true``.
             multiplex_profiles = nested_gateway.get("multiplex_profiles")
         # Operator override: GATEWAY_MULTIPLEX_PROFILES wins over config.yaml when
         # set to a recognized value. Hosted deployments (Nous Portal / Fly) stamp
@@ -1351,7 +1351,7 @@ def load_gateway_config() -> GatewayConfig:
 
             # Shared nested-fallback source: settings meant to be top-level
             # keys are also accepted when a user nests them under `gateway:`
-            # (e.g. via `hermes config set gateway.<key> ...`, which naturally
+            # (e.g. via `ansatz config set gateway.<key> ...`, which naturally
             # produces that shape). Every key below mirrors the precedent
             # already established for gateway.multiplex_profiles/streaming/
             # write_sessions_json: top-level wins, nested gateway.* falls back.
@@ -1406,7 +1406,7 @@ def load_gateway_config() -> GatewayConfig:
 
             # Multiplexing flag: accept both the top-level key and the nested
             # gateway.multiplex_profiles form (written by
-            # ``hermes config set gateway.multiplex_profiles true``).
+            # ``ansatz config set gateway.multiplex_profiles true``).
             if "multiplex_profiles" in yaml_cfg:
                 gw_data["multiplex_profiles"] = yaml_cfg["multiplex_profiles"]
 
@@ -1433,7 +1433,7 @@ def load_gateway_config() -> GatewayConfig:
 
             if isinstance(gateway_section, dict):
                 if "multiplex_profiles" in gateway_section and "multiplex_profiles" not in gw_data:
-                    # gateway.multiplex_profiles written by `hermes config set gateway.multiplex_profiles true`
+                    # gateway.multiplex_profiles written by `ansatz config set gateway.multiplex_profiles true`
                     gw_data["multiplex_profiles"] = gateway_section["multiplex_profiles"]
                 if "max_concurrent_sessions" in gateway_section:
                     gw_data["max_concurrent_sessions"] = gateway_section["max_concurrent_sessions"]
@@ -1448,7 +1448,7 @@ def load_gateway_config() -> GatewayConfig:
             streaming_cfg = yaml_cfg.get("streaming")
             if not isinstance(streaming_cfg, dict) and isinstance(gateway_section, dict):
                 # Fall back to nested gateway.streaming written by
-                # ``hermes config set gateway.streaming.*``
+                # ``ansatz config set gateway.streaming.*``
                 streaming_cfg = gateway_section.get("streaming")
             if isinstance(streaming_cfg, dict):
                 gw_data["streaming"] = streaming_cfg

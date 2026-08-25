@@ -1,4 +1,4 @@
-"""Hermes remote-account status parser."""
+"""Ansatz remote-account status parser."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from typing import Callable
 def build_auth_parser(subparsers, *, cmd_auth_status: Callable) -> None:
     auth_parser = subparsers.add_parser(
         "auth",
-        help="Hermes remote account status",
+        help="Ansatz remote account status",
     )
     auth_subparsers = auth_parser.add_subparsers(
         dest="auth_action",
@@ -16,6 +16,6 @@ def build_auth_parser(subparsers, *, cmd_auth_status: Callable) -> None:
     )
     auth_status = auth_subparsers.add_parser(
         "status",
-        help="Show Hermes remote account status",
+        help="Show Ansatz remote account status",
     )
     auth_status.set_defaults(func=cmd_auth_status)

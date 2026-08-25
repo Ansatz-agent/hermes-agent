@@ -6,7 +6,7 @@ description: "为 Hermes Web Dashboard 构建主题和插件——调色板、�
 
 # 扩展 Dashboard
 
-Hermes Web Dashboard（`hermes dashboard`）在设计上支持换肤和扩展，无需 fork 代码库。对外暴露三个层次：
+Hermes Web Dashboard（`ansatz dashboard`）在设计上支持换肤和扩展，无需 fork 代码库。对外暴露三个层次：
 
 1. **主题（Themes）** — YAML 文件，用于重绘 dashboard 的调色板、字体排版、布局以及各组件的外观。将文件放入 `~/.hermes/dashboard-themes/`，即可在主题切换器中看到它。
 2. **UI 插件（UI plugins）** — 一个包含 `manifest.json` 和 JavaScript bundle 的目录，可注册标签页、替换内置页面、通过页面级插槽增强内置页面，或向命名 shell 插槽注入组件。
@@ -800,7 +800,7 @@ Dashboard 扫描三个目录中的 `dashboard/manifest.json`：
 curl http://127.0.0.1:9119/api/dashboard/plugins/rescan
 ```
 
-……或重启 `hermes dashboard`。
+……或重启 `ansatz dashboard`。
 
 #### 插件加载生命周期
 
@@ -893,7 +893,7 @@ cp -r hermes-example-plugins/strike-freedom-cockpit ~/.hermes/plugins/
 
 **插件后端路由返回 404。**
 1. 确认 manifest 中有 `"api": "plugin_api.py"` 且指向 `dashboard/` 内的现有文件。
-2. 重启 `hermes dashboard`——插件 API 路由在启动时挂载一次，**不会**在重新扫描时挂载。
+2. 重启 `ansatz dashboard`——插件 API 路由在启动时挂载一次，**不会**在重新扫描时挂载。
 3. 检查 `plugin_api.py` 是否导出了模块级的 `router = APIRouter()`。其他导出名称不会被识别。
 4. 查看 `~/.hermes/logs/errors.log` 中的 `Failed to load plugin <name> API routes`——导入错误会记录在那里。
 

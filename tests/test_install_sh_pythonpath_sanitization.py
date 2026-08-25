@@ -20,11 +20,18 @@ def test_install_script_unsets_pythonpath_and_pythonhome_early() -> None:
     assert 'unset PYTHONHOME' in text
 
 
-def test_hermes_launcher_wrapper_clears_python_env_before_exec() -> None:
+def test_ansatz_launcher_wrapper_clears_python_env_before_exec() -> None:
     text = INSTALL_SH.read_text()
 
     # Wrapper should clear env and forward args untouched to the venv entrypoint.
-    assert 'cat > "$command_link_dir/hermes" <<EOF' in text
+    assert 'cat > "$command_link_dir/ansatz" <<EOF' in text
     assert 'unset PYTHONPATH' in text
     assert 'unset PYTHONHOME' in text
-    assert 'exec "$HERMES_BIN" "\\$@"' in text
+    assert 'exec $quoted_ansatz_bin $quoted_ansatz_entrypoint "\\$@"' in text
+
+
+def test_hermes_compatibility_launcher_delegates_to_ansatz() -> None:
+    text = INSTALL_SH.read_text()
+
+    assert 'cat > "$command_link_dir/hermes" <<EOF' in text
+    assert 'exec $quoted_command_link_dir/ansatz "\\$@"' in text

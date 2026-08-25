@@ -401,6 +401,11 @@ async def test_gateway_http_middleware_returns_401_before_handler_state():
     )
 
     assert response.status == 401
+    assert json.loads(response.text) == {
+        "error": "Ansatz login required",
+        "code": "login_required",
+        "hint": "Run `ansatz login` and retry.",
+    }
 
 
 @pytest.mark.asyncio
@@ -455,6 +460,11 @@ async def test_dashboard_api_rejects_before_downstream_handler():
     )
 
     assert response.status_code == 401
+    assert json.loads(response.body) == {
+        "detail": "Ansatz login required",
+        "code": "login_required",
+        "hint": "Run `ansatz login` and retry.",
+    }
 
 
 @pytest.mark.asyncio
@@ -516,7 +526,7 @@ async def test_dashboard_websocket_closes_when_runtime_is_locked():
     ws = FakeWebSocket()
 
     assert not await _ws_client_runtime_authorized(ws, "dashboard.ws.test")
-    assert ws.closed == {"code": 4401, "reason": "Hermes login required"}
+    assert ws.closed == {"code": 4401, "reason": "Ansatz login required"}
 
 
 @pytest.mark.asyncio
@@ -566,7 +576,7 @@ async def test_owner_eof_closes_connected_tui_websocket(monkeypatch):
     ws = FakeWebSocket()
     await ws_module.handle_ws(ws)
 
-    assert {"code": 4401, "reason": "Hermes login required"} in ws.close_calls
+    assert {"code": 4401, "reason": "Ansatz login required"} in ws.close_calls
 
 
 def test_agent_forwarder_rejects_before_reading_agent_or_creating_turn():

@@ -8,10 +8,26 @@ import {
   ansatzAuthEnvironment,
   buildAnsatzTerminalEnvironment,
   buildBundledRuntimeValidationEnvironment,
+  resolveAnsatzCliPath,
   resolveAnsatzDesktopRuntimeRoot,
   resolveAnsatzRuntimeRoot,
   resolveAnsatzSshControlDirectory
 } from './ansatz-product'
+
+test('canonical CLI path wins and the legacy path is only a compatibility fallback', () => {
+  const checked: string[] = []
+
+  const exists = (candidate: string) => {
+
+    checked.push(candidate)
+
+    return candidate.endsWith('/ansatz')
+  }
+
+  assert.equal(resolveAnsatzCliPath('/bin/ansatz', '/bin/hermes', exists), '/bin/ansatz')
+  assert.deepEqual(checked, ['/bin/ansatz'])
+  assert.equal(resolveAnsatzCliPath('/missing/ansatz', '/bin/hermes', () => false), '/bin/hermes')
+})
 
 test('Ansatz desktop identity cannot collide with an existing Hermes installation', () => {
   assert.equal(ANSATZ_PRODUCT.productName, 'Ansatz')
@@ -35,6 +51,16 @@ test('Ansatz desktop identity cannot collide with an existing Hermes installatio
     'ansatz-voice-trace',
     'ansatz-voice-trace-agent',
     'ansatz-voice-trace-acp'
+  ])
+  assert.deepEqual(ANSATZ_PRODUCT.canonicalCliLaunchers, [
+    'ansatz',
+    'ansatz-agent',
+    'ansatz-acp'
+  ])
+  assert.deepEqual(ANSATZ_PRODUCT.legacyCliLaunchers, [
+    'hermes',
+    'hermes-agent',
+    'hermes-acp'
   ])
 })
 

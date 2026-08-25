@@ -35,6 +35,19 @@ client = TestClient(app)
 HEADERS = {"X-Hermes-Session-Token": _SESSION_TOKEN}
 
 
+def test_oauth_provider_catalog_uses_canonical_ansatz_commands():
+    from hermes_cli import web_server as ws
+
+    provider_commands = [
+        entry["cli_command"]
+        for entry in ws._build_oauth_catalog()
+        if " provider add " in entry["cli_command"]
+    ]
+
+    assert provider_commands
+    assert all(command.startswith("ansatz provider add ") for command in provider_commands)
+
+
 def _make_profile_home(tmp_path, monkeypatch, profile="coder"):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     profile_home = tmp_path / "profiles" / profile
@@ -693,7 +706,6 @@ def test_status_falls_through_to_generic_dispatcher_for_catalog_only_provider():
     assert out["token_preview"] and "sk-future-secret-token-xyz" not in out["token_preview"]
     assert out["expires_at"] == "2026-12-01T00:00:00Z"
     assert out["has_refresh_token"] is True
-
 
 
 

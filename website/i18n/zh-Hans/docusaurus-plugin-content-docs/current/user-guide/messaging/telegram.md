@@ -116,7 +116,7 @@ Hermes Agent 使用 Telegram 数字用户 ID 来控制访问权限。你的用�
 ### 方式 A：交互式设置（推荐）
 
 ```bash
-hermes gateway setup
+ansatz gateway setup
 ```
 
 在提示时选择 **Telegram**。向导会询问你的机器人 token 和允许的用户 ID，然后为你写入配置。
@@ -133,7 +133,7 @@ TELEGRAM_ALLOWED_USERS=123456789    # 多个用户用逗号分隔
 ### 启动 Gateway
 
 ```bash
-hermes gateway
+ansatz gateway
 ```
 
 机器人应在几秒内上线。在 Telegram 上向它发送消息以验证。
@@ -429,7 +429,7 @@ platforms:
 重启 gateway 并查找确认日志行：
 
 ```bash
-hermes gateway restart
+ansatz gateway restart
 grep -E "Using custom Telegram base_url|Using Telegram local_mode" ~/.hermes/logs/gateway.log | tail
 ```
 
@@ -501,17 +501,17 @@ telegram:
 
 ```bash
 # 默认配置文件
-hermes gateway start
-hermes gateway status
-hermes gateway stop
+ansatz gateway start
+ansatz gateway status
+ansatz gateway stop
 
 # 命名配置文件
-hermes -p research gateway start
-hermes -p research gateway status
-hermes -p research gateway stop
+ansatz -p research gateway start
+ansatz -p research gateway status
+ansatz -p research gateway stop
 ```
 
-对于小型固定机器人集群，使用 shell 循环或脚本，对默认配置文件调用 `hermes gateway <action>`，对每个命名配置文件调用 `hermes -p <profile> gateway <action>`。这比假设单个进程级命令在每个服务管理器上控制所有命名配置文件更可靠。
+对于小型固定机器人集群，使用 shell 循环或脚本，对默认配置文件调用 `ansatz gateway <action>`，对每个命名配置文件调用 `ansatz -p <profile> gateway <action>`。这比假设单个进程级命令在每个服务管理器上控制所有命名配置文件更可靠。
 
 ### 故障排除：私聊正常但群组无响应
 
@@ -718,7 +718,7 @@ gateway:
         disable_topic_auto_rename: true
 ```
 
-启用此标志后，Hermes 仍会生成内部会话标题（供 `hermes sessions`、TUI 等使用），但永远不会编辑 Telegram 话题名称。当你在 BotFather Threaded Mode 下手动整理话题，且不希望每次第一次回复都覆盖标题时，此功能很有用。
+启用此标志后，Hermes 仍会生成内部会话标题（供 `ansatz sessions`、TUI 等使用），但永远不会编辑 Telegram 话题名称。当你在 BotFather Threaded Mode 下手动整理话题，且不希望每次第一次回复都覆盖标题时，此功能很有用。
 
 ### 话题内的 `/new`
 
@@ -1098,7 +1098,7 @@ platforms:
 
 ```bash
 export HTTPS_PROXY=http://proxy.example.com:8080
-hermes gateway
+ansatz gateway
 ```
 
 或添加到 `~/.hermes/.env`：
@@ -1169,7 +1169,7 @@ telegram:
 
 | 问题 | 解决方案 |
 |---------|----------|
-| 机器人完全不响应 | 验证 `TELEGRAM_BOT_TOKEN` 是否正确。检查 `hermes gateway` 日志中的错误。 |
+| 机器人完全不响应 | 验证 `TELEGRAM_BOT_TOKEN` 是否正确。检查 `ansatz gateway` 日志中的错误。 |
 | 机器人回复"unauthorized" | 你的用户 ID 不在 `TELEGRAM_ALLOWED_USERS` 中。用 @userinfobot 再次确认。 |
 | 机器人忽略群组消息 | 隐私模式可能已开启。禁用它（第三步）或将机器人设为群组管理员。**记住更改隐私设置后要移除并重新添加机器人。** |
 | 语音消息未转录 | 验证 STT 是否可用：安装 `faster-whisper` 进行本地转录，或在 `~/.hermes/.env` 中设置 `GROQ_API_KEY` / `VOICE_TOOLS_OPENAI_KEY`。 |

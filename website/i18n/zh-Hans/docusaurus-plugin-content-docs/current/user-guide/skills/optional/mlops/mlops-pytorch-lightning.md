@@ -14,7 +14,7 @@ description: "基于 PyTorch 的高层框架，提供 Trainer 类、自动分布
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/mlops/pytorch-lightning` 安装 |
+| 来源 | 可选 — 通过 `ansatz skills install official/mlops/pytorch-lightning` 安装 |
 | 路径 | `optional-skills/mlops/pytorch-lightning` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |

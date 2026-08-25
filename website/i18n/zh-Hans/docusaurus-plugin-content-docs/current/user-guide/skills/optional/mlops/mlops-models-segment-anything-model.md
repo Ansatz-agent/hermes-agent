@@ -14,7 +14,7 @@ SAM：通过点、框、掩码实现零样本图像分割。
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/mlops/segment-anything` 安装 |
+| 来源 | 可选 — 通过 `ansatz skills install official/mlops/segment-anything` 安装 |
 | 路径 | `optional-skills/mlops/models/segment-anything-model` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |

@@ -298,6 +298,10 @@ class TestDeleteProfile:
         procs = [
             # Backend bound to coder → matched.
             FakeProc(101, ["python", "-m", "hermes_cli.main", "--profile", "coder", "serve"]),
+            # Canonical executable form → matched.
+            FakeProc(104, ["/usr/local/bin/ansatz", "--profile", "coder", "serve"]),
+            # Legacy alias remains compatible → matched.
+            FakeProc(105, ["/usr/local/bin/hermes", "--profile", "coder", "serve"]),
             # Interactive chat for coder → NOT a backend subcommand, skipped.
             FakeProc(102, ["python", "-m", "hermes_cli.main", "--profile", "coder", "chat"]),
             # Backend for a different profile → skipped.
@@ -316,7 +320,7 @@ class TestDeleteProfile:
         monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
 
         pids = profiles._profile_bound_backend_pids("coder", profile_dir)
-        assert pids == [101]
+        assert pids == [101, 104, 105]
 
 
 # ===================================================================
@@ -433,14 +437,35 @@ class TestWrapperScript:
     """Tests for create_wrapper_script() and remove_wrapper_script()."""
 
     def test_creates_sh_on_posix(self, profile_env, monkeypatch):
-        monkeypatch.setattr("hermes_cli.profiles.shutil.which", lambda name: "/opt/hermes/bin/hermes")
+        seen = []
+
+        def which(name):
+            seen.append(name)
+            return {"ansatz": "/opt/ansatz/bin/ansatz", "hermes": "/opt/hermes/bin/hermes"}.get(name)
+
+        monkeypatch.setattr("hermes_cli.profiles.shutil.which", which)
         from hermes_cli.profiles import create_wrapper_script
         wrapper = create_wrapper_script("mybot")
         assert wrapper is not None
         assert wrapper.name == "mybot"
         content = wrapper.read_text()
         assert content.startswith("#!/bin/sh")
-        assert "exec /opt/hermes/bin/hermes -p mybot" in content
+        assert "exec /opt/ansatz/bin/ansatz -p mybot" in content
+        assert seen == ["ansatz"]
+
+    def test_posix_wrapper_falls_back_to_legacy_alias(self, profile_env, monkeypatch):
+        seen = []
+
+        def which(name):
+            seen.append(name)
+            return "/opt/hermes/bin/hermes" if name == "hermes" else None
+
+        monkeypatch.setattr("hermes_cli.profiles.shutil.which", which)
+        wrapper = create_wrapper_script("mybot")
+
+        assert wrapper is not None
+        assert "exec /opt/hermes/bin/hermes -p mybot" in wrapper.read_text()
+        assert seen == ["ansatz", "hermes"]
 
 
     @pytest.mark.windows_only
@@ -935,6 +960,5 @@ class TestProfilesToServe:
 
         assert set(serve) == {"default", "worker"}
         assert serve["worker"] == get_profile_dir("worker")
-
 
 

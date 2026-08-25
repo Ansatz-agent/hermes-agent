@@ -157,7 +157,7 @@ export const coreCommands: SlashCommand[] = [
       }
 
       ctx.transcript.sys('exiting TUI to run update...')
-      // Exit code 42 signals the Python wrapper to exec `hermes update`.
+      // Exit code 42 signals the Python wrapper to exec `ansatz update`.
       // Use dieWithCode for proper cleanup (gateway kill + Ink unmount).
       setTimeout(() => ctx.session.dieWithCode(42), 100)
     }

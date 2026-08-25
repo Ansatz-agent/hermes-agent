@@ -15,7 +15,7 @@ When you want multiple agents on the **same machine**, prefer [delegation](../fe
 ## Enable
 
 ```bash
-hermes gateway setup      # pick A2A
+ansatz gateway setup      # pick A2A
 ```
 
 Or in `~/.hermes/config.yaml`:
@@ -32,9 +32,9 @@ gateway:
 The outbound client tools ship as the `a2a` toolset, **off by default** — enable it per platform:
 
 ```bash
-hermes tools enable a2a --platform cli        # CLI/TUI sessions
-hermes tools enable a2a --platform telegram   # or any messaging platform
-hermes tools enable a2a --platform a2a        # let inbound A2A tasks call peers (agent chaining)
+ansatz tools enable a2a --platform cli        # CLI/TUI sessions
+ansatz tools enable a2a --platform telegram   # or any messaging platform
+ansatz tools enable a2a --platform a2a        # let inbound A2A tasks call peers (agent chaining)
 ```
 
 The tools are available in every process type — CLI, TUI, gateway, and cron — without the inbound platform needing to be enabled.

@@ -14,7 +14,7 @@ description: "为研究和生产优化的快速 tokenizer"
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/mlops/huggingface-tokenizers` 安装 |
+| 来源 | 可选 — 通过 `ansatz skills install official/mlops/huggingface-tokenizers` 安装 |
 | 路径 | `optional-skills/mlops/huggingface-tokenizers` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |

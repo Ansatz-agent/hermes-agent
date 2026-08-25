@@ -27,6 +27,8 @@ ACCEPT = [
     "hermes-gateway.exe",
     "hermes gateway",          # bare `hermes gateway` defaults to run
     "hermes gateway run",
+    "ansatz gateway",          # canonical CLI also defaults to run
+    "ansatz gateway run",
     # profile selector AFTER the `gateway` token (argv is profile-position
     # agnostic — _apply_profile_override strips --profile/-p anywhere)
     "hermes gateway --profile work run",
@@ -56,5 +58,4 @@ REJECT = [
 @pytest.mark.parametrize("cmd", ACCEPT)
 def test_accepts_real_gateway_run(cmd):
     assert matches(cmd) is True
-
 

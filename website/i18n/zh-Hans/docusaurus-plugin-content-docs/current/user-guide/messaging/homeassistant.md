@@ -41,7 +41,7 @@ HASS_URL=http://192.168.1.100:8123
 ### 3. 启动 Gateway
 
 ```bash
-hermes gateway
+ansatz gateway
 ```
 
 Home Assistant 将作为已连接平台出现，与其他消息平台（Telegram、Discord 等）并列显示。

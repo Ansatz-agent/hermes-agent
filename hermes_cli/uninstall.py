@@ -115,23 +115,45 @@ def remove_path_from_shell_configs():
 
 
 def remove_wrapper_script():
-    """Remove the hermes wrapper script if it exists."""
+    """Remove Ansatz launchers and the temporary Hermes compatibility family."""
+    names = (
+        "ansatz",
+        "ansatz-agent",
+        "ansatz-acp",
+        "hermes",
+        "hermes-agent",
+        "hermes-acp",
+    )
     wrapper_paths = [
-        Path.home() / ".local" / "bin" / "hermes",
-        Path.home() / ".local" / "bin" / "hermes-acp",
-        Path.home() / ".local" / "bin" / "hermes-agent",
-        Path("/usr/local/bin/hermes"),
-        Path("/usr/local/bin/hermes-acp"),
-        Path("/usr/local/bin/hermes-agent"),
+        directory / name
+        for directory in (Path.home() / ".local" / "bin", Path("/usr/local/bin"))
+        for name in names
     ]
     
     removed = []
     for wrapper in wrapper_paths:
         if wrapper.exists():
             try:
-                # Check if it's our wrapper (contains hermes_cli reference)
+                # Check if it is one of our generated wrappers.
                 content = wrapper.read_text(encoding="utf-8")
-                if 'hermes_cli' in content or 'hermes-agent' in content:
+                generated_targets = {
+                    "ansatz": "/ansatz",
+                    "ansatz-agent": "run_agent.py",
+                    "ansatz-acp": "/ansatz",
+                    "hermes": "/ansatz",
+                    "hermes-agent": "/ansatz-agent",
+                    "hermes-acp": "/ansatz-acp",
+                }
+                is_generated_ansatz_wrapper = (
+                    "unset PYTHONPATH" in content
+                    and "unset PYTHONHOME" in content
+                    and generated_targets[wrapper.name] in content
+                )
+                if (
+                    "hermes_cli" in content
+                    or "hermes-agent" in content
+                    or is_generated_ansatz_wrapper
+                ):
                     wrapper.unlink()
                     removed.append(wrapper)
             except Exception as e:
@@ -206,7 +228,7 @@ def uninstall_gateway_service():
     - Linux: user + system systemd services (with proper DBUS env setup)
     - macOS: launchd plists
     - Windows: Scheduled Task + Startup-folder fallback, via ``gateway_windows``
-    - All platforms: standalone ``hermes gateway run`` processes
+    - All platforms: standalone ``ansatz gateway run`` processes
     - Termux/Android: skips systemd (no systemd on Android), still kills standalone processes
     """
     import platform
@@ -328,7 +350,7 @@ def uninstall_gateway_service():
 #   3. Downloads PortableGit to ``%LOCALAPPDATA%\hermes\git\`` and Node to
 #      ``%LOCALAPPDATA%\hermes\node\`` as user-scoped, isolated copies.
 #      These are ~200MB combined and serve no purpose after uninstall.
-#   4. On the ``hermes dashboard`` + gateway paths, drops files into
+#   4. On the ``ansatz dashboard`` + gateway paths, drops files into
 #      ``%LOCALAPPDATA%\hermes\gateway-service\`` and sometimes
 #      ``%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\`` — the
 #      latter is handled by ``gateway_windows.uninstall()`` already.
@@ -468,7 +490,7 @@ def _uninstall_profile(profile) -> None:
     """Fully uninstall a single named profile: stop its gateway service,
     remove its alias wrapper, and wipe its HERMES_HOME directory.
 
-    We shell out to ``hermes -p <name> gateway stop|uninstall`` because
+    We shell out to ``ansatz -p <name> gateway stop|uninstall`` because
     service names, unit paths, and plist paths are all derived from the
     current HERMES_HOME and can't be easily switched in-process.
     """
@@ -517,7 +539,7 @@ def _uninstall_profile(profile) -> None:
 def run_gui_uninstall(args):
     """GUI-only uninstall: remove the Chat GUI, leave the agent + data intact.
 
-    Mirrors ``hermes uninstall --gui``. Removes the desktop app's built
+    Mirrors ``ansatz uninstall --gui``. Removes the desktop app's built
     artifacts, the packaged app bundle (best-effort), and the Electron
     userData dir — nothing under ``$HERMES_HOME`` config/sessions/.env, and
     never the Python agent or its venv.
@@ -582,7 +604,7 @@ def run_gui_uninstall(args):
     print(color("└─────────────────────────────────────────────────────────┘", Colors.GREEN, Colors.BOLD))
     print()
     print("The Hermes agent is still installed. Run 'hermes' to use the CLI,")
-    print("or 'hermes uninstall' to remove the agent too.")
+    print("or 'ansatz uninstall' to remove the agent too.")
     print()
 
 

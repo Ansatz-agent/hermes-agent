@@ -10,7 +10,7 @@ stacking a backlog.
 
 This is deliberately session-scoped and in-process (CLI process or gateway
 process must be running) — the durable cross-process scheduling surface
-remains ``hermes cron`` / the ``cronjob`` tool, which runs in isolated
+remains ``ansatz cron`` / the ``cronjob`` tool, which runs in isolated
 sessions. A heartbeat is for "keep re-entering THIS conversation", the
 cron system is for "run this job on a schedule". Distinct by design.
 

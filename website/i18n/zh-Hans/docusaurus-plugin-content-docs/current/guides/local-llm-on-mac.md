@@ -213,7 +213,7 @@ curl -s http://127.0.0.1:8000/v1/models | jq '.data[].id'
 本地服务器启动后：
 
 ```bash
-hermes model
+ansatz model
 ```
 
 选择 **Custom endpoint**，按提示操作。系统会询问 base URL 和模型名称——使用你所配置的后端对应的值即可。

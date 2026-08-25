@@ -6,7 +6,7 @@ description: "Hermes Agent 使用的所有环境变量完整参考"
 
 # 环境变量参考
 
-所有变量均写入 `~/.hermes/.env`。也可以使用 `hermes config set VAR value` 进行设置。
+所有变量均写入 `~/.hermes/.env`。也可以使用 `ansatz config set VAR value` 进行设置。
 
 ## LLM 提供商
 
@@ -160,7 +160,7 @@ description: "Hermes Agent 使用的所有环境变量完整参考"
 
 ### Langfuse 可观测性
 
-内置 [`observability/langfuse`](/user-guide/features/built-in-plugins#observabilitylangfuse) 插件的环境变量。在 `~/.hermes/.env` 中设置。在这些变量生效之前，还必须启用该插件（`hermes plugins enable observability/langfuse`，或在 `hermes plugins` 中勾选）。
+内置 [`observability/langfuse`](/user-guide/features/built-in-plugins#observabilitylangfuse) 插件的环境变量。在 `~/.hermes/.env` 中设置。在这些变量生效之前，还必须启用该插件（`ansatz plugins enable observability/langfuse`，或在 `ansatz plugins` 中勾选）。
 
 | 变量 | 描述 |
 |----------|-------------|
@@ -176,7 +176,7 @@ description: "Hermes Agent 使用的所有环境变量完整参考"
 
 ### Nous Tool Gateway
 
-这些变量为付费 Nous 订阅者或自托管 gateway 部署配置 [Tool Gateway](/user-guide/features/tool-gateway)。大多数用户无需设置——gateway 通过 `hermes model` 或 `hermes tools` 自动配置。
+这些变量为付费 Nous 订阅者或自托管 gateway 部署配置 [Tool Gateway](/user-guide/features/tool-gateway)。大多数用户无需设置——gateway 通过 `ansatz model` 或 `ansatz tools` 自动配置。
 
 | 变量 | 描述 |
 |----------|-------------|
@@ -522,7 +522,7 @@ Graph 事件（Teams 会议、日历、聊天等）的入站变更通知监听�
 | `HERMES_GATEWAY_PLATFORM_CONNECT_TIMEOUT` | gateway 启动期间每个平台的连接超时（秒）。 |
 | `HERMES_GATEWAY_BUSY_INPUT_MODE` | 默认 gateway 繁忙输入行为：`queue`、`steer` 或 `interrupt`。可通过 `/busy` 按聊天覆盖。 |
 | `HERMES_GATEWAY_BUSY_ACK_ENABLED` | gateway 是否在用户 agent 繁忙时发送确认消息（⚡/⏳/⏩）（默认：`true`）。设为 `false` 可完全抑制这些消息——输入仍会正常排队/引导/中断，只是聊天回复被静默。从 `config.yaml` 中的 `display.busy_ack_enabled` 桥接。 |
-| `HERMES_GATEWAY_NO_SUPERVISE` | 在 s6-overlay Docker 镜像内部运行 `hermes gateway run` 时跳过 s6 自动监管，退回到 pre-s6 前台语义（无自动重启，gateway 作为容器主进程）。真值：`1`、`true`、`yes`。等同于 `--no-supervise` CLI 标志。在 s6 镜像之外为空操作。 |
+| `HERMES_GATEWAY_NO_SUPERVISE` | 在 s6-overlay Docker 镜像内部运行 `ansatz gateway run` 时跳过 s6 自动监管，退回到 pre-s6 前台语义（无自动重启，gateway 作为容器主进程）。真值：`1`、`true`、`yes`。等同于 `--no-supervise` CLI 标志。在 s6 镜像之外为空操作。 |
 | `HERMES_GATEWAY_BOOTSTRAP_STATE` | 在 s6-overlay Docker 镜像内部，为**全新卷**声明 gateway 的初始受监管状态。空白卷上不存在持久化的 `gateway_state.json`，因此启动协调器会注册 `gateway-default` 槽位但保持其**关闭**（只有上次记录状态为 `running` 时才会自动启动）。将此变量设为 `running` 后，首次启动 hook 会在协调器运行前预写入 `gateway_state.json`，从而让 gateway 在第一次启动时就自动拉起。仅字面值 `running` 生效。仅影响首次启动：若已有 `gateway_state.json`，绝不会被覆盖，因此被刻意停止的 gateway 在重启后仍保持停止。在 s6 镜像之外为空操作。 |
 | `HERMES_FILE_MUTATION_VERIFIER` | 启用每轮文件变更验证器页脚（默认：`true`）。启用后，Hermes 附加一个建议列表，列出本轮中失败且未被成功写入覆盖的 `write_file`/`patch` 调用。设为 `0`、`false`、`no` 或 `off` 可抑制。镜像 `config.yaml` 中的 `display.file_mutation_verifier`；设置时环境变量优先。 |
 | `HERMES_CRON_TIMEOUT` | cron 任务 agent 运行的不活动超时（秒，默认：`600`）。agent 在主动调用工具或接收流 token 时可无限运行——仅在空闲时触发。设为 `0` 表示无限制。 |
@@ -603,9 +603,9 @@ export HERMES_WRITE_SAFE_ROOT=/path/to/project:/home/you/.hermes
 |----------|-------------|
 | `HERMES_TUI` | 设为 `1` 时启动 [TUI](../user-guide/tui.md) 而非经典 CLI。等同于传入 `--tui`。 |
 | `HERMES_TUI_DIR` | 预构建 `ui-tui/` 目录的路径（必须包含 `dist/entry.js` 和已填充的 `node_modules`）。供发行版和 Nix 使用以跳过首次启动时的 `npm install`。 |
-| `HERMES_TUI_RESUME` | 启动时按 ID 恢复特定 TUI 会话。设置后，`hermes --tui` 跳过创建新会话并接续指定会话——适用于断开连接或终端崩溃后重新连接。 |
+| `HERMES_TUI_RESUME` | 启动时按 ID 恢复特定 TUI 会话。设置后，`ansatz --tui` 跳过创建新会话并接续指定会话——适用于断开连接或终端崩溃后重新连接。 |
 | `HERMES_TUI_THEME` | 强制 TUI 颜色主题：`light`、`dark` 或原始 6 字符背景十六进制（例如 `ffffff` 或 `1a1a2e`）。未设置时，Hermes 使用 `COLORFGBG` 和终端背景查询自动检测；此变量覆盖不设置 `COLORFGBG` 的终端（Ghostty、Warp、iTerm2 等）上的检测。 |
-| `HERMES_INFERENCE_MODEL` | 为 `hermes -z`/`hermes chat` 强制指定模型而不修改 `config.yaml`。与 `--provider` 标志配合使用。适用于需要每次运行覆盖默认模型的脚本调用者（sweeper、CI、批量运行器）。 |
+| `HERMES_INFERENCE_MODEL` | 为 `ansatz -z`/`ansatz chat` 强制指定模型而不修改 `config.yaml`。与 `--provider` 标志配合使用。适用于需要每次运行覆盖默认模型的脚本调用者（sweeper、CI、批量运行器）。 |
 
 ## 会话设置
 
@@ -674,5 +674,5 @@ fallback_providers:
 | `data_collection` | `"allow"`（默认）或 `"deny"` 以排除存储数据的提供商 |
 
 :::tip
-使用 `hermes config set` 设置环境变量——它会自动将其保存到正确的文件（密钥保存到 `.env`，其他所有内容保存到 `config.yaml`）。
+使用 `ansatz config set` 设置环境变量——它会自动将其保存到正确的文件（密钥保存到 `.env`，其他所有内容保存到 `config.yaml`）。
 :::

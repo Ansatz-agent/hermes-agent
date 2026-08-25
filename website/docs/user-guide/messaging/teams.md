@@ -10,7 +10,7 @@ Connect Hermes Agent to Microsoft Teams as a bot. Unlike Slack's Socket Mode, Te
 
 Need meeting summaries from Microsoft Graph events rather than normal bot conversations? Use the dedicated setup page: [Teams Meetings](/user-guide/messaging/teams-meetings).
 
-> Run `hermes gateway setup` and pick **Microsoft Teams** for a guided walk-through.
+> Run `ansatz gateway setup` and pick **Microsoft Teams** for a guided walk-through.
 
 ## How the Bot Responds
 
@@ -116,8 +116,8 @@ HERMES_UID=$(id -u) HERMES_GID=$(id -g) docker compose up -d gateway
 **Native / systemd install** (typical `hermes` one-liner installer under `~/.hermes/hermes-agent`):
 
 ```bash
-hermes gateway restart
-# or foreground: hermes gateway run
+ansatz gateway restart
+# or foreground: ansatz gateway run
 ```
 
 The Teams SDK is optional; when Teams is enabled, the gateway lazy-installs it into Hermes' own venv on first start (do **not** use system `pip install` on Ubuntu 24.04 — that hits PEP 668 `externally-managed-environment`). To install manually into the Hermes venv:
@@ -134,7 +134,7 @@ curl http://localhost:3978/health   # should return: ok
 # Docker:
 docker logs -f hermes
 # Native:
-hermes gateway status -l
+ansatz gateway status -l
 ```
 
 Look for:
@@ -256,7 +256,7 @@ Make sure the public HTTPS endpoint is reachable from the internet and uses a va
 
 | Problem | Solution |
 |---------|----------|
-| `Can't find a suitable configuration file` from `docker compose` | You are not in the repo that has `docker-compose.yml`, or you are on a native install — use `hermes gateway restart` instead, or `cd` into the clone first |
+| `Can't find a suitable configuration file` from `docker compose` | You are not in the repo that has `docker-compose.yml`, or you are on a native install — use `ansatz gateway restart` instead, or `cd` into the clone first |
 | `requirements not met` / `Teams SDK missing` / `No adapter available for teams` | Restart gateway so lazy-install can run, or install into the **Hermes venv**: `~/.hermes/hermes-agent/venv/bin/pip install microsoft-teams-apps aiohttp`. System `pip` fails on Ubuntu 24.04 (PEP 668) and would not affect the service anyway |
 | `health` endpoint works but bot doesn't respond | Check that your tunnel is still running and the bot's messaging endpoint matches the tunnel URL |
 | Logs show `"UNKNOWN / HTTP/1.0" 400` when Teams sends a message | The tunnel or reverse proxy is forwarding HTTPS to Hermes' plain HTTP listener. Terminate TLS at the proxy and forward HTTP to port `3978` |
@@ -265,7 +265,7 @@ Make sure the public HTTPS endpoint is reachable from the internet and uses a va
 | `No inference provider configured` | Check that `ANTHROPIC_API_KEY` (or another provider key) is set in `~/.hermes/.env` |
 | Bot receives messages but ignores them | Your AAD object ID may not be in `TEAMS_ALLOWED_USERS`. Run `teams status --verbose` to find it |
 | Tunnel URL changes on restart | devtunnel URLs are persistent if you use a named tunnel (`devtunnel create hermes-bot`). ngrok and cloudflared generate a new URL each run unless you have a paid plan — update the bot endpoint with `teams app update` when it changes |
-| Teams shows "This bot is not responding" | The webhook returned an error. Check `docker logs hermes` / `hermes gateway status -l` for tracebacks |
+| Teams shows "This bot is not responding" | The webhook returned an error. Check `docker logs hermes` / `ansatz gateway status -l` for tracebacks |
 | `[teams] Failed to connect` in logs | The SDK failed to authenticate. Double-check your credentials and that the tenant ID matches the account you used in `teams login` |
 
 ---

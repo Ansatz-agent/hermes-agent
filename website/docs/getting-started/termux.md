@@ -125,8 +125,8 @@ ln -sf "$PWD/venv/bin/hermes" "$PREFIX/bin/hermes"
 ### 6. Verify the install
 
 ```bash
-hermes version
-hermes doctor
+ansatz version
+ansatz doctor
 ```
 
 ### 7. Start Hermes
@@ -142,7 +142,7 @@ hermes
 ### Configure a model
 
 ```bash
-hermes model
+ansatz model
 ```
 
 Or set keys directly in `~/.hermes/.env`.
@@ -150,7 +150,7 @@ Or set keys directly in `~/.hermes/.env`.
 ### Re-run the full interactive setup wizard later
 
 ```bash
-hermes setup
+ansatz setup
 ```
 
 ### Install optional Node dependencies manually
@@ -213,7 +213,7 @@ export ANDROID_API_LEVEL="$(getprop ro.build.version.sdk)"
 python -m pip install -e '.[termux]' -c constraints-termux.txt
 ```
 
-### `hermes doctor` says ripgrep or Node is missing
+### `ansatz doctor` says ripgrep or Node is missing
 
 Install them with Termux packages:
 
@@ -249,5 +249,5 @@ If you hit a new Android-specific issue, please open a GitHub issue with:
 - your Android version
 - `termux-info`
 - `python --version`
-- `hermes doctor`
+- `ansatz doctor`
 - the exact install command and full error output

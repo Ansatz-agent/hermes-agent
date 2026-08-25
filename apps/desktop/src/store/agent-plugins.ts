@@ -10,7 +10,7 @@ import { notifyError } from '@/store/notifications'
  * it runs in.
  *
  * Backed by the gateway's `plugins.manage` RPC — the same list/toggle
- * primitives `hermes plugins` and the dashboard use, so all surfaces agree on
+ * primitives `ansatz plugins` and the dashboard use, so all surfaces agree on
  * what's installed and what's enabled. Works against every backend topology
  * (local spawn, SSH, URL+token) because it rides the session's own transport.
  */

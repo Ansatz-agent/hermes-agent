@@ -69,9 +69,9 @@ describe('formatBlockerMessage', () => {
 })
 
 describe('formatProbeFailedMessage', () => {
-  it('suggests retry and hermes update', () => {
+  it('suggests retry and ansatz update', () => {
     const msg = formatProbeFailedMessage()
-    assert.ok(msg.includes('hermes update'))
+    assert.ok(msg.includes('ansatz update'))
     assert.ok(msg.includes('retry'))
   })
 })

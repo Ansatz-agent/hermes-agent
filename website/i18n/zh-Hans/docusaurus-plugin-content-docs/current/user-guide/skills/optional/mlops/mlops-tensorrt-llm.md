@@ -14,7 +14,7 @@ description: "使用 NVIDIA TensorRT 优化 LLM 推理以实现最大吞吐量�
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/mlops/tensorrt-llm` 安装 |
+| 来源 | 可选 — 通过 `ansatz skills install official/mlops/tensorrt-llm` 安装 |
 | 路径 | `optional-skills/mlops/tensorrt-llm` |
 | 版本 | `1.0.0` |
 | 作者 | Orchestra Research |

@@ -69,7 +69,7 @@ source ~/.bashrc   # or source ~/.zshrc
 ### 2. Run Quick Setup
 
 ```bash
-hermes setup
+ansatz setup
 ```
 
 Select **Quick Setup**. Hermes opens a browser tab and waits for you to finish the next steps.
@@ -111,7 +111,7 @@ Already set up with another model?
 
 ## Troubleshooting
 
-- **Don't see the model in the list?** Make sure you finished the Nous Portal connection and that you're on the **Free** plan. In the CLI, `hermes portal info` confirms you're logged in and routing through Nous.
+- **Don't see the model in the list?** Make sure you finished the Nous Portal connection and that you're on the **Free** plan. In the CLI, `ansatz portal info` confirms you're logged in and routing through Nous.
 - **Picked the wrong variant?** Re-select `nvidia/nemotron-3-ultra:free` — the `:free` suffix is required to stay on the no-cost tier.
 - **Browser didn't open / you're on a remote host (CLI)?** See [OAuth over SSH / Remote Hosts](/guides/oauth-over-ssh) for port-forwarding workarounds.
 

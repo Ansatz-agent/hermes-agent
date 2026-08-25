@@ -250,7 +250,7 @@ Developer Mode also lets you copy **Channel IDs** and **Server IDs** the same wa
 Run the guided setup command:
 
 ```bash
-hermes gateway setup
+ansatz gateway setup
 ```
 
 Select **Discord** when prompted, then paste your bot token and user ID when asked.
@@ -271,13 +271,13 @@ DISCORD_ALLOWED_USERS=284102345871466496
 Then start the gateway:
 
 ```bash
-hermes gateway
+ansatz gateway
 ```
 
 The bot should come online in Discord within a few seconds. Send it a message — either a DM or in a channel it can see — to test.
 
 :::tip
-You can run `hermes gateway` in the background or as a systemd service for persistent operation. See the deployment docs for details.
+You can run `ansatz gateway` in the background or as a systemd service for persistent operation. See the deployment docs for details.
 :::
 
 ## Configuration Reference
@@ -650,7 +650,7 @@ Hermes automatically registers installed skills as **native Discord Application 
 - Discord has a limit of 100 application commands per bot — if you have more skills than available slots, extra skills are skipped with a warning in the logs
 - Skills are registered during bot startup alongside built-in commands like `/model`, `/reset`, and `/background`
 
-No extra configuration is needed — any skill installed via `hermes skills install` is automatically registered as a Discord slash command on the next gateway restart.
+No extra configuration is needed — any skill installed via `ansatz skills install` is automatically registered as a Discord slash command on the next gateway restart.
 
 ### Disabling Slash Command Registration
 
@@ -815,7 +815,7 @@ Refreshing the directory (`/channels refresh` on platforms that expose it, or a 
 3. Restart the gateway:
 
    ```bash
-   hermes gateway restart
+   ansatz gateway restart
    ```
 
 If the gateway log says Discord is connected and REST API checks work, but every inbound message is silent, look for this warning in `~/.hermes/logs/gateway.log`:
@@ -834,7 +834,7 @@ Hermes 0.18 intentionally fails closed on externally reachable adapters. A Disco
 
 1. Go to [Developer Portal](https://discord.com/developers/applications) → your app → Bot → Privileged Gateway Intents.
 2. Enable **Message Content Intent** (required). Enable **Server Members Intent** if you use usernames or role allowlists.
-3. Click **Save Changes**, then restart the gateway (`hermes gateway restart`).
+3. Click **Save Changes**, then restart the gateway (`ansatz gateway restart`).
 
 The gateway log should name the exact intent(s) Hermes requested. Until they are enabled, Discord will keep rejecting the connection — this is a portal configuration error, not a flaky network issue.
 
@@ -854,7 +854,7 @@ The gateway log should name the exact intent(s) Hermes requested. Until they are
 
 **Cause**: The Hermes gateway isn't running, or the token is incorrect.
 
-**Fix**: Check that `hermes gateway` is running. Verify `DISCORD_BOT_TOKEN` in your `.env` file. If you recently reset the token, update it.
+**Fix**: Check that `ansatz gateway` is running. Verify `DISCORD_BOT_TOKEN` in your `.env` file. If you recently reset the token, update it.
 
 ### "User not allowed" / Bot ignores you
 

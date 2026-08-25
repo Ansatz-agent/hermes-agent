@@ -193,11 +193,11 @@ def print_fast_version_info() -> None:
 
     openai_version = read_openai_version()
     print(f"OpenAI SDK: {openai_version}" if openai_version else "OpenAI SDK: Not installed")
-    print("Run 'hermes version' for update status.")
+    print("Run 'ansatz version' for update status.")
 
 
 def try_fast_version(argv: list[str] | None = None) -> bool:
-    """Handle ``hermes --version`` before the heavy import wall.
+    """Handle ``ansatz --version`` before the heavy import wall.
 
     Termux keeps its historical contract (also accepts the ``version``
     subcommand + the HERMES_TERMUX_DISABLE_FAST_CLI escape hatch). Everywhere

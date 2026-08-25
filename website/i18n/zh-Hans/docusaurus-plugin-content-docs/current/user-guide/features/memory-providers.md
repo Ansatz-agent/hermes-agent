@@ -11,12 +11,12 @@ Hermes Agent 内置 8 个外部记忆提供者插件，为 Agent 提供跨会话
 ## 快速开始
 
 ```bash
-hermes memory setup      # 交互式选择器 + 配置
-hermes memory status     # 查看当前激活状态
-hermes memory off        # 禁用外部提供者
+ansatz memory setup      # 交互式选择器 + 配置
+ansatz memory status     # 查看当前激活状态
+ansatz memory off        # 禁用外部提供者
 ```
 
-也可以通过 `hermes plugins` → Provider Plugins → Memory Provider 选择激活的记忆提供者。
+也可以通过 `ansatz plugins` → Provider Plugins → Memory Provider 选择激活的记忆提供者。
 
 或在 `~/.hermes/config.yaml` 中手动设置：
 
@@ -63,10 +63,10 @@ AI 原生的跨会话用户建模，具备辩证推理、会话范围上下文�
 
 **安装向导：**
 ```bash
-hermes memory setup        # 选择 "honcho" — 运行 Honcho 专属的安装后配置
+ansatz memory setup        # 选择 "honcho" — 运行 Honcho 专属的安装后配置
 ```
 
-旧版 `hermes honcho setup` 命令仍然有效（现在会重定向到 `hermes memory setup`），但只有在 Honcho 被选为激活记忆提供者后才会注册。
+旧版 `ansatz honcho setup` 命令仍然有效（现在会重定向到 `ansatz memory setup`），但只有在 Honcho 被选为激活记忆提供者后才会注册。
 
 **配置：** `$HERMES_HOME/honcho.json`（profile 本地）或 `~/.honcho/config.json`（全局）。解析顺序：`$HERMES_HOME/honcho.json` > `~/.hermes/honcho.json` > `~/.honcho/config.json`。参见[配置参考](https://github.com/hermes-ai/hermes-agent/blob/main/plugins/memory/honcho/README.md)和 [Honcho 集成指南](https://docs.honcho.dev/v3/guides/integrations/hermes)。
 
@@ -136,8 +136,8 @@ hermes memory setup        # 选择 "honcho" — 运行 Honcho 专属的安装�
 
 </details>
 
-:::tip 从 `hermes honcho` 迁移
-如果你之前使用过 `hermes honcho setup`，你的配置和所有服务端数据均完好无损。只需通过安装向导重新启用，或手动设置 `memory.provider: honcho`，即可通过新系统重新激活。
+:::tip 从 `ansatz honcho` 迁移
+如果你之前使用过 `ansatz honcho setup`，你的配置和所有服务端数据均完好无损。只需通过安装向导重新启用，或手动设置 `memory.provider: honcho`，即可通过新系统重新激活。
 :::
 
 **多 peer 配置：**
@@ -156,7 +156,7 @@ Honcho 将对话建模为 peer 之间的消息交换——每个 Hermes profile 
 ### 新建 profile，创建新 Honcho peer
 
 ```bash
-hermes profile create coder --clone
+ansatz profile create coder --clone
 ```
 
 `--clone` 在 `honcho.json` 中创建一个 `hermes.coder` host 块，包含 `aiPeer: "coder"`、共享的 `workspace`、继承的 `peerName`、`recallMode`、`writeFrequency`、`observation` 等。AI peer 会在 Honcho 中提前创建，确保在第一条消息之前就已存在。
@@ -164,7 +164,7 @@ hermes profile create coder --clone
 ### 为现有 profile 补充 Honcho peer
 
 ```bash
-hermes honcho sync
+ansatz honcho sync
 ```
 
 扫描所有 Hermes profile，为没有 host 块的 profile 创建 host 块，从默认 `hermes` 块继承设置，并提前创建新的 AI peer。幂等操作——跳过已有 host 块的 profile。
@@ -280,9 +280,9 @@ pip install openviking
 openviking-server
 
 # 然后配置 Hermes
-hermes memory setup    # 选择 "openviking"
+ansatz memory setup    # 选择 "openviking"
 # 或手动配置：
-hermes config set memory.provider openviking
+ansatz config set memory.provider openviking
 echo "OPENVIKING_ENDPOINT=http://localhost:1933" >> ~/.hermes/.env
 ```
 
@@ -308,9 +308,9 @@ echo "OPENVIKING_ENDPOINT=http://localhost:1933" >> ~/.hermes/.env
 
 **安装：**
 ```bash
-hermes memory setup    # 选择 "mem0"
+ansatz memory setup    # 选择 "mem0"
 # 或手动配置：
-hermes config set memory.provider mem0
+ansatz config set memory.provider mem0
 echo "MEM0_API_KEY=your-key" >> ~/.hermes/.env
 ```
 
@@ -338,9 +338,9 @@ echo "MEM0_API_KEY=your-key" >> ~/.hermes/.env
 
 **安装：**
 ```bash
-hermes memory setup    # 选择 "hindsight"
+ansatz memory setup    # 选择 "hindsight"
 # 或手动配置：
-hermes config set memory.provider hindsight
+ansatz config set memory.provider hindsight
 echo "HINDSIGHT_API_KEY=your-key" >> ~/.hermes/.env
 ```
 
@@ -385,9 +385,9 @@ echo "HINDSIGHT_API_KEY=your-key" >> ~/.hermes/.env
 
 **安装：**
 ```bash
-hermes memory setup    # 选择 "holographic"
+ansatz memory setup    # 选择 "holographic"
 # 或手动配置：
-hermes config set memory.provider holographic
+ansatz config set memory.provider holographic
 ```
 
 **配置：** `plugins.hermes-memory-store` 下的 `config.yaml`
@@ -421,9 +421,9 @@ hermes config set memory.provider holographic
 
 **安装：**
 ```bash
-hermes memory setup    # 选择 "retaindb"
+ansatz memory setup    # 选择 "retaindb"
 # 或手动配置：
-hermes config set memory.provider retaindb
+ansatz config set memory.provider retaindb
 echo "RETAINDB_API_KEY=your-key" >> ~/.hermes/.env
 ```
 
@@ -448,9 +448,9 @@ echo "RETAINDB_API_KEY=your-key" >> ~/.hermes/.env
 curl -fsSL https://byterover.dev/install.sh | sh
 
 # 然后配置 Hermes
-hermes memory setup    # 选择 "byterover"
+ansatz memory setup    # 选择 "byterover"
 # 或手动配置：
-hermes config set memory.provider byterover
+ansatz config set memory.provider byterover
 ```
 
 **主要特性：**
@@ -475,9 +475,9 @@ hermes config set memory.provider byterover
 
 **安装：**
 ```bash
-hermes memory setup    # 选择 "supermemory"
+ansatz memory setup    # 选择 "supermemory"
 # 或手动配置：
-hermes config set memory.provider supermemory
+ansatz config set memory.provider supermemory
 echo 'SUPERMEMORY_API_KEY=***' >> ~/.hermes/.env
 ```
 
@@ -487,7 +487,7 @@ echo 'SUPERMEMORY_API_KEY=***' >> ~/.hermes/.env
 npx supermemory local
 ```
 
-在运行 `hermes memory setup` **之前**，先在
+在运行 `ansatz memory setup` **之前**，先在
 `$HERMES_HOME/supermemory.json` 中设置 `base_url`：
 
 ```json
@@ -496,7 +496,7 @@ npx supermemory local
 }
 ```
 
-然后运行 `hermes memory setup` 并输入本地服务器打印的 API key。先配置端点可确保安装连接探测也只访问本地服务器。
+然后运行 `ansatz memory setup` 并输入本地服务器打印的 API key。先配置端点可确保安装连接探测也只访问本地服务器。
 
 **配置：** `$HERMES_HOME/supermemory.json`
 

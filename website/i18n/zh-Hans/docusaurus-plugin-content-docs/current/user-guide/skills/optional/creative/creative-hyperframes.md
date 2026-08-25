@@ -14,7 +14,7 @@ description: "使用 HyperFrames 创建基于 HTML 的视频合成、动画标�
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/creative/hyperframes` 安装 |
+| 来源 | 可选 — 通过 `ansatz skills install official/creative/hyperframes` 安装 |
 | 路径 | `optional-skills/creative/hyperframes` |
 | 版本 | `1.0.0` |
 | 作者 | heygen-com |

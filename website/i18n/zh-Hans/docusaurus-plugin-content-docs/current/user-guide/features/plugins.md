@@ -100,11 +100,11 @@ def register(ctx):
 | 添加 hook | `ctx.register_hook("post_tool_call", callback)` |
 | 添加斜杠命令 | `ctx.register_command(name, handler, description)` — 在 CLI 和 gateway 会话中添加 `/name` |
 | 从命令中调度工具 | `ctx.dispatch_tool(name, args)` — 调用已注册的工具，自动注入父 agent 上下文 |
-| 添加 CLI 命令 | `ctx.register_cli_command(name, help, setup_fn, handler_fn)` — 添加 `hermes <plugin> <subcommand>` |
+| 添加 CLI 命令 | `ctx.register_cli_command(name, help, setup_fn, handler_fn)` — 添加 `ansatz <plugin> <subcommand>` |
 | 注入消息 | `ctx.inject_message(content, role="user")` — 参见 [注入消息](#injecting-messages) |
 | 附带数据文件 | `Path(__file__).parent / "data" / "file.yaml"` |
 | 打包 skill | `ctx.register_skill(name, path)` — 命名空间为 `plugin:skill`，通过 `skill_view("plugin:skill")` 加载 |
-| 按环境变量控制 | 在 plugin.yaml 中设置 `requires_env: [API_KEY]` — 在 `hermes plugins install` 时提示输入 |
+| 按环境变量控制 | 在 plugin.yaml 中设置 `requires_env: [API_KEY]` — 在 `ansatz plugins install` 时提示输入 |
 | 通过 pip 分发 | `[project.entry-points."hermes_agent.plugins"]` |
 | 注册 gateway 平台（Discord、Telegram、IRC 等） | `ctx.register_platform(name, label, adapter_factory, check_fn, ...)` — 参见 [Adding Platform Adapters](/developer-guide/adding-platform-adapters) |
 | 注册图像生成后端 | `ctx.register_image_gen_provider(provider)` — 参见 [Image Generation Provider Plugins](/developer-guide/image-gen-provider-plugin) |
@@ -141,11 +141,11 @@ def register(ctx):
 
 `~/.hermes/plugins/model-providers/<name>/` 和 `~/.hermes/plugins/memory/<name>/` 下的用户插件会覆盖同名内置插件 — `register_provider()` / `register_memory_provider()` 中后写者胜出。放入一个目录即可替换内置实现，无需修改仓库。
 
-子分类插件在 `hermes plugins list` 和交互式 `hermes plugins` UI 中以**路径派生的 key** 显示 — 例如 `observability/langfuse`、`image_gen/openai`、`platforms/teams`。该 key（而非 manifest 中的 `name:`）是传给 `hermes plugins enable …` / `disable …` 的值，也是在 `config.yaml` 的 `plugins.enabled` 下填写的字符串。
+子分类插件在 `ansatz plugins list` 和交互式 `ansatz plugins` UI 中以**路径派生的 key** 显示 — 例如 `observability/langfuse`、`image_gen/openai`、`platforms/teams`。该 key（而非 manifest 中的 `name:`）是传给 `ansatz plugins enable …` / `disable …` 的值，也是在 `config.yaml` 的 `plugins.enabled` 下填写的字符串。
 
 ## 插件默认关闭（少数例外）
 
-**通用插件和用户安装的后端默认禁用** — 发现系统会找到它们（因此它们会出现在 `hermes plugins` 和 `/plugins` 中），但在你将插件名称添加到 `~/.hermes/config.yaml` 的 `plugins.enabled` 之前，任何带有 hook 或工具的内容都不会加载。这可防止第三方代码在未经明确同意的情况下运行。
+**通用插件和用户安装的后端默认禁用** — 发现系统会找到它们（因此它们会出现在 `ansatz plugins` 和 `/plugins` 中），但在你将插件名称添加到 `~/.hermes/config.yaml` 的 `plugins.enabled` 之前，任何带有 hook 或工具的内容都不会加载。这可防止第三方代码在未经明确同意的情况下运行。
 
 ```yaml
 plugins:
@@ -159,12 +159,12 @@ plugins:
 切换状态的三种方式：
 
 ```bash
-hermes plugins                    # 交互式切换（空格勾选/取消勾选）
-hermes plugins enable <name>      # 添加到允许列表
-hermes plugins disable <name>     # 从允许列表移除并添加到禁用列表
+ansatz plugins                    # 交互式切换（空格勾选/取消勾选）
+ansatz plugins enable <name>      # 添加到允许列表
+ansatz plugins disable <name>     # 从允许列表移除并添加到禁用列表
 ```
 
-执行 `hermes plugins install owner/repo` 后，会询问 `Enable 'name' now? [y/N]` — 默认为否。脚本化安装时可用 `--enable` 或 `--no-enable` 跳过提示。
+执行 `ansatz plugins install owner/repo` 后，会询问 `Enable 'name' now? [y/N]` — 默认为否。脚本化安装时可用 `--enable` 或 `--no-enable` 跳过提示。
 
 ### 允许列表不控制的内容
 
@@ -220,7 +220,7 @@ Memory provider 和 context engine 是 **provider 插件** — 每种类型同�
 | LLM 可调用的**工具** | Python 插件 — `ctx.register_tool()` | [Build a Hermes Plugin](/developer-guide/plugins) · [Adding Tools](/developer-guide/adding-tools) |
 | **生命周期 hook**（LLM 前后、会话开始/结束、工具过滤） | Python 插件 — `ctx.register_hook()` | [Hooks reference](/user-guide/features/hooks) · [Build a Hermes Plugin](/developer-guide/plugins) |
 | CLI / gateway 的**斜杠命令** | Python 插件 — `ctx.register_command()` | [Build a Hermes Plugin](/developer-guide/plugins) · [Extending the CLI](/developer-guide/extending-the-cli) |
-| `hermes <thing>` 的**子命令** | Python 插件 — `ctx.register_cli_command()` | [Extending the CLI](/developer-guide/extending-the-cli) |
+| `ansatz <thing>` 的**子命令** | Python 插件 — `ctx.register_cli_command()` | [Extending the CLI](/developer-guide/extending-the-cli) |
 | 插件附带的**skill** | Python 插件 — `ctx.register_skill()` | [Creating Skills](/developer-guide/creating-skills) |
 | **推理后端**（LLM provider：OpenAI 兼容、Codex、Anthropic-Messages、Bedrock） | Provider 插件 — 在 `plugins/model-providers/<name>/` 中调用 `register_provider(ProviderProfile(...))` | **[Model Provider Plugins](/developer-guide/model-provider-plugin)** · [Adding Providers](/developer-guide/adding-providers) |
 | **Gateway 频道**（Discord / Telegram / IRC / Teams 等） | 平台插件 — 在 `plugins/platforms/<name>/` 中调用 `ctx.register_platform()` | [Adding Platform Adapters](/developer-guide/adding-platform-adapters) |
@@ -231,7 +231,7 @@ Memory provider 和 context engine 是 **provider 插件** — 每种类型同�
 | **TTS 后端**（任意 CLI — Piper、VoxCPM、Kokoro、xtts、语音克隆脚本等） | 配置驱动（推荐）— 在 `config.yaml` 的 `tts.providers.<name>` 下以 `type: command` 声明。或 Python 后端插件 — 对需要超出 shell 模板的 Python SDK / 流式引擎使用 `ctx.register_tts_provider()`。 | [TTS Setup](/user-guide/features/tts#custom-command-providers) · [Python plugin guide](/user-guide/features/tts#python-plugin-providers) |
 | **STT 后端**（自定义 whisper 二进制、本地 ASR CLI） | 配置驱动 — 将 `HERMES_LOCAL_STT_COMMAND` 环境变量设置为 shell 模板 | [Voice Message Transcription (STT)](/user-guide/features/tts#voice-message-transcription-stt) |
 | **通过 MCP 使用外部工具**（文件系统、GitHub、Linear、Notion、任意 MCP 服务器） | 配置驱动 — 在 `config.yaml` 中以 `command:` / `url:` 声明 `mcp_servers.<name>`。Hermes 自动发现服务器的工具并与内置工具一同注册。 | [MCP](/user-guide/features/mcp) |
-| **额外 skill 来源**（自定义 GitHub 仓库、私有 skill 索引） | CLI — `hermes skills tap add <repo>` | [Skills Hub](/user-guide/features/skills#skills-hub) · [发布自定义 tap](/user-guide/features/skills#publishing-a-custom-skill-tap) |
+| **额外 skill 来源**（自定义 GitHub 仓库、私有 skill 索引） | CLI — `ansatz skills tap add <repo>` | [Skills Hub](/user-guide/features/skills#skills-hub) · [发布自定义 tap](/user-guide/features/skills#publishing-a-custom-skill-tap) |
 | **Gateway 事件 hook**（在 `gateway:startup`、`session:start`、`agent:end`、`command:*` 时触发） | 将 `HOOK.yaml` + `handler.py` 放入 `~/.hermes/hooks/<name>/` | [Event Hooks](/user-guide/features/hooks#gateway-event-hooks) |
 | **Shell hook**（在事件时运行 shell 命令 — 通知、审计日志、桌面提醒） | 配置驱动 — 在 `config.yaml` 的 `hooks:` 下声明 | [Shell Hooks](/user-guide/features/hooks#shell-hooks) |
 
@@ -241,7 +241,7 @@ Memory provider 和 context engine 是 **provider 插件** — 每种类型同�
 
 ## NixOS 声明式插件
 
-在 NixOS 上，插件可通过模块选项声明式安装 — 无需 `hermes plugins install`。完整详情请参见 **[Nix Setup 指南](/getting-started/nix-setup#plugins)**。
+在 NixOS 上，插件可通过模块选项声明式安装 — 无需 `ansatz plugins install`。完整详情请参见 **[Nix Setup 指南](/getting-started/nix-setup#plugins)**。
 
 ```nix
 services.hermes-agent = {
@@ -259,23 +259,23 @@ services.hermes-agent = {
 ## 管理插件
 
 ```bash
-hermes plugins                                       # 统一交互式 UI
-hermes plugins list                                  # 表格：已启用 / 已禁用 / 未启用
-hermes plugins install user/repo                     # 从 Git 安装，然后提示 Enable? [y/N]
-hermes plugins install user/repo --enable            # 安装并启用（无提示）
-hermes plugins install user/repo --no-enable         # 安装但保持禁用（无提示）
-hermes plugins update my-plugin                      # 拉取最新版本
-hermes plugins remove my-plugin                      # 卸载
-hermes plugins enable my-plugin                      # 添加到允许列表（普通插件）
-hermes plugins enable observability/langfuse         # 添加到允许列表（子分类插件）
-hermes plugins disable my-plugin                     # 从允许列表移除并添加到禁用列表
+ansatz plugins                                       # 统一交互式 UI
+ansatz plugins list                                  # 表格：已启用 / 已禁用 / 未启用
+ansatz plugins install user/repo                     # 从 Git 安装，然后提示 Enable? [y/N]
+ansatz plugins install user/repo --enable            # 安装并启用（无提示）
+ansatz plugins install user/repo --no-enable         # 安装但保持禁用（无提示）
+ansatz plugins update my-plugin                      # 拉取最新版本
+ansatz plugins remove my-plugin                      # 卸载
+ansatz plugins enable my-plugin                      # 添加到允许列表（普通插件）
+ansatz plugins enable observability/langfuse         # 添加到允许列表（子分类插件）
+ansatz plugins disable my-plugin                     # 从允许列表移除并添加到禁用列表
 ```
 
-对于子分类目录下的插件（例如 `plugins/observability/langfuse/`、`plugins/image_gen/openai/`），使用完整的 `<category>/<plugin>` key — 这正是 `hermes plugins list` 在 **Name** 列中显示的内容。
+对于子分类目录下的插件（例如 `plugins/observability/langfuse/`、`plugins/image_gen/openai/`），使用完整的 `<category>/<plugin>` key — 这正是 `ansatz plugins list` 在 **Name** 列中显示的内容。
 
 ### 交互式 UI
 
-不带参数运行 `hermes plugins` 会打开一个复合交互界面：
+不带参数运行 `ansatz plugins` 会打开一个复合交互界面：
 
 ```
 Plugins
@@ -316,7 +316,7 @@ context:
 | `disabled` | 明确关闭 — 即使同时在 `enabled` 中也不会加载 | （无关） | 是 |
 | `not enabled` | 已发现但从未选择加入 | 否 | 否 |
 
-新安装或内置插件的默认状态为 `not enabled`。`hermes plugins list` 显示全部三种状态，便于区分明确关闭的插件和等待启用的插件。
+新安装或内置插件的默认状态为 `not enabled`。`ansatz plugins list` 显示全部三种状态，便于区分明确关闭的插件和等待启用的插件。
 
 在运行中的会话里，`/plugins` 显示当前已加载的插件。
 

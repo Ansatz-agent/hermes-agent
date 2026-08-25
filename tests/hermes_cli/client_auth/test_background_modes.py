@@ -119,7 +119,7 @@ def test_runtime_wait_command_emits_only_redacted_state(monkeypatch, capsys):
     assert runtime.main(["wait", "service.gateway.start"]) == 0
     output = capsys.readouterr().out
     assert '"auth_state": "locked-waiting"' in output
-    assert "run `hermes login`" in output
+    assert "run `ansatz login`" in output
     assert "cookie" not in output.casefold()
     assert "password" not in output.casefold()
 

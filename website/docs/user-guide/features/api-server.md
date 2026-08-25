@@ -11,7 +11,7 @@ The API server exposes hermes-agent as an OpenAI-compatible HTTP endpoint. Any f
 Your agent handles requests with its full toolset (terminal, file operations, web search, memory, skills) and returns the final response. When streaming, tool progress indicators appear inline so frontends can show what the agent is doing.
 
 :::tip One backend covers models + tools
-Hermes itself needs a configured provider and tool backends for the API server to be useful. A [Nous Portal](/user-guide/features/tool-gateway) subscription handles both — 300+ models plus web/image/TTS/browser via the Tool Gateway. Run `hermes setup --portal` once before starting the API server and frontends like Open WebUI or LobeChat get a fully tool-equipped backend.
+Hermes itself needs a configured provider and tool backends for the API server to be useful. A [Nous Portal](/user-guide/features/tool-gateway) subscription handles both — 300+ models plus web/image/TTS/browser via the Tool Gateway. Run `ansatz setup --portal` once before starting the API server and frontends like Open WebUI or LobeChat get a fully tool-equipped backend.
 :::
 
 ## Quick Start
@@ -30,7 +30,7 @@ API_SERVER_KEY=change-me-local-dev
 ### 2. Start the gateway
 
 ```bash
-hermes gateway
+ansatz gateway
 ```
 
 You'll see:
@@ -415,7 +415,7 @@ List all scheduled jobs.
 
 ### POST /api/jobs
 
-Create a new scheduled job. Body accepts the same shape as `hermes cron` — prompt, schedule, skills, provider override, delivery target.
+Create a new scheduled job. Body accepts the same shape as `ansatz cron` — prompt, schedule, skills, provider override, delivery target.
 
 ### GET /api/jobs/\{job_id\}
 
@@ -626,8 +626,8 @@ To give multiple users their own isolated Hermes instance (separate config, memo
 
 ```bash
 # Create a profile per user
-hermes profile create alice
-hermes profile create bob
+ansatz profile create alice
+ansatz profile create bob
 
 # Configure each profile's API server on a different port. API_SERVER_* are env
 # vars (not config.yaml keys), so write them to each profile's .env:
@@ -644,8 +644,8 @@ API_SERVER_KEY=bob-secret
 EOF
 
 # Start each profile's gateway
-hermes -p alice gateway &
-hermes -p bob gateway &
+ansatz -p alice gateway &
+ansatz -p bob gateway &
 ```
 
 Each profile's API server automatically advertises the profile name as the model ID:

@@ -34,7 +34,7 @@ group_sessions_per_user: true
 ### 推荐：扫码创建（一条命令）
 
 ```bash
-hermes gateway setup
+ansatz gateway setup
 ```
 
 选择 **飞书 / Lark**，用飞书或 Lark 手机端扫描二维码。Hermes 将自动创建具有正确权限的机器人应用并保存凭据。
@@ -49,7 +49,7 @@ hermes gateway setup
 2. 创建新应用。
 3. 在 **凭证与基础信息** 中，复制 **App ID** 和 **App Secret**。
 4. 为应用开启 **机器人** 能力。
-5. 运行 `hermes gateway setup`，选择 **飞书 / Lark**，并在提示时输入凭据。
+5. 运行 `ansatz gateway setup`，选择 **飞书 / Lark**，并在提示时输入凭据。
 
 :::warning
 请妥善保管 App Secret。任何持有它的人都可以冒充你的应用。
@@ -100,7 +100,7 @@ FEISHU_WEBHOOK_PATH=/feishu/webhook  # 默认：/feishu/webhook
 ### 方式 A：交互式配置
 
 ```bash
-hermes gateway setup
+ansatz gateway setup
 ```
 
 选择 **飞书 / Lark** 并填写提示信息。
@@ -128,7 +128,7 @@ FEISHU_HOME_CHANNEL=oc_xxx
 ## 第四步：启动 Gateway
 
 ```bash
-hermes gateway
+ansatz gateway
 ```
 
 然后从飞书/Lark 向机器人发送消息，确认连接已建立。
@@ -249,7 +249,7 @@ FEISHU_ALLOW_BOTS=mentions   # 默认：none
 - 卡片定义中操作的 `value` payload 以 JSON 形式包含在内。
 - 卡片操作在 15 分钟窗口内去重，防止重复处理。
 
-Gateway 驱动的更新提示使用原生飞书 `Yes` / `No` 卡片，而非回退到纯文本回复。当 `hermes update --gateway` 需要确认时，适配器将所选答案记录到 Hermes 的 `.update_response` 文件中，并将卡片内联替换为已解决状态。
+Gateway 驱动的更新提示使用原生飞书 `Yes` / `No` 卡片，而非回退到纯文本回复。当 `ansatz update --gateway` 需要确认时，适配器将所选答案记录到 Hermes 的 `.update_response` 文件中，并将卡片内联替换为已解决状态。
 
 卡片操作事件以 `MessageType.COMMAND` 分发，因此流经标准命令处理管道。
 
@@ -515,7 +515,7 @@ WebSocket 和按群 ACL 设置通过 `config.yaml` 的 `platforms.feishu.extra` 
 | `lark-oapi not installed` | 安装 SDK：`pip install lark-oapi` |
 | `websockets not installed; websocket mode unavailable` | 安装 websockets：`pip install websockets` |
 | `aiohttp not installed; webhook mode unavailable` | 安装 aiohttp：`pip install aiohttp` |
-| `FEISHU_APP_ID or FEISHU_APP_SECRET not set` | 设置两个环境变量，或通过 `hermes gateway setup` 配置 |
+| `FEISHU_APP_ID or FEISHU_APP_SECRET not set` | 设置两个环境变量，或通过 `ansatz gateway setup` 配置 |
 | `Another local Hermes gateway is already using this Feishu app_id` | 同一时间只能有一个 Hermes 实例使用相同的 app_id。请先停止另一个 gateway。 |
 | 机器人在群聊中不响应 | 确保机器人被 @提及，检查 `FEISHU_GROUP_POLICY`，若策略为 `allowlist` 则验证发送者是否在 `FEISHU_ALLOWED_USERS` 中 |
 | `Webhook rejected: invalid verification token` | 确保 `FEISHU_VERIFICATION_TOKEN` 与飞书应用事件订阅配置中的 token 一致 |

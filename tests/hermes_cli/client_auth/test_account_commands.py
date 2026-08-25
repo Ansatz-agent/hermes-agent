@@ -95,6 +95,7 @@ def test_signed_out_login_prompts_once_and_wipes_password(monkeypatch, capsys):
     signed_out = SimpleNamespace(state=AuthState.SIGNED_OUT, username=None)
     authenticated = SimpleNamespace(state=AuthState.AUTHENTICATED, username="alice")
     captured: list[bytearray] = []
+    captured_prompts: list[str] = []
     monkeypatch.setattr(
         "hermes_cli.client_auth.runtime.account_status",
         lambda: signed_out,
@@ -109,7 +110,11 @@ def test_signed_out_login_prompts_once_and_wipes_password(monkeypatch, capsys):
     monkeypatch.setattr("hermes_cli.client_auth.runtime.account_login", login)
     prompts = iter(["alice"])
     passwords = iter(["secret"])
-    monkeypatch.setattr("builtins.input", lambda _prompt: next(prompts))
+    def read_username(prompt: str) -> str:
+        captured_prompts.append(prompt)
+        return next(prompts)
+
+    monkeypatch.setattr("builtins.input", read_username)
     monkeypatch.setattr("getpass.getpass", lambda _prompt: next(passwords))
     monkeypatch.setattr(sys, "stdin", _Tty())
     monkeypatch.setattr(sys, "stderr", _Tty())
@@ -117,6 +122,7 @@ def test_signed_out_login_prompts_once_and_wipes_password(monkeypatch, capsys):
     main.cmd_login(SimpleNamespace())
 
     assert captured == [bytearray(b"\0" * 6)]
+    assert captured_prompts == ["Ansatz account: "]
     assert capsys.readouterr().out == "Authenticated as alice\n"
 
 
@@ -133,7 +139,7 @@ def test_logout_uses_account_runtime_and_mentions_provider_credentials(monkeypat
 
     assert calls == ["logout"]
     assert capsys.readouterr().out == (
-        "Remote Hermes account signed out; provider credentials were not modified.\n"
+        "Remote Ansatz account signed out; provider credentials were not modified.\n"
     )
 
 
@@ -150,7 +156,7 @@ def test_noninteractive_login_returns_structured_auth_required():
     assert result.returncode == 20
     assert result.stdout == ""
     assert result.stderr == (
-        "AUTH_REQUIRED interactive_login_required; run `hermes login`\n"
+        "AUTH_REQUIRED interactive_login_required; run `ansatz login`\n"
     )
     assert "Traceback" not in result.stderr
 
@@ -173,7 +179,7 @@ def test_installed_console_callable_returns_structured_auth_required():
     assert result.returncode == 20
     assert result.stdout == ""
     assert result.stderr == (
-        "AUTH_REQUIRED interactive_login_required; run `hermes login`\n"
+        "AUTH_REQUIRED interactive_login_required; run `ansatz login`\n"
     )
     assert "Traceback" not in result.stderr
 
@@ -208,14 +214,14 @@ def test_account_status_is_auth_free_and_contains_no_secret():
         (
             ("logout",),
             0,
-            "Remote Hermes account signed out; provider credentials were not modified.\n",
+            "Remote Ansatz account signed out; provider credentials were not modified.\n",
             "",
         ),
         (
             ("login",),
             20,
             "",
-            "AUTH_REQUIRED interactive_login_required; run `hermes login`\n",
+            "AUTH_REQUIRED interactive_login_required; run `ansatz login`\n",
         ),
     ],
 )

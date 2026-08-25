@@ -1,4 +1,4 @@
-"""``hermes sessions`` command — extracted from ``hermes_cli/main.py``.
+"""``ansatz sessions`` command — extracted from ``hermes_cli/main.py``.
 
 Mechanical move (main.py decomposition): ``cmd_sessions`` was a ``def`` nested
 inside ``main()``'s body; its dispatch on ``args.sessions_action`` is lifted
@@ -55,14 +55,14 @@ def _confirm_prompt(prompt: str) -> bool:
         return False
 
 
-#: Default age floor for `hermes sessions prune --never-active`.  Deliberately
+#: Default age floor for `ansatz sessions prune --never-active`.  Deliberately
 #: generous: the rows are worthless but harmless, and a young never-active row
 #: may simply be a chat that nobody has replied to yet.
 _NEVER_ACTIVE_DEFAULT_DAYS = 30.0
 
 
 def _prune_never_active_keyed(db, args):
-    """`hermes sessions prune --never-active` — drop leaked/dead keyed rows.
+    """`ansatz sessions prune --never-active` — drop leaked/dead keyed rows.
 
     Targets keyed gateway rows that were opened and never used at all.  The
     population is dominated by escaped test fixtures (#82770), which the
@@ -181,11 +181,11 @@ def cmd_sessions(args, sessions_parser=None):
             print("")
             print("  Next step — offline recovery (never modifies the source):")
             source_hint = report.get("backup_path") or db_path
-            print(f"    hermes sessions recover --source {source_hint} \\")
+            print(f"    ansatz sessions recover --source {source_hint} \\")
             print("        --inspect-only")
             print("  If that reports the data is recoverable, rebuild it into")
             print("  a NEW database (the active one is left untouched):")
-            print(f"    hermes sessions recover --source {source_hint} \\")
+            print(f"    ansatz sessions recover --source {source_hint} \\")
             print("        --output recovered-state.db")
         return
 
@@ -886,7 +886,7 @@ def cmd_sessions(args, sessions_parser=None):
         )
 
         # Preserve the historical default ONLY for a truly bare
-        # `hermes sessions prune`: no time window and no filters at all
+        # `ansatz sessions prune`: no time window and no filters at all
         # means "older than 90 days". ANY filter — including --source —
         # suppresses the implicit cutoff, so `prune --source cron`
         # matches ALL cron sessions regardless of age. The preview +
@@ -1080,7 +1080,7 @@ def cmd_sessions(args, sessions_parser=None):
             print("Cancelled.")
             return
 
-        # Launch hermes --resume <id> by replacing the current process
+        # Launch ansatz --resume <id> by replacing the current process
         print(f"Resuming session: {selected_id}")
         from hermes_cli.relaunch import relaunch
 
@@ -1240,7 +1240,7 @@ def cmd_sessions(args, sessions_parser=None):
         )
         if result.get("vacuumed") is False:
             print("  (VACUUM was skipped or failed — run "
-                  "`hermes sessions optimize` later to reclaim freed space.)")
+                  "`ansatz sessions optimize` later to reclaim freed space.)")
 
     elif action == "repair-routing":
         records = db.find_orphaned_gateway_sessions(

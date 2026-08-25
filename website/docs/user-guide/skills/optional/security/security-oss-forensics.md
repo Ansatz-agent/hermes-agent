@@ -14,7 +14,7 @@ GitHub supply-chain forensics: recovery, IOCs, reporting.
 
 | | |
 |---|---|
-| Source | Optional — install with `hermes skills install official/security/oss-forensics` |
+| Source | Optional — install with `ansatz skills install official/security/oss-forensics` |
 | Path | `optional-skills/security/oss-forensics` |
 | Version | `1.0.0` |
 | Author | Teknium (teknium1), Hermes Agent |

@@ -14,7 +14,7 @@ Vector search engine for production RAG systems.
 
 | | |
 |---|---|
-| Source | Optional — install with `hermes skills install official/mlops/qdrant` |
+| Source | Optional — install with `ansatz skills install official/mlops/qdrant` |
 | Path | `optional-skills/mlops/qdrant` |
 | Version | `1.0.1` |
 | Author | Orchestra Research |

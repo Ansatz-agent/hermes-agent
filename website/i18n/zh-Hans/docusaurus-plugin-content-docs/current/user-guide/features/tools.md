@@ -21,10 +21,10 @@ Hermes 内置了丰富的工具注册表，涵盖网页搜索、浏览器自动�
 | 分类 | 示例 | 描述 |
 |----------|----------|-------------|
 | **Web** | `web_search`, `web_extract` | 搜索网页并提取页面内容。 |
-| **X 搜索** | `x_search` | 通过 xAI 内置的 `x_search` Responses 工具搜索 X（Twitter）帖子和话题——需要 xAI 凭据（SuperGrok OAuth 或 `XAI_API_KEY`）；默认关闭，可通过 `hermes tools` → 🐦 X (Twitter) Search 启用。 |
+| **X 搜索** | `x_search` | 通过 xAI 内置的 `x_search` Responses 工具搜索 X（Twitter）帖子和话题——需要 xAI 凭据（SuperGrok OAuth 或 `XAI_API_KEY`）；默认关闭，可通过 `ansatz tools` → 🐦 X (Twitter) Search 启用。 |
 | **终端与文件** | `terminal`, `process`, `read_file`, `patch` | 执行命令并操作文件。 |
 | **浏览器** | `browser_navigate`, `browser_snapshot`, `browser_vision` | 支持文本和视觉的交互式浏览器自动化。 |
-| **媒体** | `vision_analyze`, `image_generate`, `video_generate`, `video_analyze`, `text_to_speech` | 多模态分析与生成。`video_generate` 和 `video_analyze` 需手动启用（通过 `hermes tools` 或 `--toolsets` 添加 `video_gen` / `video` 工具集）。 |
+| **媒体** | `vision_analyze`, `image_generate`, `video_generate`, `video_analyze`, `text_to_speech` | 多模态分析与生成。`video_generate` 和 `video_analyze` 需手动启用（通过 `ansatz tools` 或 `--toolsets` 添加 `video_gen` / `video` 工具集）。 |
 | **Agent 编排** | `todo`, `clarify`, `execute_code`, `delegate_task` | 规划、澄清、代码执行及子 Agent 委托。 |
 | **记忆与召回** | `memory`, `session_search` | 持久化记忆与会话搜索。 |
 | **自动化与投递** | `cronjob`, `send_message` | 支持创建/列出/更新/暂停/恢复/运行/删除操作的定时任务，以及出站消息投递。 |
@@ -33,20 +33,20 @@ Hermes 内置了丰富的工具注册表，涵盖网页搜索、浏览器自动�
 如需查看由代码派生的权威注册表，请参阅 [内置工具参考](/reference/tools-reference) 和 [工具集参考](/reference/toolsets-reference)。
 
 :::tip Nous Tool Gateway
-付费 [Nous Portal](https://portal.nousresearch.com) 订阅者可通过 **[Tool Gateway](tool-gateway.md)** 使用网页搜索、图像生成、TTS 和浏览器自动化——无需单独配置 API 密钥。运行 `hermes model` 启用，或通过 `hermes tools` 配置各工具。
+付费 [Nous Portal](https://portal.nousresearch.com) 订阅者可通过 **[Tool Gateway](tool-gateway.md)** 使用网页搜索、图像生成、TTS 和浏览器自动化——无需单独配置 API 密钥。运行 `ansatz model` 启用，或通过 `ansatz tools` 配置各工具。
 :::
 
 ## 使用工具集
 
 ```bash
 # 使用指定工具集
-hermes chat --toolsets "web,terminal"
+ansatz chat --toolsets "web,terminal"
 
 # 查看所有可用工具
-hermes tools
+ansatz tools
 
 # 按平台交互式配置工具
-hermes tools
+ansatz tools
 ```
 
 常用工具集包括 `web`、`search`、`terminal`、`file`、`browser`、`vision`、`image_gen`、`moa`、`skills`、`tts`、`todo`、`memory`、`session_search`、`cronjob`、`code_execution`、`delegation`、`clarify`、`homeassistant`、`messaging`、`spotify`、`discord`、`discord_admin`、`debugging` 和 `safe`。
@@ -111,8 +111,8 @@ TERMINAL_SSH_KEY=~/.ssh/id_rsa
 apptainer build ~/python.sif docker://python:3.11-slim
 
 # 配置
-hermes config set terminal.backend singularity
-hermes config set terminal.singularity_image ~/python.sif
+ansatz config set terminal.backend singularity
+ansatz config set terminal.singularity_image ~/python.sif
 ```
 
 ### Modal（无服务器云）
@@ -120,15 +120,15 @@ hermes config set terminal.singularity_image ~/python.sif
 ```bash
 uv pip install modal
 modal setup
-hermes config set terminal.backend modal
+ansatz config set terminal.backend modal
 ```
 
 ### Vercel Sandbox
 
 ```bash
 pip install 'hermes-agent[vercel]'
-hermes config set terminal.backend vercel_sandbox
-hermes config set terminal.vercel_runtime node24
+ansatz config set terminal.backend vercel_sandbox
+ansatz config set terminal.vercel_runtime node24
 ```
 
 需同时配置 `VERCEL_TOKEN`、`VERCEL_PROJECT_ID` 和 `VERCEL_TEAM_ID` 三个凭据。此访问令牌配置方式是在 Render、Railway、Docker 及类似平台上进行部署和正常长期运行 Hermes 进程的推荐路径。支持的运行时为 `node24`、`node22` 和 `python3.13`；Hermes 默认使用 `/vercel/sandbox` 作为远程工作区根目录。
@@ -136,13 +136,13 @@ hermes config set terminal.vercel_runtime node24
 对于本地一次性开发，Hermes 也接受短期 Vercel OIDC token：
 
 ```bash
-VERCEL_OIDC_TOKEN="$(vc project token <project-name>)" hermes chat
+VERCEL_OIDC_TOKEN="$(vc project token <project-name>)" ansatz chat
 ```
 
 在已关联的 Vercel 项目目录中：
 
 ```bash
-VERCEL_OIDC_TOKEN="$(vc project token)" hermes chat
+VERCEL_OIDC_TOKEN="$(vc project token)" ansatz chat
 ```
 
 启用 `container_persistent: true` 后，Hermes 使用 Vercel 快照在同一任务的沙箱重建时保留文件系统状态，其中可包含沙箱内 Hermes 同步的凭据、技能和缓存文件。快照不保留活跃进程、PID 空间或相同的活跃沙箱标识。

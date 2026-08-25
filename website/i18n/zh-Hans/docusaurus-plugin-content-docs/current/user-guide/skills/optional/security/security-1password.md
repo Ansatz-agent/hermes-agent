@@ -14,7 +14,7 @@ description: "设置并使用 1Password CLI (op)"
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/security/1password` 安装 |
+| 来源 | 可选 — 通过 `ansatz skills install official/security/1password` 安装 |
 | 路径 | `optional-skills/security/1password` |
 | 版本 | `1.0.0` |
 | 作者 | arceus77-7，由 Hermes Agent 增强 |

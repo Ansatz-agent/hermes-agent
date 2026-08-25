@@ -109,10 +109,10 @@ def _models_config_is_allowlist(value: Any) -> bool:
     """Return True when ``models:`` is an intentional ID allowlist.
 
     A mapping like ``{model_id: {context_length: N}}`` is per-model *metadata*
-    written by ``_save_custom_provider`` / the ``hermes model`` wizard — not a
+    written by ``_save_custom_provider`` / the ``ansatz model`` wizard — not a
     catalog narrow. Treating that shape as an allowlist made Desktop/Telegram
     pickers show only the saved default for local Ollama (no ``api_key``),
-    while ``hermes model`` still live-probed the full ``/v1/models`` list.
+    while ``ansatz model`` still live-probed the full ``/v1/models`` list.
     Refresh could not help because the same gate skipped probing.
 
     List/string shapes remain allowlists for no-key endpoints. To pin a
@@ -392,7 +392,7 @@ def _load_direct_aliases() -> dict[str, DirectAlias]:
             provider: custom
             base_url: "https://ollama.com/v1"
 
-    Also reads ``model.aliases`` (set by ``hermes config set model.aliases.xxx``)
+    Also reads ``model.aliases`` (set by ``ansatz config set model.aliases.xxx``)
     and converts simple string entries (``ds-flash: deepseek/deepseek-v4-flash``)
     into DirectAlias objects.  The provider is parsed from the ``provider/``
     prefix in the value; if no slash, the current provider is used.
@@ -1363,7 +1363,7 @@ def switch_model(
         if pdef is None:
             _switch_err = (
                 f"Unknown provider '{explicit_provider}'. "
-                f"Check 'hermes model' for available providers, or define it "
+                f"Check 'ansatz model' for available providers, or define it "
                 f"in config.yaml under 'providers:'."
             )
             # Check for common config issues that cause provider resolution failures
@@ -1371,7 +1371,7 @@ def switch_model(
                 from hermes_cli.config import validate_config_structure
                 _cfg_issues = validate_config_structure()
                 if _cfg_issues:
-                    _switch_err += "\n\nRun 'hermes doctor' — config issues detected:"
+                    _switch_err += "\n\nRun 'ansatz doctor' — config issues detected:"
                     for _ci in _cfg_issues[:3]:
                         _switch_err += f"\n  • {_ci.message}"
             except Exception:
@@ -2473,7 +2473,7 @@ def list_authenticated_providers(
 
     data = fetch_models_dev()
 
-    # Build curated model lists keyed by hermes provider ID
+    # Build curated model lists keyed by ansatz provider ID
     curated: dict[str, list[str]] = dict(_PROVIDER_MODELS)
     curated["openrouter"] = [mid for mid, _ in OPENROUTER_MODELS]
     # "nous" pulls from the remote model-catalog manifest published at
@@ -2628,7 +2628,7 @@ def list_authenticated_providers(
             continue
 
         # Unified pathway: route through cached_provider_model_ids() so the
-        # /model picker sees the SAME list `hermes model` would build, with
+        # /model picker sees the SAME list `ansatz model` would build, with
         # disk caching to keep the picker open snappy. Falls back to the
         # curated static list when the live fetcher returns nothing.
         model_ids = cached_provider_model_ids(hermes_id)
@@ -2794,7 +2794,7 @@ def list_authenticated_providers(
         elif hermes_slug == "nous":
             # Nous serves a large live /v1/models catalog (vendor-prefixed
             # models from many providers, returned alphabetically). The
-            # `hermes model` picker deliberately shows ONLY the curated agentic
+            # `ansatz model` picker deliberately shows ONLY the curated agentic
             # list — augmented with the Portal's free/paid recommendations so
             # newly-launched models surface without a CLI release — in curated
             # order. Mirror that exactly (see _model_flow_nous in main.py) so
@@ -2859,7 +2859,7 @@ def list_authenticated_providers(
     # --- 2b. Cross-check canonical provider list ---
     # Catches providers that are in CANONICAL_PROVIDERS but weren't found
     # in PROVIDER_TO_MODELS_DEV or HERMES_OVERLAYS (keeps /model in sync
-    # with `hermes model`).
+    # with `ansatz model`).
     try:
         from hermes_cli.models import CANONICAL_PROVIDERS as _canon_provs
     except ImportError:
@@ -3059,7 +3059,7 @@ def list_authenticated_providers(
             # list: a singular ``default_model``/``model`` is only the active
             # selection and must not suppress discovery (see #40542 / PR
             # #61928). Dict-shaped ``models:`` is context_length metadata from
-            # ``hermes model``, not an allowlist — see
+            # ``ansatz model``, not an allowlist — see
             # ``_models_config_is_allowlist``.
             if _models_config_is_allowlist(ep_cfg.get("models")):
                 ep_groups[group_key]["has_explicit_models"] = True
@@ -3094,7 +3094,7 @@ def list_authenticated_providers(
             #   narrowing (mirrors section 4 / #40542).
             # - A dict-shaped ``models:`` is per-model metadata
             #   (context_length), not an allowlist — still probe so local
-            #   Ollama/llama.cpp match ``hermes model``. Pin with
+            #   Ollama/llama.cpp match ``ansatz model``. Pin with
             #   ``discover_models: false`` instead.
             # - Without an api_key AND no allowlist: probe anyway so bare
             #   local endpoints still show their full model catalog.
@@ -3434,7 +3434,7 @@ def list_authenticated_providers(
             # - A dict-shaped ``models:`` is per-model metadata written by
             #   ``_save_custom_provider`` for context_length — not an
             #   allowlist. Still probe so Desktop/Telegram match
-            #   ``hermes model``. Pin a dict catalog with
+            #   ``ansatz model``. Pin a dict catalog with
             #   ``discover_models: false``.
             # - The singular ``model:`` field is only the current active
             #   selection and must not suppress discovery.

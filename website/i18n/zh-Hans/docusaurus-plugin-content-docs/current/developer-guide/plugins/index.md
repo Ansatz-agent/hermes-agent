@@ -29,7 +29,7 @@ Hermes 有多种不同的可插拔接口——有些使用 Python `register_*` A
 | **通过 MCP 接入外部工具**（文件系统、GitHub、Linear、任意 MCP 服务器） | [MCP](/user-guide/features/mcp)——在 `config.yaml` 中声明 `mcp_servers.<name>` |
 | **网关事件钩子**（在启动、会话事件、命令时触发） | [事件钩子](/user-guide/features/hooks#gateway-event-hooks)——将 `HOOK.yaml` + `handler.py` 放入 `~/.hermes/hooks/<name>/` |
 | **Shell 钩子**（在事件发生时运行 shell 命令） | [Shell 钩子](/user-guide/features/hooks#shell-hooks)——在 `config.yaml` 的 `hooks:` 下声明 |
-| **额外技能来源**（自定义 GitHub 仓库、私有技能索引） | [技能](/user-guide/features/skills)——`hermes skills tap add <repo>` · [发布 tap](/user-guide/features/skills#publishing-a-custom-skill-tap) |
+| **额外技能来源**（自定义 GitHub 仓库、私有技能索引） | [技能](/user-guide/features/skills)——`ansatz skills tap add <repo>` · [发布 tap](/user-guide/features/skills#publishing-a-custom-skill-tap) |
 | 一流的**核心**推理提供商（非插件） | [添加提供商](/developer-guide/adding-providers) |
 
 查看完整的[可插拔接口表](/user-guide/features/plugins#pluggable-interfaces--where-to-go-for-each)，获取每种扩展接口的汇总视图，包括配置驱动（TTS、STT、MCP、shell 钩子）和放入目录（网关钩子）两种方式。
@@ -320,7 +320,7 @@ Plugins (1):
 如果你的插件没有出现，或出现了但未加载——设置 `HERMES_PLUGINS_DEBUG=1` 可在 stderr 获取详细的发现日志：
 
 ```bash
-HERMES_PLUGINS_DEBUG=1 hermes plugins list
+HERMES_PLUGINS_DEBUG=1 ansatz plugins list
 ```
 
 你将看到每个插件来源（内置、用户、项目、entry-points）的以下信息：
@@ -335,12 +335,12 @@ HERMES_PLUGINS_DEBUG=1 hermes plugins list
 同样的日志始终写入 `~/.hermes/logs/agent.log`，失败时为 WARNING 级别，设置环境变量时为 DEBUG 级别（全部内容）。如果无法使用环境变量运行（例如从网关内部），可以改为追踪日志文件：
 
 ```bash
-hermes logs --level WARNING | grep -i plugin
+ansatz logs --level WARNING | grep -i plugin
 ```
 
 插件未出现的常见原因：
 
-- **未在配置中启用**——插件需要手动启用。运行 `hermes plugins enable <name>`（名称来自 `plugins list` 输出，嵌套布局下可能是 `<category>/<plugin>`）。
+- **未在配置中启用**——插件需要手动启用。运行 `ansatz plugins enable <name>`（名称来自 `plugins list` 输出，嵌套布局下可能是 `<category>/<plugin>`）。
 - **目录结构错误**——必须是 `~/.hermes/plugins/<plugin-name>/plugin.yaml`（扁平）或 `~/.hermes/plugins/<category>/<plugin-name>/plugin.yaml`（一级分类嵌套，最多）。更深层的目录会被忽略。
 - **缺少 `__init__.py`**——插件目录需要同时包含 `plugin.yaml` 和带有 `register(ctx)` 函数的 `__init__.py`。
 - **`kind` 错误**——网关适配器需要在清单中设置 `kind: platform`。记忆提供商会被自动检测为 `kind: exclusive`，并通过 `memory.provider` 配置路由，而非 `plugins.enabled`。
@@ -433,7 +433,7 @@ requires_env:
 
 如果 `WEATHER_API_KEY` 未设置，插件将被禁用并显示清晰的提示信息。不会崩溃，代理中也不会报错——只会显示"Plugin weather disabled (missing: WEATHER_API_KEY)"。
 
-用户运行 `hermes plugins install` 时，会**交互式提示**输入任何缺失的 `requires_env` 变量。值会自动保存到 `.env`。
+用户运行 `ansatz plugins install` 时，会**交互式提示**输入任何缺失的 `requires_env` 变量。值会自动保存到 `.env`。
 
 为了获得更好的安装体验，使用带有描述和注册 URL 的富格式：
 
@@ -643,7 +643,7 @@ def register(ctx):
 
 ### 注册 CLI 命令
 
-插件可以添加自己的 `hermes <plugin>` 子命令树：
+插件可以添加自己的 `ansatz <plugin>` 子命令树：
 
 ```python
 def _my_command(args):
@@ -842,7 +842,7 @@ def register(ctx):
         check_fn=check_requirements,
         required_env=["MYPLATFORM_TOKEN"],
         # 从环境变量自动填充 PlatformConfig.extra，使仅环境变量的设置
-        # 在 `hermes gateway status` 中显示，无需 SDK 实例化。
+        # 在 `ansatz gateway status` 中显示，无需 SDK 实例化。
         env_enablement_fn=_env_enablement,
         # 启用 cron 投递：`deliver=myplatform` 路由到此变量。
         cron_deliver_env_var="MYPLATFORM_HOME_CHANNEL",
@@ -1026,9 +1026,9 @@ hooks:
 如果你维护了一个技能 GitHub 仓库（或想从内置来源之外的社区索引拉取），将其添加为 **tap**：
 
 ```bash
-hermes skills tap add myorg/skills-repo
-hermes skills search my-workflow --source myorg/skills-repo
-hermes skills install myorg/skills-repo/my-workflow
+ansatz skills tap add myorg/skills-repo
+ansatz skills search my-workflow --source myorg/skills-repo
+ansatz skills install myorg/skills-repo/my-workflow
 ```
 
 发布你自己的 tap 只需一个包含 `skills/<skill-name>/SKILL.md` 目录的 GitHub 仓库——无需服务器或注册表注册。

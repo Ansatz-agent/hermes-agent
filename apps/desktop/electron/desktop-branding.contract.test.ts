@@ -92,7 +92,7 @@ test('native desktop alerts and updater handoff copy use the Ansatz app identity
   assert.match(main, /`\$\{ANSATZ_PRODUCT\.productName\} update did not finish`/)
   assert.equal(main.match(/Updating \$\{ANSATZ_PRODUCT\.productName\}/g)?.length, 2)
   assert.equal(main.match(/\$\{ANSATZ_PRODUCT\.productName\} will keep running/g)?.length, 2)
-  assert.match(main, /let command = 'hermes update'/)
+  assert.match(main, /let command = 'ansatz update'/)
 })
 
 test('renderer-only app actions do not present Hermes as the desktop product', () => {

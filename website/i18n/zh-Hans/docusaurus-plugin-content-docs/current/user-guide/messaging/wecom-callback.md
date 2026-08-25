@@ -60,10 +60,10 @@ WECOM_CALLBACK_ALLOWED_USERS=user1,user2
 ### 3. 启动 Gateway
 
 ```bash
-hermes gateway
+ansatz gateway
 ```
 
-（仅在通过 `hermes gateway install` 注册 systemd/launchd 服务后，才使用 `hermes gateway start`。）
+（仅在通过 `ansatz gateway install` 注册 systemd/launchd 服务后，才使用 `ansatz gateway start`。）
 
 回调适配器会在配置的端口上启动 HTTP 服务器。企业微信将通过 GET 请求验证回调 URL，随后开始通过 POST 发送消息。
 

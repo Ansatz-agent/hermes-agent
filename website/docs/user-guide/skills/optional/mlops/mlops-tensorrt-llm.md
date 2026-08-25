@@ -14,7 +14,7 @@ High-throughput LLM inference on NVIDIA GPUs.
 
 | | |
 |---|---|
-| Source | Optional — install with `hermes skills install official/mlops/tensorrt-llm` |
+| Source | Optional — install with `ansatz skills install official/mlops/tensorrt-llm` |
 | Path | `optional-skills/mlops/tensorrt-llm` |
 | Version | `1.0.1` |
 | Author | Orchestra Research |

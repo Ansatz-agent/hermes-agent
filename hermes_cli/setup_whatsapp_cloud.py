@@ -1,7 +1,7 @@
 """
 Interactive setup wizard for the WhatsApp Cloud API adapter.
 
-Entry point: ``hermes whatsapp-cloud`` (dispatched from
+Entry point: ``ansatz whatsapp-cloud`` (dispatched from
 ``cmd_whatsapp_cloud`` in ``hermes_cli/main.py``).
 
 Walks the user through the 6 credentials Meta requires + recipient
@@ -482,7 +482,7 @@ def run_whatsapp_cloud_setup() -> int:
     print("       Note the printed https://<random>.trycloudflare.com URL.")
     print()
     print("    3. Start the Hermes gateway in another terminal:")
-    print("         hermes gateway")
+    print("         ansatz gateway")
     print()
     print("    4. Verify your local config is reachable. From a third")
     print("       terminal, with the tunnel URL substituted:")

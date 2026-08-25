@@ -142,7 +142,7 @@ class ModelAssignment(BaseModel):
     # ``model.api_key`` (main slot) or ``auxiliary.<task>.api_key`` (aux
     # slots) — where the runtime resolvers read it — so a self-hosted
     # endpoint that requires auth works from the GUI. Mirrors the key the
-    # ``hermes model`` custom flow collects.
+    # ``ansatz model`` custom flow collects.
     api_key: str = ""
     confirm_expensive_model: bool = False
     profile: Optional[str] = None
@@ -510,7 +510,7 @@ class BackupRequest(BaseModel):
 
 class ImportRequest(BaseModel):
     archive: str
-    # Pass --force to `hermes import`. The spawned action runs with
+    # Pass --force to `ansatz import`. The spawned action runs with
     # stdin=DEVNULL, so the CLI's interactive "Continue? [y/N]" overwrite
     # prompt hits EOF and auto-aborts ("Aborted.", exit 1) whenever the
     # target already has a config — which it always does when the dashboard
@@ -584,7 +584,7 @@ class ProfileCreate(BaseModel):
     # Empty list = leave the seeded bundle untouched (legacy behaviour).
     keep_skills: List[str] = []
     # Skills-hub identifiers to install into the new profile. Installed async
-    # via a subprocess scoped to the profile (`hermes -p <name> skills install`)
+    # via a subprocess scoped to the profile (`ansatz -p <name> skills install`)
     # because skills_hub.SKILLS_DIR is import-time-bound and the HERMES_HOME
     # override can't redirect it. Returns spawned PIDs for the UI to poll.
     hub_skills: List[str] = []
