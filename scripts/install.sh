@@ -2178,29 +2178,29 @@ remove_legacy_desktop_launcher_if_owned() {
 }
 
 setup_path() {
-    local primary_launcher="hermes"
+    local primary_launcher="ansatz"
 
     if [ "$DESKTOP_PRODUCT" = "ansatz-voice-trace" ]; then
-        primary_launcher="ansatz-voice-trace"
         log_info "Setting up Ansatz commands..."
     else
-        log_info "Setting up hermes command..."
+        log_info "Setting up ansatz command..."
     fi
 
     if [ "$USE_VENV" = true ]; then
         HERMES_BIN="$INSTALL_DIR/venv/bin/python"
+        ANSATZ_ENTRYPOINT="$INSTALL_DIR/ansatz"
         HERMES_ENTRYPOINT="$INSTALL_DIR/hermes"
     else
-        HERMES_BIN="$(which hermes 2>/dev/null || echo "")"
+        HERMES_BIN="$(command -v ansatz 2>/dev/null || echo "")"
         if [ -z "$HERMES_BIN" ]; then
-            log_warn "hermes not found on PATH after install"
+            log_warn "ansatz not found on PATH after install"
             return 0
         fi
     fi
 
     # Verify the interpreter and the checked-in entrypoint needed by the launcher.
-    if [ ! -x "$HERMES_BIN" ] || { [ "$USE_VENV" = true ] && [ ! -f "$HERMES_ENTRYPOINT" ]; }; then
-        log_warn "Hermes launcher prerequisites not found"
+    if [ ! -x "$HERMES_BIN" ] || { [ "$USE_VENV" = true ] && [ ! -f "$ANSATZ_ENTRYPOINT" ]; }; then
+        log_warn "Ansatz launcher prerequisites not found"
         log_info "This usually means the Python package install didn't complete successfully."
         if [ "$DISTRO" = "termux" ]; then
             log_info "Try: cd $INSTALL_DIR && python -m pip install -e '.[termux-all]' -c constraints-termux.txt"
@@ -2215,84 +2215,96 @@ setup_path() {
     command_link_dir="$(get_command_link_dir)"
     command_link_display_dir="$(get_command_link_display_dir)"
 
-    # Create a user-facing shim for the hermes command.
-    # We intentionally clear PYTHONPATH/PYTHONHOME here so inherited env vars
-    # can't make this launcher import modules from another checkout.
+    # Publish the canonical command family first. We intentionally clear
+    # PYTHONPATH/PYTHONHOME so another checkout cannot shadow this install.
     mkdir -p "$command_link_dir"
-    # Older installs created this path as a symlink to $HERMES_BIN. Without
-    # the rm, `cat >` follows the symlink and overwrites the venv pip entry
-    # point with this shim — making `exec "$HERMES_BIN"` self-recurse. (#21454)
+    local quoted_ansatz_bin
+    local quoted_ansatz_entrypoint
+    local quoted_agent_entrypoint
+    local quoted_command_link_dir
+    local launcher_home_export=""
+    printf -v quoted_ansatz_bin '%q' "$HERMES_BIN"
+    printf -v quoted_ansatz_entrypoint '%q' "${ANSATZ_ENTRYPOINT:-}"
+    printf -v quoted_agent_entrypoint '%q' "$INSTALL_DIR/run_agent.py"
+    printf -v quoted_command_link_dir '%q' "$command_link_dir"
     if [ "$DESKTOP_PRODUCT" = "ansatz-voice-trace" ]; then
-        local ansatz_hermes_home
-        local ansatz_hermes_bin
-        local ansatz_hermes_entrypoint
-        local ansatz_agent_entrypoint
-        printf -v ansatz_hermes_home '%q' "$HERMES_HOME"
-        printf -v ansatz_hermes_bin '%q' "$HERMES_BIN"
-        printf -v ansatz_hermes_entrypoint '%q' "${HERMES_ENTRYPOINT:-}"
-        printf -v ansatz_agent_entrypoint '%q' "$INSTALL_DIR/run_agent.py"
+        local quoted_ansatz_home
+        printf -v quoted_ansatz_home '%q' "$HERMES_HOME"
+        launcher_home_export="export HERMES_HOME=$quoted_ansatz_home"
+    fi
 
-        rm -f "$command_link_dir/ansatz-voice-trace"
-        if [ "$USE_VENV" = true ]; then
-            cat > "$command_link_dir/ansatz-voice-trace" <<EOF
+    rm -f "$command_link_dir/ansatz"
+    if [ "$USE_VENV" = true ]; then
+        cat > "$command_link_dir/ansatz" <<EOF
 #!/usr/bin/env bash
 unset PYTHONPATH
 unset PYTHONHOME
-export HERMES_HOME=$ansatz_hermes_home
-exec $ansatz_hermes_bin $ansatz_hermes_entrypoint "\$@"
+$launcher_home_export
+exec $quoted_ansatz_bin $quoted_ansatz_entrypoint "\$@"
 EOF
-        else
-            cat > "$command_link_dir/ansatz-voice-trace" <<EOF
+    else
+        cat > "$command_link_dir/ansatz" <<EOF
 #!/usr/bin/env bash
 unset PYTHONPATH
 unset PYTHONHOME
-export HERMES_HOME=$ansatz_hermes_home
-exec $ansatz_hermes_bin "\$@"
+$launcher_home_export
+exec $quoted_ansatz_bin "\$@"
 EOF
-        fi
-        chmod +x "$command_link_dir/ansatz-voice-trace"
+    fi
+    chmod +x "$command_link_dir/ansatz"
+    log_success "Installed ansatz launcher → $command_link_display_dir/ansatz"
+
+    rm -f "$command_link_dir/ansatz-agent"
+    if [ "$USE_VENV" = true ]; then
+        cat > "$command_link_dir/ansatz-agent" <<EOF
+#!/usr/bin/env bash
+unset PYTHONPATH
+unset PYTHONHOME
+$launcher_home_export
+exec $quoted_ansatz_bin $quoted_agent_entrypoint "\$@"
+EOF
+    else
+        cat > "$command_link_dir/ansatz-agent" <<EOF
+#!/usr/bin/env bash
+unset PYTHONPATH
+unset PYTHONHOME
+$launcher_home_export
+exec $quoted_ansatz_bin run_agent.py "\$@"
+EOF
+    fi
+    chmod +x "$command_link_dir/ansatz-agent"
+    log_success "Installed ansatz-agent launcher → $command_link_display_dir/ansatz-agent"
+
+    rm -f "$command_link_dir/ansatz-acp"
+    if [ "$USE_VENV" = true ]; then
+        cat > "$command_link_dir/ansatz-acp" <<EOF
+#!/usr/bin/env bash
+unset PYTHONPATH
+unset PYTHONHOME
+$launcher_home_export
+exec $quoted_ansatz_bin $quoted_ansatz_entrypoint acp "\$@"
+EOF
+    else
+        cat > "$command_link_dir/ansatz-acp" <<EOF
+#!/usr/bin/env bash
+unset PYTHONPATH
+unset PYTHONHOME
+$launcher_home_export
+exec $quoted_ansatz_bin acp "\$@"
+EOF
+    fi
+    chmod +x "$command_link_dir/ansatz-acp"
+    log_success "Installed ansatz-acp launcher → $command_link_display_dir/ansatz-acp"
+
+    if [ "$DESKTOP_PRODUCT" = "ansatz-voice-trace" ]; then
+        for product_launcher in ansatz-voice-trace ansatz-voice-trace-agent ansatz-voice-trace-acp; do
+            rm -f "$command_link_dir/$product_launcher"
+        done
+        cp "$command_link_dir/ansatz" "$command_link_dir/ansatz-voice-trace"
+        cp "$command_link_dir/ansatz-agent" "$command_link_dir/ansatz-voice-trace-agent"
+        cp "$command_link_dir/ansatz-acp" "$command_link_dir/ansatz-voice-trace-acp"
         log_success "Installed ansatz-voice-trace launcher → $command_link_display_dir/ansatz-voice-trace"
-
-        rm -f "$command_link_dir/ansatz-voice-trace-agent"
-        if [ "$USE_VENV" = true ]; then
-            cat > "$command_link_dir/ansatz-voice-trace-agent" <<EOF
-#!/usr/bin/env bash
-unset PYTHONPATH
-unset PYTHONHOME
-export HERMES_HOME=$ansatz_hermes_home
-exec $ansatz_hermes_bin $ansatz_agent_entrypoint "\$@"
-EOF
-        else
-            cat > "$command_link_dir/ansatz-voice-trace-agent" <<EOF
-#!/usr/bin/env bash
-unset PYTHONPATH
-unset PYTHONHOME
-export HERMES_HOME=$ansatz_hermes_home
-exec $ansatz_hermes_bin run_agent.py "\$@"
-EOF
-        fi
-        chmod +x "$command_link_dir/ansatz-voice-trace-agent"
         log_success "Installed ansatz-voice-trace-agent launcher → $command_link_display_dir/ansatz-voice-trace-agent"
-
-        rm -f "$command_link_dir/ansatz-voice-trace-acp"
-        if [ "$USE_VENV" = true ]; then
-            cat > "$command_link_dir/ansatz-voice-trace-acp" <<EOF
-#!/usr/bin/env bash
-unset PYTHONPATH
-unset PYTHONHOME
-export HERMES_HOME=$ansatz_hermes_home
-exec $ansatz_hermes_bin $ansatz_hermes_entrypoint acp "\$@"
-EOF
-        else
-            cat > "$command_link_dir/ansatz-voice-trace-acp" <<EOF
-#!/usr/bin/env bash
-unset PYTHONPATH
-unset PYTHONHOME
-export HERMES_HOME=$ansatz_hermes_home
-exec $ansatz_hermes_bin acp "\$@"
-EOF
-        fi
-        chmod +x "$command_link_dir/ansatz-voice-trace-acp"
         log_success "Installed ansatz-voice-trace-acp launcher → $command_link_display_dir/ansatz-voice-trace-acp"
 
         local install_root
@@ -2301,76 +2313,46 @@ EOF
         remove_legacy_desktop_launcher_if_owned "$command_link_dir/hermes-agent" "$install_root"
         remove_legacy_desktop_launcher_if_owned "$command_link_dir/hermes-acp" "$install_root"
     else
-    rm -f "$command_link_dir/hermes"
-    if [ "$USE_VENV" = true ]; then
-        # uv-generated console scripts resolve themselves through `realpath`,
-        # which stock macOS does not provide. Run the checked-in entrypoint
-        # with the venv interpreter instead, so the public launcher remains
-        # independent of non-standard shell utilities.
+        # Temporary compatibility boundary. These aliases can be deleted as
+        # one block after downstream callers have migrated to Ansatz.
+        rm -f "$command_link_dir/hermes"
         cat > "$command_link_dir/hermes" <<EOF
 #!/usr/bin/env bash
 unset PYTHONPATH
 unset PYTHONHOME
-exec "$HERMES_BIN" "$HERMES_ENTRYPOINT" "\$@"
+if [ -t 0 ] && [ -t 2 ]; then
+    printf '%s\n' 'Deprecated command `hermes`; use `ansatz` instead.' >&2
+fi
+exec $quoted_command_link_dir/ansatz "\$@"
 EOF
-    else
-        cat > "$command_link_dir/hermes" <<EOF
-#!/usr/bin/env bash
-unset PYTHONPATH
-unset PYTHONHOME
-exec "$HERMES_BIN" "\$@"
-EOF
-    fi
-    chmod +x "$command_link_dir/hermes"
-    log_success "Installed hermes launcher → $command_link_display_dir/hermes"
+        chmod +x "$command_link_dir/hermes"
+        log_success "Installed hermes compatibility launcher → $command_link_display_dir/hermes"
 
-    # Also expose `hermes-agent`. The `hermes-agent` console script declared in
-    # pyproject.toml's [project.scripts] lives inside the venv, which is not on
-    # the login-shell PATH. Without this launcher users can't invoke the agent
-    # entrypoint directly from outside the venv. (#74819)
-    rm -f "$command_link_dir/hermes-agent"
-    if [ "$USE_VENV" = true ]; then
+        rm -f "$command_link_dir/hermes-agent"
         cat > "$command_link_dir/hermes-agent" <<EOF
 #!/usr/bin/env bash
 unset PYTHONPATH
 unset PYTHONHOME
-exec "$HERMES_BIN" "$INSTALL_DIR/run_agent.py" "\$@"
+if [ -t 0 ] && [ -t 2 ]; then
+    printf '%s\n' 'Deprecated command `hermes-agent`; use `ansatz-agent` instead.' >&2
+fi
+exec $quoted_command_link_dir/ansatz-agent "\$@"
 EOF
-    else
-        cat > "$command_link_dir/hermes-agent" <<EOF
-#!/usr/bin/env bash
-unset PYTHONPATH
-unset PYTHONHOME
-exec "$HERMES_BIN" run_agent.py "\$@"
-EOF
-    fi
-    chmod +x "$command_link_dir/hermes-agent"
-    log_success "Installed hermes-agent launcher → $command_link_display_dir/hermes-agent"
+        chmod +x "$command_link_dir/hermes-agent"
+        log_success "Installed hermes-agent compatibility launcher → $command_link_display_dir/hermes-agent"
 
-    # Also expose `hermes-acp`. ACP hosts (Zed, JetBrains, Buzz) resolve the
-    # agent by command name on the login-shell PATH, and the `hermes-acp`
-    # console script lives inside the venv, which is not on that PATH. Without
-    # this launcher those hosts report Hermes as not installed. (#21454 applies
-    # here too: clear the path first so `cat >` cannot follow an old symlink
-    # into the venv and overwrite the console script.)
-    rm -f "$command_link_dir/hermes-acp"
-    if [ "$USE_VENV" = true ]; then
+        rm -f "$command_link_dir/hermes-acp"
         cat > "$command_link_dir/hermes-acp" <<EOF
 #!/usr/bin/env bash
 unset PYTHONPATH
 unset PYTHONHOME
-exec "$HERMES_BIN" "$HERMES_ENTRYPOINT" acp "\$@"
+if [ -t 0 ] && [ -t 2 ]; then
+    printf '%s\n' 'Deprecated command `hermes-acp`; use `ansatz-acp` instead.' >&2
+fi
+exec $quoted_command_link_dir/ansatz-acp "\$@"
 EOF
-    else
-        cat > "$command_link_dir/hermes-acp" <<EOF
-#!/usr/bin/env bash
-unset PYTHONPATH
-unset PYTHONHOME
-exec "$HERMES_BIN" acp "\$@"
-EOF
-    fi
-    chmod +x "$command_link_dir/hermes-acp"
-    log_success "Installed hermes-acp launcher → $command_link_display_dir/hermes-acp"
+        chmod +x "$command_link_dir/hermes-acp"
+        log_success "Installed hermes-acp compatibility launcher → $command_link_display_dir/hermes-acp"
     fi
 
     if [ "$DISTRO" = "termux" ]; then

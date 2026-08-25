@@ -43,6 +43,24 @@ def fake_scripts_dir(tmp_path):
 
 
 class TestVerifyConsoleScriptsInstalled:
+    def test_quarantine_fallback_includes_both_command_families(
+        self, fake_scripts_dir
+    ):
+        import hermes_cli.main as main_mod
+
+        with patch("hermes_cli.main._is_windows", return_value=True), \
+             patch("hermes_cli.main._load_console_script_names", return_value=[]):
+            names = {path.name for path in main_mod._hermes_exe_shims(fake_scripts_dir)}
+
+        assert {
+            "ansatz.exe",
+            "ansatz-agent.exe",
+            "ansatz-acp.exe",
+            "hermes.exe",
+            "hermes-agent.exe",
+            "hermes-acp.exe",
+        } <= names
+
     def test_no_action_when_all_shims_present(self, temp_pyproject, fake_scripts_dir):
         for name in (
             "ansatz",

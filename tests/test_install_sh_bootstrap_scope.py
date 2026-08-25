@@ -91,7 +91,7 @@ def test_auth_complete_publishes_cli_launchers_in_a_clean_home(tmp_path: Path) -
     venv_python.parent.mkdir(parents=True)
     shell_home.mkdir()
     os.symlink(sys.executable, venv_python)
-    install_dir.joinpath("hermes").write_text(
+    install_dir.joinpath("ansatz").write_text(
         "#!/usr/bin/env python3\nraise SystemExit(0)\n",
         encoding="utf-8",
     )
@@ -122,10 +122,18 @@ def test_auth_complete_publishes_cli_launchers_in_a_clean_home(tmp_path: Path) -
 
     assert result.returncode == 0, result.stderr
     command_dir = shell_home / ".local" / "bin"
-    for command in ("hermes", "hermes-agent", "hermes-acp"):
+    for command in ("ansatz", "ansatz-agent", "ansatz-acp"):
         launcher = command_dir / command
         assert launcher.is_file(), f"auth bootstrap did not publish {command}"
         assert str(install_dir) in launcher.read_text(encoding="utf-8")
+    for legacy, canonical in (
+        ("hermes", "ansatz"),
+        ("hermes-agent", "ansatz-agent"),
+        ("hermes-acp", "ansatz-acp"),
+    ):
+        launcher = command_dir / legacy
+        assert launcher.is_file(), f"auth bootstrap did not publish {legacy}"
+        assert canonical in launcher.read_text(encoding="utf-8")
     assert install_dir.joinpath(".hermes-auth-bootstrap-complete").is_file()
 
 
@@ -365,7 +373,7 @@ def test_bundled_auth_stages_sync_hashed_wheels_without_network(tmp_path: Path) 
     auth_project.joinpath("uv.toml").write_text(
         'exclude-newer = "2026-08-19T00:00:00Z"\n', encoding="utf-8"
     )
-    install_dir.joinpath("hermes").write_text(
+    install_dir.joinpath("ansatz").write_text(
         "#!/usr/bin/env python3\nraise SystemExit(0)\n", encoding="utf-8"
     )
 
@@ -422,5 +430,12 @@ def test_bundled_auth_stages_sync_hashed_wheels_without_network(tmp_path: Path) 
     assert not any(call.startswith("sync --project") for call in calls)
     assert not network_log.exists(), "pre-login bootstrap invoked a network client"
     assert install_dir.joinpath(".hermes-auth-bootstrap-complete").is_file()
-    for command in ("hermes", "hermes-agent", "hermes-acp"):
+    for command in (
+        "ansatz",
+        "ansatz-agent",
+        "ansatz-acp",
+        "hermes",
+        "hermes-agent",
+        "hermes-acp",
+    ):
         assert shell_home.joinpath(".local", "bin", command).is_file()

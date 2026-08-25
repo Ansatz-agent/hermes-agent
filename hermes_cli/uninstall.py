@@ -115,23 +115,45 @@ def remove_path_from_shell_configs():
 
 
 def remove_wrapper_script():
-    """Remove the hermes wrapper script if it exists."""
+    """Remove Ansatz launchers and the temporary Hermes compatibility family."""
+    names = (
+        "ansatz",
+        "ansatz-agent",
+        "ansatz-acp",
+        "hermes",
+        "hermes-agent",
+        "hermes-acp",
+    )
     wrapper_paths = [
-        Path.home() / ".local" / "bin" / "hermes",
-        Path.home() / ".local" / "bin" / "hermes-acp",
-        Path.home() / ".local" / "bin" / "hermes-agent",
-        Path("/usr/local/bin/hermes"),
-        Path("/usr/local/bin/hermes-acp"),
-        Path("/usr/local/bin/hermes-agent"),
+        directory / name
+        for directory in (Path.home() / ".local" / "bin", Path("/usr/local/bin"))
+        for name in names
     ]
     
     removed = []
     for wrapper in wrapper_paths:
         if wrapper.exists():
             try:
-                # Check if it's our wrapper (contains hermes_cli reference)
+                # Check if it is one of our generated wrappers.
                 content = wrapper.read_text(encoding="utf-8")
-                if 'hermes_cli' in content or 'hermes-agent' in content:
+                generated_targets = {
+                    "ansatz": "/ansatz",
+                    "ansatz-agent": "run_agent.py",
+                    "ansatz-acp": "/ansatz",
+                    "hermes": "/ansatz",
+                    "hermes-agent": "/ansatz-agent",
+                    "hermes-acp": "/ansatz-acp",
+                }
+                is_generated_ansatz_wrapper = (
+                    "unset PYTHONPATH" in content
+                    and "unset PYTHONHOME" in content
+                    and generated_targets[wrapper.name] in content
+                )
+                if (
+                    "hermes_cli" in content
+                    or "hermes-agent" in content
+                    or is_generated_ansatz_wrapper
+                ):
                     wrapper.unlink()
                     removed.append(wrapper)
             except Exception as e:
