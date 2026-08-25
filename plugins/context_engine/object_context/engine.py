@@ -239,6 +239,7 @@ class ObjectContextEngine(ContextCompressor):
         self._last_batch_size = 0
         self._last_failure = ""
         self._projection_sequence = 0
+        self._cache_request_sequence = 0
         # Immutable replacement snapshot for high-frequency status-bar reads.
         # Detailed status continues to aggregate SQLite; this mapping must
         # remain entirely in-memory so prompt-toolkit repaint never performs
@@ -344,26 +345,71 @@ class ObjectContextEngine(ContextCompressor):
         """Retain summarizer accounting and record provider cache telemetry."""
 
         super().update_from_response(usage)
+        # ``update_from_response({})`` is also used to consume a pending
+        # compression verdict when a provider response has no usage block. It
+        # is not a measured request and must not become a zero-hit datapoint.
+        if not usage or not any(
+            key in usage
+            for key in (
+                "prompt_tokens",
+                "input_tokens",
+                "cache_read_tokens",
+                "cache_write_tokens",
+            )
+        ):
+            return
         cache_read = max(0, _safe_int(usage.get("cache_read_tokens"), 0))
         cache_write = max(0, _safe_int(usage.get("cache_write_tokens"), 0))
-        input_tokens = max(
+        prompt_tokens = max(0, _safe_int(usage.get("prompt_tokens"), 0))
+        uncached_input = max(
             0,
             _safe_int(
-                usage.get("input_tokens", usage.get("prompt_tokens")),
-                self.last_prompt_tokens,
+                usage.get("input_tokens"),
+                max(0, prompt_tokens - cache_read - cache_write),
             ),
         )
-        self._record_metric("cache_read_tokens", cache_read)
-        self._record_metric("cache_write_tokens", cache_write)
-        if input_tokens > 0:
-            self._record_metric(
-                "prompt_cache_hit_ratio", min(1.0, cache_read / input_tokens)
+        if prompt_tokens <= 0:
+            prompt_tokens = uncached_input + cache_read + cache_write
+        if prompt_tokens <= 0 or self._store is None or not self._conversation_id:
+            return
+
+        self._cache_request_sequence += 1
+        sequence = self._cache_request_sequence
+        metadata = {
+            "event": "provider_cache_usage",
+            "cache_request_id": (
+                f"{self._object_session_id or 'session'}:cache:"
+                f"{sequence}:{time.time_ns()}"
+            ),
+            "cache_request_sequence": sequence,
+            "turn_id": self._active_turn_id,
+            "session_id": self._object_session_id,
+        }
+        try:
+            self._store.record_metrics(
+                self._conversation_id,
+                {
+                    "prompt_tokens": prompt_tokens,
+                    "uncached_input_tokens": uncached_input,
+                    "cache_read_tokens": cache_read,
+                    "cache_write_tokens": cache_write,
+                    "prompt_cache_hit_ratio": min(
+                        1.0, cache_read / prompt_tokens
+                    ),
+                },
+                metadata=metadata,
+            )
+        except Exception:
+            logger.debug(
+                "Object Context provider cache telemetry write failed",
+                exc_info=True,
             )
 
     def on_session_start(self, session_id: str, **kwargs: Any) -> None:
         super().on_session_start(session_id, **kwargs)
         self._clear_status_bar_savings()
         self._projection_sequence = 0
+        self._cache_request_sequence = 0
         prior_conversation = self._conversation_id
         self._object_session_id = str(session_id or "")
         conversation_id = str(kwargs.get("conversation_id") or "")
@@ -419,6 +465,7 @@ class ObjectContextEngine(ContextCompressor):
         self._active_turn_id = ""
         self._last_rendered_refs.clear()
         self._projection_sequence = 0
+        self._cache_request_sequence = 0
         self._clear_status_bar_savings()
 
     def on_session_reset(self) -> None:
@@ -428,6 +475,7 @@ class ObjectContextEngine(ContextCompressor):
         self._active_turn_id = ""
         self._last_rendered_refs.clear()
         self._projection_sequence = 0
+        self._cache_request_sequence = 0
         self._clear_status_bar_savings()
 
     def _record_metric(
@@ -1014,14 +1062,15 @@ class ObjectContextEngine(ContextCompressor):
         return projected
 
     def get_projection_timeline(self) -> dict[str, Any]:
-        """Return content-free projection dynamics for the active conversation."""
+        """Return content-free projection and provider-cache dynamics."""
 
         if self._store is None or not self._conversation_id:
             return {
-                "schema_version": 1,
+                "schema_version": 2,
                 "conversation_id": self._conversation_id,
                 "session_id": self._object_session_id,
                 "projections": [],
+                "cache_requests": [],
             }
         try:
             projections = self._store.request_projection_timeline(
@@ -1033,11 +1082,22 @@ class ObjectContextEngine(ContextCompressor):
                 exc_info=True,
             )
             projections = []
+        try:
+            cache_requests = self._store.cache_usage_timeline(
+                self._conversation_id
+            )
+        except Exception:
+            logger.debug(
+                "Object Context cache-usage timeline query failed",
+                exc_info=True,
+            )
+            cache_requests = []
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "conversation_id": self._conversation_id,
             "session_id": self._object_session_id,
             "projections": projections,
+            "cache_requests": cache_requests,
         }
 
     def should_compress_preflight(self, messages: list[dict[str, Any]]) -> bool:

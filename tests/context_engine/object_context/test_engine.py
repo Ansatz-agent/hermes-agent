@@ -143,10 +143,11 @@ def test_select_context_records_content_free_projection_identity_and_latency(tmp
 
     timeline = engine.get_projection_timeline()
 
-    assert timeline["schema_version"] == 1
+    assert timeline["schema_version"] == 2
     assert timeline["conversation_id"] == "conv-a"
     assert timeline["session_id"] == "session-a"
     assert len(timeline["projections"]) == 2
+    assert timeline["cache_requests"] == []
     assert [event["projection_sequence"] for event in timeline["projections"]] == [
         1,
         2,
@@ -736,15 +737,20 @@ def test_active_root_scanning_and_gc_only_run_at_lifecycle_boundaries(tmp_path):
 def test_metrics_and_status_cover_v1_without_leaking_content_or_store_path(tmp_path):
     engine = _started_engine(tmp_path)
     raw, history, _, object_ref = _prepare_user_card(engine)
-    engine.update_from_response({
-        "prompt_tokens": 1_000,
-        "completion_tokens": 100,
-        "total_tokens": 1_100,
-        "input_tokens": 1_000,
-        "output_tokens": 100,
-        "cache_read_tokens": 750,
-        "cache_write_tokens": 50,
-    })
+    engine.update_from_response(
+        {
+            "prompt_tokens": 1_000,
+            "completion_tokens": 100,
+            "total_tokens": 1_100,
+            "input_tokens": 200,
+            "output_tokens": 100,
+            "cache_read_tokens": 750,
+            "cache_write_tokens": 50,
+        }
+    )
+    # Missing provider usage is a compression-verdict signal, not a measured
+    # zero-hit request.
+    engine.update_from_response({})
     for index in range(2):
         result = json.loads(
             engine.handle_tool_call(
@@ -801,6 +807,8 @@ def test_metrics_and_status_cover_v1_without_leaking_content_or_store_path(tmp_p
         "exact_recovery_hash_pass_rate",
         "cache_read_tokens",
         "cache_write_tokens",
+        "prompt_tokens",
+        "uncached_input_tokens",
         "prompt_cache_hit_ratio",
     } <= names
     failure_rows = [
@@ -821,6 +829,16 @@ def test_metrics_and_status_cover_v1_without_leaking_content_or_store_path(tmp_p
     assert status["last_request_metrics"]["raw_context_tokens"] > (
         status["last_request_metrics"]["rendered_context_tokens"]
     )
+    cache_timeline = engine.get_projection_timeline()["cache_requests"]
+    assert len(cache_timeline) == 1
+    assert cache_timeline[0]["turn_id"] == "turn-2"
+    assert cache_timeline[0]["metrics"] == {
+        "prompt_tokens": 1_000.0,
+        "uncached_input_tokens": 200.0,
+        "cache_read_tokens": 750.0,
+        "cache_write_tokens": 50.0,
+        "prompt_cache_hit_ratio": 0.75,
+    }
     encoded = json.dumps(status, ensure_ascii=False)
     assert raw not in encoded
     assert str(tmp_path) not in encoded

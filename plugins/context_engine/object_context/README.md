@@ -73,21 +73,38 @@ it in the default browser. Its experiment-tracking workspace provides global
 KPIs, a searchable session/run list and comparison table, and selects the
 current conversation by default. Stored Hermes session titles are the primary
 labels; stable conversation-root IDs remain visible underneath and both are
-searchable. Selecting a run switches the same three groups of four charts:
-tokens saved, Object Context projection time, and rendered-context tokens
-spent; each group shows per-project, cumulative-project, per-turn, and
-cumulative-turn dynamics. The saved-token group has one toggle that switches
-all four charts between absolute tokens avoided and relative savings percentage
-(`tokens_saved / raw_context_tokens`); cumulative percentages divide cumulative
-saved tokens by cumulative raw tokens rather than adding or averaging rates.
+searchable. Selecting a run switches the same four groups of four charts:
+tokens saved, provider-reported prompt-cache hits, Object Context projection
+time, and rendered-context tokens spent. Projection groups show per-project,
+cumulative-project, per-turn, and cumulative-turn dynamics. Cache charts use
+model requests instead of projections because one turn can contain several
+inferences, including a retrieval continuation. The saved-token group has one
+toggle that switches all four charts between absolute tokens avoided and
+relative savings percentage (`tokens_saved / raw_context_tokens`); cumulative
+percentages divide cumulative saved tokens by cumulative raw tokens rather
+than adding or averaging rates.
+
+The cache group similarly switches all four request/turn charts between hit
+rate and cache-read tokens. A request hit rate is
+`cache_read_tokens / prompt_tokens`, where canonical `prompt_tokens` is
+`uncached_input + cache_read + cache_write`; cumulative and turn rates divide
+summed cache-read tokens by summed prompt tokens, so they are token-weighted.
+The run table and global/session KPI rows show this weighted rate, and display
+an em dash when a stored run has no exact request-level cache telemetry. Cache
+values come from the provider response: a zero can mean a measured miss or a
+provider/proxy that returned no cache hit details, while a non-zero value is a
+reported hit.
+
 Every chart has a one-click CSV download containing its currently displayed
 complete point series and identities, and the selected-session header has one
-combined CSV download for all 12 charts, including both saved-token modes. Here,
+combined CSV download for all 16 charts, including both saved-token and cache
+modes. Here,
 one project is one request-time Object Context projection, one turn is one real
 user turn (all projections in that turn are summed), and projection time is
 local Object Context processing time only—it excludes model and network
-latency. Token values are the same rough conversation-message estimates used by `stats`, not
-provider-billed usage. The webpage abbreviates Token labels with base-1000
+latency. Saved/spent token values are the same rough conversation-message
+estimates used by `stats`, not provider-billed usage; cache values are canonical
+provider usage buckets. The webpage abbreviates Token labels with base-1000
 `K`/`M`/`B` units regardless of browser locale; CSV downloads retain the raw,
 unscaled numeric values.
 

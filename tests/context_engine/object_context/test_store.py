@@ -223,6 +223,55 @@ def test_projection_timeline_groups_atomic_metrics_and_marks_legacy_rows(tmp_pat
     assert len({row["created_at"] for row in rows}) == 1
 
 
+def test_cache_usage_timeline_groups_exact_atomic_requests_and_skips_legacy_rows(
+    tmp_path,
+):
+    store = ObjectContextStore(tmp_path / "objects.sqlite3")
+    for sequence, (prompt, uncached, cache_read, cache_write) in enumerate(
+        ((1_000, 1_000, 0, 0), (1_250, 200, 1_000, 50)), start=1
+    ):
+        store.record_metrics(
+            "conv-a",
+            {
+                "prompt_tokens": prompt,
+                "uncached_input_tokens": uncached,
+                "cache_read_tokens": cache_read,
+                "cache_write_tokens": cache_write,
+                "prompt_cache_hit_ratio": cache_read / prompt,
+            },
+            metadata={
+                "event": "provider_cache_usage",
+                "cache_request_id": f"session-a:cache:{sequence}",
+                "cache_request_sequence": sequence,
+                "turn_id": "turn-a",
+                "session_id": "session-a",
+            },
+        )
+    # Pre-monitor cache telemetry has neither an atomic request identity nor a
+    # trustworthy total-prompt denominator, so it must not become a chart point.
+    store.record_metric("conv-a", "cache_read_tokens", 999)
+    store.record_metric("conv-a", "prompt_cache_hit_ratio", 1.0)
+
+    timeline = store.cache_usage_timeline("conv-a")
+
+    assert len(timeline) == 2
+    assert timeline[0]["request_sequence"] == 1
+    assert timeline[1] == {
+        "cache_request_id": "session-a:cache:2",
+        "request_sequence": 2,
+        "turn_id": "turn-a",
+        "session_id": "session-a",
+        "created_at": timeline[1]["created_at"],
+        "metrics": {
+            "prompt_tokens": 1_250.0,
+            "uncached_input_tokens": 200.0,
+            "cache_read_tokens": 1_000.0,
+            "cache_write_tokens": 50.0,
+            "prompt_cache_hit_ratio": 0.8,
+        },
+    }
+
+
 def test_projection_conversations_lists_every_root_in_latest_first_order(tmp_path):
     store = ObjectContextStore(tmp_path / "objects.sqlite3")
     for conversation_id, saved in (("conv-old", 10), ("conv-new", 20)):

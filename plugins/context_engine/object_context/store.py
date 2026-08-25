@@ -38,6 +38,15 @@ REQUEST_PROJECTION_METRIC_NAMES = frozenset(
         "projection_latency_ms",
     }
 )
+CACHE_USAGE_METRIC_NAMES = frozenset(
+    {
+        "prompt_tokens",
+        "uncached_input_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "prompt_cache_hit_ratio",
+    }
+)
 OBJECT_REF_RE = re.compile(
     r"^object://(?P<object_id>obj_[a-f0-9]{24})@v(?P<version>[1-9][0-9]*)$"
 )
@@ -1466,6 +1475,64 @@ class ObjectContextStore:
             }
             for row in rows
         ]
+
+    def cache_usage_timeline(self, conversation_id: str) -> list[dict[str, Any]]:
+        """Return ordered, content-free provider cache-usage events.
+
+        Only atomic events carrying the ``provider_cache_usage`` identity are
+        eligible. Older V1 builds wrote cache buckets as unrelated metric rows
+        and calculated their ratio against uncached input, so those rows cannot
+        be reconstructed into an exact request-level hit rate and are
+        deliberately excluded.
+        """
+
+        names = sorted(CACHE_USAGE_METRIC_NAMES)
+        placeholders = ",".join("?" for _ in names)
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT id, name, value, metadata_json, created_at FROM metrics "
+                "WHERE conversation_id = ? AND delta_id = '' "
+                f"AND name IN ({placeholders}) ORDER BY id",
+                (conversation_id, *names),
+            ).fetchall()
+
+        grouped: dict[str, dict[str, Any]] = {}
+        ordered_keys: list[str] = []
+        for row in rows:
+            try:
+                metadata = json.loads(row["metadata_json"] or "{}")
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(metadata, dict):
+                continue
+            if metadata.get("event") != "provider_cache_usage":
+                continue
+            request_id = str(metadata.get("cache_request_id") or "")
+            if not request_id:
+                continue
+            if request_id not in grouped:
+                grouped[request_id] = {
+                    "cache_request_id": request_id,
+                    "request_sequence": metadata.get("cache_request_sequence"),
+                    "turn_id": str(metadata.get("turn_id") or ""),
+                    "session_id": str(metadata.get("session_id") or ""),
+                    "created_at": float(row["created_at"]),
+                    "metrics": {},
+                }
+                ordered_keys.append(request_id)
+            event = grouped[request_id]
+            event["created_at"] = min(
+                float(event["created_at"]), float(row["created_at"])
+            )
+            event["metrics"][str(row["name"])] = float(row["value"])
+
+        timeline = [grouped[key] for key in ordered_keys]
+        # A conversation can span resumed physical sessions whose local
+        # counters restart at one. Labels must remain monotonic across the
+        # stable conversation root, so persisted row order is authoritative.
+        for ordinal, event in enumerate(timeline, start=1):
+            event["request_sequence"] = ordinal
+        return timeline
 
     def metrics(self, conversation_id: str) -> list[dict[str, Any]]:
         with self._connect() as conn:

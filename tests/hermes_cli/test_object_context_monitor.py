@@ -42,6 +42,35 @@ def _event(
     }
 
 
+def _cache_event(
+    sequence: int,
+    turn_id: str,
+    *,
+    prompt: float,
+    cache_read: float,
+    cache_write: float = 0,
+    created_at: float | None = None,
+) -> dict:
+    return {
+        "cache_request_id": f"cache-request-{sequence}",
+        "request_sequence": sequence,
+        "turn_id": turn_id,
+        "session_id": "session-a",
+        "created_at": created_at or 0,
+        "metrics": {
+            "prompt_tokens": prompt,
+            "uncached_input_tokens": max(
+                0, prompt - cache_read - cache_write
+            ),
+            "cache_read_tokens": cache_read,
+            "cache_write_tokens": cache_write,
+            "prompt_cache_hit_ratio": (
+                cache_read / prompt if prompt else 0
+            ),
+        },
+    }
+
+
 def _timeline() -> dict:
     return {
         "schema_version": 1,
@@ -52,6 +81,11 @@ def _timeline() -> dict:
             _event(1, "turn-a", saved=60, spent=40, latency=1.5),
             _event(2, "turn-a", saved=80, spent=20, latency=2.5),
             _event(3, "turn-b", saved=70, spent=30, latency=3.0),
+        ],
+        "cache_requests": [
+            _cache_event(1, "turn-a", prompt=100, cache_read=0),
+            _cache_event(2, "turn-a", prompt=200, cache_read=120, cache_write=10),
+            _cache_event(3, "turn-b", prompt=400, cache_read=320),
         ],
     }
 
@@ -67,6 +101,8 @@ def _dashboard() -> dict:
     older["projections"] = older["projections"][:1]
     older["projections"][0]["created_at"] = 50
     older["projections"][0]["metrics"]["tokens_saved"] = 10
+    older["cache_requests"] = older["cache_requests"][:1]
+    older["cache_requests"][0]["created_at"] = 51
     return {
         "schema_version": 2,
         "active_conversation_id": "conversation-a",
@@ -81,11 +117,12 @@ def _chart(payload: dict, group_key: str, chart_key: str) -> dict:
     return next(chart for chart in group["charts"] if chart["key"] == chart_key)
 
 
-def test_payload_contains_three_groups_and_all_twelve_requested_dynamics():
+def test_payload_contains_four_groups_and_all_sixteen_requested_dynamics():
     payload = build_monitor_payload(_timeline())
 
     assert [group["key"] for group in payload["groups"]] == [
         "saved",
+        "cache",
         "time",
         "spent",
     ]
@@ -93,11 +130,18 @@ def test_payload_contains_three_groups_and_all_twelve_requested_dynamics():
     assert payload["project_count"] == 3
     assert payload["turn_count"] == 2
     assert payload["title"] == "Alpha experiment"
-    assert payload["download_point_count"] == 40
+    assert payload["cache_request_count"] == 3
+    assert payload["cache_turn_count"] == 2
+    assert payload["download_point_count"] == 60
     assert payload["totals"] == {
         "tokens_saved": 210.0,
         "projection_latency_ms": 7.0,
         "rendered_context_tokens": 90.0,
+        "prompt_tokens": 700.0,
+        "uncached_input_tokens": 250.0,
+        "cache_read_tokens": 440.0,
+        "cache_write_tokens": 10.0,
+        "cache_hit_percent": 62.857143,
     }
 
     assert _chart(payload, "saved", "project-saved")["values"] == [60.0, 80.0, 70.0]
@@ -132,6 +176,34 @@ def test_payload_contains_three_groups_and_all_twelve_requested_dynamics():
     assert _chart(payload, "saved", "turn-saved-cumulative")["modes"][
         "relative"
     ]["values"] == [70.0, 70.0]
+
+    cache_group = next(group for group in payload["groups"] if group["key"] == "cache")
+    assert cache_group["default_display_mode"] == "relative"
+    assert cache_group["display_modes"] == [
+        {"key": "relative", "label": "命中率"},
+        {"key": "absolute", "label": "命中 Token"},
+    ]
+    assert _chart(payload, "cache", "request-cache-hit")["values"] == [
+        0.0,
+        60.0,
+        80.0,
+    ]
+    assert _chart(payload, "cache", "request-cache-hit-cumulative")[
+        "values"
+    ] == [0.0, 40.0, 62.857143]
+    assert _chart(payload, "cache", "turn-cache-hit")["values"] == [
+        40.0,
+        80.0,
+    ]
+    assert _chart(payload, "cache", "turn-cache-hit-cumulative")[
+        "values"
+    ] == [40.0, 62.857143]
+    assert _chart(payload, "cache", "request-cache-hit")["modes"][
+        "absolute"
+    ]["values"] == [0.0, 120.0, 320.0]
+    assert _chart(payload, "cache", "request-cache-hit-cumulative")[
+        "modes"
+    ]["absolute"]["values"] == [0.0, 120.0, 440.0]
 
     assert _chart(payload, "time", "project-time")["values"] == [1.5, 2.5, 3.0]
     assert _chart(payload, "time", "project-time-cumulative")["values"] == [
@@ -174,6 +246,18 @@ def test_legacy_projects_remain_in_token_projects_without_fabricated_turn_or_tim
     assert _chart(payload, "saved", "project-saved")["values"][-1] == 5.0
     assert len(_chart(payload, "saved", "turn-saved")["values"]) == 2
     assert len(_chart(payload, "time", "project-time")["values"]) == 3
+
+
+def test_session_without_exact_cache_telemetry_keeps_empty_cache_charts():
+    timeline = _timeline()
+    timeline.pop("cache_requests")
+
+    payload = build_monitor_payload(timeline)
+
+    assert payload["cache_request_count"] == 0
+    assert payload["totals"]["cache_hit_percent"] == 0.0
+    assert _chart(payload, "cache", "request-cache-hit")["values"] == []
+    assert _chart(payload, "cache", "turn-cache-hit-cumulative")["values"] == []
 
 
 def test_new_projection_without_turn_identity_is_labeled_and_excluded_from_turns():
@@ -241,14 +325,20 @@ def test_dashboard_aggregates_all_sessions_and_selects_active_conversation():
     assert payload["global_totals"] == {
         "project_count": 4,
         "turn_count": 3,
+        "cache_request_count": 4,
         "timed_project_count": 4,
         "legacy_project_count": 0,
         "tokens_saved": 220.0,
         "projection_latency_ms": 8.5,
         "rendered_context_tokens": 130.0,
+        "prompt_tokens": 800.0,
+        "uncached_input_tokens": 350.0,
+        "cache_read_tokens": 440.0,
+        "cache_write_tokens": 10.0,
+        "cache_hit_percent": 55.0,
     }
     assert all(
-        sum(len(group["charts"]) for group in session["groups"]) == 12
+        sum(len(group["charts"]) for group in session["groups"]) == 16
         for session in payload["sessions"]
     )
 
@@ -263,7 +353,7 @@ def test_dashboard_falls_back_to_newest_session_when_active_has_no_telemetry():
     assert not any(session["is_active"] for session in payload["sessions"])
 
 
-def test_html_is_standalone_has_twelve_charts_and_omits_unrecognized_content():
+def test_html_is_standalone_has_sixteen_charts_and_omits_unrecognized_content():
     timeline = _timeline()
     timeline["conversation_id"] = "conv</script><img src=x>"
     timeline["raw_message"] = "TOP SECRET PROMPT"
@@ -284,7 +374,7 @@ def test_html_is_standalone_has_twelve_charts_and_omits_unrecognized_content():
     assert payload["session_count"] == 1
     assert sum(
         len(group["charts"]) for group in payload["sessions"][0]["groups"]
-    ) == 12
+    ) == 16
     assert payload["sessions"][0]["conversation_id"] == "conv</script><img src=x>"
     assert "Runs" in html
     assert "CSV ↓" in html
@@ -296,7 +386,11 @@ def test_html_is_standalone_has_twelve_charts_and_omits_unrecognized_content():
     assert "String(session.title" in html
     assert "point_index" in html
     assert "节省比例" in html
-    assert 'let savedDisplayMode="absolute"' in html
+    assert 'groupDisplayModes={saved:"absolute",cache:"relative"}' in html
+    assert "Prompt 缓存命中" in html
+    assert "Request · 累计命中率" in html
+    assert "命中 Token" in html
+    assert "fmtCache" in html
     assert 'chart.unit==="percent"?100' in html
     assert "if(chart.modes)" in html
     assert '<div class="privacy">' not in html

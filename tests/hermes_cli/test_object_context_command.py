@@ -138,7 +138,7 @@ def _live_v1_status() -> dict:
 
 def _live_timeline() -> dict:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "conversation_id": "conversation-a",
         "session_id": "session-a",
         "projections": [
@@ -153,6 +153,21 @@ def _live_timeline() -> dict:
                     "rendered_context_tokens": 40,
                     "tokens_saved": 60,
                     "projection_latency_ms": 1.5,
+                },
+            }
+        ],
+        "cache_requests": [
+            {
+                "cache_request_id": "session-a:cache:1",
+                "request_sequence": 1,
+                "turn_id": "turn-a",
+                "session_id": "session-a",
+                "metrics": {
+                    "prompt_tokens": 100,
+                    "uncached_input_tokens": 40,
+                    "cache_read_tokens": 60,
+                    "cache_write_tokens": 0,
+                    "prompt_cache_hit_ratio": 0.6,
                 },
             }
         ],
@@ -175,6 +190,23 @@ def _seed_persisted_timeline(tmp_path) -> None:
             "event": "request_projection",
             "projection_id": "persisted-projection-1",
             "projection_sequence": 1,
+            "turn_id": "turn-a",
+            "session_id": "session-a",
+        },
+    )
+    store.record_metrics(
+        "conversation-a",
+        {
+            "prompt_tokens": 100,
+            "uncached_input_tokens": 40,
+            "cache_read_tokens": 60,
+            "cache_write_tokens": 0,
+            "prompt_cache_hit_ratio": 0.6,
+        },
+        metadata={
+            "event": "provider_cache_usage",
+            "cache_request_id": "session-a:cache:1",
+            "cache_request_sequence": 1,
             "turn_id": "turn-a",
             "session_id": "session-a",
         },
@@ -442,6 +474,7 @@ def test_persisted_telemetry_resolves_resumed_session_conversation_root(
     assert timeline["session_id"] == "resumed-session"
     assert timeline["title"] == "Latest continuation title"
     assert timeline["projections"][0]["turn_id"] == "turn-a"
+    assert timeline["cache_requests"][0]["metrics"]["cache_read_tokens"] == 60
 
 
 def test_persisted_telemetry_does_not_borrow_another_conversations_metrics(
@@ -502,6 +535,7 @@ def test_persisted_monitor_telemetry_contains_every_projection_session(
         "conversation-b",
     }
     assert sum(len(item["projections"]) for item in timeline["sessions"]) == 2
+    assert sum(len(item["cache_requests"]) for item in timeline["sessions"]) == 1
     assert {
         item["conversation_id"]: item["title"] for item in timeline["sessions"]
     } == {
@@ -528,6 +562,7 @@ def test_all_session_monitor_remains_available_when_current_root_has_no_metrics(
     status, timeline = persisted
     assert status["request_projection_count"] == 0
     assert timeline["projections"] == []
+    assert timeline["cache_requests"] == []
     assert [item["conversation_id"] for item in timeline["sessions"]] == [
         "conversation-a"
     ]

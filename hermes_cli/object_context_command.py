@@ -943,6 +943,7 @@ def persisted_context_engine_telemetry(
             return None
         store = ObjectContextStore(store_path)
         projections = store.request_projection_timeline(conversation_id)
+        cache_requests = store.cache_usage_timeline(conversation_id)
         if not projections and not include_all_sessions:
             return None
         status = store.aggregate_status(conversation_id)
@@ -951,6 +952,9 @@ def persisted_context_engine_telemetry(
             for summary in store.request_projection_conversations():
                 stored_conversation_id = str(summary.get("conversation_id") or "")
                 stored_projections = store.request_projection_timeline(
+                    stored_conversation_id
+                )
+                stored_cache_requests = store.cache_usage_timeline(
                     stored_conversation_id
                 )
                 if not stored_projections:
@@ -974,6 +978,7 @@ def persisted_context_engine_telemetry(
                         "first_projection_at": summary.get("first_projection_at", 0),
                         "last_projection_at": summary.get("last_projection_at", 0),
                         "projections": stored_projections,
+                        "cache_requests": stored_cache_requests,
                     }
                 )
             if not session_timelines:
@@ -999,6 +1004,7 @@ def persisted_context_engine_telemetry(
         ),
         "source": "persisted",
         "projections": projections,
+        "cache_requests": cache_requests,
     }
     if include_all_sessions:
         timeline.update(

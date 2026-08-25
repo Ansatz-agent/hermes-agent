@@ -74,7 +74,7 @@ Hermes 有两个斜杠命令入口，均由 `hermes_cli/commands.py` 中的中�
 | `/reasoning` | 管理推理力度和显示（用法：/reasoning [level\|show\|hide]） |
 | `/skin` | 显示或更改显示皮肤/主题 |
 | `/statusbar`（别名：`/sb`） | 切换上下文/模型状态栏的显示与隐藏。Object Context V1 开启后，中/宽布局在尚未节省 Token 时会先显示 `V1↓0`，之后显示紧凑的最近一次节省量（如 `V1↓80K`）；宽布局还会显示节省比例和当前对话累计节省（`Σ↓720K`）。 |
-| `/object_context monitor`（别名：`/object-context`、`/oc`） | **仅限 CLI。** 打开私有、自包含的全 session Object Context 工作台，包含跨 session KPI、可搜索运行表，以及节省 Token、本地投影耗时和渲染上下文花费 Token 的单次 project、累计 project、单轮 turn 与累计 turn 图。存储的 session title 是主标识，稳定 ID 是副标识。点击任意 session 即可切换其 12 张图；一个节省 Token 控件会同步把四张节省图切换为绝对 Token 数或相对节省比例。每张图下载当前显示模式的完整 CSV，session 标题区的一键下载则同时包含两种节省模式及其他全部图表数据。当前或恢复的对话默认选中，且无需先发送新模型消息；再次执行即可刷新快照。 |
+| `/object_context monitor`（别名：`/object-context`、`/oc`） | **仅限 CLI。** 打开私有、自包含的全 session Object Context 工作台，包含跨 session KPI、可搜索运行表，以及节省 Token、provider 返回的 prompt 缓存命中、本地投影耗时和渲染上下文花费 Token 的 16 张 request/turn 图。存储的 session title 是主标识，稳定 ID 是副标识。节省图可在绝对 Token 数与相对节省比例之间切换；缓存图可在缓存命中率与 cache-read Token 之间切换，累计命中率按 prompt Token 加权。每张图下载当前显示模式的完整 CSV，session 标题区的一键下载包含所有模式。当前或恢复的对话默认选中，且无需先发送新模型消息；再次执行即可刷新快照。 |
 | `/voice [on\|off\|tts\|status]` | 切换 CLI 语音模式和语音播放。录音使用 `voice.record_key`（默认：`Ctrl+B`）。 |
 | `/yolo` | 切换 YOLO 模式——跳过所有危险命令审批提示。 |
 | `/footer [on\|off\|status]` | 切换最终回复中的 gateway 运行时元数据页脚（显示模型、工具调用次数、耗时）。 |
