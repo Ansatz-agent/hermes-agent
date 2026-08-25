@@ -135,7 +135,7 @@ _hermes_completion() {{
     fi
 }}
 
-complete -F _hermes_completion hermes
+complete -F _hermes_completion ansatz
 """
 
 
@@ -199,7 +199,7 @@ def generate_zsh(parser: argparse.ArgumentParser) -> str:
             )
     sub_cases_str = "\n".join(sub_cases)
 
-    return f"""#compdef hermes
+    return f"""#compdef ansatz
 # Hermes Agent zsh completion
 # Add to ~/.zshrc:
 #   eval "$(ansatz completion zsh)"
@@ -240,7 +240,7 @@ _hermes() {{
     esac
 }}
 
-compdef _hermes hermes
+compdef _hermes ansatz
 """
 
 
