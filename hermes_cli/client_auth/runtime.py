@@ -69,6 +69,9 @@ _AUTH_KEYRING_SERVICE_PATTERN = re.compile(
     flags=re.ASCII,
 )
 _DEFAULT_AUTH_KEYRING_SERVICE = "cn.c2sml.hermes.remote-auth"
+_EXPLICIT_TERMINAL_REASONS = frozenset(
+    {"account_disabled", "account_revoked", "session_revoked"}
+)
 
 
 def _test_runtime_suffix() -> str:
@@ -610,7 +613,11 @@ class RuntimeSnapshot:
             state=AuthState.LOCKED,
             epoch=self.epoch + 1,
             valid_until=now,
-            runtime_instance_id=secrets.token_hex(16),
+            runtime_instance_id=(
+                self.runtime_instance_id
+                if reason in _EXPLICIT_TERMINAL_REASONS
+                else secrets.token_hex(16)
+            ),
             reason=reason,
             validation_state=ValidationState.DEGRADED,
             validation_reason=reason,

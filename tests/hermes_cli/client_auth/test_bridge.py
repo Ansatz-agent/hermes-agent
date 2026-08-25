@@ -145,6 +145,32 @@ def test_status_dispatches_restored_native_snapshot_with_finite_durable_lease(mo
     assert "native-token-sentinel" not in json.dumps(response)
 
 
+@pytest.mark.parametrize(
+    "reason", ["account_disabled", "account_revoked", "session_revoked"]
+)
+def test_status_dispatches_explicit_terminal_snapshot_with_matching_identity(
+    monkeypatch, reason
+):
+    terminal = SimpleNamespace(
+        reason=reason,
+        public_dict=lambda: public_status(
+            state="locked",
+            username=None,
+            valid_until=0.0,
+            validation_state="degraded",
+            validation_reason=reason,
+            reason=reason,
+        )
+    )
+    monkeypatch.setattr("hermes_cli.client_auth.bridge.account_status", lambda: terminal)
+
+    response = dispatch(
+        {"version": 2, "id": "1", "method": "status", "params": NATIVE_CONTEXT}
+    )
+
+    assert response["result"] == terminal.public_dict()
+
+
 def test_bridge_translates_runtime_lease_to_unix_epoch(monkeypatch):
     monkeypatch.setattr(
         "hermes_cli.client_auth.bridge.account_status",

@@ -120,6 +120,29 @@ test('status carries native context and accepts degraded health without secrets'
   bridge.close()
 })
 
+test.each(['account_disabled', 'account_revoked', 'session_revoked'])(
+  'status accepts the matching-identity %s terminal snapshot',
+  async reason => {
+    const { bridge, child } = bridgeFixture()
+    const pending = bridge.status()
+    const request = await readRequest(child)
+
+    const terminal = {
+      ...authenticatedStatus,
+      state: 'locked',
+      username: null,
+      valid_until: 0,
+      validation_state: 'degraded',
+      validation_reason: reason,
+      reason
+    }
+    respond(child, { version: 2, id: request.id, result: terminal })
+
+    assert.deepEqual(await pending, terminal)
+    bridge.close()
+  }
+)
+
 test('login injects native context while leaving renderer credentials out of status frames', async () => {
   const { bridge, child } = bridgeFixture()
   const pending = bridge.login('alice', 'password-sentinel')

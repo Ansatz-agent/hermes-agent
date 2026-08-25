@@ -419,6 +419,12 @@ test.each(['account_disabled', 'account_revoked', 'session_revoked'] as const)(
   'matching current %s removes local scope and cleans exactly once',
   async reason => {
     const { cleanup, coordinator, setStatus } = fixture(authenticated)
+    const terminalEvents: BridgeStatus[] = []
+    coordinator.subscribe(status => {
+      if (status.reason === reason) {
+        terminalEvents.push(status)
+      }
+    })
     await coordinator.start()
     setStatus(terminalStatus(reason))
 
@@ -429,6 +435,7 @@ test.each(['account_disabled', 'account_revoked', 'session_revoked'] as const)(
     assert.equal(second.reason, reason)
     assert.equal(coordinator.scope('local'), null)
     assert.equal(cleanup.mock.calls.length, 1)
+    assert.equal(terminalEvents.length, 1)
     await assert.rejects(coordinator.require('local', 'local'), /AUTH_REQUIRED/)
   }
 )

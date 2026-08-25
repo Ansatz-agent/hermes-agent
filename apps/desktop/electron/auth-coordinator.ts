@@ -470,6 +470,10 @@ export class AuthCoordinator {
       previousScope &&
       isMatchingExplicitTerminal(previousStatus, status, reason)
 
+    if (sameExplicitTerminalSnapshot(previousStatus, status, reason)) {
+      return previousStatus
+    }
+
     if (status.state === 'signed_out' || matchingTerminal) {
       this.scopes.delete(connectionId)
 
@@ -581,6 +585,20 @@ function isMatchingExplicitTerminal(left: BridgeStatus, right: BridgeStatus, rea
   }
 
   return reason === 'session_revoked' ? sameCurrentSession(left, right) : sameAccount(left, right)
+}
+
+function sameExplicitTerminalSnapshot(left: BridgeStatus, right: BridgeStatus, reason: string): boolean {
+  return (
+    left.state === 'locked' &&
+    right.state === 'locked' &&
+    EXPLICIT_TERMINAL_REASONS.has(reason) &&
+    left.reason === reason &&
+    left.account_id === right.account_id &&
+    left.session_id === right.session_id &&
+    left.principal_key === right.principal_key &&
+    left.runtime_instance_id === right.runtime_instance_id &&
+    left.epoch === right.epoch
+  )
 }
 
 function withScope(status: BridgeStatus, scope: ConnectionScope): BridgeStatus {

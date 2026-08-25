@@ -77,6 +77,9 @@ _VALIDATION_REASONS = frozenset(
         "session_rejected",
         "invalid_response",
         "invalid_session_credential",
+        "session_revoked",
+        "account_disabled",
+        "account_revoked",
         "vault_unavailable",
     }
 )

@@ -906,6 +906,41 @@ def test_matching_explicit_revoke_writes_secret_free_tombstone_once():
     assert backend.write_count == 2
 
 
+@pytest.mark.parametrize(
+    "reason", ["account_disabled", "account_revoked", "session_revoked"]
+)
+def test_matching_explicit_revoke_reaches_attached_consumer_without_weakening_owner_identity(
+    reason,
+):
+    owner, _, client, _ = native_owner_factory()
+    active = owner.login(
+        "alice",
+        bytearray(b"secret"),
+        installation_id=INSTALLATION_ID,
+        client_version="0.17.0",
+    )
+    consumer = owner.connect_consumer()
+    client.native_status_error = ExplicitSessionRevocation(
+        code=reason,
+        account_id=active.account_id,
+        session_id=active.session_id,
+        revoked_at="2026-08-24T12:00:00+00:00",
+    )
+
+    revoked = owner.validate_now()
+
+    assert revoked.runtime_instance_id == active.runtime_instance_id
+    assert revoked.epoch == active.epoch + 1
+    assert consumer.snapshot() == revoked
+    with pytest.raises(AuthRequired, match=reason):
+        consumer.require_authorized("tool.after-revoke", now=1.0)
+
+    replacement = RuntimeSnapshot.new_authenticated("alice", now=2.0, ttl=60.0)
+    with pytest.raises(AuthRequired, match="runtime_unavailable"):
+        consumer.publish(replacement)
+    assert consumer.snapshot().reason == "runtime_unavailable"
+
+
 def legacy_v1_blob() -> str:
     return json.dumps(
         {

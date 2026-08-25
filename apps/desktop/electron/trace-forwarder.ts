@@ -114,8 +114,7 @@ export class TraceForwarder {
     this.installationId = options.installationId
     this.maxBodyBytes = options.maxBodyBytes ?? MAX_BODY_BYTES
     this.queue = options.queue ?? new TraceForwarderQueue()
-    this.remoteAddressForRequest =
-      options.remoteAddressForRequest ?? (request => request.socket.remoteAddress)
+    this.remoteAddressForRequest = options.remoteAddressForRequest ?? (request => request.socket.remoteAddress)
     this.upstreamUrl = options.upstreamUrl ?? DEFAULT_TRACE_UPSTREAM_URL
   }
 
@@ -169,9 +168,15 @@ export class TraceForwarder {
 
     this.server = null
 
-    const closePromise = server
-      ? new Promise<void>(resolve => server.close(() => resolve()))
-      : Promise.resolve()
+    const closePromise = server ? new Promise<void>(resolve => server.close(() => resolve())) : Promise.resolve()
+
+    // `server.close()` waits for active requests. A crashed or suspended OTLP
+    // producer can leave an incomplete loopback request open forever, which
+    // would otherwise block terminal auth cleanup before the backend is
+    // stopped. Admission is already closed, so terminate those local sockets;
+    // complete batches are in the queue and still receive the bounded flush
+    // below.
+    server?.closeAllConnections()
 
     const deadline = Date.now() + Math.max(0, flushMs)
 
@@ -287,10 +292,13 @@ export class TraceForwarder {
       return
     }
 
-    this.retryTimer = setTimeout(() => {
-      this.retryTimer = null
-      this.kick()
-    }, Math.max(0, retryAt - Date.now()))
+    this.retryTimer = setTimeout(
+      () => {
+        this.retryTimer = null
+        this.kick()
+      },
+      Math.max(0, retryAt - Date.now())
+    )
   }
 
   private clearRetryTimer(): void {

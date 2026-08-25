@@ -15,10 +15,7 @@ const installationId = '11111111-1111-4111-8111-111111111111'
 const protobuf = Buffer.from([0x0a, 0x03, 0x01, 0x02, 0x03])
 
 test('product Trace uploads use the public same-origin Gateway API by default', () => {
-  assert.equal(
-    DEFAULT_TRACE_UPSTREAM_URL,
-    'https://c2sml.cn/trace-ingest/v1/traces'
-  )
+  assert.equal(DEFAULT_TRACE_UPSTREAM_URL, 'https://c2sml.cn/trace-ingest/v1/traces')
 })
 
 async function post(
@@ -33,14 +30,15 @@ async function post(
   const target = new URL(endpoint)
   const body = overrides.body ?? protobuf
 
-  const correlationHeaders = overrides.includeCorrelationHeaders === false
-    ? {}
-    : {
-        'x-hermes-session-id': 'session-1',
-        'x-trace-entrypoint': 'desktop',
-        'x-trace-run-id': 'run-1',
-        'x-telemetry-schema-version': '1'
-      }
+  const correlationHeaders =
+    overrides.includeCorrelationHeaders === false
+      ? {}
+      : {
+          'x-hermes-session-id': 'session-1',
+          'x-trace-entrypoint': 'desktop',
+          'x-trace-run-id': 'run-1',
+          'x-telemetry-schema-version': '1'
+        }
 
   const headers = {
     authorization: `Bearer ${localBearer}`,
@@ -62,9 +60,7 @@ async function post(
         const chunks: Buffer[] = []
 
         response.on('data', chunk => chunks.push(Buffer.from(chunk)))
-        response.on('end', () =>
-          resolve({ body: Buffer.concat(chunks), status: response.statusCode ?? 0 })
-        )
+        response.on('end', () => resolve({ body: Buffer.concat(chunks), status: response.statusCode ?? 0 }))
       }
     )
 
@@ -284,14 +280,8 @@ test('HTTP boundary rejects remote peers, bad local auth, media drift, encoding,
     (await post(first.endpoint, first.localBearer, { headers: { 'content-type': 'application/json' } })).status,
     415
   )
-  assert.equal(
-    (await post(first.endpoint, first.localBearer, { headers: { 'content-encoding': 'gzip' } })).status,
-    415
-  )
-  assert.equal(
-    (await post(first.endpoint, first.localBearer, { body: Buffer.alloc(8 * 1024 * 1024 + 1) })).status,
-    413
-  )
+  assert.equal((await post(first.endpoint, first.localBearer, { headers: { 'content-encoding': 'gzip' } })).status, 415)
+  assert.equal((await post(first.endpoint, first.localBearer, { body: Buffer.alloc(8 * 1024 * 1024 + 1) })).status, 413)
   await forwarder.stop({ flushMs: 0 })
 
   const second = await forwarder.start(8)
@@ -301,6 +291,51 @@ test('HTTP boundary rejects remote peers, bad local auth, media drift, encoding,
     assert.equal(upstreamCalls, 0)
   } finally {
     await forwarder.stop({ flushMs: 0 })
+  }
+})
+
+test('stop remains bounded when a local OTLP client holds an incomplete request open', async () => {
+  const forwarder = new TraceForwarder({
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource()),
+    installationId
+  })
+  const started = await forwarder.start(7)
+  const target = new URL(started.endpoint)
+  const request = http.request({
+    hostname: target.hostname,
+    port: target.port,
+    path: target.pathname,
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${started.localBearer}`,
+      'content-length': '5',
+      'content-type': 'application/x-protobuf'
+    }
+  })
+  request.on('error', () => {})
+  const connected = new Promise<void>(resolve => {
+    request.on('socket', socket => {
+      if (socket.readyState === 'open') {
+        resolve()
+      } else {
+        socket.once('connect', resolve)
+      }
+    })
+  })
+  request.flushHeaders()
+  await connected
+
+  const stopping = forwarder.stop({ flushMs: 0 })
+
+  try {
+    const stoppedWithinBoundary = await Promise.race([
+      stopping.then(() => true),
+      new Promise<false>(resolve => setTimeout(() => resolve(false), 250))
+    ])
+    assert.equal(stoppedWithinBoundary, true)
+  } finally {
+    request.destroy()
+    await stopping
   }
 })
 
@@ -327,8 +362,5 @@ test('desktop lifecycle starts Trace before local spawn and flushes it before ba
   )
   assert.match(source, /trace: traceContextForBackendRoot\(root\)/)
   assert.match(source, /trace: traceContextForBackendRoot\(ACTIVE_HERMES_ROOT\)/)
-  assert.match(
-    source,
-    /pluginsToml: path\.join\(root, 'config', 'ansatz-voice-trace', 'plugins\.toml'\)/
-  )
+  assert.match(source, /pluginsToml: path\.join\(root, 'config', 'ansatz-voice-trace', 'plugins\.toml'\)/)
 })
