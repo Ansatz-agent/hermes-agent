@@ -11,7 +11,10 @@ from __future__ import annotations
 import math
 import re
 import shlex
+from bisect import bisect_right
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Mapping
 
 
@@ -514,16 +517,15 @@ def _monitor_result(
         if isinstance(monitor_timeline, Mapping)
         else None
     )
-    has_persisted_sessions = bool(
+    has_session_snapshot = bool(
         isinstance(session_timelines, list)
         and any(
             isinstance(item, Mapping)
-            and isinstance(item.get("projections"), list)
-            and item.get("projections")
+            and str(item.get("conversation_id") or "").strip()
             for item in session_timelines
         )
     )
-    if active_engine != OBJECT_CONTEXT_ENGINE and not has_persisted_sessions:
+    if active_engine != OBJECT_CONTEXT_ENGINE and not has_session_snapshot:
         lines.extend(
             [
                 f"Unavailable: the active session is {_active_label(active_engine)}.",
@@ -531,7 +533,7 @@ def _monitor_result(
             ]
         )
         return ObjectContextCommandResult(tuple(lines))
-    if not isinstance(engine_status, Mapping) and not has_persisted_sessions:
+    if not isinstance(engine_status, Mapping) and not has_session_snapshot:
         lines.extend(
             [
                 "Unavailable: no live Object Context status is available yet.",
@@ -542,7 +544,7 @@ def _monitor_result(
     if (
         isinstance(engine_status, Mapping)
         and engine_status.get("object_context_available") is False
-        and not has_persisted_sessions
+        and not has_session_snapshot
     ):
         lines.extend(
             [
@@ -562,7 +564,7 @@ def _monitor_result(
     projections = monitor_timeline.get("projections")
     if (
         (not isinstance(projections, list) or not projections)
-        and not has_persisted_sessions
+        and not has_session_snapshot
     ):
         lines.extend(
             [
@@ -599,6 +601,10 @@ def _monitor_result(
         [
             f"Sessions: {int(payload.get('session_count', 0)):,}",
             (
+                f"Requests: {int(global_totals.get('request_count', 0)):,} total"
+                f" · {int(selected.get('request_count', 0)):,} selected"
+            ),
+            (
                 f"Projects: {int(global_totals.get('project_count', 0)):,} total"
                 f" · {int(selected.get('project_count', 0)):,} selected"
             ),
@@ -610,12 +616,18 @@ def _monitor_result(
     )
     project_count = int(selected.get("project_count", 0) or 0)
     turnless = int(selected.get("turnless_project_count", 0) or 0)
-    timed = int(selected.get("timed_project_count", 0) or 0)
+    request_count = int(selected.get("request_count", 0) or 0)
+    request_events = int(selected.get("request_event_count", 0) or 0)
     legacy = int(selected.get("legacy_project_count", 0) or 0)
-    if turnless or timed < project_count:
+    if request_events < request_count:
+        lines.append(
+            f"Request-series coverage: {request_events:,}/{request_count:,}; "
+            "the provider-token KPI still uses the exact SessionDB aggregate."
+        )
+    if turnless:
         lines.append(
             f"Coverage: {project_count - turnless:,}/{project_count:,} projects "
-            f"have turn identity; {timed:,}/{project_count:,} have timing."
+            "have turn identity."
         )
     if legacy:
         lines.append(f"Compatibility: {legacy:,} of the uncovered projects are legacy.")
@@ -907,6 +919,428 @@ def _stored_session_title(
     return ""
 
 
+_LEGACY_API_USAGE_RE = re.compile(
+    r"^(?P<timestamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3}) "
+    r"INFO \[(?P<session_id>[^\]]+)\] agent\.conversation_loop: "
+    r"API call #(?P<sequence>\d+): model=(?P<model>.*?) "
+    r"provider=(?P<provider>.*?) in=(?P<prompt>\d+) "
+    r"out=(?P<output>\d+) total=(?P<total>\d+) "
+    r"latency=(?P<latency>[0-9.]+)s"
+    r"(?: cache=(?P<cache_read>\d+)/(?P<cache_prompt>\d+) \([^)]*\))?$"
+)
+
+
+def _safe_nonnegative_int(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _safe_nonnegative_float(value: Any) -> float:
+    try:
+        number = float(value or 0.0)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return max(0.0, number) if math.isfinite(number) else 0.0
+
+
+def _session_usage_summary(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
+    fields = (
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "cache_write_tokens",
+        "reasoning_tokens",
+        "api_call_count",
+    )
+    totals = {
+        field: sum(_safe_nonnegative_int(row.get(field)) for row in rows)
+        for field in fields
+    }
+    totals["total_tokens"] = (
+        totals["input_tokens"]
+        + totals["output_tokens"]
+        + totals["cache_read_tokens"]
+        + totals["cache_write_tokens"]
+    )
+    return totals
+
+
+def _legacy_log_paths(log_dir: Path) -> list[Path]:
+    """Return agent logs oldest-first, including stdlib rotated backups."""
+
+    paths = [path for path in log_dir.glob("agent.log*") if path.is_file()]
+
+    def key(path: Path) -> tuple[int, int, str]:
+        if path.name == "agent.log":
+            return (1, 0, path.name)
+        suffix = path.name.removeprefix("agent.log.")
+        try:
+            # Higher backup numbers are older.
+            return (0, -int(suffix), path.name)
+        except ValueError:
+            return (0, 0, path.name)
+
+    return sorted(paths, key=key)
+
+
+def _best_sequential_log_chain(
+    rows: list[dict[str, Any]], expected_calls: int
+) -> list[dict[str, Any]]:
+    """Select the longest monotonic API-call chain from interleaved logs.
+
+    Background-review agents can share the parent session log tag while their
+    own counters restart at one.  The main agent's durable counter is monotonic,
+    so retaining the longest consecutive chain rejects those auxiliary runs.
+    """
+
+    best: dict[int, list[dict[str, Any]]] = {}
+    for row in rows:
+        sequence = _safe_nonnegative_int(row.get("request_sequence"))
+        if sequence <= 0 or (expected_calls > 0 and sequence > expected_calls):
+            continue
+        previous = best.get(sequence - 1)
+        candidate = [*previous, row] if previous else [row]
+        if len(candidate) > len(best.get(sequence, [])):
+            best[sequence] = candidate
+    if expected_calls > 0 and expected_calls in best:
+        return best[expected_calls]
+    return max(best.values(), key=len, default=[])
+
+
+def _attach_legacy_log_usage(
+    conversations: list[dict[str, Any]],
+    *,
+    hermes_home: Path,
+) -> None:
+    """Merge exact request usage recoverable from redacted agent logs.
+
+    This is a historical compatibility path only.  New calls are persisted in
+    ``session_request_usage``.  Parsing is restricted to the numeric API-call
+    INFO record; turn-context lines (which contain message previews) are never
+    captured or serialized.
+    """
+
+    targets: dict[str, dict[str, Any]] = {}
+    for conversation in conversations:
+        for physical in conversation.pop("_physical_sessions", []):
+            session_id = str(physical.get("id") or "")
+            if not session_id:
+                continue
+            targets[session_id] = {
+                "conversation": conversation,
+                "expected_calls": _safe_nonnegative_int(
+                    physical.get("api_call_count")
+                ),
+                "turns": list(physical.get("turn_boundaries") or []),
+                "rows": [],
+            }
+    if not targets:
+        return
+
+    for path in _legacy_log_paths(hermes_home / "logs"):
+        try:
+            lines = path.open("r", encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        with lines:
+            for line in lines:
+                match = _LEGACY_API_USAGE_RE.match(line.rstrip("\r\n"))
+                if match is None:
+                    continue
+                session_id = match.group("session_id")
+                target = targets.get(session_id)
+                if target is None:
+                    continue
+                try:
+                    created_at = datetime.strptime(
+                        match.group("timestamp"), "%Y-%m-%d %H:%M:%S,%f"
+                    ).astimezone().timestamp()
+                except ValueError:
+                    continue
+                prompt_tokens = _safe_nonnegative_int(match.group("prompt"))
+                output_tokens = _safe_nonnegative_int(match.group("output"))
+                cache_read_tokens = _safe_nonnegative_int(
+                    match.group("cache_read")
+                )
+                turns = target["turns"]
+                starts = [
+                    _safe_nonnegative_float(turn.get("started_at"))
+                    for turn in turns
+                ]
+                turn_index = bisect_right(starts, created_at) - 1
+                turn_id = (
+                    str(turns[turn_index].get("turn_id") or "")
+                    if turn_index >= 0
+                    else ""
+                )
+                sequence = _safe_nonnegative_int(match.group("sequence"))
+                target["rows"].append(
+                    {
+                        "session_id": session_id,
+                        "conversation_id": str(
+                            target["conversation"].get("conversation_id") or ""
+                        ),
+                        "api_request_id": f"legacy-log:{session_id}:{sequence}",
+                        "turn_id": turn_id,
+                        "request_sequence": sequence,
+                        "started_at": created_at,
+                        "model": match.group("model"),
+                        "billing_provider": match.group("provider"),
+                        "source": "legacy_log",
+                        "metrics": {
+                            "input_tokens": max(
+                                0, prompt_tokens - cache_read_tokens
+                            ),
+                            "output_tokens": output_tokens,
+                            "cache_read_tokens": cache_read_tokens,
+                            "cache_write_tokens": 0,
+                            "prompt_tokens": prompt_tokens,
+                            "total_tokens": _safe_nonnegative_int(
+                                match.group("total")
+                            ),
+                            "api_duration_ms": (
+                                _safe_nonnegative_float(match.group("latency"))
+                                * 1000.0
+                            ),
+                        },
+                    }
+                )
+
+    for target in targets.values():
+        conversation = target["conversation"]
+        chain = _best_sequential_log_chain(
+            target["rows"], target["expected_calls"]
+        )
+        structured = list(conversation.get("requests") or [])
+        merged: dict[tuple[str, int], dict[str, Any]] = {
+            (
+                str(event.get("session_id") or ""),
+                _safe_nonnegative_int(event.get("request_sequence")),
+            ): event
+            for event in chain
+        }
+        # Structured SQLite evidence wins when the same call also remains in
+        # agent.log.  This supports a session spanning the schema upgrade.
+        for event in structured:
+            merged[
+                (
+                    str(event.get("session_id") or ""),
+                    _safe_nonnegative_int(event.get("request_sequence")),
+                )
+            ] = event
+        conversation["requests"] = sorted(
+            merged.values(),
+            key=lambda event: (
+                _safe_nonnegative_float(event.get("started_at")),
+                str(event.get("api_request_id") or ""),
+            ),
+        )
+
+
+def _finalize_usage_coverage(conversation: dict[str, Any]) -> None:
+    aggregate = conversation.get("usage_aggregate")
+    if not isinstance(aggregate, Mapping):
+        aggregate = {}
+    requests = [
+        event
+        for event in conversation.get("requests") or []
+        if isinstance(event, Mapping)
+    ]
+    event_tokens = sum(
+        _metric_value(_mapping(event.get("metrics")), "total_tokens")
+        for event in requests
+    )
+    aggregate_tokens = _safe_nonnegative_int(aggregate.get("total_tokens"))
+    aggregate_calls = _safe_nonnegative_int(aggregate.get("api_call_count"))
+    conversation["request_usage_coverage"] = {
+        "event_count": len(requests),
+        "aggregate_api_call_count": aggregate_calls,
+        "event_tokens": event_tokens,
+        "aggregate_tokens": aggregate_tokens,
+        "call_percent": (
+            min(100.0, len(requests) / aggregate_calls * 100.0)
+            if aggregate_calls > 0
+            else (100.0 if not requests else 0.0)
+        ),
+        "token_percent": (
+            min(100.0, event_tokens / aggregate_tokens * 100.0)
+            if aggregate_tokens > 0
+            else (100.0 if event_tokens <= 0 else 0.0)
+        ),
+        "complete": bool(
+            len(requests) == aggregate_calls
+            and round(event_tokens) == aggregate_tokens
+        ),
+    }
+
+
+def _monitor_session_metadata(session_db: Any) -> list[dict[str, Any]]:
+    """List every user-visible conversation without serializing its content.
+
+    ``list_sessions_rich`` is the existing user-facing conversation projection:
+    it hides implementation-only children, folds compression continuations into
+    one logical run, and can include archived sessions.  The monitor retains
+    only identity/title/activity metadata from each row; previews and all other
+    SessionDB fields are deliberately discarded.
+    """
+
+    listing = getattr(session_db, "list_sessions_rich", None)
+    if not callable(listing):
+        return []
+
+    resolver = getattr(session_db, "get_conversation_root", None)
+    lineage_getter = getattr(session_db, "get_compression_lineage", None)
+    session_getter = getattr(session_db, "get_session", None)
+    request_getter = getattr(session_db, "request_usage_timeline", None)
+    turn_getter = getattr(session_db, "content_free_turn_boundaries", None)
+    page_size = 200
+    offset = 0
+    seen_session_ids: set[str] = set()
+    seen_conversation_ids: set[str] = set()
+    conversations: list[dict[str, Any]] = []
+    while True:
+        try:
+            raw_page = listing(
+                limit=page_size,
+                offset=offset,
+                include_archived=True,
+                order_by_last_active=True,
+                compact_rows=True,
+            )
+        except Exception:
+            break
+        if not isinstance(raw_page, list) or not raw_page:
+            break
+
+        added = 0
+        for row in raw_page:
+            if not isinstance(row, Mapping):
+                continue
+            session_id = str(row.get("id") or "").strip()
+            if not session_id or session_id in seen_session_ids:
+                continue
+            seen_session_ids.add(session_id)
+            added += 1
+
+            conversation_id = str(row.get("_lineage_root_id") or "").strip()
+            if not conversation_id:
+                conversation_id = session_id
+                if callable(resolver):
+                    try:
+                        conversation_id = str(
+                            resolver(session_id) or session_id
+                        ).strip()
+                    except Exception:
+                        conversation_id = session_id
+            conversation_id = conversation_id or session_id
+            if conversation_id in seen_conversation_ids:
+                continue
+            seen_conversation_ids.add(conversation_id)
+
+            lineage = [session_id]
+            if callable(lineage_getter):
+                try:
+                    loaded_lineage = lineage_getter(session_id)
+                    if isinstance(loaded_lineage, list) and loaded_lineage:
+                        lineage = [str(value) for value in loaded_lineage if value]
+                except Exception:
+                    lineage = [session_id]
+            physical_sessions: list[dict[str, Any]] = []
+            for physical_id in lineage:
+                physical_row: Mapping[str, Any] | None = (
+                    row if physical_id == session_id else None
+                )
+                if physical_row is None and callable(session_getter):
+                    try:
+                        loaded_row = session_getter(physical_id)
+                        if isinstance(loaded_row, Mapping):
+                            physical_row = loaded_row
+                    except Exception:
+                        physical_row = None
+                if physical_row is None:
+                    physical_row = {"id": physical_id}
+                boundaries: list[dict[str, Any]] = []
+                if callable(turn_getter):
+                    try:
+                        loaded_boundaries = turn_getter(physical_id)
+                        if isinstance(loaded_boundaries, list):
+                            boundaries = [
+                                dict(item)
+                                for item in loaded_boundaries
+                                if isinstance(item, Mapping)
+                            ]
+                    except Exception:
+                        boundaries = []
+                physical_sessions.append(
+                    {
+                        "id": physical_id,
+                        "started_at": physical_row.get("started_at", 0),
+                        "ended_at": physical_row.get("ended_at", 0),
+                        "input_tokens": physical_row.get("input_tokens", 0),
+                        "output_tokens": physical_row.get("output_tokens", 0),
+                        "cache_read_tokens": physical_row.get(
+                            "cache_read_tokens", 0
+                        ),
+                        "cache_write_tokens": physical_row.get(
+                            "cache_write_tokens", 0
+                        ),
+                        "reasoning_tokens": physical_row.get(
+                            "reasoning_tokens", 0
+                        ),
+                        "api_call_count": physical_row.get("api_call_count", 0),
+                        "turn_boundaries": boundaries,
+                    }
+                )
+            requests: list[dict[str, Any]] = []
+            if callable(request_getter):
+                try:
+                    loaded_requests = request_getter(conversation_id)
+                    if isinstance(loaded_requests, list):
+                        requests = [
+                            dict(item)
+                            for item in loaded_requests
+                            if isinstance(item, Mapping)
+                        ]
+                except Exception:
+                    requests = []
+            conversations.append(
+                {
+                    "conversation_id": conversation_id,
+                    "session_id": session_id,
+                    "title": str(row.get("title") or "").strip(),
+                    "source": "session_db",
+                    "started_at": row.get("started_at", 0),
+                    "last_activity_at": row.get("last_active", 0),
+                    "projections": [],
+                    "cache_requests": [],
+                    "requests": requests,
+                    "usage_aggregate": _session_usage_summary(
+                        physical_sessions
+                    ),
+                    "_physical_sessions": physical_sessions,
+                }
+            )
+
+        if len(raw_page) < page_size or added == 0:
+            break
+        offset += len(raw_page)
+    try:
+        from hermes_constants import get_hermes_home
+
+        _attach_legacy_log_usage(conversations, hermes_home=get_hermes_home())
+    except Exception:
+        # Log recovery is compatibility-only. Structured request events and
+        # aggregate SessionDB totals remain available if the log is absent or
+        # unreadable.
+        for conversation in conversations:
+            conversation.pop("_physical_sessions", None)
+    for conversation in conversations:
+        _finalize_usage_coverage(conversation)
+    return conversations
+
+
 def persisted_context_engine_telemetry(
     session_db: Any,
     session_id: str,
@@ -939,17 +1373,52 @@ def persisted_context_engine_telemetry(
         from plugins.context_engine.object_context.store import ObjectContextStore
 
         store_path = get_hermes_home() / "context" / "object_context_v1.sqlite3"
-        if not store_path.is_file():
-            return None
-        store = ObjectContextStore(store_path)
-        projections = store.request_projection_timeline(conversation_id)
-        cache_requests = store.cache_usage_timeline(conversation_id)
+        store = ObjectContextStore(store_path) if store_path.is_file() else None
+        projections = (
+            store.request_projection_timeline(conversation_id) if store else []
+        )
+        cache_requests = store.cache_usage_timeline(conversation_id) if store else []
         if not projections and not include_all_sessions:
             return None
-        status = store.aggregate_status(conversation_id)
+        status = (
+            store.aggregate_status(conversation_id)
+            if store
+            else {
+                "request_projection_count": 0,
+                "request_metric_totals": {},
+                "request_metric_averages": {},
+                "last_request_metrics": {},
+            }
+        )
         session_timelines: list[dict[str, Any]] = []
         if include_all_sessions:
-            for summary in store.request_projection_conversations():
+            session_timelines = _monitor_session_metadata(session_db)
+            session_by_conversation = {
+                str(item.get("conversation_id") or ""): item
+                for item in session_timelines
+                if str(item.get("conversation_id") or "")
+            }
+            if conversation_id and conversation_id not in session_by_conversation:
+                current_item = {
+                    "conversation_id": conversation_id,
+                    "session_id": current_session_id or conversation_id,
+                    "title": _stored_session_title(
+                        session_db,
+                        conversation_id,
+                        projections,
+                        current_session_id=current_session_id,
+                    ),
+                    "source": "session_db",
+                    "started_at": 0,
+                    "last_activity_at": 0,
+                    "projections": [],
+                    "cache_requests": [],
+                }
+                session_timelines.insert(0, current_item)
+                session_by_conversation[conversation_id] = current_item
+
+            summaries = store.request_projection_conversations() if store else []
+            for summary in summaries:
                 stored_conversation_id = str(summary.get("conversation_id") or "")
                 stored_projections = store.request_projection_timeline(
                     stored_conversation_id
@@ -957,8 +1426,6 @@ def persisted_context_engine_telemetry(
                 stored_cache_requests = store.cache_usage_timeline(
                     stored_conversation_id
                 )
-                if not stored_projections:
-                    continue
                 title = _stored_session_title(
                     session_db,
                     stored_conversation_id,
@@ -969,14 +1436,30 @@ def persisted_context_engine_telemetry(
                         else ""
                     ),
                 )
-                session_timelines.append(
-                    {
+                stored_item = session_by_conversation.get(stored_conversation_id)
+                if stored_item is None:
+                    stored_item = {
                         "conversation_id": stored_conversation_id,
                         "session_id": stored_conversation_id,
-                        "title": title,
+                        "title": "",
                         "source": "persisted",
-                        "first_projection_at": summary.get("first_projection_at", 0),
-                        "last_projection_at": summary.get("last_projection_at", 0),
+                        "started_at": 0,
+                        "last_activity_at": summary.get("last_projection_at", 0),
+                        "projections": [],
+                        "cache_requests": [],
+                    }
+                    session_timelines.append(stored_item)
+                    session_by_conversation[stored_conversation_id] = stored_item
+                if not str(stored_item.get("title") or "").strip():
+                    stored_item["title"] = title
+                stored_item.update(
+                    {
+                        "first_projection_at": summary.get(
+                            "first_projection_at", 0
+                        ),
+                        "last_projection_at": summary.get(
+                            "last_projection_at", 0
+                        ),
                         "projections": stored_projections,
                         "cache_requests": stored_cache_requests,
                     }
@@ -989,7 +1472,7 @@ def persisted_context_engine_telemetry(
     status.update(
         {
             "object_context_version": 1,
-            "object_context_available": True,
+            "object_context_available": store is not None,
         }
     )
     timeline: dict[str, Any] = {
@@ -1007,6 +1490,16 @@ def persisted_context_engine_telemetry(
         "cache_requests": cache_requests,
     }
     if include_all_sessions:
+        active_item = next(
+            (
+                item
+                for item in session_timelines
+                if str(item.get("conversation_id") or "") == conversation_id
+            ),
+            None,
+        )
+        if active_item is not None:
+            timeline["title"] = str(active_item.get("title") or timeline["title"])
         timeline.update(
             {
                 "active_conversation_id": conversation_id,

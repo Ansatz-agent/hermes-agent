@@ -4176,6 +4176,32 @@ def run_conversation(
                                 if cost_result.status == "included" else None,
                                 model=agent.model,
                                 api_call_count=1,
+                                request_event={
+                                    "conversation_id": (
+                                        str(
+                                            agent._conversation_root_id()
+                                            or agent.session_id
+                                        )
+                                    ),
+                                    "api_request_id": api_request_id,
+                                    "turn_id": turn_id,
+                                    "request_sequence": agent.session_api_calls,
+                                    "started_at": api_start_time,
+                                    "duration_ms": api_duration * 1000.0,
+                                    "model": agent.model,
+                                    "billing_provider": agent.provider,
+                                    "input_tokens": canonical_usage.input_tokens,
+                                    "output_tokens": canonical_usage.output_tokens,
+                                    "cache_read_tokens": (
+                                        canonical_usage.cache_read_tokens
+                                    ),
+                                    "cache_write_tokens": (
+                                        canonical_usage.cache_write_tokens
+                                    ),
+                                    "reasoning_tokens": (
+                                        canonical_usage.reasoning_tokens
+                                    ),
+                                },
                             )
                         except Exception as e:
                             # Log token persistence failures so they're

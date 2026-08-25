@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -21,6 +22,7 @@ from hermes_cli.object_context_command import (
     persisted_context_engine_telemetry,
     run_object_context_command,
 )
+from hermes_state import SessionDB
 from plugins.context_engine.object_context.store import ObjectContextStore
 
 
@@ -564,8 +566,232 @@ def test_all_session_monitor_remains_available_when_current_root_has_no_metrics(
     assert timeline["projections"] == []
     assert timeline["cache_requests"] == []
     assert [item["conversation_id"] for item in timeline["sessions"]] == [
-        "conversation-a"
+        "conversation-without-metrics",
+        "conversation-a",
     ]
+    current = timeline["sessions"][0]
+    assert current["session_id"] == "new-session"
+    assert current["projections"] == []
+    assert current["cache_requests"] == []
+
+
+def test_persisted_monitor_unions_real_session_db_with_projection_store(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    session_db = SessionDB(db_path=tmp_path / "state.db")
+    try:
+        session_db.create_session("plain-session", "cli")
+        session_db.set_session_title("plain-session", "No Object Context")
+        session_db.create_session("projected-session", "cli")
+        session_db.set_session_title("projected-session", "Projected session")
+
+        store = ObjectContextStore(
+            tmp_path / "context" / "object_context_v1.sqlite3"
+        )
+        store.record_metrics(
+            "projected-session",
+            {
+                "raw_context_tokens": 100,
+                "rendered_context_tokens": 40,
+                "tokens_saved": 60,
+            },
+            metadata={
+                "event": "request_projection",
+                "projection_id": "projected-request",
+                "projection_sequence": 1,
+                "turn_id": "projected-turn",
+                "session_id": "projected-session",
+            },
+        )
+
+        persisted = persisted_context_engine_telemetry(
+            session_db,
+            "plain-session",
+            include_all_sessions=True,
+        )
+    finally:
+        session_db.close()
+
+    assert persisted is not None
+    status, timeline = persisted
+    assert status["request_projection_count"] == 0
+    assert timeline["active_conversation_id"] == "plain-session"
+    by_id = {
+        item["conversation_id"]: item for item in timeline["sessions"]
+    }
+    assert set(by_id) == {"plain-session", "projected-session"}
+    assert by_id["plain-session"]["title"] == "No Object Context"
+    assert by_id["plain-session"]["projections"] == []
+    assert by_id["plain-session"]["cache_requests"] == []
+    assert len(by_id["projected-session"]["projections"]) == 1
+
+
+def test_persisted_monitor_paginates_every_user_visible_session(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    rows = [
+        {
+            "id": f"session-{index}",
+            "title": f"Session {index}",
+            "started_at": index,
+            "last_active": index,
+        }
+        for index in range(205)
+    ]
+    calls = []
+
+    def list_sessions_rich(**kwargs):
+        calls.append(kwargs)
+        offset = kwargs["offset"]
+        return rows[offset : offset + kwargs["limit"]]
+
+    persisted = persisted_context_engine_telemetry(
+        SimpleNamespace(
+            list_sessions_rich=list_sessions_rich,
+            get_conversation_root=lambda session_id: session_id,
+            get_session_title=lambda session_id: f"Title {session_id}",
+        ),
+        "session-0",
+        include_all_sessions=True,
+    )
+
+    assert persisted is not None
+    _status, timeline = persisted
+    assert len(timeline["sessions"]) == 205
+    assert [call["offset"] for call in calls] == [0, 200]
+    assert all(call["include_archived"] is True for call in calls)
+    assert all(call["compact_rows"] is True for call in calls)
+
+
+def test_cli_monitor_opens_for_real_session_without_object_context_store(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    session_db = SessionDB(db_path=tmp_path / "state.db")
+    try:
+        session_db.create_session("plain-session", "cli")
+        session_db.set_session_title("plain-session", "Plain session")
+        session_db.append_message(
+            "plain-session", "user", "TOP SECRET SESSION PREVIEW"
+        )
+        session_db.update_token_counts(
+            "plain-session",
+            input_tokens=100,
+            output_tokens=15,
+            cache_read_tokens=20,
+            api_call_count=1,
+            model="model-a",
+            billing_provider="provider-a",
+            request_event={
+                "conversation_id": "plain-session",
+                "api_request_id": "turn-1:api:0",
+                "turn_id": "turn-1",
+                "request_sequence": 1,
+                "started_at": 1000,
+                "duration_ms": 900,
+                "input_tokens": 100,
+                "output_tokens": 15,
+                "cache_read_tokens": 20,
+            },
+        )
+        cli_obj = HermesCLI.__new__(HermesCLI)
+        cli_obj.agent = None
+        cli_obj.session_id = "plain-session"
+        cli_obj._session_db = session_db
+
+        with patch("webbrowser.open", return_value=True) as browser_open:
+            cli_obj._handle_object_context_command("/oc monitor")
+    finally:
+        session_db.close()
+
+    output = capsys.readouterr().out
+    assert "Unavailable:" not in output
+    assert "Sessions: 1" in output
+    assert "Requests: 1 total · 1 selected" in output
+    assert "Projects: 0 total · 0 selected" in output
+    browser_open.assert_called_once()
+    dashboard = (
+        tmp_path
+        / "logs"
+        / "object-context-monitor"
+        / "object_context_monitor_all_sessions.html"
+    )
+    html = dashboard.read_text(encoding="utf-8")
+    assert "Plain session" in html
+    assert '"project_count":0' in html
+    assert '"tokens_saved":0.0' in html
+    assert '"provider_tokens":135.0' in html
+    assert '"api_duration_ms":900.0' in html
+    assert "OC 未启用 · 节省量为 0" in html
+    assert "TOP SECRET SESSION PREVIEW" not in html
+
+
+def test_persisted_monitor_recovers_legacy_request_series_from_numeric_logs(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    logs.joinpath("agent.log").write_text(
+        "\n".join(
+            [
+                "2026-08-25 10:00:01,000 INFO [legacy-session] "
+                "agent.conversation_loop: API call #1: model=m provider=p "
+                "in=100 out=10 total=110 latency=1.5s cache=40/100 (40%)",
+                # Same session tag, restarted counter: background auxiliary
+                # work must not replace the main monotonic chain.
+                "2026-08-25 10:00:01,500 INFO [legacy-session] "
+                "agent.conversation_loop: API call #1: model=aux provider=p "
+                "in=999 out=1 total=1000 latency=9.0s",
+                "2026-08-25 10:00:02,000 INFO [legacy-session] "
+                "agent.conversation_loop: API call #2: model=m provider=p "
+                "in=200 out=20 total=220 latency=2.5s",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    db = SessionDB(db_path=tmp_path / "state.db")
+    try:
+        db.create_session("legacy-session", "cli")
+        turn_started = datetime.fromisoformat("2026-08-25T09:59:00").astimezone().timestamp()
+        db.append_message(
+            "legacy-session", "user", "TOP SECRET LEGACY PROMPT",
+            timestamp=turn_started,
+        )
+        db.update_token_counts(
+            "legacy-session", input_tokens=60, output_tokens=10,
+            cache_read_tokens=40, api_call_count=1,
+        )
+        db.update_token_counts(
+            "legacy-session", input_tokens=200, output_tokens=20,
+            api_call_count=1,
+        )
+
+        persisted = persisted_context_engine_telemetry(
+            db, "legacy-session", include_all_sessions=True
+        )
+    finally:
+        db.close()
+
+    assert persisted is not None
+    _status, timeline = persisted
+    session = timeline["sessions"][0]
+    assert [event["request_sequence"] for event in session["requests"]] == [1, 2]
+    assert [event["metrics"]["total_tokens"] for event in session["requests"]] == [
+        110,
+        220,
+    ]
+    assert [event["metrics"]["api_duration_ms"] for event in session["requests"]] == [
+        1500.0,
+        2500.0,
+    ]
+    assert len({event["turn_id"] for event in session["requests"]}) == 1
+    assert session["usage_aggregate"]["total_tokens"] == 330
+    assert session["request_usage_coverage"]["complete"] is True
+    assert "TOP SECRET" not in repr(timeline)
 
 
 def test_process_command_dispatches_original_arguments_to_handler():

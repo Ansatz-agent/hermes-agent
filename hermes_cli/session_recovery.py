@@ -35,6 +35,7 @@ _CANONICAL_TABLES = (
     "sessions",
     "messages",
     "session_model_usage",
+    "session_request_usage",
     "compression_locks",
     "gateway_routing",
     "async_delegations",
@@ -1049,6 +1050,7 @@ def _cleanup_partial_orphans(
         "messages_retained": 0,
         "messages_removed": 0,
         "session_model_usage_removed": 0,
+        "session_request_usage_removed": 0,
         "compression_locks_removed": 0,
         "telegram_dm_topic_bindings_removed": 0,
     }
@@ -1118,6 +1120,7 @@ def _cleanup_partial_orphans(
         dependent_tables = (
             ("messages", "messages_removed"),
             ("session_model_usage", "session_model_usage_removed"),
+            ("session_request_usage", "session_request_usage_removed"),
             ("compression_locks", "compression_locks_removed"),
             (
                 "telegram_dm_topic_bindings",
@@ -1155,6 +1158,7 @@ def _cleanup_partial_orphans(
         + int(result["sessions_parent_cleared"])
         + int(result["messages_removed"])
         + int(result["session_model_usage_removed"])
+        + int(result["session_request_usage_removed"])
         + int(result["compression_locks_removed"])
         + int(result["telegram_dm_topic_bindings_removed"])
     )

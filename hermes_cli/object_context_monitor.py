@@ -16,7 +16,7 @@ from hermes_constants import get_hermes_home
 from utils import atomic_write_text
 
 
-MONITOR_SCHEMA_VERSION = 4
+MONITOR_SCHEMA_VERSION = 7
 MONITOR_DIRNAME = "object-context-monitor"
 
 
@@ -84,12 +84,28 @@ def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
 
     raw_events = timeline.get("projections")
     events = [event for event in raw_events or [] if isinstance(event, Mapping)]
+    raw_requests = timeline.get("requests")
+    requests = [
+        event for event in raw_requests or [] if isinstance(event, Mapping)
+    ]
     legacy_count = sum(1 for event in events if bool(event.get("legacy")))
     turnless_count = sum(
         1
         for event in events
         if bool(event.get("legacy")) or not str(event.get("turn_id") or "")
     )
+    request_turnless_count = sum(
+        1 for event in requests if not str(event.get("turn_id") or "")
+    )
+
+    request_labels = [f"R{index}" for index in range(1, len(requests) + 1)]
+    request_ids = [
+        str(event.get("api_request_id") or request_labels[index])
+        for index, event in enumerate(requests)
+    ]
+    request_spent = [_metric(event, "total_tokens") for event in requests]
+    request_prompt = [_metric(event, "prompt_tokens") for event in requests]
+    request_time = [_metric(event, "api_duration_ms") for event in requests]
 
     project_labels = [
         _sequence_label(event, index) for index, event in enumerate(events, start=1)
@@ -100,67 +116,89 @@ def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
     ]
     project_saved = [_metric(event, "tokens_saved") for event in events]
     project_raw = [_metric(event, "raw_context_tokens") for event in events]
-    project_spent = [_metric(event, "rendered_context_tokens") for event in events]
+    # With Object Context off there are no projections.  Savings are still a
+    # real zero-valued series, aligned to universal model requests.
+    savings_project_labels = project_labels or request_labels
+    savings_project_ids = project_ids or request_ids
+    savings_project_values = project_saved or [0.0] * len(requests)
+    savings_project_raw = project_raw or request_prompt
     project_saved_percent = [
         _percentage(saved, raw)
-        for saved, raw in zip(project_saved, project_raw, strict=True)
+        for saved, raw in zip(
+            savings_project_values, savings_project_raw, strict=True
+        )
     ]
 
-    timed_pairs = [
-        (event, project_labels[index], project_ids[index])
-        for index, event in enumerate(events)
-        if isinstance(event.get("metrics"), Mapping)
-        and "projection_latency_ms" in event["metrics"]
-    ]
-    timed_events = [event for event, _label, _identity in timed_pairs]
-    timed_labels = [label for _event, label, _identity in timed_pairs]
-    timed_ids = [identity for _event, _label, identity in timed_pairs]
-    project_time = [_metric(event, "projection_latency_ms") for event in timed_events]
+    request_turns: "OrderedDict[str, dict[str, float]]" = OrderedDict()
+    for event in requests:
+        turn_id = str(event.get("turn_id") or "")
+        if not turn_id:
+            continue
+        turn = request_turns.setdefault(
+            turn_id,
+            {
+                "spent": 0.0,
+                "time": 0.0,
+                "prompt": 0.0,
+                "read": 0.0,
+                "write": 0.0,
+                "uncached": 0.0,
+                "requests": 0.0,
+            },
+        )
+        turn["spent"] += _metric(event, "total_tokens")
+        turn["time"] += _metric(event, "api_duration_ms")
+        turn["prompt"] += _metric(event, "prompt_tokens")
+        turn["read"] += _metric(event, "cache_read_tokens")
+        turn["write"] += _metric(event, "cache_write_tokens")
+        turn["uncached"] += _metric(event, "input_tokens")
+        turn["requests"] += 1
 
-    turns: "OrderedDict[str, dict[str, Any]]" = OrderedDict()
+    projection_turns: "OrderedDict[str, dict[str, float]]" = OrderedDict()
     for event in events:
         turn_id = str(event.get("turn_id") or "")
         if bool(event.get("legacy")) or not turn_id:
             continue
-        turn = turns.setdefault(
-            turn_id,
-            {
-                "saved": 0.0,
-                "raw": 0.0,
-                "spent": 0.0,
-                "time": 0.0,
-                "timed_projects": 0,
-                "projects": 0,
-            },
-        )
+        turn = projection_turns.setdefault(turn_id, {"saved": 0.0, "raw": 0.0})
         turn["saved"] += _metric(event, "tokens_saved")
         turn["raw"] += _metric(event, "raw_context_tokens")
-        turn["spent"] += _metric(event, "rendered_context_tokens")
-        turn["projects"] += 1
-        metrics = event.get("metrics")
-        if isinstance(metrics, Mapping) and "projection_latency_ms" in metrics:
-            turn["time"] += _metric(event, "projection_latency_ms")
-            turn["timed_projects"] += 1
 
-    turn_ids = list(turns)
+    turn_ids = list(request_turns)
+    turn_ids.extend(
+        turn_id for turn_id in projection_turns if turn_id not in request_turns
+    )
     turn_labels = [f"T{index}" for index in range(1, len(turn_ids) + 1)]
-    turn_saved = [float(turns[turn_id]["saved"]) for turn_id in turn_ids]
-    turn_raw = [float(turns[turn_id]["raw"]) for turn_id in turn_ids]
-    turn_spent = [float(turns[turn_id]["spent"]) for turn_id in turn_ids]
+    turn_saved = [
+        float(projection_turns.get(turn_id, {}).get("saved", 0.0))
+        for turn_id in turn_ids
+    ]
+    turn_raw = [
+        float(
+            projection_turns.get(turn_id, {}).get(
+                "raw", request_turns.get(turn_id, {}).get("prompt", 0.0)
+            )
+        )
+        for turn_id in turn_ids
+    ]
     turn_saved_percent = [
         _percentage(saved, raw)
         for saved, raw in zip(turn_saved, turn_raw, strict=True)
     ]
-    timed_turn_ids = [
-        turn_id for turn_id in turn_ids if int(turns[turn_id]["timed_projects"]) > 0
+    request_turn_ids = list(request_turns)
+    request_turn_labels = [
+        f"T{turn_ids.index(turn_id) + 1}" for turn_id in request_turn_ids
     ]
-    timed_turn_labels = [
-        f"T{turn_ids.index(turn_id) + 1}" for turn_id in timed_turn_ids
-    ]
-    turn_time = [float(turns[turn_id]["time"]) for turn_id in timed_turn_ids]
+    turn_spent = [request_turns[turn_id]["spent"] for turn_id in request_turn_ids]
+    turn_time = [request_turns[turn_id]["time"] for turn_id in request_turn_ids]
 
+    # Universal request telemetry owns cache data too.  Object Context's old
+    # cache store remains a compatibility fallback for pre-v27 sessions whose
+    # request log has already rotated away.
+    request_cache_events = [
+        event for event in requests if _metric(event, "prompt_tokens") > 0
+    ]
     raw_cache_events = timeline.get("cache_requests")
-    cache_events = [
+    cache_events = request_cache_events or [
         event
         for event in raw_cache_events or []
         if isinstance(event, Mapping)
@@ -168,14 +206,20 @@ def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
     ]
     cache_labels = [f"R{index}" for index in range(1, len(cache_events) + 1)]
     cache_ids = [
-        str(event.get("cache_request_id") or cache_labels[index])
+        str(
+            event.get("api_request_id")
+            or event.get("cache_request_id")
+            or cache_labels[index]
+        )
         for index, event in enumerate(cache_events)
     ]
     cache_prompt = [_metric(event, "prompt_tokens") for event in cache_events]
     cache_read = [_metric(event, "cache_read_tokens") for event in cache_events]
     cache_write = [_metric(event, "cache_write_tokens") for event in cache_events]
     cache_uncached = [
-        _metric(event, "uncached_input_tokens") for event in cache_events
+        _metric(event, "input_tokens")
+        or _metric(event, "uncached_input_tokens")
+        for event in cache_events
     ]
     cache_hit_percent = [
         _percentage(read, prompt)
@@ -194,7 +238,10 @@ def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
         turn["prompt"] += _metric(event, "prompt_tokens")
         turn["read"] += _metric(event, "cache_read_tokens")
         turn["write"] += _metric(event, "cache_write_tokens")
-        turn["uncached"] += _metric(event, "uncached_input_tokens")
+        turn["uncached"] += (
+            _metric(event, "input_tokens")
+            or _metric(event, "uncached_input_tokens")
+        )
     cache_turn_ids = list(cache_turns)
     cache_turn_labels: list[str] = []
     extra_turn_number = len(turn_ids)
@@ -307,13 +354,13 @@ def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
                     "Project · 节省",
                     "Project 轮次",
                     "tokens",
-                    project_labels,
-                    project_saved,
-                    ids=project_ids,
+                    savings_project_labels,
+                    savings_project_values,
+                    ids=savings_project_ids,
                     modes=savings_modes(
                         "Project · 节省",
                         "Project · 节省率",
-                        project_saved,
+                        savings_project_values,
                         project_saved_percent,
                     ),
                 ),
@@ -322,14 +369,16 @@ def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
                     "Project · 累计节省",
                     "Project 轮次",
                     "tokens",
-                    project_labels,
-                    _cumulative(project_saved),
-                    ids=project_ids,
+                    savings_project_labels,
+                    _cumulative(savings_project_values),
+                    ids=savings_project_ids,
                     modes=savings_modes(
                         "Project · 累计节省",
                         "Project · 累计节省率",
-                        _cumulative(project_saved),
-                        _cumulative_percentages(project_saved, project_raw),
+                        _cumulative(savings_project_values),
+                        _cumulative_percentages(
+                            savings_project_values, savings_project_raw
+                        ),
                     ),
                 ),
                 chart(
@@ -442,37 +491,96 @@ def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
         },
         {
             "key": "time",
-            "title": "Projection 耗时",
-            "description": "本地 projection wall time",
+            "title": "模型请求耗时",
+            "description": "provider API request latency · 与 Object Context 开关无关",
             "color": "#3978d6",
             "charts": [
-                chart("project-time", "Project · 耗时", "Project 轮次", "ms", timed_labels, project_time, ids=timed_ids),
-                chart("project-time-cumulative", "Project · 累计耗时", "Project 轮次", "ms", timed_labels, _cumulative(project_time), ids=timed_ids),
-                chart("turn-time", "Turn · 耗时", "Turn 轮次", "ms", timed_turn_labels, turn_time, ids=timed_turn_ids),
-                chart("turn-time-cumulative", "Turn · 累计耗时", "Turn 轮次", "ms", timed_turn_labels, _cumulative(turn_time), ids=timed_turn_ids),
+                chart("request-time", "Request · 耗时", "模型请求", "ms", request_labels, request_time, ids=request_ids),
+                chart("request-time-cumulative", "Request · 累计耗时", "模型请求", "ms", request_labels, _cumulative(request_time), ids=request_ids),
+                chart("turn-time", "Turn · 耗时", "Turn 轮次", "ms", request_turn_labels, turn_time, ids=request_turn_ids),
+                chart("turn-time-cumulative", "Turn · 累计耗时", "Turn 轮次", "ms", request_turn_labels, _cumulative(turn_time), ids=request_turn_ids),
             ],
         },
         {
             "key": "spent",
             "title": "Token 花费",
-            "description": "rendered conversation-view tokens",
+            "description": "provider-reported prompt + output tokens · 与 Object Context 开关无关",
             "color": "#d97706",
             "charts": [
-                chart("project-spent", "Project · 花费", "Project 轮次", "tokens", project_labels, project_spent, ids=project_ids),
-                chart("project-spent-cumulative", "Project · 累计花费", "Project 轮次", "tokens", project_labels, _cumulative(project_spent), ids=project_ids),
-                chart("turn-spent", "Turn · 花费", "Turn 轮次", "tokens", turn_labels, turn_spent, ids=turn_ids),
-                chart("turn-spent-cumulative", "Turn · 累计花费", "Turn 轮次", "tokens", turn_labels, _cumulative(turn_spent), ids=turn_ids),
+                chart("request-spent", "Request · 花费", "模型请求", "tokens", request_labels, request_spent, ids=request_ids),
+                chart("request-spent-cumulative", "Request · 累计花费", "模型请求", "tokens", request_labels, _cumulative(request_spent), ids=request_ids),
+                chart("turn-spent", "Turn · 花费", "Turn 轮次", "tokens", request_turn_labels, turn_spent, ids=request_turn_ids),
+                chart("turn-spent-cumulative", "Turn · 累计花费", "Turn 轮次", "tokens", request_turn_labels, _cumulative(turn_spent), ids=request_turn_ids),
             ],
         },
     ]
 
-    timestamps = [
+    projection_timestamps = [
         _finite_nonnegative(event.get("created_at"))
-        for event in [*events, *cache_events]
+        for event in events
         if _finite_nonnegative(event.get("created_at")) > 0
+    ]
+    request_timestamps = [
+        _finite_nonnegative(event.get("started_at"))
+        for event in requests
+        if _finite_nonnegative(event.get("started_at")) > 0
     ]
     conversation_id = str(timeline.get("conversation_id") or "")
     title = str(timeline.get("title") or "").strip() or "未命名会话"
+    first_projection_at = (
+        min(projection_timestamps)
+        if projection_timestamps
+        else _finite_nonnegative(timeline.get("first_projection_at"))
+    )
+    last_projection_at = (
+        max(projection_timestamps)
+        if projection_timestamps
+        else _finite_nonnegative(timeline.get("last_projection_at"))
+    )
+    last_activity_at = _finite_nonnegative(
+        timeline.get("last_activity_at") or timeline.get("last_active")
+    )
+    if last_activity_at <= 0:
+        last_activity_at = max(
+            last_projection_at,
+            max(request_timestamps, default=0.0),
+        )
+    usage_aggregate = timeline.get("usage_aggregate")
+    aggregate = usage_aggregate if isinstance(usage_aggregate, Mapping) else {}
+    aggregate_api_calls = int(_finite_nonnegative(aggregate.get("api_call_count")))
+    aggregate_prompt = (
+        _finite_nonnegative(aggregate.get("input_tokens"))
+        + _finite_nonnegative(aggregate.get("cache_read_tokens"))
+        + _finite_nonnegative(aggregate.get("cache_write_tokens"))
+    )
+    aggregate_total = _finite_nonnegative(aggregate.get("total_tokens"))
+    provider_tokens = aggregate_total or sum(request_spent)
+    provider_prompt = aggregate_prompt or sum(cache_prompt)
+    provider_cache_read = (
+        _finite_nonnegative(aggregate.get("cache_read_tokens"))
+        if aggregate
+        else sum(cache_read)
+    )
+    provider_cache_write = (
+        _finite_nonnegative(aggregate.get("cache_write_tokens"))
+        if aggregate
+        else sum(cache_write)
+    )
+    provider_uncached = (
+        _finite_nonnegative(aggregate.get("input_tokens"))
+        if aggregate
+        else sum(cache_uncached)
+    )
+    raw_coverage = timeline.get("request_usage_coverage")
+    usage_coverage = dict(raw_coverage) if isinstance(raw_coverage, Mapping) else {
+        "event_count": len(requests),
+        "aggregate_api_call_count": aggregate_api_calls or len(requests),
+        "event_tokens": sum(request_spent),
+        "aggregate_tokens": provider_tokens,
+        "call_percent": 100.0 if requests else 0.0,
+        "token_percent": 100.0 if requests else 0.0,
+        "complete": bool(requests),
+    }
     return {
         "schema_version": MONITOR_SCHEMA_VERSION,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -480,11 +588,24 @@ def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
         "session_id": str(timeline.get("session_id") or conversation_id),
         "title": title,
         "source": str(timeline.get("source") or "live"),
-        "first_projection_at": min(timestamps) if timestamps else 0.0,
-        "last_projection_at": max(timestamps) if timestamps else 0.0,
+        "started_at": _finite_nonnegative(timeline.get("started_at")),
+        "first_projection_at": first_projection_at,
+        "last_projection_at": last_projection_at,
+        "last_activity_at": last_activity_at,
+        "object_context_used": bool(events),
+        "has_projection_telemetry": bool(events),
         "project_count": len(events),
-        "timed_project_count": len(timed_events),
-        "turn_count": len(turns),
+        "request_count": aggregate_api_calls or len(requests),
+        "request_event_count": len(requests),
+        "timed_request_count": sum(
+            1
+            for event in requests
+            if isinstance(event.get("metrics"), Mapping)
+            and "api_duration_ms" in event["metrics"]
+        ),
+        "request_turnless_count": request_turnless_count,
+        "request_usage_coverage": usage_coverage,
+        "turn_count": len(turn_ids),
         "cache_request_count": len(cache_events),
         "cache_turn_count": len(cache_turns),
         "cache_turnless_request_count": sum(
@@ -505,15 +626,15 @@ def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
             for chart_payload in group["charts"]
         ),
         "totals": {
-            "tokens_saved": round(sum(project_saved), 6),
-            "projection_latency_ms": round(sum(project_time), 6),
-            "rendered_context_tokens": round(sum(project_spent), 6),
-            "prompt_tokens": round(sum(cache_prompt), 6),
-            "uncached_input_tokens": round(sum(cache_uncached), 6),
-            "cache_read_tokens": round(sum(cache_read), 6),
-            "cache_write_tokens": round(sum(cache_write), 6),
+            "tokens_saved": round(sum(savings_project_values), 6),
+            "api_duration_ms": round(sum(request_time), 6),
+            "provider_tokens": round(provider_tokens, 6),
+            "prompt_tokens": round(provider_prompt, 6),
+            "uncached_input_tokens": round(provider_uncached, 6),
+            "cache_read_tokens": round(provider_cache_read, 6),
+            "cache_write_tokens": round(provider_cache_write, 6),
             "cache_hit_percent": round(
-                _percentage(sum(cache_read), sum(cache_prompt)), 6
+                _percentage(provider_cache_read, provider_prompt), 6
             ),
         },
         "groups": groups,
@@ -536,12 +657,11 @@ def build_monitor_dashboard_payload(timeline: Mapping[str, Any]) -> dict[str, An
         conversation_id = str(payload.get("conversation_id") or "")
         if not conversation_id or conversation_id in seen:
             continue
-        if int(payload.get("project_count", 0) or 0) <= 0:
-            continue
         seen.add(conversation_id)
         sessions.append(payload)
     sessions.sort(
         key=lambda item: (
+            _finite_nonnegative(item.get("last_activity_at")),
             _finite_nonnegative(item.get("last_projection_at")),
             str(item.get("conversation_id") or ""),
         ),
@@ -575,15 +695,21 @@ def build_monitor_dashboard_payload(timeline: Mapping[str, Any]) -> dict[str, An
 
     global_totals = {
         "project_count": sum(int(item["project_count"]) for item in sessions),
+        "request_count": sum(int(item["request_count"]) for item in sessions),
+        "request_event_count": sum(
+            int(item["request_event_count"]) for item in sessions
+        ),
         "turn_count": sum(int(item["turn_count"]) for item in sessions),
         "cache_request_count": sum(
             int(item["cache_request_count"]) for item in sessions
         ),
-        "timed_project_count": sum(int(item["timed_project_count"]) for item in sessions),
+        "timed_request_count": sum(
+            int(item["timed_request_count"]) for item in sessions
+        ),
         "legacy_project_count": sum(int(item["legacy_project_count"]) for item in sessions),
         "tokens_saved": total("tokens_saved"),
-        "projection_latency_ms": total("projection_latency_ms"),
-        "rendered_context_tokens": total("rendered_context_tokens"),
+        "api_duration_ms": total("api_duration_ms"),
+        "provider_tokens": total("provider_tokens"),
         "prompt_tokens": total("prompt_tokens"),
         "uncached_input_tokens": total("uncached_input_tokens"),
         "cache_read_tokens": total("cache_read_tokens"),
@@ -648,12 +774,22 @@ def render_monitor_html(timeline: Mapping[str, Any]) -> str:
     .nav-label { margin:17px 8px 8px; color:#8f9399; font-size:10px; font-weight:750; text-transform:uppercase; letter-spacing:.12em; }
     .side-search,.run-search { width:100%; border:1px solid #41454a; background:#2b2e32; color:#fff; border-radius:7px; padding:9px 10px; outline:none; }
     .side-search:focus,.run-search:focus { border-color:var(--accent); box-shadow:0 0 0 2px rgba(244,189,45,.15); }
-    .side-runs { margin-top:9px; display:grid; gap:4px; }
+    .side-runs { margin-top:9px; }
+    .side-group + .side-group { margin-top:16px; }
+    .side-group-head { display:flex; align-items:center; justify-content:space-between; gap:8px; margin:0 8px 6px; color:#8f9399; font-size:9px; font-weight:760; text-transform:uppercase; letter-spacing:.09em; }
+    .side-group-count { color:#6f7379; font-variant-numeric:tabular-nums; }
+    .side-group-list { display:grid; gap:4px; }
     .side-run { width:100%; text-align:left; border:0; border-radius:8px; padding:9px 10px; color:#d9dbde; background:transparent; }
     .side-run:hover { background:var(--sidebar2); } .side-run.selected { background:#35383d; color:#fff; box-shadow:inset 3px 0 var(--accent); }
-    .side-run-title { display:block; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:720; }
+    .side-run-title-row { display:flex; align-items:center; gap:7px; min-width:0; }
+    .side-run-title { display:block; min-width:0; flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-weight:720; }
     .side-run-id { display:block; margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#92969c; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10px; }
     .side-run-meta { display:block; color:#979ba1; font-size:10px; margin-top:3px; }
+    .context-tag { display:inline-flex; flex:none; align-items:center; padding:2px 6px; border-radius:999px; font:750 9px/1.4 ui-sans-serif,sans-serif; white-space:nowrap; vertical-align:2px; }
+    .context-tag.oc-on { background:#e7f7f1; color:#087153; }
+    .context-tag.oc-off { background:#eceef1; color:#5f6368; }
+    .side-run .context-tag.oc-on { background:rgba(24,167,123,.18); color:#7ddfbd; }
+    .side-run .context-tag.oc-off { background:#3a3d42; color:#b9bdc3; }
     main { min-width:0; padding:24px clamp(18px,2.7vw,38px) 60px; }
     .topbar { display:flex; justify-content:space-between; gap:20px; align-items:center; }
     .eyebrow { color:#876100; text-transform:uppercase; letter-spacing:.13em; font-weight:800; font-size:10px; }
@@ -667,16 +803,17 @@ def render_monitor_html(timeline: Mapping[str, Any]) -> str:
     .panel-head { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:12px 15px; border-bottom:1px solid var(--border); }
     .panel-head h2 { margin:0; font-size:15px; }
     .run-search { width:min(290px,45vw); color:var(--ink); background:#fafafa; border-color:var(--border); }
-    .table-wrap { overflow:auto; } table { border-collapse:collapse; width:100%; min-width:900px; }
+    .table-wrap { overflow:auto; } table { border-collapse:collapse; width:100%; min-width:960px; }
     th,td { padding:11px 15px; text-align:right; border-bottom:1px solid #ecebe7; font-variant-numeric:tabular-nums; white-space:nowrap; }
     th { color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.065em; background:#fafaf8; } th:first-child,td:first-child { text-align:left; }
+    th:nth-child(2),td:nth-child(2) { text-align:center; }
     tbody tr { cursor:pointer; } tbody tr:hover { background:#fffaf0; } tbody tr.selected { background:#fff8df; box-shadow:inset 3px 0 var(--accent); } tbody tr:last-child td { border-bottom:0; }
     .run-title { display:block; font-weight:720; color:var(--ink); }
     .run-id { display:block; margin-top:2px; color:var(--muted); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:10px; }
     .badge { display:inline-flex; margin-left:7px; padding:2px 6px; border-radius:999px; background:#e7f7f1; color:#087153; font:700 9px/1.4 ui-sans-serif,sans-serif; text-transform:uppercase; vertical-align:1px; }
     .coverage { display:inline-block; width:64px; height:6px; background:#e7e6e1; border-radius:999px; overflow:hidden; vertical-align:middle; margin-right:6px; } .coverage i { display:block; height:100%; background:var(--blue); }
     .workspace { margin-top:24px; } .session-head { display:flex; justify-content:space-between; gap:18px; align-items:center; padding-bottom:12px; border-bottom:1px solid var(--border); }
-    .session-head h2 { margin:0 0 3px; font-size:21px; } .session-id { color:var(--muted); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; overflow-wrap:anywhere; }
+    .session-head h2 { margin:0 0 3px; font-size:21px; } .session-head h2 .context-tag { margin-left:7px; } .session-id { color:var(--muted); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; overflow-wrap:anywhere; }
     .session-actions { display:flex; flex-direction:column; align-items:flex-end; gap:8px; }
     .session-time { color:var(--muted); text-align:right; font-size:11px; } .session-kpis { margin-top:12px; margin-bottom:4px; }
     .metric-group { margin-top:26px; } .group-heading { display:flex; justify-content:space-between; align-items:center; gap:16px; }
@@ -721,7 +858,7 @@ def render_monitor_html(timeline: Mapping[str, Any]) -> str:
     <div id="global-kpis" class="kpis"></div>
     <section class="panel" aria-label="All sessions">
       <div class="panel-head"><h2>Runs</h2><input id="run-search" class="run-search" type="search" placeholder="搜索标题或 ID" autocomplete="off"></div>
-      <div class="table-wrap"><table><thead><tr><th>Run</th><th>Projects</th><th>Turns</th><th>Saved</th><th>Cache Hit</th><th>Time</th><th>Spent</th><th>Coverage</th><th>Updated</th></tr></thead><tbody id="run-body"></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>Run</th><th>Context</th><th>Requests</th><th>Turns</th><th>Saved</th><th>Cache Hit</th><th>API Time</th><th>Tokens</th><th>Series</th><th>Updated</th></tr></thead><tbody id="run-body"></tbody></table></div>
     </section>
     <div id="workspace" class="workspace"></div>
     <footer>本地离线快照 · 不含 prompt / 消息内容 · <code>/oc monitor</code> 刷新</footer>
@@ -733,13 +870,14 @@ const NS="http://www.w3.org/2000/svg";
 const byId=id=>document.getElementById(id);
 const TOKEN_UNITS=[{threshold:1e9,label:"B"},{threshold:1e6,label:"M"},{threshold:1e3,label:"K"}];
 const fmtToken=value=>{const n=Math.max(0,Number(value||0));const unit=TOKEN_UNITS.find(item=>n>=item.threshold);if(unit){const scaled=n/unit.threshold;return `${new Intl.NumberFormat("en-US",{maximumSignificantDigits:3}).format(scaled)}${unit.label} tok`;}return new Intl.NumberFormat("en-US",{maximumFractionDigits:n<10?2:n<100?1:0}).format(n)+" tok";};
-const fmt=(value,unit)=>{const n=Number(value||0);if(unit==="percent")return new Intl.NumberFormat("zh-CN",{minimumFractionDigits:n>0&&n<1?2:0,maximumFractionDigits:2}).format(n)+"%";if(unit==="ms")return n>=1000?`${(n/1000).toFixed(2)} s`:`${n.toFixed(n<10?2:1)} ms`;return fmtToken(n);};
+const fmt=(value,unit)=>{const n=Number(value||0);if(unit==="percent")return new Intl.NumberFormat("zh-CN",{minimumFractionDigits:n>0&&n<1?2:0,maximumFractionDigits:2}).format(n)+"%";if(unit==="ms"){if(n>=36e5)return `${(n/36e5).toFixed(2)} h`;if(n>=6e4)return `${(n/6e4).toFixed(2)} min`;return n>=1000?`${(n/1000).toFixed(2)} s`:`${n.toFixed(n<10?2:1)} ms`;}return fmtToken(n);};
 const fmtCache=(percent,count)=>Number(count||0)>0?fmt(percent,"percent"):"—";
 const SHORT_DATE=new Intl.DateTimeFormat("zh-CN",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"});
 const dateFmt=value=>value?SHORT_DATE.format(new Date(Number(value)*1000)):"—";
 const shortId=value=>{const s=String(value||"unknown");return s.length>28?s.slice(0,17)+"…"+s.slice(-8):s;};
 const node=(name,attrs={})=>{const el=document.createElementNS(NS,name);for(const [key,value] of Object.entries(attrs))el.setAttribute(key,String(value));return el;};
 function kpi(label,value){const box=document.createElement("div");box.className="kpi";const l=document.createElement("div");l.className="kpi-label";l.textContent=label;const v=document.createElement("div");v.className="kpi-value";v.textContent=value;box.append(l,v);return box;}
+function contextTag(session){const used=Boolean(session.object_context_used);const tag=document.createElement("span");tag.className=`context-tag ${used?"oc-on":"oc-off"}`;tag.textContent=used?"OC":"No OC";tag.setAttribute("aria-label",used?"使用了 Object Context":"未使用 Object Context");return tag;}
 function sample(chart,max=180){const n=chart.values.length;if(n<=max)return chart.values.map((value,index)=>({value,index}));const out=[];for(let slot=0;slot<max;slot++){const index=Math.round(slot*(n-1)/(max-1));out.push({value:chart.values[index],index});}return out;}
 function csvCell(value){let text=String(value??"");if(/^[=+\-@]/.test(text))text="'"+text;return `"${text.replace(/"/g,'""')}"`;}
 const CSV_HEADERS=["session_title","session_id","conversation_id","group_key","chart_key","chart_title","display_mode","point_index","label","identity","value","unit"];
@@ -769,19 +907,23 @@ function renderChart(session,group,chart){
 }
 let selectedId=DATA.selected_conversation_id;const groupDisplayModes={saved:"absolute",cache:"relative"};const selectedSession=()=>DATA.sessions.find(session=>session.conversation_id===selectedId)||DATA.sessions[0];
 const activeChart=(group,chart)=>resolveChartMode(chart,groupDisplayModes[group.key]||group.default_display_mode||"default");
-function renderGlobal(){const totals=DATA.global_totals;const host=byId("global-kpis");host.replaceChildren(kpi("Sessions",String(DATA.session_count)),kpi("Projects",new Intl.NumberFormat("en-US").format(totals.project_count)),kpi("Saved",fmt(totals.tokens_saved,"tokens")),kpi("Cache Hit",fmtCache(totals.cache_hit_percent,totals.cache_request_count)),kpi("Time",fmt(totals.projection_latency_ms,"ms")),kpi("Spent",fmt(totals.rendered_context_tokens,"tokens")));byId("snapshot-count").textContent=`${DATA.session_count} sessions · ${totals.project_count} projects · ${totals.cache_request_count} model requests`;byId("generated").textContent=`Updated ${SHORT_DATE.format(new Date(DATA.generated_at))}`;}
+function renderGlobal(){const totals=DATA.global_totals;const host=byId("global-kpis");host.replaceChildren(kpi("Sessions",String(DATA.session_count)),kpi("Requests",new Intl.NumberFormat("en-US").format(totals.request_count)),kpi("Saved",fmt(totals.tokens_saved,"tokens")),kpi("Cache Hit",fmtCache(totals.cache_hit_percent,totals.request_count)),kpi("API Time",fmt(totals.api_duration_ms,"ms")),kpi("Provider Tokens",fmt(totals.provider_tokens,"tokens")));byId("snapshot-count").textContent=`${DATA.session_count} sessions · ${totals.request_count} model requests · ${totals.project_count} OC projections`;byId("generated").textContent=`Updated ${SHORT_DATE.format(new Date(DATA.generated_at))}`;}
 function runMatches(session,query){return !query||String(session.title||"").toLowerCase().includes(query)||session.conversation_id.toLowerCase().includes(query)||String(session.session_id||"").toLowerCase().includes(query);}
 function renderRuns(query=""){
   const normalized=query.trim().toLowerCase();const sessions=DATA.sessions.filter(session=>runMatches(session,normalized));const side=byId("side-runs");const body=byId("run-body");side.replaceChildren();body.replaceChildren();
-  for(const session of sessions){const button=document.createElement("button");button.className="side-run"+(session.conversation_id===selectedId?" selected":"");button.type="button";const title=document.createElement("span");title.className="side-run-title";title.textContent=session.title;const id=document.createElement("span");id.className="side-run-id";id.textContent=session.conversation_id;const meta=document.createElement("span");meta.className="side-run-meta";meta.textContent=`${session.project_count} P · ${fmt(session.totals.tokens_saved,"tokens")}`;button.append(title,id,meta);button.addEventListener("click",()=>selectSession(session.conversation_id));side.append(button);
-    const row=document.createElement("tr");if(session.conversation_id===selectedId)row.className="selected";const identity=document.createElement("td");const runTitle=document.createElement("span");runTitle.className="run-title";runTitle.textContent=session.title;if(session.is_active){const badge=document.createElement("span");badge.className="badge";badge.textContent="current";runTitle.append(badge);}const runId=document.createElement("span");runId.className="run-id";runId.textContent=shortId(session.conversation_id);runId.title=session.conversation_id;identity.append(runTitle,runId);const coverage=session.project_count?session.timed_project_count/session.project_count:0;const cells=[identity,session.project_count,session.turn_count,fmt(session.totals.tokens_saved,"tokens"),fmtCache(session.totals.cache_hit_percent,session.cache_request_count),fmt(session.totals.projection_latency_ms,"ms"),fmt(session.totals.rendered_context_tokens,"tokens")];for(const value of cells){if(value instanceof Node)row.append(value);else{const cell=document.createElement("td");cell.textContent=String(value);row.append(cell);}}const coverageCell=document.createElement("td");const bar=document.createElement("span");bar.className="coverage";const fill=document.createElement("i");fill.style.width=`${Math.round(coverage*100)}%`;bar.append(fill);coverageCell.append(bar,`${Math.round(coverage*100)}%`);row.append(coverageCell);const last=document.createElement("td");last.textContent=dateFmt(session.last_projection_at);row.append(last);row.addEventListener("click",()=>selectSession(session.conversation_id));body.append(row);}
-  if(!sessions.length){const row=document.createElement("tr");const cell=document.createElement("td");cell.colSpan=9;cell.textContent="没有匹配的 session";cell.style.textAlign="center";cell.style.color="var(--muted)";row.append(cell);body.append(row);}
+  const sideGroups=[
+    {label:"Object Context",sessions:sessions.filter(session=>session.object_context_used)},
+    {label:"No Object Context",sessions:sessions.filter(session=>!session.object_context_used)},
+  ];
+  for(const group of sideGroups){if(!group.sessions.length)continue;const section=document.createElement("section");section.className="side-group";const heading=document.createElement("div");heading.className="side-group-head";const label=document.createElement("span");label.textContent=group.label;const count=document.createElement("span");count.className="side-group-count";count.textContent=String(group.sessions.length);heading.append(label,count);const list=document.createElement("div");list.className="side-group-list";for(const session of group.sessions){const button=document.createElement("button");button.className="side-run"+(session.conversation_id===selectedId?" selected":"");button.type="button";const titleRow=document.createElement("span");titleRow.className="side-run-title-row";const title=document.createElement("span");title.className="side-run-title";title.textContent=session.title;titleRow.append(title,contextTag(session));const id=document.createElement("span");id.className="side-run-id";id.textContent=session.conversation_id;const meta=document.createElement("span");meta.className="side-run-meta";meta.textContent=`${session.request_count} R · ${fmt(session.totals.provider_tokens,"tokens")}`;button.append(titleRow,id,meta);button.addEventListener("click",()=>selectSession(session.conversation_id));list.append(button);}section.append(heading,list);side.append(section);}
+  for(const session of sessions){const row=document.createElement("tr");if(session.conversation_id===selectedId)row.className="selected";const identity=document.createElement("td");const runTitle=document.createElement("span");runTitle.className="run-title";runTitle.textContent=session.title;if(session.is_active){const badge=document.createElement("span");badge.className="badge";badge.textContent="current";runTitle.append(badge);}const runId=document.createElement("span");runId.className="run-id";runId.textContent=shortId(session.conversation_id);runId.title=session.conversation_id;identity.append(runTitle,runId);const contextCell=document.createElement("td");contextCell.append(contextTag(session));const coverage=Math.max(0,Math.min(1,Number(session.request_usage_coverage.call_percent||0)/100));const cells=[identity,contextCell,session.request_count,session.turn_count,fmt(session.totals.tokens_saved,"tokens"),fmtCache(session.totals.cache_hit_percent,session.request_count),fmt(session.totals.api_duration_ms,"ms"),fmt(session.totals.provider_tokens,"tokens")];for(const value of cells){if(value instanceof Node)row.append(value);else{const cell=document.createElement("td");cell.textContent=String(value);row.append(cell);}}const coverageCell=document.createElement("td");const bar=document.createElement("span");bar.className="coverage";const fill=document.createElement("i");fill.style.width=`${Math.round(coverage*100)}%`;bar.append(fill);coverageCell.append(bar,`${Math.round(coverage*100)}%`);coverageCell.title="已恢复逐请求曲线 / 聚合请求总数";row.append(coverageCell);const last=document.createElement("td");last.textContent=dateFmt(session.last_activity_at);row.append(last);row.addEventListener("click",()=>selectSession(session.conversation_id));body.append(row);}
+  if(!sessions.length){const row=document.createElement("tr");const cell=document.createElement("td");cell.colSpan=10;cell.textContent="没有匹配的 session";cell.style.textAlign="center";cell.style.color="var(--muted)";row.append(cell);body.append(row);}
 }
 function renderWorkspace(){
-  const session=selectedSession();const host=byId("workspace");host.replaceChildren();if(!session)return;const head=document.createElement("div");head.className="session-head";const left=document.createElement("div");const title=document.createElement("h2");title.textContent=session.title;if(session.is_active){const badge=document.createElement("span");badge.className="badge";badge.textContent="current";title.append(badge);}const identity=document.createElement("div");identity.className="session-id";identity.textContent=session.conversation_id;left.append(title,identity);const actions=document.createElement("div");actions.className="session-actions";const allData=sessionDownload(session);const downloadAll=document.createElement("a");downloadAll.className="download download-all";downloadAll.textContent=`全部 CSV · ${allData.rowCount}`;downloadAll.title=`下载「${session.title}」全部图表的 CSV 数据（含可切换模式）`;downloadAll.setAttribute("aria-label",downloadAll.title);downloadAll.href=allData.href;downloadAll.download=allData.filename;const time=document.createElement("div");time.className="session-time";time.textContent=`${dateFmt(session.first_projection_at)} → ${dateFmt(session.last_projection_at)}`;actions.append(downloadAll,time);head.append(left,actions);host.append(head);
-  const metrics=document.createElement("div");metrics.className="kpis session-kpis";metrics.append(kpi("Projects",String(session.project_count)),kpi("Turns",String(session.turn_count)),kpi("Saved",fmt(session.totals.tokens_saved,"tokens")),kpi("Cache Hit",fmtCache(session.totals.cache_hit_percent,session.cache_request_count)),kpi("Time",fmt(session.totals.projection_latency_ms,"ms")),kpi("Spent",fmt(session.totals.rendered_context_tokens,"tokens")));host.append(metrics);
+  const session=selectedSession();const host=byId("workspace");host.replaceChildren();if(!session)return;const head=document.createElement("div");head.className="session-head";const left=document.createElement("div");const title=document.createElement("h2");title.textContent=session.title;title.append(contextTag(session));if(session.is_active){const badge=document.createElement("span");badge.className="badge";badge.textContent="current";title.append(badge);}const identity=document.createElement("div");identity.className="session-id";identity.textContent=session.conversation_id;left.append(title,identity);const actions=document.createElement("div");actions.className="session-actions";const allData=sessionDownload(session);const downloadAll=document.createElement("a");downloadAll.className="download download-all";downloadAll.textContent=`全部 CSV · ${allData.rowCount}`;downloadAll.title=`下载「${session.title}」全部图表的 CSV 数据（含可切换模式）`;downloadAll.setAttribute("aria-label",downloadAll.title);downloadAll.href=allData.href;downloadAll.download=allData.filename;const time=document.createElement("div");time.className="session-time";time.textContent=session.has_projection_telemetry?`${session.project_count} OC projections · ${dateFmt(session.first_projection_at)} → ${dateFmt(session.last_projection_at)}`:"OC 未启用 · 节省量为 0";actions.append(downloadAll,time);head.append(left,actions);host.append(head);
+  const metrics=document.createElement("div");metrics.className="kpis session-kpis";metrics.append(kpi("Requests",String(session.request_count)),kpi("Turns",String(session.turn_count)),kpi("Saved",fmt(session.totals.tokens_saved,"tokens")),kpi("Cache Hit",fmtCache(session.totals.cache_hit_percent,session.request_count)),kpi("API Time",fmt(session.totals.api_duration_ms,"ms")),kpi("Provider Tokens",fmt(session.totals.provider_tokens,"tokens")));host.append(metrics);
   for(const group of session.groups){const section=document.createElement("section");section.className="metric-group";const heading=document.createElement("div");heading.className="group-heading";const title=document.createElement("h3");title.className="group-title";title.style.color=group.color;const dot=document.createElement("span");dot.className="group-dot";const label=document.createElement("span");label.textContent=group.title;title.append(dot,label);heading.append(title);if(Array.isArray(group.display_modes)){const toggle=document.createElement("div");toggle.className="metric-toggle";toggle.setAttribute("role","group");toggle.setAttribute("aria-label",`${group.title} 显示方式`);const selectedMode=groupDisplayModes[group.key]||group.default_display_mode;for(const mode of group.display_modes){const button=document.createElement("button");button.type="button";button.className="metric-mode";button.textContent=mode.label;button.setAttribute("aria-pressed",String(selectedMode===mode.key));button.addEventListener("click",()=>{if(groupDisplayModes[group.key]===mode.key)return;groupDisplayModes[group.key]=mode.key;renderWorkspace();});toggle.append(button);}heading.append(toggle);}const description=document.createElement("div");description.className="group-description";description.textContent=group.description;const charts=document.createElement("div");charts.className="charts";for(const chart of group.charts)charts.append(renderChart(session,group,activeChart(group,chart)));section.append(heading,description,charts);host.append(section);}
-  if(session.turnless_project_count||session.timed_project_count<session.project_count){const coverage=document.createElement("div");coverage.className="coverage-note";const label=document.createElement("strong");label.textContent="Coverage";coverage.append(label);const chip=value=>{const item=document.createElement("span");item.className="coverage-chip";item.textContent=value;coverage.append(item);};chip(`Turn ID ${session.project_count-session.turnless_project_count}/${session.project_count}`);chip(`Timing ${session.timed_project_count}/${session.project_count}`);if(session.legacy_project_count)chip(`Legacy ${session.legacy_project_count}`);host.append(coverage);}
+  if(!session.request_usage_coverage.complete||session.request_turnless_count||session.turnless_project_count){const coverage=document.createElement("div");coverage.className="coverage-note";const label=document.createElement("strong");label.textContent="Coverage";coverage.append(label);const chip=value=>{const item=document.createElement("span");item.className="coverage-chip";item.textContent=value;coverage.append(item);};chip(`Request series ${session.request_event_count}/${session.request_count}`);chip(`Token series ${fmt(session.request_usage_coverage.event_tokens,"tokens")} / ${fmt(session.totals.provider_tokens,"tokens")}`);if(session.request_turnless_count)chip(`Request turn ID ${session.request_count-session.request_turnless_count}/${session.request_count}`);if(session.project_count&&session.turnless_project_count)chip(`OC turn ID ${session.project_count-session.turnless_project_count}/${session.project_count}`);if(session.legacy_project_count)chip(`Legacy OC ${session.legacy_project_count}`);host.append(coverage);}
 }
 function selectSession(conversationId){selectedId=conversationId;renderRuns(byId("run-search").value);renderWorkspace();history.replaceState(null,"",`#session=${encodeURIComponent(conversationId)}`);byId("workspace").scrollIntoView({behavior:"smooth",block:"start"});}
 function syncSearch(value){byId("run-search").value=value;byId("side-search").value=value;renderRuns(value);}byId("run-search").addEventListener("input",event=>syncSearch(event.target.value));byId("side-search").addEventListener("input",event=>syncSearch(event.target.value));

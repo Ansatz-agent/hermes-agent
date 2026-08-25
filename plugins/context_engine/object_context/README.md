@@ -68,17 +68,28 @@ estimates, not provider-billing totals; retrieved payload is reported
 separately and is already reflected in the rendered projection.
 
 `/object_context monitor` writes a private, self-contained HTML snapshot for
-every conversation root with Object Context V1 projection telemetry and opens
-it in the default browser. Its experiment-tracking workspace provides global
-KPIs, a searchable session/run list and comparison table, and selects the
-current conversation by default. Stored Hermes session titles are the primary
-labels; stable conversation-root IDs remain visible underneath and both are
-searchable. Selecting a run switches the same four groups of four charts:
-tokens saved, provider-reported prompt-cache hits, Object Context projection
-time, and rendered-context tokens spent. Projection groups show per-project,
-cumulative-project, per-turn, and cumulative-turn dynamics. Cache charts use
-model requests instead of projections because one turn can contain several
-inferences, including a retrieval continuation. The saved-token group has one
+every user-visible conversation in the active profile and opens it in the
+default browser. Sessions that never enabled Object Context, or have not yet
+produced a projection, remain selectable with zero saved tokens while their
+normal provider-request token, cache, latency, and turn series remain visible.
+Persisted telemetry roots are retained even if their
+SessionDB row is no longer in the normal visible listing. The workspace
+provides global KPIs, a searchable session/run list and comparison table, and
+selects the current conversation by default. Stored Hermes session titles are
+the primary labels; stable conversation-root IDs remain visible underneath and
+both are searchable. Every identity carries an `OC` or `No OC` tag, and the
+left sidebar groups matching sessions by that tag. `OC` means the logical
+conversation has persisted Object Context projection evidence; the monitor
+does not guess an unrecorded historical configuration state. Search continues
+to filter both groups at once and omits groups with no matching runs. Selecting
+a run switches the same four groups of four charts:
+tokens saved, provider-reported prompt-cache hits, provider API-request
+latency, and provider-reported tokens spent. Savings uses per-project,
+cumulative-project, per-turn, and cumulative-turn dynamics; the other groups
+use request/turn dynamics because one turn can contain several inferences,
+including a retrieval continuation. When Object Context is off, the savings
+project/turn curves are zero-valued and aligned to those universal requests.
+The saved-token group has one
 toggle that switches all four charts between absolute tokens avoided and
 relative savings percentage (`tokens_saved / raw_context_tokens`); cumulative
 percentages divide cumulative saved tokens by cumulative raw tokens rather
@@ -89,34 +100,36 @@ rate and cache-read tokens. A request hit rate is
 `cache_read_tokens / prompt_tokens`, where canonical `prompt_tokens` is
 `uncached_input + cache_read + cache_write`; cumulative and turn rates divide
 summed cache-read tokens by summed prompt tokens, so they are token-weighted.
-The run table and global/session KPI rows show this weighted rate, and display
-an em dash when a stored run has no exact request-level cache telemetry. Cache
-values come from the provider response: a zero can mean a measured miss or a
-provider/proxy that returned no cache hit details, while a non-zero value is a
-reported hit.
+The run table and global/session KPI rows use the exact SessionDB aggregate even
+when a historical per-request curve is unavailable. Cache values come from the
+provider response: a zero can mean a measured miss or a provider/proxy that
+returned no cache hit details, while a non-zero value is a reported hit.
 
 Every chart has a one-click CSV download containing its currently displayed
 complete point series and identities, and the selected-session header has one
 combined CSV download for all 16 charts, including both saved-token and cache
-modes. Here,
-one project is one request-time Object Context projection, one turn is one real
-user turn (all projections in that turn are summed), and projection time is
-local Object Context processing time only—it excludes model and network
-latency. Saved/spent token values are the same rough conversation-message
-estimates used by `stats`, not provider-billed usage; cache values are canonical
-provider usage buckets. The webpage abbreviates Token labels with base-1000
+modes. Here, one project is one request-time Object Context projection, one
+request is one successful provider response, and one turn is one real user turn
+(all requests/projections carrying that turn identity are summed). Saved-token
+values remain the rough conversation-message estimates used by `stats`.
+Spent-token values are canonical provider prompt plus output usage, and time is
+provider API-request latency; neither depends on Object Context. The webpage
+abbreviates Token labels with base-1000
 `K`/`M`/`B` units regardless of browser locale; CSV downloads retain the raw,
 unscaled numeric values.
 
 The dashboard is an offline HTML/CSS/JavaScript/SVG file under the active
-profile's `logs/object-context-monitor/` directory. It contains stored session
+profile's `logs/object-context-monitor/` directory. Universal request events are
+stored content-free in `state.db` in the same transaction as normal token
+accounting. For sessions created before that schema, the monitor can recover
+exact numeric request rows still present in the redacted `agent.log`; otherwise
+it shows the exact aggregate token/request totals and labels partial curve
+coverage instead of inventing per-turn values. The HTML contains stored session
 titles plus event identities, timestamps, and numeric telemetry—never prompt
 text, messages, Cards, stored objects, or retrieved payloads. Re-run the command
 to refresh the snapshot. If the browser cannot be launched, the CLI prints the
 exact local file path. A resumed conversation can be monitored immediately,
-before its first new model turn: the command resolves the persisted
-conversation lineage and reads the profile's complete V1 telemetry without
-forcing lazy agent initialization.
+before its first new model turn, without forcing lazy agent initialization.
 
 When V1 is active and has avoided tokens, the classic CLI status bar also
 shows a compact live indicator. Medium-width terminals show the latest value,

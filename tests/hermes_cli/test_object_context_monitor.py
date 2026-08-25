@@ -71,6 +71,35 @@ def _cache_event(
     }
 
 
+def _request_event(
+    sequence: int,
+    turn_id: str,
+    *,
+    prompt: int,
+    output: int,
+    cache_read: int,
+    cache_write: int = 0,
+    latency_ms: float,
+) -> dict:
+    uncached = max(0, prompt - cache_read - cache_write)
+    return {
+        "api_request_id": f"request-{sequence}",
+        "request_sequence": sequence,
+        "turn_id": turn_id,
+        "session_id": "session-a",
+        "started_at": 100 + sequence,
+        "metrics": {
+            "input_tokens": uncached,
+            "output_tokens": output,
+            "cache_read_tokens": cache_read,
+            "cache_write_tokens": cache_write,
+            "prompt_tokens": prompt,
+            "total_tokens": prompt + output,
+            "api_duration_ms": latency_ms,
+        },
+    }
+
+
 def _timeline() -> dict:
     return {
         "schema_version": 1,
@@ -82,6 +111,38 @@ def _timeline() -> dict:
             _event(2, "turn-a", saved=80, spent=20, latency=2.5),
             _event(3, "turn-b", saved=70, spent=30, latency=3.0),
         ],
+        "requests": [
+            _request_event(
+                1, "turn-a", prompt=100, output=10, cache_read=0,
+                latency_ms=1.5,
+            ),
+            _request_event(
+                2, "turn-a", prompt=200, output=20, cache_read=120,
+                cache_write=10, latency_ms=2.5,
+            ),
+            _request_event(
+                3, "turn-b", prompt=400, output=30, cache_read=320,
+                latency_ms=3.0,
+            ),
+        ],
+        "usage_aggregate": {
+            "input_tokens": 250,
+            "output_tokens": 60,
+            "cache_read_tokens": 440,
+            "cache_write_tokens": 10,
+            "reasoning_tokens": 0,
+            "api_call_count": 3,
+            "total_tokens": 760,
+        },
+        "request_usage_coverage": {
+            "event_count": 3,
+            "aggregate_api_call_count": 3,
+            "event_tokens": 760,
+            "aggregate_tokens": 760,
+            "call_percent": 100,
+            "token_percent": 100,
+            "complete": True,
+        },
         "cache_requests": [
             _cache_event(1, "turn-a", prompt=100, cache_read=0),
             _cache_event(2, "turn-a", prompt=200, cache_read=120, cache_write=10),
@@ -101,6 +162,25 @@ def _dashboard() -> dict:
     older["projections"] = older["projections"][:1]
     older["projections"][0]["created_at"] = 50
     older["projections"][0]["metrics"]["tokens_saved"] = 10
+    older["requests"] = older["requests"][:1]
+    older["usage_aggregate"] = {
+        "input_tokens": 100,
+        "output_tokens": 10,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 0,
+        "reasoning_tokens": 0,
+        "api_call_count": 1,
+        "total_tokens": 110,
+    }
+    older["request_usage_coverage"] = {
+        "event_count": 1,
+        "aggregate_api_call_count": 1,
+        "event_tokens": 110,
+        "aggregate_tokens": 110,
+        "call_percent": 100,
+        "token_percent": 100,
+        "complete": True,
+    }
     older["cache_requests"] = older["cache_requests"][:1]
     older["cache_requests"][0]["created_at"] = 51
     return {
@@ -120,6 +200,8 @@ def _chart(payload: dict, group_key: str, chart_key: str) -> dict:
 def test_payload_contains_four_groups_and_all_sixteen_requested_dynamics():
     payload = build_monitor_payload(_timeline())
 
+    assert payload["schema_version"] == 7
+    assert payload["object_context_used"] is True
     assert [group["key"] for group in payload["groups"]] == [
         "saved",
         "cache",
@@ -135,8 +217,8 @@ def test_payload_contains_four_groups_and_all_sixteen_requested_dynamics():
     assert payload["download_point_count"] == 60
     assert payload["totals"] == {
         "tokens_saved": 210.0,
-        "projection_latency_ms": 7.0,
-        "rendered_context_tokens": 90.0,
+        "api_duration_ms": 7.0,
+        "provider_tokens": 760.0,
         "prompt_tokens": 700.0,
         "uncached_input_tokens": 250.0,
         "cache_read_tokens": 440.0,
@@ -205,8 +287,8 @@ def test_payload_contains_four_groups_and_all_sixteen_requested_dynamics():
         "modes"
     ]["absolute"]["values"] == [0.0, 120.0, 440.0]
 
-    assert _chart(payload, "time", "project-time")["values"] == [1.5, 2.5, 3.0]
-    assert _chart(payload, "time", "project-time-cumulative")["values"] == [
+    assert _chart(payload, "time", "request-time")["values"] == [1.5, 2.5, 3.0]
+    assert _chart(payload, "time", "request-time-cumulative")["values"] == [
         1.5,
         4.0,
         7.0,
@@ -217,16 +299,16 @@ def test_payload_contains_four_groups_and_all_sixteen_requested_dynamics():
         7.0,
     ]
 
-    assert _chart(payload, "spent", "project-spent")["values"] == [40.0, 20.0, 30.0]
-    assert _chart(payload, "spent", "project-spent-cumulative")["values"] == [
-        40.0,
-        60.0,
-        90.0,
+    assert _chart(payload, "spent", "request-spent")["values"] == [110.0, 220.0, 430.0]
+    assert _chart(payload, "spent", "request-spent-cumulative")["values"] == [
+        110.0,
+        330.0,
+        760.0,
     ]
-    assert _chart(payload, "spent", "turn-spent")["values"] == [60.0, 30.0]
+    assert _chart(payload, "spent", "turn-spent")["values"] == [330.0, 430.0]
     assert _chart(payload, "spent", "turn-spent-cumulative")["values"] == [
-        60.0,
-        90.0,
+        330.0,
+        760.0,
     ]
 
 
@@ -239,18 +321,21 @@ def test_legacy_projects_remain_in_token_projects_without_fabricated_turn_or_tim
     payload = build_monitor_payload(timeline)
 
     assert payload["project_count"] == 4
-    assert payload["timed_project_count"] == 3
+    assert payload["timed_request_count"] == 3
     assert payload["turn_count"] == 2
     assert payload["legacy_project_count"] == 1
     assert payload["turnless_project_count"] == 1
     assert _chart(payload, "saved", "project-saved")["values"][-1] == 5.0
     assert len(_chart(payload, "saved", "turn-saved")["values"]) == 2
-    assert len(_chart(payload, "time", "project-time")["values"]) == 3
+    assert len(_chart(payload, "time", "request-time")["values"]) == 3
 
 
 def test_session_without_exact_cache_telemetry_keeps_empty_cache_charts():
     timeline = _timeline()
     timeline.pop("cache_requests")
+    timeline.pop("requests")
+    timeline.pop("usage_aggregate")
+    timeline.pop("request_usage_coverage")
 
     payload = build_monitor_payload(timeline)
 
@@ -270,7 +355,7 @@ def test_new_projection_without_turn_identity_is_labeled_and_excluded_from_turns
 
     assert payload["legacy_project_count"] == 0
     assert payload["turnless_project_count"] == 1
-    assert payload["timed_project_count"] == 4
+    assert payload["timed_request_count"] == 3
     assert len(_chart(payload, "saved", "project-saved")["values"]) == 4
     assert len(_chart(payload, "saved", "turn-saved")["values"]) == 2
 
@@ -291,7 +376,7 @@ def test_savings_percentages_use_weighted_raw_totals_not_mean_percentages():
         "relative"
     ]["values"]
     assert project_cumulative == [90.0, 17.272727]
-    assert turn_percentage == [17.272727]
+    assert turn_percentage == [17.272727, 0.0]
 
 
 def test_savings_percentage_fails_closed_for_zero_raw_and_bounds_invalid_ratio():
@@ -324,13 +409,15 @@ def test_dashboard_aggregates_all_sessions_and_selects_active_conversation():
     ]
     assert payload["global_totals"] == {
         "project_count": 4,
+        "request_count": 4,
+        "request_event_count": 4,
         "turn_count": 3,
         "cache_request_count": 4,
-        "timed_project_count": 4,
+        "timed_request_count": 4,
         "legacy_project_count": 0,
         "tokens_saved": 220.0,
-        "projection_latency_ms": 8.5,
-        "rendered_context_tokens": 130.0,
+        "api_duration_ms": 8.5,
+        "provider_tokens": 870.0,
         "prompt_tokens": 800.0,
         "uncached_input_tokens": 350.0,
         "cache_read_tokens": 440.0,
@@ -351,6 +438,58 @@ def test_dashboard_falls_back_to_newest_session_when_active_has_no_telemetry():
 
     assert payload["selected_conversation_id"] == "conversation-a"
     assert not any(session["is_active"] for session in payload["sessions"])
+
+
+def test_dashboard_keeps_active_zero_telemetry_session_with_zero_savings():
+    dashboard = _dashboard()
+    dashboard["active_conversation_id"] = "conversation-plain"
+    dashboard["sessions"].append(
+        {
+            "conversation_id": "conversation-plain",
+            "session_id": "session-plain",
+            "title": "No Object Context",
+            "last_activity_at": 1_000,
+            "projections": [],
+            "cache_requests": [],
+            "requests": [
+                _request_event(
+                    1, "plain-turn", prompt=120, output=15,
+                    cache_read=20, latency_ms=900,
+                )
+            ],
+            "usage_aggregate": {
+                "input_tokens": 100,
+                "output_tokens": 15,
+                "cache_read_tokens": 20,
+                "cache_write_tokens": 0,
+                "api_call_count": 1,
+                "total_tokens": 135,
+            },
+        }
+    )
+
+    payload = build_monitor_dashboard_payload(dashboard)
+
+    assert payload["session_count"] == 3
+    assert payload["selected_conversation_id"] == "conversation-plain"
+    session = next(
+        item
+        for item in payload["sessions"]
+        if item["conversation_id"] == "conversation-plain"
+    )
+    assert session["is_active"] is True
+    assert session["object_context_used"] is False
+    assert session["has_projection_telemetry"] is False
+    assert session["project_count"] == 0
+    assert session["request_count"] == 1
+    assert session["turn_count"] == 1
+    assert session["totals"]["tokens_saved"] == 0.0
+    assert session["totals"]["api_duration_ms"] == 900.0
+    assert session["totals"]["provider_tokens"] == 135.0
+    assert _chart(session, "saved", "project-saved")["values"] == [0.0]
+    assert _chart(session, "saved", "turn-saved")["values"] == [0.0]
+    assert _chart(session, "time", "request-time")["values"] == [900.0]
+    assert _chart(session, "spent", "request-spent")["values"] == [135.0]
 
 
 def test_html_is_standalone_has_sixteen_charts_and_omits_unrecognized_content():
@@ -377,6 +516,11 @@ def test_html_is_standalone_has_sixteen_charts_and_omits_unrecognized_content():
     ) == 16
     assert payload["sessions"][0]["conversation_id"] == "conv</script><img src=x>"
     assert "Runs" in html
+    assert "<th>Context</th>" in html
+    assert 'tag.textContent=used?"OC":"No OC"' in html
+    assert '{label:"Object Context"' in html
+    assert '{label:"No Object Context"' in html
+    assert 'cell.colSpan=10' in html
     assert "CSV ↓" in html
     assert "function chartDownload" in html
     assert "function sessionDownload" in html

@@ -45,6 +45,7 @@ def _make_agent(session_db, *, platform: str):
 
 def test_run_conversation_persists_tokens_for_telegram_sessions():
     session_db = MagicMock()
+    session_db.get_conversation_root.return_value = "telegram-session"
     agent = _make_agent(session_db, platform="telegram")
 
     result = agent.run_conversation("hello")
@@ -54,6 +55,14 @@ def test_run_conversation_persists_tokens_for_telegram_sessions():
     # (queue_token_counts) rather than written inline on the turn thread.
     session_db.queue_token_counts.assert_called_once()
     assert session_db.queue_token_counts.call_args.args[0] == "telegram-session"
+    request_event = session_db.queue_token_counts.call_args.kwargs["request_event"]
+    assert request_event["conversation_id"] == "telegram-session"
+    assert request_event["turn_id"]
+    assert request_event["api_request_id"].startswith(request_event["turn_id"])
+    assert request_event["request_sequence"] == 1
+    assert request_event["input_tokens"] == 11
+    assert request_event["output_tokens"] == 7
+    assert request_event["duration_ms"] >= 0
 
 
 
