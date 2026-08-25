@@ -80,6 +80,7 @@ class ControllableGateway {
   readonly attempts: GatewayAttempt[] = []
   readonly logical = new Map<string, { body: Buffer; digest: string }>()
   private loseResponses = 0
+  private heldResponse: { received: () => void; release: Promise<void> } | null = null
   private readonly server: http.Server
   private constructor(private mode: GatewayMode) {
     this.server = http.createServer((request, response) => void this.handle(request, response))
@@ -101,6 +102,20 @@ class ControllableGateway {
 
   loseNextResponse(): void {
     this.loseResponses += 1
+  }
+
+  holdNextResponse(): { received: Promise<void>; release(): void } {
+    let markReceived!: () => void
+    let release!: () => void
+    const received = new Promise<void>(resolve => {
+      markReceived = resolve
+    })
+    const released = new Promise<void>(resolve => {
+      release = resolve
+    })
+    this.heldResponse = { received: markReceived, release: released }
+
+    return { received, release }
   }
 
   setOnline(online: boolean): void {
@@ -161,6 +176,13 @@ class ControllableGateway {
     const outcome = existing ? 'duplicate' : 'accepted'
     this.logical.set(batchId, { body: Buffer.from(body), digest })
 
+    const heldResponse = this.heldResponse
+    if (heldResponse !== null) {
+      this.heldResponse = null
+      heldResponse.received()
+      await heldResponse.release
+    }
+
     if (this.loseResponses > 0) {
       this.loseResponses -= 1
       this.attempts.push({ batchId, body, digest, outcome: 'lost' })
@@ -193,6 +215,7 @@ async function launchTraceHarness(options: {
   const root = join(options.userData, 'trace-outbox', options.owner.accountKey)
 
   const store = await TraceOutboxStore.open({
+    expectedOwner: options.owner,
     fs: options.fs,
     groupCommitMs: options.groupCommitMs ?? 1,
     keyProtector: options.keyProtector ?? protector(),
@@ -277,6 +300,10 @@ function envelopeFor(harness: TraceHarness, body: Buffer, sequence: number): Tra
   }
 }
 
+function isActiveSegmentPath(path: string): boolean {
+  return path.replaceAll('\\', '/').endsWith('/segments/active.segment')
+}
+
 function segmentSyncGate(): {
   fs: TraceFileSystem
   release(): void
@@ -301,7 +328,7 @@ function segmentSyncGate(): {
     fs: {
       ...nodeTraceFileSystem,
       async syncFile(path: string) {
-        if (path.endsWith('/segments/active.segment') && !released) {
+        if (isActiveSegmentPath(path) && !released) {
           blocked()
           await releasePromise
         }
@@ -314,11 +341,26 @@ function segmentSyncGate(): {
   }
 }
 
+test('segment fsync gate recognizes Windows path separators', () => {
+  assert.equal(isActiveSegmentPath('C:\\user-data\\trace-outbox\\segments\\active.segment'), true)
+  assert.equal(isActiveSegmentPath('C:\\user-data\\trace-outbox\\index.journal'), false)
+})
+
 async function temporaryUserData(): Promise<string> {
   const root = join(process.cwd(), 'tmp')
   await mkdir(root, { recursive: true })
 
   return mkdtemp(join(root, 'trace-continuity-'))
+}
+
+async function cleanupContinuityTest(
+  harnesses: TraceHarness[],
+  gateways: ControllableGateway[],
+  userData: string
+): Promise<void> {
+  await Promise.allSettled(harnesses.map(harness => harness.quit()))
+  await Promise.allSettled(gateways.map(gateway => gateway.close()))
+  await rm(userData, { force: true, recursive: true }).catch(() => undefined)
 }
 
 test('quit waits for durable admission, closes the listener, and closes its store', async () => {
@@ -348,9 +390,31 @@ test('quit waits for durable admission, closes the listener, and closes its stor
     await assert.rejects(fetch(harness.endpoint), /fetch failed|ECONNREFUSED/)
   } finally {
     gate.release()
-    await harness.quit().catch(() => undefined)
-    await gateway.close()
-    await rm(userData, { force: true, recursive: true })
+    await cleanupContinuityTest([harness], [gateway], userData)
+  }
+})
+
+test('a late Gateway receipt after stop cannot mutate the closed real store journal', async () => {
+  const userData = await temporaryUserData()
+  const gateway = await ControllableGateway.start('online')
+  const held = gateway.holdNextResponse()
+  const harness = await launchTraceHarness({ gateway, owner: owner('a'), userData })
+
+  try {
+    const post = harness.post(payload('late-receipt'), 1)
+    await held.received
+    assert.equal((await post).status, 200)
+    await harness.quit()
+    const journalPath = join(harness.root, 'index.journal')
+    const stoppedJournal = await readFile(journalPath)
+
+    held.release()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.deepEqual(await readFile(journalPath), stoppedJournal)
+    await assert.rejects(harness.store.enqueue(envelopeFor(harness, payload('closed-store'), 2)), /trace_outbox_closed/)
+  } finally {
+    held.release()
+    await cleanupContinuityTest([harness], [gateway], userData)
   }
 })
 
@@ -359,9 +423,11 @@ test('offline accepted Trace survives quit and uploads FIFO only from the same-a
   const gateway = await ControllableGateway.start('offline')
   const firstBody = payload('offline-one')
   const secondBody = payload('offline-two')
+  const harnesses: TraceHarness[] = []
 
   try {
     const first = await launchTraceHarness({ gateway, owner: owner('a'), userData })
+    harnesses.push(first)
     assert.equal((await first.post(firstBody, 1)).status, 200)
     assert.equal((await first.post(secondBody, 2)).status, 200)
     assert.equal((await first.quit()).pending, 2)
@@ -373,12 +439,24 @@ test('offline accepted Trace survives quit and uploads FIFO only from the same-a
     const requestsBeforeWrongAccount = gateway.attempts.length
     gateway.setOnline(true)
     const wrong = await launchTraceHarness({ gateway, owner: owner('b'), userData })
+    harnesses.push(wrong)
     await wrong.trigger()
     assert.equal((await wrong.diagnostics()).pending, 0)
     assert.equal(gateway.attempts.length, requestsBeforeWrongAccount)
     await wrong.quit()
 
+    await assert.rejects(
+      TraceOutboxStore.open({
+        expectedOwner: owner('b'),
+        groupCommitMs: 1,
+        keyProtector: protector(),
+        root: first.root
+      }),
+      /trace_outbox_account_mismatch/
+    )
+
     const unavailable = await TraceOutboxStore.open({
+      expectedOwner: owner('a'),
       groupCommitMs: 1,
       keyProtector: lostProtector(),
       root: first.root
@@ -387,8 +465,10 @@ test('offline accepted Trace survives quit and uploads FIFO only from the same-a
     assert.equal((await unavailable.diagnostics()).keyLost, 1)
     assert.equal((await unavailable.diagnostics()).quarantined, 2)
     assert.equal(await unavailable.peekEligible(Number.MAX_SAFE_INTEGER), undefined)
+    await unavailable.close()
 
     const resumed = await launchTraceHarness({ gateway, owner: owner('a'), userData })
+    harnesses.push(resumed)
     await resumed.trigger()
     await waitFor(async () => (await resumed.diagnostics()).pending === 0)
     assert.deepEqual(
@@ -402,8 +482,7 @@ test('offline accepted Trace survives quit and uploads FIFO only from the same-a
     )
     await resumed.quit()
   } finally {
-    await gateway.close()
-    await rm(userData, { force: true, recursive: true })
+    await cleanupContinuityTest(harnesses, [gateway], userData)
   }
 })
 
@@ -411,6 +490,7 @@ test('a durable online Gateway receipt leaves only a bounded payload-free tombst
   const userData = await temporaryUserData()
   const gateway = await ControllableGateway.start('online')
   const body = payload('gateway-first')
+  const harnesses: TraceHarness[] = []
 
   try {
     const harness = await launchTraceHarness({
@@ -420,6 +500,7 @@ test('a durable online Gateway receipt leaves only a bounded payload-free tombst
       receiptCapacityBytes: 2_048,
       userData
     })
+    harnesses.push(harness)
 
     assert.equal((await harness.post(body, 1)).status, 200)
     await waitFor(async () => (await harness.diagnostics()).pending === 0)
@@ -435,12 +516,17 @@ test('a durable online Gateway receipt leaves only a bounded payload-free tombst
     )
     await harness.quit()
 
-    const reopened = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root: harness.root })
+    const reopened = await TraceOutboxStore.open({
+      expectedOwner: owner('a'),
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root: harness.root
+    })
     assert.equal((await reopened.diagnostics()).payloadBytes, 0)
     assert.equal((await reopened.diagnostics()).tombstones, 1)
+    await reopened.close()
   } finally {
-    await gateway.close()
-    await rm(userData, { force: true, recursive: true })
+    await cleanupContinuityTest(harnesses, [gateway], userData)
   }
 })
 
@@ -449,9 +535,11 @@ test('a lost durable Gateway response reuses the same batch id and digest after 
   const gateway = await ControllableGateway.start('online')
   gateway.loseNextResponse()
   const body = payload('lost-response')
+  const harnesses: TraceHarness[] = []
 
   try {
     const harness = await launchTraceHarness({ gateway, owner: owner('a'), userData })
+    harnesses.push(harness)
     assert.equal((await harness.post(body, 1)).status, 200)
     await waitFor(async () => gateway.attempts.length >= 2 && (await harness.diagnostics()).pending === 0)
 
@@ -464,8 +552,7 @@ test('a lost durable Gateway response reuses the same batch id and digest after 
     assert.equal((await harness.diagnostics()).payloadBytes, 0)
     await harness.quit()
   } finally {
-    await gateway.close()
-    await rm(userData, { force: true, recursive: true })
+    await cleanupContinuityTest(harnesses, [gateway], userData)
   }
 })
 

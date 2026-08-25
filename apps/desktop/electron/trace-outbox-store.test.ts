@@ -13,7 +13,7 @@ import {
 } from './trace-outbox-journal'
 import { decodeSegmentRecord } from './trace-outbox-record'
 import { TraceOutboxStore } from './trace-outbox-store'
-import { type DurableReceipt, type TraceEnvelopeInput } from './trace-outbox-types'
+import { type DurableReceipt, type TraceEnvelopeInput, type TraceOwner } from './trace-outbox-types'
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
@@ -204,8 +204,20 @@ function protector() {
   })
 }
 
+async function downgradeBoundKeyToLegacy(root: string): Promise<void> {
+  const keyPath = join(root, 'key.json')
+  const persisted = JSON.parse(await readFile(keyPath, 'utf8')) as { wrappedKey: string }
+  const bound = JSON.parse(Buffer.from(persisted.wrappedKey, 'base64').toString('utf8')) as { key: string }
+  await writeFile(
+    keyPath,
+    JSON.stringify({ version: 1, wrappedKey: Buffer.from(bound.key, 'utf8').toString('base64') }),
+    'utf8'
+  )
+}
+
 function options(overrides: Partial<Parameters<typeof TraceOutboxStore.open>[0]> = {}) {
   return {
+    expectedOwner: envelope('options-owner').owner,
     fs: new FakeTraceFileSystem(),
     groupCommitMs: 5,
     keyProtector: protector(),
@@ -228,6 +240,15 @@ function envelope(label: string): TraceEnvelopeInput {
     },
     runId: `run-${label}`,
     telemetrySchemaVersion: '1'
+  }
+}
+
+function otherOwner(): TraceOwner {
+  return {
+    accountId: '44444444-4444-4444-8444-444444444444',
+    accountKey: 'account-44444444-4444-4444-8444-444444444444',
+    installationId: '55555555-5555-4555-8555-555555555555',
+    sessionId: '66666666-6666-4666-8666-666666666666'
   }
 }
 
@@ -299,6 +320,70 @@ test('syncs an exclusive same-directory key temporary before renaming it into pl
   assert.ok(keyRename < directorySync)
 })
 
+test('rejects a wrong expected owner before reading an existing namespace journal or segment', async () => {
+  const fs = new FakeTraceFileSystem()
+  const firstOptions = { ...options({ fs }), expectedOwner: envelope('owner-a').owner }
+  const first = await TraceOutboxStore.open(firstOptions)
+  await first.enqueue(envelope('owner-a'))
+  let existingNamespaceReads = 0
+  const readRange = fs.readRange.bind(fs)
+
+  fs.readRange = async (path, offset, length) => {
+    if (path.endsWith('index.journal') || path.endsWith('active.segment')) {
+      existingNamespaceReads += 1
+    }
+
+    return readRange(path, offset, length)
+  }
+
+  await assert.rejects(
+    TraceOutboxStore.open({ ...options({ fs }), expectedOwner: otherOwner() }),
+    /trace_outbox_account_mismatch/
+  )
+  assert.equal(existingNamespaceReads, 0)
+})
+
+test('migrates a legacy key only after recovering the matching account and then authenticates the binding', async () => {
+  const root = await temporaryOutboxDirectory()
+  const expectedOwner = envelope('legacy-migration').owner
+
+  try {
+    const first = await TraceOutboxStore.open({
+      expectedOwner,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
+    await first.enqueue(envelope('legacy-migration'))
+    await first.close()
+    await downgradeBoundKeyToLegacy(root)
+
+    const migrated = await TraceOutboxStore.open({
+      expectedOwner,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
+    assert.equal((await migrated.peekEligible(Number.MAX_SAFE_INTEGER))?.body.toString(), 'trace:legacy-migration')
+    await migrated.close()
+
+    const key = JSON.parse(await readFile(join(root, 'key.json'), 'utf8')) as {
+      accountKey: string
+      version: number
+    }
+    assert.deepEqual(
+      { accountKey: key.accountKey, version: key.version },
+      { accountKey: expectedOwner.accountKey, version: 2 }
+    )
+    await assert.rejects(
+      TraceOutboxStore.open({ expectedOwner: otherOwner(), groupCommitMs: 1, keyProtector: protector(), root }),
+      /trace_outbox_account_mismatch/
+    )
+  } finally {
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
 test('a receipt during a synced append creates a tombstone and makes the payload reclaimable', async () => {
   const gate = deferred<void>()
   const fs = new FakeTraceFileSystem({ 'segment.sync': () => gate.promise })
@@ -321,11 +406,21 @@ test('writes key.json through a synced temporary file before accepting the first
   const root = await mkdtemp(join(tmpBase, 'trace-outbox-'))
 
   try {
-    const store = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+    const store = await TraceOutboxStore.open({
+      expectedOwner: envelope('root-owner').owner,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
     const batch = await store.enqueue(envelope('disk'))
-    const key = JSON.parse(await readFile(join(root, 'key.json'), 'utf8')) as { wrappedKey: string; version: number }
+    const key = JSON.parse(await readFile(join(root, 'key.json'), 'utf8')) as {
+      accountKey: string
+      wrappedKey: string
+      version: number
+    }
 
-    assert.equal(key.version, 1)
+    assert.equal(key.version, 2)
+    assert.equal(key.accountKey, envelope('root-owner').owner.accountKey)
     assert.ok(key.wrappedKey.length > 0)
     assert.notEqual(key.wrappedKey, Buffer.alloc(32).toString('base64'))
     assert.equal(await store.lookupReceipt(batch.batchId), undefined)
@@ -458,7 +553,12 @@ test('rejects symlinked outbox root, segments, key, and journal paths before rea
       const configuredRoot = await candidate.setup()
       const root = typeof configuredRoot === 'string' ? configuredRoot : join(base, 'root')
       await assert.rejects(
-        TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root }),
+        TraceOutboxStore.open({
+          expectedOwner: envelope('root-owner').owner,
+          groupCommitMs: 1,
+          keyProtector: protector(),
+          root
+        }),
         /unsafe_trace_outbox_path/
       )
     }
@@ -502,7 +602,12 @@ async function temporaryOutboxDirectory(): Promise<string> {
 }
 
 async function buildCrashFixture(root: string, crashPoint: CrashPoint): Promise<CrashFixture> {
-  const store = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+  const store = await TraceOutboxStore.open({
+    expectedOwner: envelope('root-owner').owner,
+    groupCommitMs: 1,
+    keyProtector: protector(),
+    root
+  })
   const commits = [store.beginEnqueue(envelope('one')), store.beginEnqueue(envelope('two'))]
   const batches = await Promise.all(commits.map(commit => commit.durable))
   const segmentPath = join(root, 'segments', 'active.segment')
@@ -541,7 +646,12 @@ test.each<CrashPoint>(['segment-tail', 'journal-tail', 'after-segment-sync', 'du
 
     try {
       const fixture = await buildCrashFixture(root, crashPoint)
-      const recovered = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+      const recovered = await TraceOutboxStore.open({
+        expectedOwner: envelope('root-owner').owner,
+        groupCommitMs: 1,
+        keyProtector: protector(),
+        root
+      })
       const diagnostics = await recovered.diagnostics()
       const eligible = await recovered.peekEligible(Number.MAX_SAFE_INTEGER)
 
@@ -557,7 +667,12 @@ test.each<CrashPoint>(['segment-tail', 'journal-tail', 'after-segment-sync', 'du
           { op: 'receipt', batchId: head.batchId, outcome: 'accepted', receivedAt: 1_798_000_000_001 }
         ])
         await journal.sync()
-        current = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+        current = await TraceOutboxStore.open({
+          expectedOwner: envelope('root-owner').owner,
+          groupCommitMs: 1,
+          keyProtector: protector(),
+          root
+        })
       }
       assert.deepEqual(drained, fixture.expectedPendingIds)
       assert.equal(new Set(drained).size, drained.length)
@@ -591,7 +706,12 @@ test('quarantines a non-tail segment corruption without scanning later untrusted
     segment[first.nextOffset - 1] ^= 0x01
     await writeFile(segmentPath, segment)
 
-    const recovered = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+    const recovered = await TraceOutboxStore.open({
+      expectedOwner: envelope('root-owner').owner,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
 
     assert.equal(await recovered.peekEligible(Number.MAX_SAFE_INTEGER), undefined)
     assert.equal((await recovered.diagnostics()).quarantined, 1)
@@ -645,7 +765,12 @@ test('does not truncate a corrupt oversize prefix or scan past it', async () => 
     const fixture = Buffer.concat([valid.subarray(0, decodeSegmentRecord(valid, 0)!.nextOffset), corrupt, valid])
     await writeFile(path, fixture)
 
-    const recovered = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+    const recovered = await TraceOutboxStore.open({
+      expectedOwner: envelope('root-owner').owner,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
     assert.deepEqual(await readFile(path), fixture)
     assert.equal((await recovered.diagnostics()).quarantined, 1)
     assert.equal(await recovered.peekEligible(Number.MAX_SAFE_INTEGER), undefined)
@@ -757,6 +882,7 @@ test('physically bounds tombstones and reclaims fully-terminal payloads during a
   let now = 1_798_000_000_000
   const receiptCapacityBytes = 2_048
   const streamingOptions = {
+    expectedOwner: envelope('stream-owner').owner,
     groupCommitMs: 1,
     isConversationStreaming: () => true,
     keyProtector: protector(),
@@ -813,6 +939,7 @@ test('caps the durable encoded receipt lines by bytes independently of the entry
   const root = await temporaryOutboxDirectory()
   const receiptCapacityBytes = 700
   const optionsForRoot = {
+    expectedOwner: envelope('receipt-owner').owner,
     groupCommitMs: 1,
     isConversationStreaming: () => true,
     keyProtector: protector(),
@@ -872,16 +999,27 @@ test('replays durable quarantine and eviction terminal states after restart', as
   const evictionRoot = await temporaryOutboxDirectory()
 
   try {
-    const store = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+    const store = await TraceOutboxStore.open({
+      expectedOwner: envelope('root-owner').owner,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
     const quarantined = await store.enqueue(envelope('restart-quarantine'))
     await store.quarantine(quarantined.batchId, 'payload_too_large')
-    const recoveredQuarantine = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+    const recoveredQuarantine = await TraceOutboxStore.open({
+      expectedOwner: envelope('root-owner').owner,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
 
     assert.equal(await recoveredQuarantine.peekEligible(Number.MAX_SAFE_INTEGER), undefined)
     assert.equal((await recoveredQuarantine.diagnostics()).quarantined, 1)
 
     const evicting = await TraceOutboxStore.open({
       capacityBytes: 900,
+      expectedOwner: envelope('eviction-owner').owner,
       freeSpace: () => ({ available: 5 * 1024 ** 3, total: 20 * 1024 ** 3 }),
       groupCommitMs: 1,
       keyProtector: protector(),
@@ -891,6 +1029,7 @@ test('replays durable quarantine and eviction terminal states after restart', as
     const live = await evicting.enqueue(envelope('restart-evicted-two'))
     const reopened = await TraceOutboxStore.open({
       capacityBytes: 900,
+      expectedOwner: envelope('eviction-owner').owner,
       freeSpace: () => ({ available: 5 * 1024 ** 3, total: 20 * 1024 ** 3 }),
       groupCommitMs: 1,
       keyProtector: protector(),
@@ -963,10 +1102,20 @@ test('uses the filesystem free-space seam by default and enforces its reserve', 
 test('reuses a reclaimed receipt batch without rewriting payload bytes across restart', async () => {
   const root = await temporaryOutboxDirectory()
   try {
-    const first = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+    const first = await TraceOutboxStore.open({
+      expectedOwner: envelope('root-owner').owner,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
     const batch = await first.enqueue(envelope('receipt-safe'))
     await first.acknowledge(batch.batchId, receipt(batch.batchId, 'accepted'))
-    const reopened = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+    const reopened = await TraceOutboxStore.open({
+      expectedOwner: envelope('root-owner').owner,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
     const duplicate = reopened.beginEnqueue(envelope('receipt-safe'))
     await duplicate.cancelForGatewayReceipt(receipt(batch.batchId, 'duplicate'))
     const next = await duplicate.durable
@@ -986,6 +1135,7 @@ test('persists root ownership after every payload and receipt tombstone is recla
   let now = 1_798_000_000_000
   try {
     const first = await TraceOutboxStore.open({
+      expectedOwner: envelope('owner-only').owner,
       groupCommitMs: 1,
       keyProtector: protector(),
       now: () => now,
@@ -999,6 +1149,7 @@ test('persists root ownership after every payload and receipt tombstone is recla
     await first.compactIfIdle()
 
     const reopened = await TraceOutboxStore.open({
+      expectedOwner: envelope('owner-only').owner,
       groupCommitMs: 1,
       keyProtector: protector(),
       now: () => now,
@@ -1021,12 +1172,22 @@ test('persists root ownership after every payload and receipt tombstone is recla
 test('deduplicates a Gateway-first receipt after restart without creating a segment', async () => {
   const root = await temporaryOutboxDirectory()
   try {
-    const first = await TraceOutboxStore.open({ groupCommitMs: 50, keyProtector: protector(), root })
+    const first = await TraceOutboxStore.open({
+      expectedOwner: envelope('root-owner').owner,
+      groupCommitMs: 50,
+      keyProtector: protector(),
+      root
+    })
     const pending = first.beginEnqueue(envelope('gateway-first-restart'))
     await pending.cancelForGatewayReceipt(receipt(pending.batchId, 'accepted'))
     await assert.rejects(pending.durable, /local_commit_cancelled/)
 
-    const reopened = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+    const reopened = await TraceOutboxStore.open({
+      expectedOwner: envelope('root-owner').owner,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
     const duplicate = await reopened.enqueue(envelope('gateway-first-restart'))
 
     assert.equal(duplicate.batchId, pending.batchId)
@@ -1040,7 +1201,12 @@ test('deduplicates a Gateway-first receipt after restart without creating a segm
 test('upgrades a legacy receipt by recovering its identity from the retained encrypted record', async () => {
   const root = await temporaryOutboxDirectory()
   try {
-    const first = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+    const first = await TraceOutboxStore.open({
+      expectedOwner: envelope('root-owner').owner,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
     const batch = await first.enqueue(envelope('legacy-receipt'))
     const journal = await TraceJournal.open({ fs: nodeTraceFileSystem, path: join(root, 'index.journal') })
     const recovered = await journal.recover()
@@ -1049,10 +1215,20 @@ test('upgrades a legacy receipt by recovering its identity from the retained enc
       { op: 'receipt', batchId: batch.batchId, outcome: 'accepted', receivedAt: 1_798_000_000_001 }
     ])
 
-    const upgraded = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+    const upgraded = await TraceOutboxStore.open({
+      expectedOwner: envelope('root-owner').owner,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
     assert.equal((await upgraded.lookupReceipt(batch.batchId))?.outcome, 'accepted')
     await upgraded.compactIfIdle()
-    const reopened = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), root })
+    const reopened = await TraceOutboxStore.open({
+      expectedOwner: envelope('root-owner').owner,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      root
+    })
     const duplicate = await reopened.enqueue(envelope('legacy-receipt'))
 
     assert.equal(duplicate.batchId, batch.batchId)
@@ -1066,12 +1242,22 @@ test('reads an ownerless legacy receipt but fails closed for new account admissi
   const root = await temporaryOutboxDirectory()
   let now = 1_798_000_000_000
   try {
-    await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: protector(), now: () => now, retentionMs: 10, root })
+    const initial = await TraceOutboxStore.open({
+      expectedOwner: envelope('legacy-owner').owner,
+      groupCommitMs: 1,
+      keyProtector: protector(),
+      now: () => now,
+      retentionMs: 10,
+      root
+    })
+    await initial.close()
+    await downgradeBoundKeyToLegacy(root)
     const journal = await TraceJournal.open({ fs: nodeTraceFileSystem, path: join(root, 'index.journal') })
     await journal.append([{ op: 'receipt', batchId: 'legacy-ownerless', outcome: 'accepted', receivedAt: now }])
     await journal.sync()
 
     const reopened = await TraceOutboxStore.open({
+      expectedOwner: envelope('legacy-owner').owner,
       groupCommitMs: 1,
       keyProtector: protector(),
       now: () => now,
@@ -1084,6 +1270,7 @@ test('reads an ownerless legacy receipt but fails closed for new account admissi
     assert.equal(await reopened.lookupReceipt('legacy-ownerless'), undefined)
     await reopened.compactIfIdle()
     const afterGc = await TraceOutboxStore.open({
+      expectedOwner: envelope('legacy-owner').owner,
       groupCommitMs: 1,
       keyProtector: protector(),
       now: () => now,
@@ -1101,6 +1288,7 @@ test('keeps repeated eviction journal state bounded across reopen', async () => 
   try {
     const optionsForRoot = {
       capacityBytes: 900,
+      expectedOwner: envelope('eviction-owner').owner,
       freeSpace: () => ({ available: 5 * 1024 ** 3, total: 20 * 1024 ** 3 }),
       groupCommitMs: 1,
       keyProtector: protector(),

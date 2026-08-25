@@ -9064,6 +9064,7 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
     })
 
     const store = await TraceOutboxStore.open({
+      expectedOwner: owner,
       keyProtector: createSafeStorageTraceKeyProtector(safeStorage),
       root: path.join(traceOutboxRoot, owner.accountKey)
     })

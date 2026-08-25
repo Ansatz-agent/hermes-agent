@@ -26,6 +26,22 @@ test('wraps data keys only through the injected OS key protector', () => {
   assert.throws(() => protector.wrap(key), /secure_key_storage_unavailable/)
 })
 
+test('authenticates the account namespace inside the OS-wrapped key', () => {
+  const safeStorage = {
+    isEncryptionAvailable: () => true,
+    encryptString: (plaintext: string) => Buffer.from(plaintext, 'utf8'),
+    decryptString: (wrapped: Buffer) => wrapped.toString('utf8')
+  }
+  const protector = createSafeStorageTraceKeyProtector(safeStorage)
+  const key = Buffer.alloc(32, 29)
+  const accountA = 'account-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
+  const accountB = 'account-bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
+  const wrapped = protector.wrap(key, accountA)
+
+  assert.deepEqual(protector.unwrap(wrapped, accountA), key)
+  assert.throws(() => protector.unwrap(wrapped, accountB), /trace_outbox_account_mismatch/)
+})
+
 test('compresses before encryption and authenticates account metadata', async () => {
   const body = Buffer.from('repeated history '.repeat(10_000))
   const key = Buffer.alloc(32, 7)

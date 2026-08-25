@@ -2,6 +2,8 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
 import { promisify } from 'node:util'
 import { brotliCompress, brotliDecompress } from 'node:zlib'
 
+import { isCanonicalTraceAccountKey } from './trace-outbox-types'
+
 const brotliCompressAsync = promisify(brotliCompress)
 const brotliDecompressAsync = promisify(brotliDecompress)
 
@@ -18,8 +20,8 @@ export interface EncryptedTraceRecord {
 
 export interface TraceKeyProtector {
   available(): boolean
-  wrap(key: Buffer): Buffer
-  unwrap(wrappedKey: Buffer): Buffer
+  wrap(key: Buffer, accountKey?: string): Buffer
+  unwrap(wrappedKey: Buffer, expectedAccountKey?: string): Buffer
 }
 
 export interface SafeStorageKeyApi {
@@ -32,6 +34,49 @@ function requireDataKey(key: Buffer): void {
   if (!Buffer.isBuffer(key) || key.length !== AES_256_KEY_BYTES) {
     throw new TypeError('invalid_encryption_key')
   }
+}
+
+function encodeBoundKey(key: Buffer, accountKey: string): string {
+  if (!isCanonicalTraceAccountKey(accountKey)) {
+    throw new TypeError('invalid_account_key')
+  }
+
+  return JSON.stringify({ accountKey, key: key.toString('base64'), version: 1 })
+}
+
+function decodeBoundKey(encoded: string, expectedAccountKey: string): Buffer {
+  if (!isCanonicalTraceAccountKey(expectedAccountKey)) {
+    throw new TypeError('invalid_account_key')
+  }
+
+  let parsed: unknown
+
+  try {
+    parsed = JSON.parse(encoded)
+  } catch {
+    throw new TypeError('invalid_wrapped_key')
+  }
+
+  if (
+    parsed === null ||
+    typeof parsed !== 'object' ||
+    Array.isArray(parsed) ||
+    Object.keys(parsed).sort().join(',') !== 'accountKey,key,version' ||
+    (parsed as Record<string, unknown>).version !== 1 ||
+    !isCanonicalTraceAccountKey((parsed as Record<string, unknown>).accountKey) ||
+    typeof (parsed as Record<string, unknown>).key !== 'string'
+  ) {
+    throw new TypeError('invalid_wrapped_key')
+  }
+
+  if ((parsed as Record<string, unknown>).accountKey !== expectedAccountKey) {
+    throw new Error('trace_outbox_account_mismatch')
+  }
+
+  const key = Buffer.from((parsed as Record<string, string>).key, 'base64')
+  requireDataKey(key)
+
+  return key
 }
 
 export function createSafeStorageTraceKeyProtector(safeStorage: SafeStorageKeyApi): TraceKeyProtector {
@@ -51,13 +96,15 @@ export function createSafeStorageTraceKeyProtector(safeStorage: SafeStorageKeyAp
 
   return {
     available,
-    wrap(key: Buffer): Buffer {
+    wrap(key: Buffer, accountKey?: string): Buffer {
       requireAvailable()
       requireDataKey(key)
 
-      return Buffer.from(safeStorage.encryptString(key.toString('base64')))
+      return Buffer.from(
+        safeStorage.encryptString(accountKey === undefined ? key.toString('base64') : encodeBoundKey(key, accountKey))
+      )
     },
-    unwrap(wrappedKey: Buffer): Buffer {
+    unwrap(wrappedKey: Buffer, expectedAccountKey?: string): Buffer {
       requireAvailable()
 
       if (!Buffer.isBuffer(wrappedKey) || wrappedKey.length === 0) {
@@ -65,6 +112,10 @@ export function createSafeStorageTraceKeyProtector(safeStorage: SafeStorageKeyAp
       }
 
       const encoded = safeStorage.decryptString(wrappedKey)
+
+      if (expectedAccountKey !== undefined) {
+        return decodeBoundKey(encoded, expectedAccountKey)
+      }
 
       if (!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded) || encoded.length % 4 !== 0) {
         throw new TypeError('invalid_wrapped_key')

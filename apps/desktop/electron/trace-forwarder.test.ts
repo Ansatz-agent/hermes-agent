@@ -51,7 +51,12 @@ function keyProtector() {
 
 async function temporaryStore() {
   const root = await mkdtemp(join(process.cwd(), 'tmp', 'trace-forwarder-'))
-  const store = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: keyProtector(), root })
+  const store = await TraceOutboxStore.open({
+    expectedOwner: validOwner(),
+    groupCommitMs: 1,
+    keyProtector: keyProtector(),
+    root
+  })
 
   return { root, store }
 }
@@ -125,7 +130,12 @@ test('product Trace uploads use the public same-origin Gateway API by default', 
 
 test('a matching Gateway receipt owns a trace before local fsync without retaining payload bytes', async () => {
   const root = await mkdtemp(join(process.cwd(), 'tmp', 'trace-forwarder-gateway-first-'))
-  const store = await TraceOutboxStore.open({ groupCommitMs: 50, keyProtector: keyProtector(), root })
+  const store = await TraceOutboxStore.open({
+    expectedOwner: validOwner(),
+    groupCommitMs: 50,
+    keyProtector: keyProtector(),
+    root
+  })
   const source = credentialSource()
   const upstream: Array<{ body: Buffer; headers: Headers }> = []
 
@@ -1243,7 +1253,12 @@ test('local backend preparation does not wait for Trace token acquisition', asyn
   )
 
   const root = await mkdtemp(join(process.cwd(), 'tmp', 'trace-forwarder-token-independent-'))
-  const store = await TraceOutboxStore.open({ groupCommitMs: 1, keyProtector: keyProtector(), root })
+  const store = await TraceOutboxStore.open({
+    expectedOwner: legacyOwner(),
+    groupCommitMs: 1,
+    keyProtector: keyProtector(),
+    root
+  })
   const forwarder = new TraceForwarder({ credentialProvider: provider, installationId, store })
 
   const controller = new TraceRecoveryController({

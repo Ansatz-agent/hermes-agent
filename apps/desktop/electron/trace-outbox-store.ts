@@ -24,6 +24,7 @@ import {
   type DurableTraceBatch,
   type TraceEnvelopeInput,
   type TraceOutboxDiagnostics,
+  type TraceOwner,
   validateTraceOwner
 } from './trace-outbox-types'
 
@@ -41,10 +42,18 @@ const KEY_FILE_NAME = 'key.json'
 const SEGMENT_FILE_NAME = 'active.segment'
 const JOURNAL_FILE_NAME = 'index.journal'
 
-interface PersistedKey {
+interface LegacyPersistedKey {
   version: 1
   wrappedKey: string
 }
+
+interface AccountBoundPersistedKey {
+  accountKey: string
+  version: 2
+  wrappedKey: string
+}
+
+type PersistedKey = LegacyPersistedKey | AccountBoundPersistedKey
 
 interface PendingCommit {
   batchId: string
@@ -93,6 +102,7 @@ export interface TraceOutboxStoreOptions {
   maxBytes?: number
   monotonicNow?: () => number
   now?: () => number
+  expectedOwner: TraceOwner
   receiptCapacityBytes?: number
   receiptCapacityEntries?: number
   retentionMs?: number
@@ -111,8 +121,8 @@ function sha256(input: Buffer): string {
   return createHash('sha256').update(input).digest('hex')
 }
 
-function keyJson(wrappedKey: Buffer): Buffer {
-  const encoded: PersistedKey = { version: 1, wrappedKey: wrappedKey.toString('base64') }
+function keyJson(wrappedKey: Buffer, accountKey: string): Buffer {
+  const encoded: AccountBoundPersistedKey = { accountKey, version: 2, wrappedKey: wrappedKey.toString('base64') }
 
   return Buffer.from(JSON.stringify(encoded), 'utf8')
 }
@@ -130,23 +140,35 @@ function parseKey(contents: Buffer): PersistedKey {
     parsed === null ||
     typeof parsed !== 'object' ||
     Array.isArray(parsed) ||
-    (parsed as Record<string, unknown>).version !== 1 ||
     typeof (parsed as Record<string, unknown>).wrappedKey !== 'string'
   ) {
     throw new Error('invalid_trace_outbox_key')
   }
 
-  const wrappedKey = (parsed as PersistedKey).wrappedKey
+  const record = parsed as Record<string, unknown>
+  const version = record.version
+  const expectedKeys = version === 1 ? 'version,wrappedKey' : 'accountKey,version,wrappedKey'
+
+  if (
+    (version !== 1 && version !== 2) ||
+    Object.keys(record).sort().join(',') !== expectedKeys ||
+    (version === 2 && typeof record.accountKey !== 'string')
+  ) {
+    throw new Error('invalid_trace_outbox_key')
+  }
+
+  const wrappedKey = record.wrappedKey as string
 
   if (!/^[A-Za-z0-9+/]+={0,2}$/.test(wrappedKey) || wrappedKey.length % 4 !== 0) {
     throw new Error('invalid_trace_outbox_key')
   }
 
-  return { version: 1, wrappedKey }
+  return version === 1 ? { version, wrappedKey } : { accountKey: record.accountKey as string, version, wrappedKey }
 }
 
 export class TraceOutboxStore {
   static async open(options: TraceOutboxStoreOptions): Promise<TraceOutboxStore> {
+    const expectedOwner = validateTraceOwner(options.expectedOwner).owner
     const fs = options.fs ?? nodeTraceFileSystem
     const groupCommitBytes = options.groupCommitBytes ?? DEFAULT_GROUP_COMMIT_BYTES
     const groupCommitMs = options.groupCommitMs ?? DEFAULT_GROUP_COMMIT_MS
@@ -184,11 +206,24 @@ export class TraceOutboxStore {
     await fs.mkdir(segmentDirectory)
     const keyPath = join(options.root, KEY_FILE_NAME)
     let dataKey: Buffer
+    let legacyUnboundKey = false
     let keyLost = false
 
     try {
-      dataKey = await TraceOutboxStore.loadOrCreateKey(fs, keyPath, options.root, options.keyProtector)
+      const loaded = await TraceOutboxStore.loadOrCreateKey(
+        fs,
+        keyPath,
+        options.root,
+        options.keyProtector,
+        expectedOwner.accountKey
+      )
+      dataKey = loaded.dataKey
+      legacyUnboundKey = loaded.legacyUnbound
     } catch (error) {
+      if ((error as Error).message === 'trace_outbox_account_mismatch') {
+        throw error
+      }
+
       if ((await fs.readFile(keyPath)) === null) {
         throw error
       }
@@ -201,6 +236,7 @@ export class TraceOutboxStore {
     const store = new TraceOutboxStore({
       dataKey,
       capacityBytes,
+      expectedAccountKey: expectedOwner.accountKey,
       freeSpace: options.freeSpace ?? (() => fs.freeSpace(options.root)),
       fs,
       groupCommitBytes,
@@ -208,6 +244,7 @@ export class TraceOutboxStore {
       isConversationStreaming: options.isConversationStreaming ?? (() => false),
       journal,
       keyLost,
+      legacyUnboundKey,
       monotonicNow: options.monotonicNow ?? performance.now.bind(performance),
       now: options.now ?? Date.now,
       receiptCapacityBytes,
@@ -220,6 +257,16 @@ export class TraceOutboxStore {
 
     if (keyLost) {
       store.quarantineForKeyLoss()
+    } else if (legacyUnboundKey && store.accountKey === expectedOwner.accountKey && !store.legacyOwnerUnknown) {
+      await TraceOutboxStore.persistBoundKey(
+        fs,
+        keyPath,
+        options.root,
+        options.keyProtector,
+        dataKey,
+        expectedOwner.accountKey,
+        true
+      )
     }
 
     return store
@@ -229,8 +276,9 @@ export class TraceOutboxStore {
     fs: TraceFileSystem,
     keyPath: string,
     root: string,
-    keyProtector: TraceKeyProtector
-  ): Promise<Buffer> {
+    keyProtector: TraceKeyProtector,
+    expectedAccountKey: string
+  ): Promise<{ dataKey: Buffer; legacyUnbound: boolean }> {
     if (!keyProtector.available()) {
       throw new Error('secure_key_storage_unavailable')
     }
@@ -238,17 +286,45 @@ export class TraceOutboxStore {
     const existing = await fs.readFile(keyPath)
 
     if (existing !== null) {
-      return keyProtector.unwrap(Buffer.from(parseKey(existing).wrappedKey, 'base64'))
+      const persisted = parseKey(existing)
+
+      if (persisted.version === 2) {
+        if (persisted.accountKey !== expectedAccountKey) {
+          throw new Error('trace_outbox_account_mismatch')
+        }
+
+        return {
+          dataKey: keyProtector.unwrap(Buffer.from(persisted.wrappedKey, 'base64'), expectedAccountKey),
+          legacyUnbound: false
+        }
+      }
+
+      return {
+        dataKey: keyProtector.unwrap(Buffer.from(persisted.wrappedKey, 'base64')),
+        legacyUnbound: true
+      }
     }
 
     const dataKey = randomBytes(32)
-    const temporaryPath = `${keyPath}.tmp-${randomUUID()}`
-    await fs.writeFile(temporaryPath, keyJson(keyProtector.wrap(dataKey)), { exclusive: true })
-    await fs.syncFile(temporaryPath)
-    await fs.rename(temporaryPath, keyPath)
-    await fs.syncDirectory(root)
+    await TraceOutboxStore.persistBoundKey(fs, keyPath, root, keyProtector, dataKey, expectedAccountKey, false)
 
-    return dataKey
+    return { dataKey, legacyUnbound: false }
+  }
+
+  private static async persistBoundKey(
+    fs: TraceFileSystem,
+    keyPath: string,
+    root: string,
+    keyProtector: TraceKeyProtector,
+    dataKey: Buffer,
+    accountKey: string,
+    replace: boolean
+  ): Promise<void> {
+    const temporaryPath = `${keyPath}.tmp-${randomUUID()}`
+    await fs.writeFile(temporaryPath, keyJson(keyProtector.wrap(dataKey, accountKey), accountKey), { exclusive: true })
+    await fs.syncFile(temporaryPath)
+    await (replace ? fs.replaceFile(temporaryPath, keyPath) : fs.rename(temporaryPath, keyPath))
+    await fs.syncDirectory(root)
   }
 
   private readonly pending: PendingCommit[] = []
@@ -272,7 +348,7 @@ export class TraceOutboxStore {
   private deduplicated = 0
   private evictedCapacity = 0
   private expired = 0
-  private accountKey: string | null = null
+  private accountKey: string | null
   private ownerJournaled = false
   private legacyOwnerUnknown = false
 
@@ -280,6 +356,7 @@ export class TraceOutboxStore {
     private readonly config: {
       dataKey: Buffer
       capacityBytes: number
+      expectedAccountKey: string
       freeSpace: () => TraceFreeSpace | Promise<TraceFreeSpace>
       fs: TraceFileSystem
       groupCommitBytes: number
@@ -287,6 +364,7 @@ export class TraceOutboxStore {
       isConversationStreaming: () => boolean
       journal: TraceJournal
       keyLost: boolean
+      legacyUnboundKey: boolean
       monotonicNow: () => number
       now: () => number
       receiptCapacityBytes: number
@@ -294,7 +372,9 @@ export class TraceOutboxStore {
       retentionMs: number
       segmentPath: string
     }
-  ) {}
+  ) {
+    this.accountKey = config.legacyUnboundKey ? null : config.expectedAccountKey
+  }
 
   beginEnqueue(input: TraceEnvelopeInput): PendingLocalCommit {
     return this.beginEnqueueInternal(input, false)
@@ -660,11 +740,7 @@ export class TraceOutboxStore {
     this.evictedCapacity = [...terminalStates.values()].filter(operation => operation.terminal === 'evicted').length
 
     for (const record of scanned.records) {
-      if (this.accountKey === null) {
-        this.accountKey = record.header.owner.accountKey
-      } else if (this.accountKey !== record.header.owner.accountKey) {
-        throw new Error('trace_outbox_account_mismatch')
-      }
+      this.bindRecoveredAccount(record.header.owner.accountKey)
       this.nextSequence = Math.max(this.nextSequence, record.header.sequence + 1)
       const receipt = this.receipts.get(record.header.batchId)
       const terminal = terminalStates.get(record.header.batchId)
@@ -1258,6 +1334,10 @@ export class TraceOutboxStore {
 
   private bindRecoveredAccount(accountKey: string): void {
     if (this.legacyOwnerUnknown) {
+      throw new Error('trace_outbox_account_mismatch')
+    }
+
+    if (accountKey !== this.config.expectedAccountKey) {
       throw new Error('trace_outbox_account_mismatch')
     }
 
