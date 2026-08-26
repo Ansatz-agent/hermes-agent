@@ -1,9 +1,17 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 import { test } from 'vitest'
 
-import { canonicalJson, type TraceFileSystem, TraceJournal } from './trace-outbox-journal'
+import {
+  canonicalJson,
+  nodeTraceFileSystem,
+  type TraceFileSystem,
+  TraceJournal
+} from './trace-outbox-journal'
 
 class MemoryFileSystem implements TraceFileSystem {
   readonly files = new Map<string, Buffer>()
@@ -219,6 +227,22 @@ test('replays a strict persistent owner binding operation', async () => {
 
   await journal.replace([{ op: 'owner', accountKey: null }])
   assert.deepEqual((await journal.recover()).operations, [{ op: 'owner', accountKey: null }])
+})
+
+test('creates an absent journal on its first durable replacement', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'ansatz-trace-journal-'))
+  const path = join(root, 'index.journal')
+  const owner = { op: 'owner', accountKey: null } as const
+
+  try {
+    const journal = await TraceJournal.open({ fs: nodeTraceFileSystem, path })
+
+    await journal.replace([owner])
+
+    assert.deepEqual((await journal.recover()).operations, [owner])
+  } finally {
+    await rm(root, { force: true, recursive: true })
+  }
 })
 
 test('journal compaction scratch is deterministic, crash-recoverable, and cleaned on failure', async () => {
