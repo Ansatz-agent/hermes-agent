@@ -805,8 +805,8 @@ logging:
     max_files: 100            # count-based retention
 ```
 
-Enable it with `hermes config set logging.prompt_monitor.enabled true`, then
-run `hermes prompt-monitor` in a second terminal. Keeping the viewer separate
+Enable it with `ansatz config set logging.prompt_monitor.enabled true`, then
+run `ansatz prompt-monitor` in a second terminal. Keeping the viewer separate
 prevents prompt text from corrupting TUI, gateway, ACP, or other structured
 stdout transports.
 

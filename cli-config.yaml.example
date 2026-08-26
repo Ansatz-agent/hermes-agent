@@ -692,7 +692,7 @@ context:
 # snapshot of the finalized request body handed to each provider adapter. This
 # includes messages/input, system/instructions, tool schemas, Object Context
 # Cards, and turn-scoped retrieve_object reinsertion. View new snapshots safely
-# from a second terminal with `hermes prompt-monitor`.
+# from a second terminal with `ansatz prompt-monitor`.
 #
 # Prompt bodies can contain private conversation data. Redaction catches known
 # credential shapes but is not a substitute for treating these files as

@@ -2592,7 +2592,7 @@ DEFAULT_CONFIG = {
         # Passive snapshots of the finalized payload handed to each LLM
         # provider adapter. Disabled by default because prompts may contain
         # private conversation data. View in a second terminal with
-        # ``hermes prompt-monitor`` so TUI/gateway stdout stays untouched.
+        # ``ansatz prompt-monitor`` so TUI/gateway stdout stays untouched.
         "prompt_monitor": {
             "enabled": False,
             "include_auxiliary": True,

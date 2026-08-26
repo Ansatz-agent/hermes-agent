@@ -18,7 +18,7 @@ are request-time projections and are never written over the transcript.
 
 ## Enable and configure
 
-Select the engine through `hermes plugins`, or edit `~/.hermes/config.yaml`:
+Select the engine through `ansatz plugins`, or edit `~/.hermes/config.yaml`:
 
 ```yaml
 context:

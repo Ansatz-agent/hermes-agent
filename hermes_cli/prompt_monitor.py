@@ -109,7 +109,7 @@ def monitor_prompts(
     if not settings.enabled:
         print("Prompt monitor capture is disabled for the active Hermes profile.")
         print("Enable it with:")
-        print("  hermes config set logging.prompt_monitor.enabled true")
+        print("  ansatz config set logging.prompt_monitor.enabled true")
         return 2
 
     directory = prompt_monitor_directory()

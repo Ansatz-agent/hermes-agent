@@ -1,4 +1,4 @@
-"""``hermes prompt-monitor`` subcommand parser."""
+"""``ansatz prompt-monitor`` subcommand parser."""
 
 from __future__ import annotations
 

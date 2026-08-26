@@ -7,7 +7,7 @@ writes one atomic JSON snapshot.  It never mutates the live request object.
 
 Capture is disabled by default and configured under
 ``logging.prompt_monitor`` in ``config.yaml``.  Snapshots are consumed by the
-``hermes prompt-monitor`` command from a separate terminal so stdout-based
+``ansatz prompt-monitor`` command from a separate terminal so stdout-based
 protocols (TUI JSON-RPC, gateways, ACP) are not corrupted by debug output.
 """
 

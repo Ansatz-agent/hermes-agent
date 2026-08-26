@@ -598,8 +598,8 @@ logging:
     max_files: 100
 ```
 
-运行 `hermes config set logging.prompt_monitor.enabled true` 启用，然后在另一个
-终端运行 `hermes prompt-monitor`。快照保存在当前 profile 的
+运行 `ansatz config set logging.prompt_monitor.enabled true` 启用，然后在另一个
+终端运行 `ansatz prompt-monitor`。快照保存在当前 profile 的
 `logs/prompt-monitor/` 下，包含 Context View 投影后的 messages/input、
 system/instructions、工具 schema、Object Card 与检索对象回填。重试和 provider
 fallback 会各自产生一条记录。

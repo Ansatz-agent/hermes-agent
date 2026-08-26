@@ -44,8 +44,8 @@ To inspect the exact Context View that reaches the model, enable the local
 prompt monitor and run its viewer in a second terminal:
 
 ```bash
-hermes config set logging.prompt_monitor.enabled true
-hermes prompt-monitor
+ansatz config set logging.prompt_monitor.enabled true
+ansatz prompt-monitor
 ```
 
 The main-agent snapshot is captured after Object Context projection, so an

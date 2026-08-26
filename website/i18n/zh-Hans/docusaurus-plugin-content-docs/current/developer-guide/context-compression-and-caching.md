@@ -41,8 +41,8 @@ context:
 要查看真正送达模型的 Context View，可运行：
 
 ```bash
-hermes config set logging.prompt_monitor.enabled true
-hermes prompt-monitor
+ansatz config set logging.prompt_monitor.enabled true
+ansatz prompt-monitor
 ```
 
 主 Agent 快照在 Object Context 投影后捕获，因此冷对象会显示为完整 Card，
