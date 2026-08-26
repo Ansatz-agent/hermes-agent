@@ -1,0 +1,515 @@
+{
+  "schema_version": 1,
+  "name": "workflow-prefeval",
+  "version": "1.0-smoke",
+  "description": "PrefEval-style smoke suite for durable, scope-sensitive professional workflow preferences. It contains eight positive/near-neighbor pairs and deterministic output assertions. It is a platform fixture, not yet the 40-pair release acceptance set.",
+  "distractors": [
+    {
+      "user": "用通俗中文解释一下幸存者偏差，不需要举公式。",
+      "assistant": "幸存者偏差是只观察成功留下来的样本，却忽略已经失败或消失的样本，因此高估某种方法或特征的有效性。"
+    },
+    {
+      "user": "把这句话翻译成英文：这项发现对不同样本划分保持稳健。",
+      "assistant": "This finding remains robust across different sample splits."
+    },
+    {
+      "user": "Python 的生成器表达式和列表推导式有什么主要区别？",
+      "assistant": "列表推导式会立即创建完整列表；生成器表达式按需产生元素，通常更节省内存，但只能顺序消费。"
+    },
+    {
+      "user": "论文引言通常需要回答哪几个核心问题？",
+      "assistant": "通常需要说明研究背景、现有缺口、核心问题、研究方法、主要贡献以及文章结构。"
+    },
+    {
+      "user": "解释一下其他作者为什么有时用 \\[...\\] 而不是带编号公式环境，只解释区别。",
+      "assistant": "前者通常用于不编号的陈列公式；带编号环境适合需要编号或交叉引用的公式，具体选择还取决于项目规范。"
+    },
+    {
+      "user": "请列出三种减少会议时间的方法。",
+      "assistant": "提前发送议程、限制每个议题的时间，并把纯信息同步改为异步书面更新。"
+    },
+    {
+      "user": "什么是机会成本？",
+      "assistant": "机会成本是选择一个方案时放弃的最佳替代方案所能带来的价值。"
+    },
+    {
+      "user": "帮我写一句轻松的生日祝福。",
+      "assistant": "生日快乐，愿新的一岁有惊喜、有底气，也有很多轻松开心的时刻！"
+    },
+    {
+      "user": "解释 pandas 中 left join 的含义，不要给代码。",
+      "assistant": "左连接保留左表的全部记录，并把右表中键值匹配的字段补上；没有匹配时右表字段为空。"
+    },
+    {
+      "user": "做稳健性检验的主要目的是什么？",
+      "assistant": "它用于检查主要结论是否依赖某个特定样本、变量定义、模型设定或估计方法。"
+    },
+    {
+      "user": "Markdown 里表格适合表达什么信息？",
+      "assistant": "表格适合展示字段固定、需要横向比较的多组项目；单一结论或很短的信息通常用句子更清楚。"
+    },
+    {
+      "user": "帮我概括番茄工作法。",
+      "assistant": "把专注工作切成固定时段，每段之后短暂休息，完成若干轮后再安排较长休息。"
+    }
+  ],
+  "cases": [
+    {
+      "id": "latex_source_positive",
+      "category": "latex-source",
+      "preference_form": "explicit",
+      "setup": [
+        {
+          "user": "这是当前论文项目的长期工作偏好，请记住：返回 LaTeX 源码时，同一自然段必须放在同一个物理行，不要按句换行；独立陈列公式统一使用 equation 环境，不用 $$、\\[...\\] 或 align；只返回可复制的源码。",
+          "assistant": "已记住。"
+        }
+      ],
+      "probe": "请为当前论文的方法部分写一小段中文模型设定：观测值由真实信号和均值为零、方差为 sigma 平方的正态随机误差构成。返回 LaTeX 源码。",
+      "applicable": true,
+      "expected_memory_markers": ["equation", ["物理行", "physical line"]],
+      "tags": ["positive", "format", "latex"],
+      "assertions": [
+        {
+          "id": "latex_equation_environment",
+          "kind": "contains_all",
+          "values": ["\\begin{equation}", "\\end{equation}"],
+          "weight": 2,
+          "description": "Display equations use equation."
+        },
+        {
+          "id": "latex_forbidden_display_forms",
+          "kind": "not_contains_any",
+          "values": ["$$", "\\[", "\\begin{align}"],
+          "weight": 2
+        },
+        {
+          "id": "latex_no_arbitrary_prose_wrap",
+          "kind": "latex_prose_single_line",
+          "weight": 2
+        },
+        {
+          "id": "source_only",
+          "kind": "source_only"
+        }
+      ]
+    },
+    {
+      "id": "latex_source_negative",
+      "category": "latex-source",
+      "preference_form": "explicit",
+      "setup": [
+        {
+          "user": "这是当前论文项目的长期工作偏好，请记住：返回 LaTeX 源码时，同一自然段必须放在同一个物理行；独立陈列公式统一使用 equation 环境；只返回源码。",
+          "assistant": "已记住。"
+        }
+      ],
+      "probe": "现在不是在写论文，也不要返回公式或源码。请用两句普通中文向高中生解释什么是样本均值。",
+      "applicable": false,
+      "expected_memory_markers": ["equation", ["物理行", "physical line"]],
+      "tags": ["negative", "scope", "latex"],
+      "assertions": [
+        {
+          "id": "latex_scope_not_overapplied",
+          "kind": "not_contains_any",
+          "metric": "scope_control",
+          "values": ["\\begin{equation}", "\\end{equation}", "```latex", "$$"]
+        },
+        {
+          "id": "no_markdown_table",
+          "kind": "no_markdown_table"
+        }
+      ]
+    },
+    {
+      "id": "python_style_positive",
+      "category": "python-style",
+      "preference_form": "explicit",
+      "setup": [
+        {
+          "user": "记住我在 Python 项目中的长期偏好：公共函数必须有完整类型标注；能用标准库就不要新增第三方依赖；返回实现时只给代码。",
+          "assistant": "已记住。"
+        }
+      ],
+      "probe": "为我的 Python 项目实现 dedupe_preserve_order：输入 list[str]，返回保持首次出现顺序的去重 list[str]。",
+      "applicable": true,
+      "expected_memory_markers": ["类型标注", "标准库"],
+      "tags": ["positive", "code", "python"],
+      "assertions": [
+        {
+          "id": "python_public_type_annotations",
+          "kind": "regex",
+          "pattern": "def\\s+dedupe_preserve_order\\s*\\(\\s*[^)]*:\\s*list\\[str\\][^)]*\\)\\s*->\\s*list\\[str\\]"
+        },
+        {
+          "id": "python_no_dependency_expansion",
+          "kind": "not_regex",
+          "pattern": "(?i)(import\\s+(numpy|pandas|more_itertools)|pip\\s+install)"
+        },
+        {
+          "id": "source_only",
+          "kind": "source_only"
+        }
+      ]
+    },
+    {
+      "id": "python_style_negative",
+      "category": "python-style",
+      "preference_form": "explicit",
+      "setup": [
+        {
+          "user": "记住我在 Python 项目中的长期偏好：公共函数必须有完整类型标注；能用标准库就不要新增第三方依赖。",
+          "assistant": "已记住。"
+        }
+      ],
+      "probe": "这不是 Python 实现任务。请用与语言无关的三步伪代码描述保持顺序去重，不要出现 Python 函数定义。",
+      "applicable": false,
+      "expected_memory_markers": ["类型标注", "标准库"],
+      "tags": ["negative", "scope", "python"],
+      "assertions": [
+        {
+          "id": "python_scope_not_overapplied",
+          "kind": "not_regex",
+          "metric": "scope_control",
+          "pattern": "(?m)^\\s*def\\s+|->\\s*list\\[|from\\s+typing\\s+import"
+        }
+      ]
+    },
+    {
+      "id": "client_email_positive",
+      "category": "email-tone",
+      "preference_form": "explicit",
+      "setup": [
+        {
+          "user": "请把这条设为长期偏好：给外部客户写中文项目更新邮件时，开头用“王经理您好”，结尾用“此致”和“敬礼”，语气正式简洁，不使用 emoji，也不要编号列表。",
+          "assistant": "已记住。"
+        }
+      ],
+      "probe": "帮我给外部客户王经理写一封很短的项目更新邮件：测试已完成，交付时间仍是周五，请对方确认周四下午是否方便验收。",
+      "applicable": true,
+      "expected_memory_markers": ["王经理您好", "此致", "敬礼"],
+      "tags": ["positive", "email", "tone"],
+      "assertions": [
+        {
+          "id": "email_required_conventions",
+          "kind": "ordered_contains",
+          "values": ["王经理您好", "此致", "敬礼"],
+          "weight": 2
+        },
+        {
+          "id": "email_no_emoji_or_numbered_list",
+          "kind": "not_regex",
+          "pattern": "(?m)[😀-🙏]|^\\s*\\d+[.、)]"
+        },
+        {
+          "id": "email_concise",
+          "kind": "max_chars",
+          "max": 240
+        }
+      ]
+    },
+    {
+      "id": "client_email_negative",
+      "category": "email-tone",
+      "preference_form": "explicit",
+      "setup": [
+        {
+          "user": "请把这条设为长期偏好：给外部客户写中文项目更新邮件时，开头用“王经理您好”，结尾用“此致”和“敬礼”，语气正式简洁。",
+          "assistant": "已记住。"
+        }
+      ],
+      "probe": "这不是客户邮件。帮我给合作多年的同组同事发一句轻松的聊天消息，问他下午三点能不能一起看一下测试结果。",
+      "applicable": false,
+      "expected_memory_markers": ["王经理您好", "此致", "敬礼"],
+      "tags": ["negative", "scope", "email"],
+      "assertions": [
+        {
+          "id": "email_scope_not_overapplied",
+          "kind": "not_contains_any",
+          "metric": "scope_control",
+          "values": ["王经理您好", "此致", "敬礼"]
+        },
+        {
+          "id": "chat_message_concise",
+          "kind": "max_chars",
+          "max": 100
+        }
+      ]
+    },
+    {
+      "id": "weekly_report_positive",
+      "category": "report-structure",
+      "preference_form": "explicit",
+      "setup": [
+        {
+          "user": "记住我的长期工作偏好：写每周项目状态报告时固定按“## 结论”“## 证据”“## 风险”三个标题组织，并且结论必须最先出现。",
+          "assistant": "已记住。"
+        }
+      ],
+      "probe": "生成本周项目状态报告：核心接口已完成，12 项集成测试全部通过；风险是第三方沙箱周末可能维护。",
+      "applicable": true,
+      "expected_memory_markers": ["## 结论", "## 证据", "## 风险"],
+      "tags": ["positive", "report", "structure"],
+      "assertions": [
+        {
+          "id": "report_heading_order",
+          "kind": "ordered_contains",
+          "values": ["## 结论", "## 证据", "## 风险"],
+          "weight": 2
+        }
+      ]
+    },
+    {
+      "id": "weekly_report_negative",
+      "category": "report-structure",
+      "preference_form": "explicit",
+      "setup": [
+        {
+          "user": "记住我的长期工作偏好：写每周项目状态报告时固定按“## 结论”“## 证据”“## 风险”三个标题组织。",
+          "assistant": "已记住。"
+        }
+      ],
+      "probe": "先不要写状态报告。只给我五个可能的下周讨论议题，使用简单项目符号。",
+      "applicable": false,
+      "expected_memory_markers": ["## 结论", "## 证据", "## 风险"],
+      "tags": ["negative", "scope", "report"],
+      "assertions": [
+        {
+          "id": "report_scope_not_overapplied",
+          "kind": "not_contains_any",
+          "metric": "scope_control",
+          "values": ["## 结论", "## 证据", "## 风险"]
+        }
+      ]
+    },
+    {
+      "id": "citation_style_positive",
+      "category": "citation-style",
+      "preference_form": "explicit",
+      "setup": [
+        {
+          "user": "这是当前论文项目的长期引用偏好：LaTeX 正文引用统一使用 biblatex 的 \\autocite，不使用 \\cite、\\citep 或 \\citet；返回时只给源码。",
+          "assistant": "已记住。"
+        }
+      ],
+      "probe": "为当前论文写一句英文正文，表达 Smith 的 2024 年研究发现数字化提高了生产率，文献键是 smith2024。返回 LaTeX 源码。",
+      "applicable": true,
+      "expected_memory_markers": ["autocite", "biblatex"],
+      "tags": ["positive", "citation", "latex"],
+      "assertions": [
+        {
+          "id": "biblatex_autocite",
+          "kind": "contains_all",
+          "values": ["\\autocite{smith2024}"],
+          "weight": 2
+        },
+        {
+          "id": "forbidden_citation_commands",
+          "kind": "not_regex",
+          "pattern": "\\\\cite(?:p|t)?\\{"
+        },
+        {
+          "id": "source_only",
+          "kind": "source_only"
+        }
+      ]
+    },
+    {
+      "id": "citation_style_negative",
+      "category": "citation-style",
+      "preference_form": "explicit",
+      "setup": [
+        {
+          "user": "这是当前论文项目的长期引用偏好：LaTeX 正文引用统一使用 biblatex 的 \\autocite，不使用其他引用命令。",
+          "assistant": "已记住。"
+        }
+      ],
+      "probe": "现在不是写 LaTeX。请把以下信息整理成一条普通文本参考文献，不要使用任何 LaTeX 命令：Smith, 2024, Digital Productivity, Journal of Economics。",
+      "applicable": false,
+      "expected_memory_markers": ["autocite", "biblatex"],
+      "tags": ["negative", "scope", "citation"],
+      "assertions": [
+        {
+          "id": "citation_scope_not_overapplied",
+          "kind": "not_contains_any",
+          "metric": "scope_control",
+          "values": ["\\autocite", "\\cite", "```latex"]
+        }
+      ]
+    },
+    {
+      "id": "missing_file_workflow_positive",
+      "category": "analysis-workflow",
+      "preference_form": "explicit",
+      "setup": [
+        {
+          "user": "记住我的长期分析流程：当我要求分析一个当前拿不到的具体数据文件时，先明确说明文件不可用，再列出完整性、字段类型和异常值三个检查项，绝不编造数值结论。",
+          "assistant": "已记住。"
+        }
+      ],
+      "probe": "请分析 sales.csv 的销售趋势。我还没有上传这个文件。",
+      "applicable": true,
+      "expected_memory_markers": ["文件不可用", "完整性", "异常值"],
+      "tags": ["positive", "workflow", "analysis"],
+      "assertions": [
+        {
+          "id": "missing_file_disclosed",
+          "kind": "contains_any",
+          "values": ["没有上传", "未提供", "无法访问", "拿不到"]
+        },
+        {
+          "id": "validation_checklist_present",
+          "kind": "contains_all",
+          "values": ["完整性", "字段类型", "异常值"],
+          "weight": 2
+        },
+        {
+          "id": "no_fabricated_numeric_finding",
+          "kind": "not_regex",
+          "pattern": "销售(?:额|量)?(?:增长|下降|为|达到)\\s*\\d"
+        }
+      ]
+    },
+    {
+      "id": "missing_file_workflow_negative",
+      "category": "analysis-workflow",
+      "preference_form": "explicit",
+      "setup": [
+        {
+          "user": "记住我的长期分析流程：当我要求分析一个当前拿不到的具体数据文件时，先说明文件不可用，再列出完整性、字段类型和异常值三个检查项。",
+          "assistant": "已记住。"
+        }
+      ],
+      "probe": "我不是让你分析具体文件。请概括 CSV 数据质量检查通常包括哪些方面。",
+      "applicable": false,
+      "expected_memory_markers": ["文件不可用", "完整性", "异常值"],
+      "tags": ["negative", "scope", "workflow"],
+      "assertions": [
+        {
+          "id": "missing_file_scope_not_overapplied",
+          "kind": "not_contains_any",
+          "metric": "scope_control",
+          "values": ["请上传", "没有上传", "无法访问该文件", "未找到文件"]
+        },
+        {
+          "id": "general_validation_content",
+          "kind": "contains_any",
+          "values": ["完整性", "缺失值", "字段类型", "异常值", "重复"]
+        }
+      ]
+    },
+    {
+      "id": "technical_language_positive",
+      "category": "language-style",
+      "preference_form": "explicit",
+      "setup": [
+        {
+          "user": "记住我的长期技术写作偏好：默认用中文回答；英文缩写第一次出现时给出中文名称、英文全称和缩写，后面只用缩写；不要再附一份完整英文翻译。",
+          "assistant": "已记住。"
+        }
+      ],
+      "probe": "请用一小段话解释 RAG 如何帮助长期记忆 Agent。",
+      "applicable": true,
+      "expected_memory_markers": ["英文全称", "缩写", "中文回答"],
+      "tags": ["positive", "language", "terminology"],
+      "assertions": [
+        {
+          "id": "acronym_expanded_on_first_use",
+          "kind": "regex",
+          "pattern": "检索增强生成[（(]Retrieval[- ]Augmented Generation[,，]?\\s*RAG[）)]"
+        },
+        {
+          "id": "no_parallel_english_answer",
+          "kind": "not_regex",
+          "pattern": "(?mi)^(english translation|in english|rag is a)"
+        },
+        {
+          "id": "technical_answer_concise",
+          "kind": "max_chars",
+          "max": 500
+        }
+      ]
+    },
+    {
+      "id": "technical_language_override",
+      "category": "language-style",
+      "preference_form": "explicit",
+      "setup": [
+        {
+          "user": "记住我的长期技术写作偏好：默认用中文回答，英文缩写第一次出现时给出中英文全称；单次明确指定其他语言时以当次要求为准。",
+          "assistant": "已记住。"
+        }
+      ],
+      "probe": "仅本次覆盖默认语言：write a two-sentence English abstract about retrieval-augmented generation. Use English only.",
+      "applicable": false,
+      "expected_memory_markers": ["中文回答", "中英文全称"],
+      "tags": ["negative", "override", "language"],
+      "assertions": [
+        {
+          "id": "temporary_language_override_honored",
+          "kind": "not_regex",
+          "metric": "scope_control",
+          "pattern": "[\\u4e00-\\u9fff]"
+        },
+        {
+          "id": "english_abstract_content",
+          "kind": "regex",
+          "pattern": "(?i)retrieval.?(augmented|augmentation).?(generation|systems|models)"
+        }
+      ]
+    },
+    {
+      "id": "comparison_table_positive",
+      "category": "markdown-layout",
+      "preference_form": "explicit",
+      "setup": [
+        {
+          "user": "记住我的长期排版偏好：当比较至少三个方案、且有至少三个重复字段时使用 Markdown 表格；简单事实或只有一个映射时不要为了排版而使用表格。",
+          "assistant": "已记住。"
+        }
+      ],
+      "probe": "比较 Zotero、Mendeley 和 EndNote 的价格、协作方式、主要平台和适合人群。",
+      "applicable": true,
+      "expected_memory_markers": ["三个方案", "Markdown 表格"],
+      "tags": ["positive", "markdown", "layout"],
+      "assertions": [
+        {
+          "id": "multi_field_comparison_table",
+          "kind": "markdown_table",
+          "weight": 2
+        },
+        {
+          "id": "all_comparison_entities_present",
+          "kind": "contains_all",
+          "values": ["Zotero", "Mendeley", "EndNote"]
+        }
+      ]
+    },
+    {
+      "id": "comparison_table_negative",
+      "category": "markdown-layout",
+      "preference_form": "explicit",
+      "setup": [
+        {
+          "user": "记住我的长期排版偏好：当比较至少三个方案、且有至少三个重复字段时使用 Markdown 表格；简单事实不要使用表格。",
+          "assistant": "已记住。"
+        }
+      ],
+      "probe": "只用一句话告诉我 Zotero 是否开源，不要展开比较。",
+      "applicable": false,
+      "expected_memory_markers": ["三个方案", "Markdown 表格"],
+      "tags": ["negative", "scope", "markdown"],
+      "assertions": [
+        {
+          "id": "simple_fact_not_tabulated",
+          "kind": "no_markdown_table",
+          "metric": "scope_control"
+        },
+        {
+          "id": "simple_fact_concise",
+          "kind": "max_chars",
+          "max": 180
+        }
+      ]
+    }
+  ]
+}

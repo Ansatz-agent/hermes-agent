@@ -21,6 +21,7 @@ import errno
 import hashlib
 import json
 import logging
+import math
 import os
 import queue
 import random
@@ -45,7 +46,7 @@ from hermes_constants import get_hermes_home
 from hermes_cli.sqlite_runtime import (
     is_sqlite_wal_reset_vulnerable as _is_sqlite_wal_reset_vulnerable,
 )
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar
+from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Tuple, TypeVar
 
 from hermes_state_common import (  # noqa: F401  (re-exported for back-compat)
     _BRANCH_CHILD_SQL,
@@ -7027,6 +7028,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         "model", "cost_status", "cost_source", "pricing_version",
         "billing_provider", "billing_base_url", "billing_mode",
     )
+    _TOKEN_DELTA_CONTROL_FIELDS = ("absolute", "request_event")
 
     def queue_token_counts(self, session_id: str, **kwargs) -> None:
         """Enqueue a token/cost delta for the background writer.
@@ -7180,7 +7182,10 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         groups: List[Tuple[Optional[tuple], str, Dict[str, Any]]] = []
         for session_id, kwargs in batch:
             key = None
-            if not kwargs.get("absolute"):
+            # A request event is atomic evidence for one provider response.
+            # Never coalesce it with a neighbour: doing so would preserve the
+            # aggregate counters while silently dropping one chart point.
+            if not kwargs.get("absolute") and not kwargs.get("request_event"):
                 key = (session_id,) + tuple(
                     kwargs.get(f) for f in self._TOKEN_DELTA_ROUTE_FIELDS
                 )
@@ -7277,6 +7282,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         billing_mode: Optional[str] = None,
         api_call_count: int = 0,
         absolute: bool = False,
+        request_event: Optional[Mapping[str, Any]] = None,
     ) -> None:
         """Update token counters and backfill model if not already set.
 
@@ -7425,7 +7431,201 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                     cost_source=cost_source,
                     api_call_count=api_call_count,
                 )
+            if not absolute and isinstance(request_event, Mapping):
+                self._record_request_usage(
+                    conn,
+                    session_id,
+                    request_event=request_event,
+                    fallback_model=model,
+                    fallback_provider=billing_provider,
+                )
         self._execute_write(_do)
+
+    @staticmethod
+    def _request_usage_nonnegative_int(value: Any) -> int:
+        try:
+            return max(0, int(value or 0))
+        except (TypeError, ValueError, OverflowError):
+            return 0
+
+    @staticmethod
+    def _request_usage_nonnegative_float(value: Any) -> float:
+        try:
+            number = float(value or 0.0)
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
+        return max(0.0, number) if math.isfinite(number) else 0.0
+
+    def _record_request_usage(
+        self,
+        conn,
+        session_id: str,
+        *,
+        request_event: Mapping[str, Any],
+        fallback_model: Optional[str],
+        fallback_provider: Optional[str],
+    ) -> None:
+        """Persist one content-free provider-request event transactionally.
+
+        The aggregate ``sessions`` and ``session_model_usage`` updates and this
+        event share the caller's transaction, so the monitor can never observe
+        a request point whose token delta failed (or the inverse).  The
+        deterministic request id makes replay idempotent.
+        """
+
+        api_request_id = str(request_event.get("api_request_id") or "").strip()
+        if not api_request_id:
+            return
+        conversation_id = str(
+            request_event.get("conversation_id") or session_id
+        ).strip() or session_id
+        turn_id = str(request_event.get("turn_id") or "").strip()
+        started_at = self._request_usage_nonnegative_float(
+            request_event.get("started_at")
+        )
+        if started_at <= 0:
+            started_at = time.time()
+        conn.execute(
+            """INSERT OR IGNORE INTO session_request_usage (
+                   session_id, conversation_id, api_request_id, turn_id,
+                   request_sequence, started_at, duration_ms, model,
+                   billing_provider, input_tokens, output_tokens,
+                   cache_read_tokens, cache_write_tokens, reasoning_tokens
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                session_id,
+                conversation_id,
+                api_request_id,
+                turn_id,
+                self._request_usage_nonnegative_int(
+                    request_event.get("request_sequence")
+                ),
+                started_at,
+                self._request_usage_nonnegative_float(
+                    request_event.get("duration_ms")
+                ),
+                str(request_event.get("model") or fallback_model or ""),
+                str(
+                    request_event.get("billing_provider")
+                    or fallback_provider
+                    or ""
+                ),
+                self._request_usage_nonnegative_int(
+                    request_event.get("input_tokens")
+                ),
+                self._request_usage_nonnegative_int(
+                    request_event.get("output_tokens")
+                ),
+                self._request_usage_nonnegative_int(
+                    request_event.get("cache_read_tokens")
+                ),
+                self._request_usage_nonnegative_int(
+                    request_event.get("cache_write_tokens")
+                ),
+                self._request_usage_nonnegative_int(
+                    request_event.get("reasoning_tokens")
+                ),
+            ),
+        )
+
+    def request_usage_timeline(
+        self, conversation_id: str
+    ) -> List[Dict[str, Any]]:
+        """Return ordered content-free provider-request usage for a conversation."""
+
+        if not conversation_id:
+            return []
+        self.flush_token_counts()
+        with self._read_ctx() as conn:
+            rows = conn.execute(
+                """SELECT session_id, conversation_id, api_request_id, turn_id,
+                          request_sequence, started_at, duration_ms, model,
+                          billing_provider, input_tokens, output_tokens,
+                          cache_read_tokens, cache_write_tokens, reasoning_tokens
+                     FROM session_request_usage
+                    WHERE conversation_id = ?
+                    ORDER BY started_at, id""",
+                (conversation_id,),
+            ).fetchall()
+        events: List[Dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            input_tokens = self._request_usage_nonnegative_int(
+                item.get("input_tokens")
+            )
+            output_tokens = self._request_usage_nonnegative_int(
+                item.get("output_tokens")
+            )
+            cache_read_tokens = self._request_usage_nonnegative_int(
+                item.get("cache_read_tokens")
+            )
+            cache_write_tokens = self._request_usage_nonnegative_int(
+                item.get("cache_write_tokens")
+            )
+            item["metrics"] = {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "cache_read_tokens": cache_read_tokens,
+                "cache_write_tokens": cache_write_tokens,
+                "reasoning_tokens": self._request_usage_nonnegative_int(
+                    item.get("reasoning_tokens")
+                ),
+                "prompt_tokens": (
+                    input_tokens + cache_read_tokens + cache_write_tokens
+                ),
+                "total_tokens": (
+                    input_tokens
+                    + cache_read_tokens
+                    + cache_write_tokens
+                    + output_tokens
+                ),
+                "api_duration_ms": self._request_usage_nonnegative_float(
+                    item.get("duration_ms")
+                ),
+            }
+            for key in (
+                "input_tokens",
+                "output_tokens",
+                "cache_read_tokens",
+                "cache_write_tokens",
+                "reasoning_tokens",
+                "duration_ms",
+            ):
+                item.pop(key, None)
+            events.append(item)
+        return events
+
+    def content_free_turn_boundaries(
+        self, session_id: str
+    ) -> List[Dict[str, Any]]:
+        """Return real-user turn timestamps without loading message content.
+
+        This deliberately narrow projection is used only to associate legacy
+        request-log records with turns.  Display-only synthetic user rows are
+        excluded, and prompt/message/object bodies never leave SQLite.
+        """
+
+        if not session_id:
+            return []
+        with self._read_ctx() as conn:
+            rows = conn.execute(
+                """SELECT id, timestamp
+                     FROM messages
+                    WHERE session_id = ? AND role = 'user'
+                      AND (active = 1 OR compacted = 1)
+                      AND COALESCE(display_kind, '') = ''
+                    ORDER BY id""",
+                (session_id,),
+            ).fetchall()
+        return [
+            {
+                "turn_id": f"legacy:{session_id}:{int(row['id'])}",
+                "started_at": self._request_usage_nonnegative_float(
+                    row["timestamp"]
+                ),
+            }
+            for row in rows
+        ]
 
     def _record_model_usage(
         self,

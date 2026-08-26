@@ -2202,7 +2202,12 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
             _ce_result = None
             try:
                 def _execute(next_args: dict) -> Any:
-                    return agent.context_compressor.handle_tool_call(function_name, next_args, messages=messages)
+                    return agent.context_compressor.handle_tool_call(
+                        function_name,
+                        next_args,
+                        messages=messages,
+                        tool_call_id=getattr(tool_call, "id", "") or "",
+                    )
                 function_result, function_args, middleware_trace, _execution_blocked, _execution_dispatched = _managed_values(_run_agent_tool_execution_middleware(
                     agent,
                     function_name=function_name,

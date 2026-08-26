@@ -664,6 +664,46 @@ compression:
   # auxiliary section below (auxiliary.compression.provider / model).
 
 # =============================================================================
+# Context engine
+# =============================================================================
+# The default "compressor" performs whole-history summarization. Select the
+# bundled "object_context" engine to add Context Compression Strategy V1:
+# large structured objects in recent verbatim user/assistant/tool Deltas are
+# replaced in-place by stable Cards and remain exactly retrievable. The normal
+# whole-history summarizer continues independently and consumes the Card view.
+context:
+  engine: compressor             # set to object_context to enable V1
+  object_context:
+    hot_tail_max_deltas: 8
+    hot_tail_token_budget_ratio: 0.25
+    context_soft_limit_ratio: 0.75
+    object_prefilter_min_tokens: 256
+    min_absolute_saving_tokens: 128
+    min_relative_saving_ratio: 0.25
+    summary_max_tokens: 64
+    wm_grace_deltas: 20
+    recent_retrieval_active_deltas: 20
+    retrieval_max_tokens_ratio: 0.50
+
+# =============================================================================
+# Final LLM prompt monitor (local debugging)
+# =============================================================================
+# Disabled by default. When enabled, Hermes writes a private, redacted JSON
+# snapshot of the finalized request body handed to each provider adapter. This
+# includes messages/input, system/instructions, tool schemas, Object Context
+# Cards, and turn-scoped retrieve_object reinsertion. View new snapshots safely
+# from a second terminal with `ansatz prompt-monitor`.
+#
+# Prompt bodies can contain private conversation data. Redaction catches known
+# credential shapes but is not a substitute for treating these files as
+# sensitive. Files live under the active profile's logs/prompt-monitor/ folder.
+logging:
+  prompt_monitor:
+    enabled: false
+    include_auxiliary: true  # summarizer, Card summaries, title, vision, etc.
+    max_files: 100           # oldest snapshots are removed after each capture
+
+# =============================================================================
 # Anthropic prompt caching TTL
 # =============================================================================
 # When prompt caching is active (Claude via OpenRouter or native Anthropic),

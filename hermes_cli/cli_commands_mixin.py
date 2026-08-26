@@ -765,18 +765,48 @@ class CLICommandsMixin:
         self.new_session()
         _cprint(f"{_DIM}Session reset. New tool configuration is active.{_RST}")
 
-    def _handle_profile_command(self):
-        """Display active profile name and home directory."""
-        from hermes_cli.slash_exec import CommandContext, execute_command
+    def _handle_profile_command(self, cmd_original: str = "/profile"):
+        """Browse user preferences, or show the runtime profile explicitly."""
+        from hermes_cli.profile_command import (
+            ProfileBrowseError,
+            format_profile_category,
+            format_profile_directory,
+            read_profile_payload,
+        )
 
-        reply = execute_command("profile", CommandContext(surface="cli"))
-        profile_name = reply.data["profile"]
-        display = reply.data["home"]
+        parts = str(cmd_original or "/profile").split(maxsplit=1)
+        category = parts[1].strip() if len(parts) > 1 else ""
+        if category.casefold() in {"runtime", "home", "config"}:
+            from hermes_cli.slash_exec import CommandContext, execute_command
 
-        print()
-        print(f"  Profile: {profile_name}")
-        print(f"  Home:    {display}")
-        print()
+            reply = execute_command("profile", CommandContext(surface="cli"))
+            profile_name = reply.data["profile"]
+            display = reply.data["home"]
+            print()
+            print(f"  Profile: {profile_name}")
+            print(f"  Home:    {display}")
+            print()
+            return
+
+        try:
+            payload = read_profile_payload(
+                agent=getattr(self, "agent", None),
+                session_id=str(getattr(self, "session_id", "") or ""),
+                scope=category,
+            )
+        except ProfileBrowseError as exc:
+            print()
+            print(f"  Could not read user preferences: {exc}")
+            print("  Use /profile runtime to show the active Hermes runtime profile.")
+            print()
+            return
+
+        lines = (
+            format_profile_category(payload, category)
+            if category
+            else format_profile_directory(payload)
+        )
+        print("\n".join(lines))
 
     def _handle_handoff_command(self, cmd_original: str) -> bool:
         """Handle ``/handoff <platform>`` — transfer this CLI session to a gateway platform.
@@ -3296,6 +3326,86 @@ class CLICommandsMixin:
             _cprint(f"  Message timestamps: {state}")
         else:
             _cprint("  Failed to save timestamps setting to config.yaml")
+
+    def _handle_object_context_command(self, cmd_original: str) -> None:
+        """Configure Object Context V1 without mutating the live agent.
+
+        The selected engine owns both request projection and a model-visible
+        retrieval tool.  Persist changes for the next process instead of
+        swapping either surface in the middle of an existing conversation.
+        """
+        from hermes_cli.object_context_command import (
+            OBJECT_CONTEXT_ENGINE,
+            ObjectContextCommandError,
+            active_context_engine_monitor,
+            active_context_engine_name,
+            active_context_engine_status,
+            persisted_context_engine_telemetry,
+            run_object_context_command,
+        )
+
+        parts = str(cmd_original or "/object_context").strip().split(None, 1)
+        args_raw = parts[1] if len(parts) > 1 else ""
+        agent = getattr(self, "agent", None)
+        action = (
+            args_raw.strip().split(None, 1)[0].casefold() if args_raw.strip() else ""
+        )
+        active_engine = active_context_engine_name(agent)
+        engine_status = active_context_engine_status(agent)
+        monitor_timeline = (
+            active_context_engine_monitor(agent) if action == "monitor" else None
+        )
+        if action == "monitor":
+            persisted = persisted_context_engine_telemetry(
+                getattr(self, "_session_db", None),
+                str(getattr(self, "session_id", "") or ""),
+                include_all_sessions=True,
+            )
+            if persisted is not None:
+                persisted_status, persisted_timeline = persisted
+                if engine_status is None:
+                    engine_status = persisted_status
+                active_engine = OBJECT_CONTEXT_ENGINE
+                monitor_timeline = persisted_timeline
+        elif agent is None and action == "stats":
+            persisted = persisted_context_engine_telemetry(
+                getattr(self, "_session_db", None),
+                str(getattr(self, "session_id", "") or ""),
+            )
+            if persisted is not None:
+                engine_status, _persisted_timeline = persisted
+                active_engine = OBJECT_CONTEXT_ENGINE
+        try:
+            result = run_object_context_command(
+                args_raw,
+                active_engine=active_engine,
+                engine_status=engine_status,
+                monitor_timeline=monitor_timeline,
+            )
+        except ObjectContextCommandError as exc:
+            print(f"  Object Context V1: {exc}")
+            return
+
+        browser_opened: bool | None = None
+        if result.artifact_path:
+            try:
+                import webbrowser
+                from pathlib import Path
+
+                browser_opened = bool(
+                    webbrowser.open(
+                        Path(result.artifact_path).resolve().as_uri(), new=2
+                    )
+                )
+            except Exception:
+                browser_opened = False
+
+        print()
+        for line in result.lines:
+            print(f"  {line}" if line else "")
+        if browser_opened is False:
+            print("  Browser launch was unavailable; open the Dashboard path above.")
+        print()
 
     def _handle_reasoning_command(self, cmd: str):
         """Handle /reasoning — manage effort level and display toggle.

@@ -1144,8 +1144,27 @@ def memory_tool(
 
 
 def check_memory_requirements() -> bool:
-    """Memory tool has no external requirements -- always available."""
-    return True
+    """Expose the built-in file tool only when one of its stores is enabled.
+
+    External memory providers inject their own schemas after core-tool
+    discovery.  Hiding this tool when both built-in files are disabled lets an
+    installation use an external profile-only provider without advertising a
+    generic ``memory`` tool whose ``store`` argument would be ``None`` at
+    execution time.
+    """
+    try:
+        from hermes_cli.config import load_config_readonly
+
+        config = load_config_readonly() or {}
+        memory = config.get("memory") if isinstance(config, dict) else None
+        if not isinstance(memory, dict):
+            return False
+        return bool(
+            memory.get("memory_enabled", False)
+            or memory.get("user_profile_enabled", False)
+        )
+    except Exception:
+        return False
 
 
 def apply_memory_pending(payload: Dict[str, Any], store: "MemoryStore") -> Dict[str, Any]:
@@ -1261,7 +1280,6 @@ registry.register(
     check_fn=check_memory_requirements,
     emoji="🧠",
 )
-
 
 
 

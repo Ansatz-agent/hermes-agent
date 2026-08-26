@@ -27,6 +27,12 @@ class _StubBudget:
 class _StubCompressor:
     last_prompt_tokens = 0
 
+    def __init__(self):
+        self.deltas = []
+
+    def on_delta_committed(self, delta):
+        self.deltas.append(delta)
+
 
 class _StubAgent:
     """Minimal agent surface that ``finalize_turn`` reads from."""
@@ -162,6 +168,7 @@ def test_interrupt_after_tool_closes_sequence_with_placeholder():
     assert agent.persisted_messages[-1]["role"] == "assistant"
     follow_on = agent.persisted_messages + [{"role": "user", "content": "forget it"}]
     _assert_no_tool_then_user(follow_on)
+    assert agent.context_compressor.deltas == []
 
 
 
@@ -180,3 +187,4 @@ def test_interrupt_without_tool_tail_adds_nothing():
     _finalize(agent, messages, interrupted=True, final_response="partial reply")
     assert len(messages) == before
     assert messages[-1]["role"] == "assistant"
+    assert agent.context_compressor.deltas == []

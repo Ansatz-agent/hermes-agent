@@ -91,6 +91,7 @@ def test_finalize_turn_forwards_canonical_usage_when_available():
     assert captured["usage"] == CANONICAL_USAGE
     # Turn metadata still rides alongside usage.
     assert captured["kwargs"]["turn_id"] == "turn-1"
+    assert captured["kwargs"]["turn_start_index"] == 0
 
 
 def test_finalize_turn_forwards_none_when_no_response_usage():
@@ -153,3 +154,4 @@ def test_finalization_seam_observes_interrupted_turn_with_none_usage():
     assert captured["usage"] is None
     assert captured["kwargs"]["interrupted"] is True
     assert captured["kwargs"]["turn_id"] == "turn-int"
+    assert captured["kwargs"]["turn_start_index"] == 0

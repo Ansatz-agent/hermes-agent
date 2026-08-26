@@ -331,6 +331,7 @@ def _copy_direct_tables(
         "sessions",
         "messages",
         "session_model_usage",
+        "session_request_usage",
         "compression_locks",
         "gateway_routing",
         "async_delegations",

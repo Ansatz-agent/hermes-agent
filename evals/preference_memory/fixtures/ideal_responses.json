@@ -1,0 +1,18 @@
+{
+  "latex_source_positive": "模型设定如下：\n\\begin{equation}\ny_i=\\mu_i+\\varepsilon_i,\\qquad \\varepsilon_i\\sim\\mathcal{N}(0,\\sigma^2).\n\\end{equation}\n其中，真实信号为 $\\mu_i$，随机误差 $\\varepsilon_i$ 的均值为零、方差为 $\\sigma^2$。",
+  "latex_source_negative": "样本均值是把一组样本值相加，再除以样本数量所得的数。它用一个数概括这组样本的平均水平。",
+  "python_style_positive": "def dedupe_preserve_order(items: list[str]) -> list[str]:\n    return list(dict.fromkeys(items))",
+  "python_style_negative": "1. 建立一个空的已见集合和结果序列。\n2. 依次读取输入元素；若尚未见过，就记录它并追加到结果序列。\n3. 返回结果序列。",
+  "client_email_positive": "王经理您好：\n\n测试已全部完成，交付时间仍为本周五。请问您周四下午是否方便安排验收？烦请确认。\n\n此致\n敬礼",
+  "client_email_negative": "下午三点方便一起看一下测试结果吗？",
+  "weekly_report_positive": "## 结论\n核心接口已完成，项目按计划推进。\n\n## 证据\n12 项集成测试全部通过。\n\n## 风险\n第三方沙箱周末可能维护，可能影响联调。",
+  "weekly_report_negative": "- 核心接口下一阶段目标\n- 第三方沙箱维护安排\n- 验收标准确认\n- 性能测试计划\n- 发布窗口选择",
+  "citation_style_positive": "Digitalization has been shown to increase productivity \\autocite{smith2024}.",
+  "citation_style_negative": "Smith. 2024. “Digital Productivity.” Journal of Economics.",
+  "missing_file_workflow_positive": "sales.csv 尚未提供，因此我目前无法分析其中的销售趋势，也不会编造数值结论。拿到文件后，我会依次检查数据完整性、字段类型和异常值，再进行时间趋势分析。",
+  "missing_file_workflow_negative": "CSV 数据质量检查通常包括完整性与缺失值、字段类型和格式、重复记录、取值范围、异常值、跨字段一致性以及编码和分隔符是否正确。",
+  "technical_language_positive": "检索增强生成（Retrieval-Augmented Generation, RAG）会在回答前检索外部记忆库，把与当前问题相关的历史事实和偏好加入上下文；因此长期记忆 Agent 不必把全部历史对话长期塞进提示词，也能按需调用过去的信息。",
+  "technical_language_override": "Retrieval-augmented generation grounds a model's response in information retrieved from an external knowledge store. It can improve factuality and make long-lived systems use relevant information without placing the entire history in every prompt.",
+  "comparison_table_positive": "| 工具 | 价格 | 协作方式 | 主要平台 | 适合人群 |\n|---|---|---|---|---|\n| Zotero | 免费开源；可购买云存储 | 共享群组文库 | Windows、macOS、Linux、Web | 重视开放生态和灵活插件的研究者 |\n| Mendeley | 免费基础版 | 私有群组与共享文献库 | Windows、macOS、Linux、Web | 需要入门友好界面的个人或小组 |\n| EndNote | 商业付费 | 共享文献库 | Windows、macOS、Web | 机构用户及复杂引用工作流 |",
+  "comparison_table_negative": "是，Zotero 是开源的文献管理工具。"
+}

@@ -501,6 +501,7 @@ from hermes_cli.subcommands.uninstall import build_uninstall_parser
 from hermes_cli.subcommands.dashboard import build_dashboard_parser
 from hermes_cli.subcommands.gui import build_gui_parser
 from hermes_cli.subcommands.logs import build_logs_parser
+from hermes_cli.subcommands.prompt_monitor import build_prompt_monitor_parser
 from hermes_cli.subcommands.prompt_size import build_prompt_size_parser
 from hermes_cli.subcommands.memory import build_memory_parser
 from hermes_cli.subcommands.acp import build_acp_parser
@@ -10983,6 +10984,20 @@ def cmd_prompt_size(args):
     _impl(args)
 
 
+def cmd_prompt_monitor(args):
+    """Follow redacted finalized LLM request snapshots."""
+    from hermes_cli.prompt_monitor import monitor_prompts
+
+    return monitor_prompts(
+        existing=getattr(args, "existing", 0),
+        once=getattr(args, "once", False),
+        source=getattr(args, "source", "all"),
+        session=getattr(args, "session", None),
+        task=getattr(args, "task", None),
+        json_output=getattr(args, "json", False),
+    )
+
+
 def cmd_logs(args):
     """View and filter Hermes log files."""
     from hermes_cli.logs import tail_log, list_logs
@@ -11046,7 +11061,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "journey", "memory-graph", "learning",
         "model", "monitoring", "pairing", "pause", "pets", "plugins", "portal", "profile", "provider",
         "project", "proxy",
-        "prompt-size",
+        "prompt-monitor", "prompt-size",
         "resume",
         "send", "sessions", "setup",
         "skin", "skills", "slack", "status", "sync", "tools", "uninstall", "update",
@@ -13055,6 +13070,13 @@ def _main():
     # logs command  (parser built in hermes_cli/subcommands/logs.py)
     # =========================================================================
     build_logs_parser(subparsers, cmd_logs=cmd_logs)
+
+    # =========================================================================
+    # prompt-monitor command
+    # =========================================================================
+    build_prompt_monitor_parser(
+        subparsers, cmd_prompt_monitor=cmd_prompt_monitor
+    )
 
     # =========================================================================
     # prompt-size command  (parser built in hermes_cli/subcommands/prompt_size.py)
