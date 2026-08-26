@@ -124,7 +124,10 @@ describe('incremental runtime with the real thread renderer', () => {
     expect(runtime.thread.getState()).toBe(runtime.thread.getState())
     expect(runtime.thread.composer.getState()).toBe(runtime.thread.composer.getState())
     await waitFor(() => {
-      expect(screen.getByText('first chunk')).toBeTruthy()
+      // A busy runner may publish the second delta before the renderer's first
+      // assertion. Accept the coalesced text while still proving that the
+      // initial chunk reached the real thread surface.
+      expect(screen.getByText('first chunk', { exact: false })).toBeTruthy()
     })
 
     errorSpy.mockRestore()
