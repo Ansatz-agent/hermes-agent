@@ -593,7 +593,11 @@ export class TraceJournal {
       await this.options.fs.writeFile(temporary, encoded, { exclusive: true })
       scratchExists = true
       await this.options.fs.syncFile(temporary)
-      await this.options.fs.replaceFile(temporary, this.options.path)
+      const journalExists = (await this.options.fs.stat(this.options.path)) !== null
+
+      await (journalExists
+        ? this.options.fs.replaceFile(temporary, this.options.path)
+        : this.options.fs.rename(temporary, this.options.path))
       scratchExists = false
       await this.options.fs.syncDirectory(dirname(this.options.path))
     } finally {
