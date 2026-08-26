@@ -167,6 +167,33 @@ test('prepareWindowsAuthToolchainInputs exports CPython 3.13 win_amd64 wheels an
   }
 })
 
+test('prepareWindowsAuthToolchainInputs reuses only a hash-verified local Python archive', async () => {
+  const fixture = makeFixture()
+  const commands = fixtureCommands()
+  const pythonArchiveCachePath = path.join(fixture.root, WINDOWS_PYTHON_ARCHIVE)
+  fs.writeFileSync(pythonArchiveCachePath, 'verified cached Python archive')
+
+  try {
+    const result = await prepareWindowsAuthToolchainInputs({
+      outputDir: fixture.outputDir,
+      projectRoot: fixture.projectRoot,
+      hostUvPath: fixture.hostUvPath,
+      hostPythonPath: fixture.hostPythonPath,
+      pythonArchiveCachePath,
+      execute: commands.execute,
+      downloadFile: () => assert.fail('verified cache must bypass network download'),
+      sha256File: filePath =>
+        path.basename(filePath) === WINDOWS_UV_WHEEL ? WINDOWS_UV_SHA256 : WINDOWS_PYTHON_SHA256,
+      extractUvExecutable: ({ destination }) => fs.writeFileSync(destination, 'fixture PE32+ x64 uv.exe')
+    })
+
+    assert.equal(result.pythonSource, `cache:${WINDOWS_PYTHON_ARCHIVE}`)
+    assert.equal(fs.readFileSync(result.pythonArchivePath, 'utf8'), 'verified cached Python archive')
+  } finally {
+    fs.rmSync(fixture.root, { recursive: true, force: true })
+  }
+})
+
 test('Windows auth inputs reject corrupt uv and incompatible wheels without publishing', async () => {
   for (const scenario of [{ corruptUv: true }, { wrongWheel: true }]) {
     const fixture = makeFixture()

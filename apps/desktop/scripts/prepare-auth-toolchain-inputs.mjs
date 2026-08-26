@@ -332,12 +332,16 @@ export async function prepareWindowsAuthToolchainInputs({
   projectRoot,
   hostUvPath,
   hostPythonPath,
+  pythonArchiveCachePath = null,
   downloadFile = defaultDownloadFile,
   sha256File = defaultSha256File,
   extractUvExecutable = extractWindowsUvExecutable
 }) {
   if (![outputDir, projectRoot, hostUvPath, hostPythonPath].every(value => path.isAbsolute(value))) {
     throw new Error('Windows authentication toolchain preparation paths must be absolute')
+  }
+  if (pythonArchiveCachePath !== null && !path.isAbsolute(pythonArchiveCachePath)) {
+    throw new Error('cached Windows Python archive path must be absolute')
   }
   requireRegularFile(hostUvPath, 'host uv')
   requireRegularFile(hostPythonPath, 'host Python')
@@ -358,12 +362,26 @@ export async function prepareWindowsAuthToolchainInputs({
   fs.mkdirSync(wheelhousePath, { recursive: true })
 
   try {
-    const pythonDownload = await downloadFile({
-      sources: WINDOWS_PYTHON_SOURCES,
-      destination: pythonArchivePath,
-      expectedSha256: WINDOWS_PYTHON_SHA256,
-      label: 'CPython Windows embeddable x64'
-    })
+    let pythonDownload
+    if (pythonArchiveCachePath) {
+      requireRegularFile(pythonArchiveCachePath, 'cached Windows Python archive')
+      fs.copyFileSync(pythonArchiveCachePath, pythonArchivePath)
+      const observed = sha256File(pythonArchivePath)
+      if (observed !== WINDOWS_PYTHON_SHA256) {
+        throw new Error(`cached Windows Python archive SHA-256 mismatch: expected ${WINDOWS_PYTHON_SHA256}, got ${observed}`)
+      }
+      pythonDownload = {
+        source: `cache:${path.basename(pythonArchiveCachePath)}`,
+        sha256: observed
+      }
+    } else {
+      pythonDownload = await downloadFile({
+        sources: WINDOWS_PYTHON_SOURCES,
+        destination: pythonArchivePath,
+        expectedSha256: WINDOWS_PYTHON_SHA256,
+        label: 'CPython Windows embeddable x64'
+      })
+    }
     requireRegularFile(pythonArchivePath, 'Windows Python archive')
     if (pythonDownload?.sha256 !== WINDOWS_PYTHON_SHA256 || sha256File(pythonArchivePath) !== WINDOWS_PYTHON_SHA256) {
       throw new Error('Windows Python archive SHA-256 mismatch')
@@ -661,12 +679,16 @@ export async function prepareWindowsAuthToolchainInputsFromEnvironment(env = pro
   const hostPythonPath = env.HERMES_AUTH_TOOLCHAIN_HOST_PYTHON
     ? path.resolve(env.HERMES_AUTH_TOOLCHAIN_HOST_PYTHON)
     : findManagedPython(hostUvPath, '3.13')
+  const pythonArchiveCachePath = env.HERMES_AUTH_TOOLCHAIN_WINDOWS_PYTHON_ARCHIVE
+    ? path.resolve(env.HERMES_AUTH_TOOLCHAIN_WINDOWS_PYTHON_ARCHIVE)
+    : null
 
   return prepareWindowsAuthToolchainInputs({
     outputDir,
     projectRoot,
     hostUvPath,
-    hostPythonPath
+    hostPythonPath,
+    pythonArchiveCachePath
   })
 }
 
