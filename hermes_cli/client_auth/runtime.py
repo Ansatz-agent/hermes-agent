@@ -157,6 +157,14 @@ class ValidationState(StrEnum):
     DEGRADED = "degraded"
 
 
+class CloudState(StrEnum):
+    """Cloud reachability without weakening the local account identity."""
+
+    ACTIVE = "active"
+    UNREACHABLE = "unreachable"
+    REAUTH_REQUIRED = "reauth_required"
+
+
 class LockedWaitingResult(StrEnum):
     AUTHENTICATED = "authenticated"
     OWNER_STOPPED = "owner_stopped"
@@ -181,6 +189,11 @@ class RevocationTombstone:
     session_id: str
     reason: str
     revoked_at: str
+
+
+@dataclass(frozen=True)
+class SignedOutTombstone:
+    reason: str = "signed_out"
 
 
 @dataclass(frozen=True)
@@ -995,6 +1008,7 @@ class RuntimeSnapshot:
     username: str | None
     session_expires_at: str | None
     reason: str | None
+    cloud_state: CloudState | None = None
     account_id: str | None = None
     session_id: str | None = None
     installation_id: str | None = None
@@ -1024,6 +1038,7 @@ class RuntimeSnapshot:
             username=username,
             session_expires_at=None,
             reason=None,
+            cloud_state=CloudState.ACTIVE,
         )
 
     @classmethod
@@ -1046,6 +1061,7 @@ class RuntimeSnapshot:
             username=status.username,
             session_expires_at=status.session_expires_at,
             reason=None,
+            cloud_state=CloudState.ACTIVE,
             principal_key=principal_key,
             legacy=_is_legacy_principal_key(principal_key),
         )
@@ -1067,6 +1083,7 @@ class RuntimeSnapshot:
             username=None,
             session_expires_at=None,
             reason=reason,
+            cloud_state=None,
         )
 
     @classmethod
@@ -1087,6 +1104,7 @@ class RuntimeSnapshot:
             username=credential.username,
             session_expires_at=None,
             reason=None,
+            cloud_state=CloudState.UNREACHABLE,
             account_id=credential.account_id,
             session_id=credential.session_id,
             installation_id=credential.installation_id,
@@ -1113,6 +1131,7 @@ class RuntimeSnapshot:
             username=record.cookie_record.username,
             session_expires_at=record.cookie_record.session_expires_at,
             reason=None,
+            cloud_state=CloudState.UNREACHABLE,
             principal_key=record.principal_key,
             validation_state=ValidationState.UNKNOWN,
             legacy=True,
@@ -1142,6 +1161,7 @@ class RuntimeSnapshot:
             valid_until=_lease_deadline(status, now=now, absolute_cap=absolute_cap),
             session_expires_at=absolute_text,
             reason=None,
+            cloud_state=CloudState.ACTIVE,
         )
 
     def locked(self, reason: str, *, now: float) -> RuntimeSnapshot:
@@ -1156,6 +1176,7 @@ class RuntimeSnapshot:
                 else secrets.token_hex(16)
             ),
             reason=reason,
+            cloud_state=None,
             validation_state=ValidationState.DEGRADED,
             validation_reason=reason,
         )
@@ -1164,11 +1185,22 @@ class RuntimeSnapshot:
         return replace(self, validation_state=ValidationState.VALIDATING, validation_reason=None)
 
     def degraded(self, reason: str) -> RuntimeSnapshot:
-        return replace(self, validation_state=ValidationState.DEGRADED, validation_reason=reason)
+        cloud_state = (
+            CloudState.REAUTH_REQUIRED
+            if reason in {"session_expired", "session_rejected"}
+            else CloudState.UNREACHABLE
+        )
+        return replace(
+            self,
+            cloud_state=cloud_state,
+            validation_state=ValidationState.DEGRADED,
+            validation_reason=reason,
+        )
 
     def online(self, *, last_validated_at: str) -> RuntimeSnapshot:
         return replace(
             self,
+            cloud_state=CloudState.ACTIVE,
             validation_state=ValidationState.ONLINE,
             validation_reason=None,
             last_validated_at=last_validated_at,
@@ -1180,12 +1212,23 @@ class RuntimeSnapshot:
         *,
         expected: AuthScope,
         now: float,
+        allow_local_continuity: bool = False,
     ) -> AuthScope:
         if not boundary:
             raise AuthRequired("runtime_unavailable")
         if self.state is not AuthState.AUTHENTICATED:
             raise AuthRequired(self.reason or "signed_out")
-        if (self.principal_key is None and now >= self.valid_until) or _read_boot_id() != self.boot_id:
+        if _read_boot_id() != self.boot_id:
+            raise AuthRequired("session_expired")
+        if self.cloud_state is not CloudState.ACTIVE:
+            if not allow_local_continuity:
+                fallback = (
+                    "session_expired"
+                    if self.cloud_state is CloudState.REAUTH_REQUIRED
+                    else "server_unavailable"
+                )
+                raise AuthRequired(self.validation_reason or fallback)
+        elif self.principal_key is None and now >= self.valid_until:
             raise AuthRequired("session_expired")
         if expected != self.scope:
             raise AuthScopeChanged("runtime_unavailable")
@@ -1212,6 +1255,9 @@ class RuntimeSnapshot:
             "valid_until": self.valid_until,
             "session_expires_at": self.session_expires_at,
             "reason": self.reason,
+            "cloud_state": (
+                self.cloud_state.value if self.cloud_state is not None else None
+            ),
             "account_id": self.account_id,
             "session_id": self.session_id,
             "installation_id": self.installation_id,
@@ -1222,6 +1268,12 @@ class RuntimeSnapshot:
             "last_validated_at": self.last_validated_at,
             "legacy": self.legacy,
         }
+
+    def public_dict_v2(self) -> dict[str, object]:
+        """Protocol-v2 continuity shape, before cloud availability was added."""
+        value = self.public_dict()
+        value.pop("cloud_state")
+        return value
 
 
 _unix_lock_registry_guard = threading.Lock()
@@ -1719,11 +1771,13 @@ class RuntimeConsumer:
         liveness_probe: Callable[[], bool],
         clock: Callable[[], float] = time.monotonic,
         on_authorized: Callable[[], None] | None = None,
+        allow_local_continuity: bool = False,
     ) -> None:
         self._snapshot = snapshot
         self._liveness_probe = liveness_probe
         self._clock = clock
         self._on_authorized = on_authorized or (lambda: None)
+        self._allow_local_continuity = allow_local_continuity
         self._lock = threading.RLock()
 
     def snapshot(self) -> RuntimeSnapshot:
@@ -1763,6 +1817,7 @@ class RuntimeConsumer:
             boundary,
             expected=expected or snapshot.scope,
             now=checked_at,
+            allow_local_continuity=self._allow_local_continuity,
         )
         self._on_authorized()
         return scope
@@ -2001,9 +2056,10 @@ class _OwnerCore:
         self._jitter = jitter
         self._snapshot = RuntimeSnapshot.signed_out()
         self._on_transition = on_transition
-        self._record: CookieRecord | NativeCredentialRecord | LegacyCredentialRecord | RevocationTombstone | None = None
+        self._record: CookieRecord | NativeCredentialRecord | LegacyCredentialRecord | RevocationTombstone | SignedOutTombstone | None = None
         self._record_loaded = False
         self._consumers: list[RuntimeConsumer] = []
+        self._local_continuity_enabled = False
         self._alive = True
         self._lock = threading.RLock()
         self._refresh_lock = threading.Lock()
@@ -2023,7 +2079,17 @@ class _OwnerCore:
         with self._lock:
             return self._snapshot
 
-    def connect_consumer(self, *, profile: str | None = None) -> RuntimeConsumer:
+    def enable_desktop_local_continuity(self) -> RuntimeSnapshot:
+        with self._lock:
+            self._local_continuity_enabled = True
+            return self._snapshot
+
+    def connect_consumer(
+        self,
+        *,
+        profile: str | None = None,
+        allow_local_continuity: bool = False,
+    ) -> RuntimeConsumer:
         del profile
         with self._lock:
             consumer = RuntimeConsumer(
@@ -2031,6 +2097,9 @@ class _OwnerCore:
                 liveness_probe=lambda: self._alive,
                 clock=self._clock,
                 on_authorized=self._record_authenticated_activity,
+                allow_local_continuity=(
+                    self._local_continuity_enabled and allow_local_continuity
+                ),
             )
             self._consumers.append(consumer)
             return consumer
@@ -2189,9 +2258,38 @@ class _OwnerCore:
                 or self._snapshot.state is not AuthState.AUTHENTICATED
             ):
                 raise AuthRequired("signed_out")
+            if self._snapshot.cloud_state is not CloudState.ACTIVE:
+                fallback = (
+                    "session_expired"
+                    if self._snapshot.cloud_state is CloudState.REAUTH_REQUIRED
+                    else "server_unavailable"
+                )
+                raise AuthRequired(self._snapshot.validation_reason or fallback)
             self._last_authenticated_activity = self._clock()
         try:
             with self._refresh_lock:
+                with self._lock:
+                    current_record = self._record
+                    if (
+                        isinstance(record, NativeCredentialRecord)
+                        and isinstance(current_record, NativeCredentialRecord)
+                        and current_record.credential == record.credential
+                    ):
+                        record = current_record
+                    elif current_record is not record:
+                        raise AuthRequired("signed_out")
+                    if self._snapshot.state is not AuthState.AUTHENTICATED:
+                        raise AuthRequired("signed_out")
+                    if self._snapshot.cloud_state is not CloudState.ACTIVE:
+                        fallback = (
+                            "session_expired"
+                            if self._snapshot.cloud_state
+                            is CloudState.REAUTH_REQUIRED
+                            else "server_unavailable"
+                        )
+                        raise AuthRequired(
+                            self._snapshot.validation_reason or fallback
+                        )
                 if isinstance(record, NativeCredentialRecord):
                     credential = self._client.trace_token(record.credential)
                 elif isinstance(record, LegacyCredentialRecord):
@@ -2214,12 +2312,10 @@ class _OwnerCore:
             if isinstance(error, SessionRejected):
                 with self._lock:
                     if self._record is record:
-                        self._record = None
+                        tombstone = SignedOutTombstone(error.reason)
+                        self._persist_signed_out_tombstone_locked(tombstone)
+                        self._record = tombstone
                         self._record_loaded = True
-                        try:
-                            self._secret_backend.delete()
-                        except Exception:
-                            pass
                         self._publish_locked(
                             self._snapshot.locked(error.reason, now=self._clock())
                         )
@@ -2237,7 +2333,15 @@ class _OwnerCore:
         record = self._load_record()
         if record is None:
             return self.snapshot()
-        if isinstance(record, (NativeCredentialRecord, LegacyCredentialRecord, RevocationTombstone)):
+        if isinstance(
+            record,
+            (
+                NativeCredentialRecord,
+                LegacyCredentialRecord,
+                RevocationTombstone,
+                SignedOutTombstone,
+            ),
+        ):
             return self.snapshot()
         try:
             status = self._client.status(record.cookies)
@@ -2246,12 +2350,18 @@ class _OwnerCore:
                 if self._record is not record:
                     return self._snapshot
                 if isinstance(error, SessionRejected):
-                    self._record = None
+                    tombstone = SignedOutTombstone(error.reason)
+                    self._persist_signed_out_tombstone_locked(tombstone)
+                    self._record = tombstone
                     self._record_loaded = True
-                    try:
-                        self._secret_backend.delete()
-                    except Exception:
-                        pass
+                elif (
+                    self._local_continuity_enabled
+                    and self._snapshot.state is AuthState.AUTHENTICATED
+                ):
+                    self._validation_failures += 1
+                    self._publish_locked(self._snapshot.degraded(error.reason))
+                    self._schedule_validation_locked(self._clock())
+                    return self._snapshot
                 now = self._clock()
                 locked = self._snapshot.locked(error.reason, now=now)
                 self._publish_locked(locked)
@@ -2305,20 +2415,17 @@ class _OwnerCore:
             current = self._snapshot
             signed_out = RuntimeSnapshot.signed_out(
                 epoch=current.epoch + 1,
+                reason="signed_out",
             )
-            self._record = None
+            tombstone = SignedOutTombstone()
+            persisted = self._persist_signed_out_tombstone_locked(tombstone)
+            self._record = tombstone
             self._record_loaded = True
             self._next_refresh_at = None
             self._publish_locked(signed_out)
-            try:
-                self._secret_backend.delete()
-            except Exception:
-                delete_failed = True
-            else:
-                delete_failed = False
         if record is not None:
             self._best_effort_remote_logout(record)
-        if delete_failed:
+        if not persisted:
             reason = "vault_unavailable" if self._vault_required else "runtime_unavailable"
             raise AuthRequired(reason)
         return signed_out
@@ -2390,7 +2497,7 @@ class _OwnerCore:
 
     def _load_record(
         self,
-    ) -> CookieRecord | NativeCredentialRecord | LegacyCredentialRecord | RevocationTombstone | None:
+    ) -> CookieRecord | NativeCredentialRecord | LegacyCredentialRecord | RevocationTombstone | SignedOutTombstone | None:
         needs_migration = False
         with self._lock:
             if self._record_loaded:
@@ -2468,6 +2575,16 @@ class _OwnerCore:
                 self._schedule_validation_locked(self._clock())
             elif isinstance(record, RevocationTombstone):
                 self._publish_locked(self._snapshot.locked(record.reason, now=self._clock()))
+                self._next_refresh_at = None
+            elif isinstance(record, SignedOutTombstone):
+                if record.reason == "signed_out":
+                    self._publish_locked(
+                        RuntimeSnapshot.signed_out(reason="signed_out")
+                    )
+                else:
+                    self._publish_locked(
+                        self._snapshot.locked(record.reason, now=self._clock())
+                    )
                 self._next_refresh_at = None
             return record
 
@@ -2604,11 +2721,13 @@ class _OwnerCore:
             )
             try:
                 self._secret_backend.write(_encode_tombstone_blob(tombstone))
+                if _decode_credential_blob(self._secret_backend.read() or "") != tombstone:
+                    raise AuthRequired("runtime_unavailable")
             except Exception:
-                self._validation_failures += 1
-                self._publish_locked(current.degraded("vault_unavailable"))
-                self._schedule_validation_locked(self._clock())
-                return self._snapshot
+                try:
+                    self._secret_backend.delete()
+                except Exception:
+                    pass
             self._record = tombstone
             self._record_loaded = True
             self._next_refresh_at = None
@@ -2634,6 +2753,23 @@ class _OwnerCore:
                 except Exception:
                     pass
             raise AuthServiceError("vault_unavailable") from None
+
+    def _persist_signed_out_tombstone_locked(
+        self,
+        tombstone: SignedOutTombstone,
+    ) -> bool:
+        """Commit logout denial, falling back to removing the old credential."""
+        try:
+            self._secret_backend.write(_encode_signed_out_tombstone_blob(tombstone))
+            if _decode_credential_blob(self._secret_backend.read() or "") != tombstone:
+                raise AuthRequired("runtime_unavailable")
+            return True
+        except Exception:
+            try:
+                self._secret_backend.delete()
+            except Exception:
+                return False
+            return True
 
     def _schedule_validation_locked(self, now: float) -> None:
         # Clamp the exponent before exponentiation: a long outage would
@@ -2675,7 +2811,7 @@ class _OwnerCore:
 
     def _best_effort_remote_logout(
         self,
-        record: CookieRecord | NativeCredentialRecord | LegacyCredentialRecord | RevocationTombstone,
+        record: CookieRecord | NativeCredentialRecord | LegacyCredentialRecord | RevocationTombstone | SignedOutTombstone,
     ) -> None:
         try:
             if isinstance(record, NativeCredentialRecord):
@@ -2759,12 +2895,19 @@ class _EntryPointOwner(Protocol):
 
     def snapshot(self) -> RuntimeSnapshot: ...
 
-    def connect_consumer(self, *, profile: str | None = None) -> RuntimeConsumer: ...
+    def enable_desktop_local_continuity(self) -> RuntimeSnapshot: ...
+
+    def connect_consumer(
+        self,
+        *,
+        profile: str | None = None,
+        allow_local_continuity: bool = False,
+    ) -> RuntimeConsumer: ...
 
 
 _RUNTIME_FRAME_LIMIT = 65_536
-_RUNTIME_PROTOCOL_VERSION = 2
-_RUNTIME_SUPPORTED_PROTOCOL_VERSIONS = (1, 2)
+_RUNTIME_PROTOCOL_VERSION = 3
+_RUNTIME_SUPPORTED_PROTOCOL_VERSIONS = (1, 2, 3)
 _TRACE_INSTALLATION_ID = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
     re.IGNORECASE,
@@ -2776,9 +2919,12 @@ class RemoteRuntimeConsumer:
         self,
         owner: RemoteRuntimeOwner,
         snapshot: RuntimeSnapshot,
+        *,
+        allow_local_continuity: bool = False,
     ) -> None:
         self._owner = owner
         self._snapshot = snapshot
+        self._allow_local_continuity = allow_local_continuity
         self._lock = threading.RLock()
 
     def snapshot(self) -> RuntimeSnapshot:
@@ -2799,7 +2945,11 @@ class RemoteRuntimeConsumer:
         del now
         current = self.snapshot()
         required = expected or current.scope
-        snapshot = self._owner.authorize(boundary, expected=required)
+        snapshot = self._owner.authorize(
+            boundary,
+            expected=required,
+            allow_local_continuity=self._allow_local_continuity,
+        )
         self.publish(snapshot)
         return snapshot.scope
 
@@ -2840,11 +2990,12 @@ class RemoteRuntimeOwner:
                 )
             return request
 
-        try:
-            return self._exchange(self._encode_request(params()), timeout=timeout)
-        except _OwnerProtocolRejected:
-            self._protocol_version = 1
-            return self._exchange(self._encode_request(params()), timeout=timeout)
+        while True:
+            try:
+                return self._exchange(self._encode_request(params()), timeout=timeout)
+            except _OwnerProtocolRejected:
+                if not self._downgrade_protocol():
+                    raise AuthRequired("runtime_unavailable") from None
 
     def snapshot(self) -> RuntimeSnapshot:
         with self._lock:
@@ -2870,42 +3021,39 @@ class RemoteRuntimeOwner:
             password_text = password.decode("utf-8")
         except (AttributeError, UnicodeDecodeError):
             raise AuthRequired("invalid_credentials") from None
+        request: dict[str, object] = {
+            "operation": "login",
+            "username": username,
+            "password": password_text,
+        }
+        if installation_id is not None and client_version is not None:
+            request.update(
+                installation_id=installation_id,
+                client_version=client_version,
+            )
+        password_text = ""
         try:
-            request: dict[str, object] = {
-                "operation": "login",
-                "username": username,
-                "password": password_text,
-            }
-            if installation_id is not None and client_version is not None:
-                request.update(
-                    installation_id=installation_id,
-                    client_version=client_version,
-                )
-            encoded = self._encode_request(request)
-        finally:
-            password_text = ""
-        try:
-            try:
-                return self._exchange(
-                    encoded,
-                    timeout=_RUNTIME_LOGIN_TIMEOUT_SECONDS,
-                )
-            except _OwnerProtocolRejected:
-                self._protocol_version = 1
-                retry = self._encode_request(request)
+            while True:
+                encoded = self._encode_request(request)
                 try:
-                    return self._exchange(
-                        retry,
-                        timeout=_RUNTIME_LOGIN_TIMEOUT_SECONDS,
-                    )
+                    try:
+                        return self._exchange(
+                            encoded,
+                            timeout=_RUNTIME_LOGIN_TIMEOUT_SECONDS,
+                        )
+                    except _OwnerProtocolRejected:
+                        if not self._downgrade_protocol():
+                            raise AuthRequired("runtime_unavailable") from None
                 finally:
-                    retry[:] = b"\0" * len(retry)
+                    encoded[:] = b"\0" * len(encoded)
         finally:
-            encoded[:] = b"\0" * len(encoded)
             request["password"] = ""
 
     def logout(self) -> RuntimeSnapshot:
         return self._request({"operation": "logout"})
+
+    def enable_desktop_local_continuity(self) -> RuntimeSnapshot:
+        return self._request({"operation": "enable_desktop_local_continuity"})
 
     def trace_token(
         self,
@@ -2920,17 +3068,16 @@ class RemoteRuntimeOwner:
             "client_version": client_version,
             "telemetry_schema_version": telemetry_schema_version,
         }
-        try:
-            response = self._exchange_response(
-                self._encode_request(request),
-                timeout=_RUNTIME_REQUEST_TIMEOUT_SECONDS,
-            )
-        except _OwnerProtocolRejected:
-            self._protocol_version = 1
-            response = self._exchange_response(
-                self._encode_request(request),
-                timeout=_RUNTIME_REQUEST_TIMEOUT_SECONDS,
-            )
+        while True:
+            try:
+                response = self._exchange_response(
+                    self._encode_request(request),
+                    timeout=_RUNTIME_REQUEST_TIMEOUT_SECONDS,
+                )
+                break
+            except _OwnerProtocolRejected:
+                if not self._downgrade_protocol():
+                    raise AuthRequired("runtime_unavailable") from None
         if set(response) != {"version", "ok", "credential"}:
             raise AuthRequired("runtime_unavailable")
         return _trace_credential_from_wire(
@@ -2942,15 +3089,21 @@ class RemoteRuntimeOwner:
         self,
         *,
         profile: str | None = None,
+        allow_local_continuity: bool = False,
     ) -> RemoteRuntimeConsumer:
         del profile
-        return RemoteRuntimeConsumer(self, self.snapshot())
+        return RemoteRuntimeConsumer(
+            self,
+            self.snapshot(),
+            allow_local_continuity=allow_local_continuity,
+        )
 
     def authorize(
         self,
         boundary: str,
         *,
         expected: AuthScope,
+        allow_local_continuity: bool = False,
     ) -> RuntimeSnapshot:
         return self._request(
             {
@@ -2960,6 +3113,7 @@ class RemoteRuntimeOwner:
                     "runtime_instance_id": expected.runtime_instance_id,
                     "epoch": expected.epoch,
                 },
+                "allow_local_continuity": allow_local_continuity,
             }
         )
 
@@ -2969,11 +3123,19 @@ class RemoteRuntimeOwner:
         *,
         timeout: float = _RUNTIME_REQUEST_TIMEOUT_SECONDS,
     ) -> RuntimeSnapshot:
-        try:
-            return self._exchange(self._encode_request(params), timeout=timeout)
-        except _OwnerProtocolRejected:
-            self._protocol_version = 1
-            return self._exchange(self._encode_request(params), timeout=timeout)
+        while True:
+            try:
+                return self._exchange(self._encode_request(params), timeout=timeout)
+            except _OwnerProtocolRejected:
+                if not self._downgrade_protocol():
+                    raise AuthRequired("runtime_unavailable") from None
+
+    def _downgrade_protocol(self) -> bool:
+        with self._lock:
+            if self._protocol_version <= 1:
+                return False
+            self._protocol_version -= 1
+            return True
 
     def _encode_request(self, params: dict[str, object]) -> bytearray:
         request = {
@@ -3307,6 +3469,11 @@ class OwnerBroker:
                 )
             elif operation == "logout" and set(request) == {"version", "operation"}:
                 snapshot = self._owner.logout()  # type: ignore[attr-defined]
+            elif version >= 3 and operation == "enable_desktop_local_continuity" and set(request) == {
+                "version",
+                "operation",
+            }:
+                snapshot = self._owner.enable_desktop_local_continuity()
             elif operation == "login" and set(request) in (
                 {"version", "operation", "username", "password"},
                 {
@@ -3349,7 +3516,28 @@ class OwnerBroker:
                     )
                 finally:
                     password[:] = b"\0" * len(password)
-            elif operation == "authorize" and set(request) == {
+            elif version >= 3 and operation == "authorize" and set(request) == {
+                "version",
+                "operation",
+                "boundary",
+                "expected",
+                "allow_local_continuity",
+            }:
+                boundary = request.get("boundary")
+                expected = _scope_from_wire(request.get("expected"))
+                allow_local_continuity = request.get("allow_local_continuity")
+                if (
+                    not isinstance(boundary, str)
+                    or not 0 < len(boundary) <= 256
+                    or not isinstance(allow_local_continuity, bool)
+                ):
+                    raise AuthRequired("runtime_unavailable")
+                snapshot = self._owner.snapshot()
+                consumer = self._owner.connect_consumer(
+                    allow_local_continuity=allow_local_continuity
+                )
+                consumer.require_authorized(boundary, expected=expected)
+            elif version <= 2 and operation == "authorize" and set(request) == {
                 "version",
                 "operation",
                 "boundary",
@@ -3405,7 +3593,15 @@ class OwnerBroker:
         return {
             "version": version,
             "ok": True,
-            "snapshot": snapshot.public_dict() if version >= 2 else snapshot.public_dict_v1(),
+            "snapshot": (
+                snapshot.public_dict()
+                if version >= 3
+                else (
+                    snapshot.public_dict_v2()
+                    if version == 2
+                    else snapshot.public_dict_v1()
+                )
+            ),
         }
 
 
@@ -3654,7 +3850,13 @@ def _snapshot_from_public(value: object) -> RuntimeSnapshot:
         "last_validated_at",
         "legacy",
     }
-    if not isinstance(value, dict) or (set(value) != legacy_keys and set(value) != continuity_keys):
+    cloud_keys = continuity_keys | {"cloud_state"}
+    value_keys = frozenset(value) if isinstance(value, dict) else frozenset()
+    if not isinstance(value, dict) or value_keys not in {
+        frozenset(legacy_keys),
+        frozenset(continuity_keys),
+        frozenset(cloud_keys),
+    }:
         raise AuthRequired("runtime_unavailable")
     try:
         state = AuthState(value["state"])
@@ -3684,7 +3886,7 @@ def _snapshot_from_public(value: object) -> RuntimeSnapshot:
         raise AuthRequired("runtime_unavailable")
     if reason is not None and not isinstance(reason, str):
         raise AuthRequired("runtime_unavailable")
-    if set(value) == legacy_keys:
+    if value_keys == legacy_keys:
         return RuntimeSnapshot(
             state=state,
             epoch=epoch,
@@ -3694,6 +3896,9 @@ def _snapshot_from_public(value: object) -> RuntimeSnapshot:
             username=username,
             session_expires_at=expires,
             reason=reason,
+            cloud_state=(
+                CloudState.ACTIVE if state is AuthState.AUTHENTICATED else None
+            ),
         )
     account_id = value["account_id"]
     session_id = value["session_id"]
@@ -3719,6 +3924,32 @@ def _snapshot_from_public(value: object) -> RuntimeSnapshot:
         validation_state = ValidationState(value["validation_state"])
     except (TypeError, ValueError):
         raise AuthRequired("runtime_unavailable") from None
+    if value_keys == cloud_keys:
+        cloud_value = value["cloud_state"]
+        try:
+            cloud_state = (
+                CloudState(cloud_value) if cloud_value is not None else None
+            )
+        except (TypeError, ValueError):
+            raise AuthRequired("runtime_unavailable") from None
+    else:
+        cloud_state = (
+            CloudState.ACTIVE
+            if state is AuthState.AUTHENTICATED
+            and validation_state is ValidationState.ONLINE
+            else (
+                CloudState.UNREACHABLE
+                if state is AuthState.AUTHENTICATED
+                else None
+            )
+        )
+    if (state is AuthState.AUTHENTICATED) != (cloud_state is not None):
+        raise AuthRequired("runtime_unavailable")
+    if (
+        validation_state is ValidationState.ONLINE
+        and cloud_state is not CloudState.ACTIVE
+    ):
+        raise AuthRequired("runtime_unavailable")
     if all(item is None for item in (account_id, session_id, installation_id, principal_key)):
         if legacy:
             raise AuthRequired("runtime_unavailable")
@@ -3744,6 +3975,7 @@ def _snapshot_from_public(value: object) -> RuntimeSnapshot:
         username=username,
         session_expires_at=expires,
         reason=reason,
+        cloud_state=cloud_state,
         account_id=account_id,
         session_id=session_id,
         installation_id=installation_id,
@@ -3937,7 +4169,10 @@ def authorize_entrypoint(boundary: str, *, interactive: bool) -> AuthScope:
         finally:
             password[:] = b"\0" * len(password)
 
-    consumer = owner.connect_consumer()
+    if os.environ.get("HERMES_DESKTOP") == "1":
+        consumer = owner.connect_consumer(allow_local_continuity=True)
+    else:
+        consumer = owner.connect_consumer()
     scope = consumer.require_authorized(
         boundary,
         expected=snapshot.scope,
@@ -4250,7 +4485,7 @@ def _is_legacy_principal_key(value: object) -> bool:
 
 
 def _proven_legacy_predecessor(
-    previous: CookieRecord | NativeCredentialRecord | LegacyCredentialRecord | RevocationTombstone | None,
+    previous: CookieRecord | NativeCredentialRecord | LegacyCredentialRecord | RevocationTombstone | SignedOutTombstone | None,
     bootstrap: CookieRecord,
     *,
     expected_installation_id: str,
@@ -4315,9 +4550,21 @@ def _encode_tombstone_blob(tombstone: RevocationTombstone) -> str:
     )
 
 
+def _encode_signed_out_tombstone_blob(tombstone: SignedOutTombstone) -> str:
+    return json.dumps(
+        {
+            "version": 3,
+            "kind": "signed_out",
+            "reason": tombstone.reason,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def _decode_credential_blob(
     raw: str,
-) -> CookieRecord | NativeCredentialRecord | RevocationTombstone:
+) -> CookieRecord | NativeCredentialRecord | RevocationTombstone | SignedOutTombstone:
     if not isinstance(raw, str) or not raw or len(raw) > 16_384:
         raise AuthRequired("runtime_unavailable")
     try:
@@ -4330,6 +4577,15 @@ def _decode_credential_blob(
         return _decode_cookie_blob(raw)
     if payload.get("version") not in {2, 3} or not isinstance(payload.get("kind"), str):
         raise AuthRequired("runtime_unavailable")
+    if payload["kind"] == "signed_out":
+        if set(payload) != {"version", "kind", "reason"} or payload.get(
+            "version"
+        ) != 3:
+            raise AuthRequired("runtime_unavailable")
+        reason = payload["reason"]
+        if reason not in {"signed_out", "session_rejected", "session_expired"}:
+            raise AuthRequired("runtime_unavailable")
+        return SignedOutTombstone(reason)
     if payload["kind"] == "revoked":
         if set(payload) != {
             "version", "kind", "account_id", "session_id", "reason", "revoked_at"
@@ -4484,7 +4740,10 @@ def wait_until_authorized(
             )
         on_state(snapshot)
         if snapshot.state is AuthState.AUTHENTICATED and owner is not None:
-            consumer = owner.connect_consumer()
+            if os.environ.get("HERMES_DESKTOP") == "1":
+                consumer = owner.connect_consumer(allow_local_continuity=True)
+            else:
+                consumer = owner.connect_consumer()
             consumer.require_authorized(boundary, expected=snapshot.scope)
             install_runtime_consumer(consumer)  # type: ignore[arg-type]
             return LockedWaitingResult.AUTHENTICATED
