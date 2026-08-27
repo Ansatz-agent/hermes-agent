@@ -15,6 +15,7 @@ import { type BackendControlChannel } from './backend-control-channel'
 
 const RETRY_DELAYS_SECONDS = [1, 2, 5, 10, 30] as const
 const DEFAULT_CONTROL_ACK_TIMEOUT_MS = 5_000
+const DEFAULT_CAPABILITY_PROBE_TIMEOUT_MS = 5_000
 
 export type LocalCapabilityBinding = {
   key: string
@@ -58,7 +59,12 @@ export type LocalCapabilityManagerOptions = {
   clock?: () => number
   issueToken?: (scope: ConnectionScope) => AuthScopeToken
   issueTransitionId?: () => string
-  probe?: (baseUrl: string, bearer: string) => Promise<LocalCapabilityProbe>
+  probe?: (
+    baseUrl: string,
+    bearer: string,
+    signal: AbortSignal
+  ) => Promise<LocalCapabilityProbe>
+  probeTimeoutMs?: number
   random?: () => number
   onDiagnostic?: (event: LocalCapabilityDiagnostic) => void
 }
@@ -161,7 +167,11 @@ function validatedProbe(value: unknown): LocalCapabilityProbe {
   return record as LocalCapabilityProbe
 }
 
-async function defaultProbe(baseUrl: string, bearer: string): Promise<LocalCapabilityProbe> {
+async function defaultProbe(
+  baseUrl: string,
+  bearer: string,
+  signal: AbortSignal
+): Promise<LocalCapabilityProbe> {
   const endpoint = new URL('/api/auth/scope-token-probe', baseUrl)
 
   const response = await fetch(endpoint, {
@@ -169,7 +179,8 @@ async function defaultProbe(baseUrl: string, bearer: string): Promise<LocalCapab
     headers: { Authorization: `Bearer ${bearer}` },
     cache: 'no-store',
     credentials: 'omit',
-    redirect: 'error'
+    redirect: 'error',
+    signal
   })
 
   if (!response.ok) {
@@ -190,22 +201,41 @@ export class LocalCapabilityManager {
   private readonly clock: () => number
   private readonly issueToken: (scope: ConnectionScope) => AuthScopeToken
   private readonly issueTransitionId: () => string
-  private readonly probe: (baseUrl: string, bearer: string) => Promise<LocalCapabilityProbe>
+  private readonly probe: (
+    baseUrl: string,
+    bearer: string,
+    signal: AbortSignal
+  ) => Promise<LocalCapabilityProbe>
+  private readonly probeTimeoutMs: number
   private readonly random: () => number
   private readonly onDiagnostic: (event: LocalCapabilityDiagnostic) => void
 
   constructor(options: LocalCapabilityManagerOptions = {}) {
+    const probeTimeoutMs = options.probeTimeoutMs ?? DEFAULT_CAPABILITY_PROBE_TIMEOUT_MS
+
+    if (!Number.isFinite(probeTimeoutMs) || probeTimeoutMs <= 0) {
+      throw new TypeError('Invalid local capability probe timeout')
+    }
+
     this.clock = options.clock ?? uptime
     this.issueToken =
       options.issueToken ?? (scope => issueAuthScopeToken(scope, { clock: this.clock }))
     this.issueTransitionId = options.issueTransitionId ?? (() => issueScopeTransitionId())
     this.probe = options.probe ?? defaultProbe
+    this.probeTimeoutMs = probeTimeoutMs
     this.random = options.random ?? Math.random
     this.onDiagnostic = options.onDiagnostic ?? (() => undefined)
   }
 
   activate(binding: LocalCapabilityBinding): Promise<LocalCapabilitySnapshot> {
-    const validated = validatedBinding(binding)
+    let validated: LocalCapabilityBinding
+
+    try {
+      validated = validatedBinding(binding)
+    } catch (error) {
+      return Promise.reject(unavailable(error))
+    }
+
     this.revoke(validated.key)
 
     const state: CapabilityState = {
@@ -387,7 +417,7 @@ export class LocalCapabilityManager {
       this.diagnostic(state, 'scope_candidate_acknowledged', attempt, startedAt)
 
       const probe = validatedProbe(
-        await this.awaitCurrent(state, this.probe(state.binding.baseUrl, candidate.bearer))
+        await this.probeWithTimeout(state, candidate.bearer)
       )
 
       this.assertCandidateProbe(state, candidate, probe, 'candidate', null)
@@ -416,7 +446,7 @@ export class LocalCapabilityManager {
         this.assertCandidate(state, candidate)
 
         const confirmation = validatedProbe(
-          await this.awaitCurrent(state, this.probe(state.binding.baseUrl, candidate.bearer))
+          await this.probeWithTimeout(state, candidate.bearer)
         )
 
         this.assertCandidateProbe(state, candidate, confirmation, 'active', transitionId)
@@ -546,6 +576,66 @@ export class LocalCapabilityManager {
           reject(error)
         }
       )
+    })
+  }
+
+  private probeWithTimeout(
+    state: CapabilityState,
+    bearer: string
+  ): Promise<LocalCapabilityProbe> {
+    return new Promise((resolve, reject) => {
+      const controller = new AbortController()
+      let timer: NodeJS.Timeout | null = null
+      let settled = false
+
+      const cleanup = () => {
+        if (timer) {
+          clearTimeout(timer)
+          timer = null
+        }
+
+        state.abortController.signal.removeEventListener('abort', onStateAbort)
+        controller.signal.removeEventListener('abort', onProbeAbort)
+      }
+
+      const settle = <T>(complete: (value: T) => void, value: T) => {
+        if (settled) {
+          return
+        }
+
+        settled = true
+        cleanup()
+        complete(value)
+      }
+
+      const onProbeAbort = () => {
+        settle(reject, controller.signal.reason ?? unavailable())
+      }
+
+      const onStateAbort = () => {
+        controller.abort(state.abortController.signal.reason)
+      }
+
+      controller.signal.addEventListener('abort', onProbeAbort, { once: true })
+      state.abortController.signal.addEventListener('abort', onStateAbort, { once: true })
+
+      timer = setTimeout(() => {
+        controller.abort(new Error('Local capability probe timed out'))
+      }, this.probeTimeoutMs)
+      timer.unref?.()
+
+      if (state.abortController.signal.aborted) {
+        onStateAbort()
+
+        return
+      }
+
+      Promise.resolve()
+        .then(() => this.probe(state.binding.baseUrl, bearer, controller.signal))
+        .then(
+          value => settle(resolve, value),
+          error => settle(reject, error)
+        )
     })
   }
 

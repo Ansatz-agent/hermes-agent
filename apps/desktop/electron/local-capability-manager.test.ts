@@ -34,6 +34,7 @@ type PendingControl = {
 type PendingProbe = {
   baseUrl: string
   bearer: string
+  signal: AbortSignal | null
   deferred: Deferred<ProbeResult> | null
 }
 
@@ -193,9 +194,13 @@ class FakeControl {
 class FakeProbe {
   readonly calls: PendingProbe[] = []
 
-  readonly request = (baseUrl: string, bearer: string): Promise<ProbeResult> => {
+  readonly request = (
+    baseUrl: string,
+    bearer: string,
+    signal?: AbortSignal
+  ): Promise<ProbeResult> => {
     const response = deferred<ProbeResult>()
-    this.calls.push({ baseUrl, bearer, deferred: response })
+    this.calls.push({ baseUrl, bearer, signal: signal ?? null, deferred: response })
 
     return response.promise
   }
@@ -365,7 +370,8 @@ test('keeps the old descriptor until candidate ACK, probe, and promotion all fin
   assert.equal(fixture.manager.snapshot('backend-1').registrationId, first.registrationId)
 
   assert.equal(fixture.control.ackRegistered(), true)
-  await fixture.probe.waitForPending()
+  const pendingProbe = await fixture.probe.waitForPending()
+  assert.equal(pendingProbe.signal?.aborted, false)
   assert.equal(fixture.manager.snapshot('backend-1').registrationId, first.registrationId)
 
   fixture.resolveProbe('candidate')
@@ -459,6 +465,45 @@ test('does not promote after a failed candidate probe and retries without replac
   await fixture.completePendingRotation()
   await rotating
   assert.equal(fixture.control.operationCount('promote_scope_token'), 2)
+})
+
+test('bounds a hanging probe during initial activation and reports only local backend unavailability', async () => {
+  const fixture = managerFixture()
+  const activating = fixture.manager.activate(fixture.binding)
+  let outcome: 'pending' | 'resolved' | 'rejected' = 'pending'
+  void activating.then(
+    () => {
+      outcome = 'resolved'
+    },
+    () => {
+      outcome = 'rejected'
+    }
+  )
+
+  const rejected = assert.rejects(
+    activating,
+    error =>
+      error instanceof LocalBackendCapabilityUnavailableError &&
+      error.code === 'local_backend_unavailable' &&
+      !/auth|login/i.test(error.message)
+  )
+
+  await fixture.control.waitForPending('register_scope_token')
+  assert.equal(fixture.control.ackRegistered(), true)
+  const hangingProbe = await fixture.probe.waitForPending()
+  assert.equal(hangingProbe.signal?.aborted, false)
+
+  try {
+    await vi.advanceTimersByTimeAsync(4_999)
+    assert.equal(outcome, 'pending')
+    await vi.advanceTimersByTimeAsync(1)
+    assert.equal(outcome, 'rejected')
+    assert.equal(hangingProbe.signal?.aborted, true)
+    await rejected
+  } finally {
+    fixture.manager.revoke('backend-1')
+    await activating.catch(() => undefined)
+  }
 })
 
 test('accepts an identical promoted transition from the probe when the promote ACK is lost', async () => {
@@ -626,7 +671,11 @@ test('snapshot expiry aborts a sleeping retry and closes its terminal control ch
 
   await fixture.control.waitForPending('register_scope_token')
   fixture.control.rejectPending('register_scope_token', new Error('ACK timeout'))
-  await Promise.resolve()
+  await eventually(
+    () =>
+      fixture.diagnostics.find(event => event.name === 'scope_rotation_retry_scheduled') ?? null,
+    'Retry diagnostic was not emitted before expiry'
+  )
   fixture.clock.now = first.validUntil
   assert.throws(
     () => fixture.manager.snapshot('backend-1'),
@@ -639,6 +688,23 @@ test('snapshot expiry aborts a sleeping retry and closes its terminal control ch
   fixture.manager.revoke('backend-1')
   await rejected
   assert.equal(closedAtExpiry, true)
+})
+
+test('classifies invalid local bindings as backend unavailability instead of login required', async () => {
+  const fixture = managerFixture()
+
+  await assert.rejects(
+    Promise.resolve().then(() =>
+      fixture.manager.activate({
+        ...fixture.binding,
+        scope: { ...SCOPE, epoch: -1 }
+      })
+    ),
+    error =>
+      error instanceof LocalBackendCapabilityUnavailableError &&
+      error.code === 'local_backend_unavailable' &&
+      !/auth|login/i.test(error.message)
+  )
 })
 
 test('a throwing diagnostic observer cannot interrupt activation or rotation', async () => {
@@ -688,6 +754,7 @@ test('the production probe is a non-redirecting GET to the bound loopback backen
   assert.equal(fetchMock.mock.calls[0]?.[1]?.cache, 'no-store')
   assert.equal(fetchMock.mock.calls[0]?.[1]?.redirect, 'error')
   assert.equal(fetchMock.mock.calls[0]?.[1]?.credentials, 'omit')
+  assert.ok(fetchMock.mock.calls[0]?.[1]?.signal instanceof AbortSignal)
 })
 
 test('the unref timer starts a background rotation at rotateAt', async () => {
