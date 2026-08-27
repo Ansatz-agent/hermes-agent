@@ -591,6 +591,23 @@ function shouldPrepareWindowsPackagedAuthRuntime({ platform, bootstrapScope, bun
   return platform === 'win32' && bootstrapScope === 'auth' && bundledSource === true && Boolean(bundledToolchain)
 }
 
+// A packaged Windows app may start while a backend from the previous desktop
+// build still owns a file below ACTIVE_HERMES_ROOT. Windows refuses to rename
+// that tree while its Python/venv executable is live and reports EBUSY/EPERM.
+// The existing runtime is still usable in this case, so the caller can defer
+// the bundled-source refresh instead of turning a transient lock into a
+// fatal "runtime could not be installed" state.
+function isWindowsBundledSourceLockError(error, platform = process.platform) {
+  if (platform !== 'win32' || !error || typeof error !== 'object') {
+    return false
+  }
+
+  const code = String(error.code || '').toUpperCase()
+  const message = String(error.message || error)
+
+  return ['EBUSY', 'EPERM', 'EACCES'].includes(code) && /rename\s+['"]?.*hermes-agent.*bundled-backup/i.test(message)
+}
+
 const LONG_PACKAGE_STAGES = new Set(['auth-prerequisites', 'python-auth-deps', 'python-deps', 'node-deps'])
 
 function progressHeartbeatMsForStage(stageName) {
@@ -1143,7 +1160,23 @@ async function runBootstrap(opts) {
       : null
 
     if (payload && !existingCheckout) {
-      sourceTransaction = await prepareBundledSource({ payload, activeRoot, hermesHome })
+      try {
+        sourceTransaction = await prepareBundledSource({ payload, activeRoot, hermesHome })
+      } catch (error) {
+        if (isWindowsBundledSourceLockError(error)) {
+          emit({
+            type: 'log',
+            line:
+              `[bootstrap] bundled source refresh deferred because the existing Windows runtime is still in use: ` +
+              `${error.message || String(error)}`
+          })
+
+          return { ok: false, deferred: true, error: error.message || String(error) }
+        }
+
+        throw error
+      }
+
       bundledSource = sourceTransaction.kind !== 'existing-git'
       emit({
         type: 'log',
@@ -1371,6 +1404,7 @@ export {
   installedAgentInstallScript,
   installRefForStamp,
   isPinnedCommit,
+  isWindowsBundledSourceLockError,
   // Exposed for testability
   parseStageResult,
   progressHeartbeatMsForStage,

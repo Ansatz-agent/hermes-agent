@@ -4775,6 +4775,7 @@ function createActiveBackend(backendArgs) {
 
 function resolveHermesBackend(backendArgs, options: any = {}) {
   const probeEnv = buildDesktopBackendEnv({ hermesHome: HERMES_HOME })
+  const skipBundledRefresh = options.skipBundledRefresh === true
 
   // 1. Explicit override -- HERMES_DESKTOP_HERMES_ROOT points at a developer
   //    checkout. Honour it as-is (no bootstrap; the user is driving).
@@ -4811,7 +4812,7 @@ function resolveHermesBackend(backendArgs, options: any = {}) {
   const activeRuntime = activeRuntimeState()
   const bundledRuntimeDecision = classifyPackagedBundledRuntime(activeRuntime.shouldUseActiveRuntime)
 
-  if (bundledRuntimeDecision === 'refresh' && !bootstrapRepairRequested) {
+  if (bundledRuntimeDecision === 'refresh' && !bootstrapRepairRequested && !skipBundledRefresh) {
     rememberLog(
       '[bootstrap] Packaged backend commit differs from the active desktop-bundle runtime; starting local payload refresh.'
     )
@@ -5085,6 +5086,26 @@ async function ensureRuntime(backend, { scope = 'runtime' }: any = {}) {
     })
 
     bootstrapAbortController = null
+
+    // Windows cannot rename a managed runtime tree while the previous
+    // build's Python backend still has an executable mapped from it. Keep the
+    // already-usable runtime online and defer the bundled payload refresh to
+    // a later launch, after normal backend teardown has released the handle.
+    // This is a recoverable lock race, not an installation failure.
+    if (
+      bootstrapResult.deferred === true &&
+      backend.reason === 'bundled-refresh' &&
+      IS_WINDOWS &&
+      activeRuntimeState().shouldUseActiveRuntime
+    ) {
+      rememberLog(
+        '[bootstrap] bundled source refresh deferred because the active Windows runtime is locked; continuing with the existing runtime.'
+      )
+      bootstrapFailure = null
+      broadcastBootstrapEvent({ type: 'dismissed' })
+
+      return ensureRuntime(resolveHermesBackend(backend.args, { skipBundledRefresh: true }), { scope })
+    }
 
     if (bootstrapResult.cancelled) {
       const cancelledError = new Error('Ansatz install was cancelled.') as any
