@@ -163,7 +163,7 @@ def test_backend_scope_token_expires_revokes_and_rejects_owner_epoch_change():
     )
 
     current = AuthScope(current.runtime_instance_id, current.epoch + 1)
-    with pytest.raises(BackendScopeTokenRejected, match="scope_not_authorized"):
+    with pytest.raises(AuthRequired, match="runtime_unavailable"):
         registry.authorize_claim(grant.claim(), "dashboard.ws.message")
 
     current = grant.auth

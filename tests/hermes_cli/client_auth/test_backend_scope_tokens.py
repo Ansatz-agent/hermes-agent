@@ -204,6 +204,31 @@ def test_candidate_cannot_authorize_business_until_promoted():
         registry.authorize(registration.bearer, "dashboard.api.request")
 
 
+def test_probe_is_read_only_and_reports_the_completed_promotion_transition():
+    registry, _clock = _registry_fixture()
+    registration = _registration(registration_byte=b"A", bearer_byte=b"a")
+    promotion = _promotion(
+        registration,
+        transition_byte=b"1",
+        previous_registration_id=None,
+    )
+    candidate = registry.register_candidate(registration, expected=AUTH_SCOPE)
+    candidate_snapshot = dict(registry._registrations)
+
+    assert registry.probe(registration.bearer) == candidate
+    assert registry.probe(registration.bearer) == candidate
+    assert registry._registrations == candidate_snapshot
+
+    active = registry.promote(promotion, expected=AUTH_SCOPE)
+    active_snapshot = dict(registry._registrations)
+
+    assert registry.probe(registration.bearer) == active
+    assert active.state is BackendScopeGrantState.ACTIVE
+    assert active.promoted_transition_id == promotion.transition_id
+    assert registry._registrations == active_snapshot
+    assert registration.bearer not in repr(active)
+
+
 def test_candidate_registration_is_idempotent_without_retaining_the_bearer():
     registry, _clock = _registry_fixture()
     first = _registration(registration_byte=b"A", bearer_byte=b"a")

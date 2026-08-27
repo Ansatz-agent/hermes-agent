@@ -237,6 +237,27 @@ class BackendScopeTokenRejected(AuthRequired):
         self.failure_phase = "pre_dispatch"
 
 
+def local_capability_rejection_payload(
+    error: BackendScopeTokenRejected,
+) -> dict[str, object]:
+    reason = "unknown" if error.reason == "unknown_token" else error.reason
+    return {
+        "detail": "Local capability rejected",
+        "code": error.code,
+        "reason": reason,
+        "failure_phase": error.failure_phase,
+        "retryable": True,
+    }
+
+
+def account_locked_payload() -> dict[str, object]:
+    return {
+        "detail": "Ansatz login required",
+        "code": "account_locked",
+        "hint": "Run `ansatz login` and retry.",
+    }
+
+
 _RECOVERABLE_BACKEND_SCOPE_CONTROL_REJECTIONS = frozenset(
     {
         "candidate_not_available",
@@ -678,10 +699,7 @@ class BackendScopeTokenRegistry:
         *,
         expected: AuthScope,
     ) -> AuthScope:
-        try:
-            authorized = self._authorize(boundary, expected=expected)
-        except AuthRequired:
-            raise BackendScopeTokenRejected("scope_not_authorized") from None
+        authorized = self._authorize(boundary, expected=expected)
         if authorized != expected:
             raise BackendScopeTokenRejected("scope_not_authorized")
         return authorized

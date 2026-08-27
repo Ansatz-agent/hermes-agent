@@ -103,9 +103,15 @@ from gateway.status import (
     resolve_gateway_liveness,
 )
 from utils import env_var_enabled
+from hermes_cli.client_auth.backend_scope_protocol import (
+    DESKTOP_SCOPE_PROTOCOL_VERSION,
+)
 from hermes_cli.client_auth.runtime import (
     AuthRequired,
+    BackendScopeTokenRejected,
+    account_locked_payload,
     backend_scope_tokens,
+    local_capability_rejection_payload,
     require_authorized,
     start_backend_scope_token_control,
 )
@@ -914,6 +920,7 @@ class DashboardHealth:
 
 
 DASHBOARD_HEALTH = DashboardHealth()
+DESKTOP_SCOPE_TOKEN_PROBE_PATH = "/api/auth/scope-token-probe"
 
 
 @app.middleware("http")
@@ -924,6 +931,22 @@ async def client_runtime_auth_middleware(request: Request, call_next):
             request_app = getattr(request, "app", app)
             if getattr(request_app.state, "desktop_scope_tokens_required", False):
                 bearer = request.headers.get(_SESSION_HEADER_NAME, "")
+                if request.url.path == DESKTOP_SCOPE_TOKEN_PROBE_PATH:
+                    grant = backend_scope_tokens.probe(bearer)
+                    return JSONResponse(
+                        status_code=200,
+                        content={
+                            "protocol_version": DESKTOP_SCOPE_PROTOCOL_VERSION,
+                            "registration_id": grant.registration_id,
+                            "connection_id": grant.connection_id,
+                            "runtime_instance_id": grant.auth.runtime_instance_id,
+                            "epoch": grant.auth.epoch,
+                            "state": grant.state.value,
+                            "promoted_transition_id": (
+                                grant.promoted_transition_id
+                            ),
+                        },
+                    )
                 grant = backend_scope_tokens.authorize(
                     bearer,
                     "dashboard.api.request",
@@ -932,14 +955,15 @@ async def client_runtime_auth_middleware(request: Request, call_next):
                 request.state.desktop_scope_grant = grant
             else:
                 require_authorized("dashboard.api.request")
+        except BackendScopeTokenRejected as error:
+            return JSONResponse(
+                status_code=401,
+                content=local_capability_rejection_payload(error),
+            )
         except AuthRequired:
             return JSONResponse(
                 status_code=401,
-                content={
-                    "detail": "Ansatz login required",
-                    "code": "login_required",
-                    "hint": "Run `ansatz login` and retry.",
-                },
+                content=account_locked_payload(),
             )
     return await call_next(request)
 
