@@ -38,6 +38,47 @@ export type LocalCapabilitySnapshot = {
 
 export type RotationReason = 'timer' | 'recovery'
 
+export type LocalCapabilityDiagnosticName =
+  | 'scope_candidate_acknowledged'
+  | 'scope_candidate_probe_succeeded'
+  | 'scope_expired'
+  | 'scope_promotion_ack_recovered_by_probe'
+  | 'scope_revoked'
+  | 'scope_rotation_attempt_failed'
+  | 'scope_rotation_promoted'
+  | 'scope_rotation_recovered_backend'
+  | 'scope_rotation_retry_scheduled'
+  | 'scope_rotation_started'
+
+export type LocalCapabilityDiagnosticPhase =
+  | 'lifecycle'
+  | 'issue'
+  | 'register'
+  | 'candidate_probe'
+  | 'promote'
+  | 'promotion_confirmation'
+  | 'complete'
+
+export type LocalCapabilityDiagnosticOutcome =
+  | 'started'
+  | 'succeeded'
+  | 'failed'
+  | 'retry_scheduled'
+  | 'recovered'
+  | 'revoked'
+  | 'expired'
+
+export type LocalCapabilityDiagnosticFailureCode =
+  | 'none'
+  | 'operation_failed'
+  | 'local_backend_unavailable'
+  | 'aborted'
+  | 'active_expired'
+  | 'probe_http_error'
+  | 'probe_request_failed'
+  | 'probe_response_invalid'
+  | 'probe_timeout'
+
 export type LocalCapabilityProbe = {
   protocol_version: 2
   registration_id: string
@@ -49,10 +90,30 @@ export type LocalCapabilityProbe = {
 }
 
 export type LocalCapabilityDiagnostic = {
-  name: string
+  name: LocalCapabilityDiagnosticName
   backendGeneration: number
   attempt: number
   elapsedMs: number
+  trigger: RotationReason | 'lifecycle'
+  phase: LocalCapabilityDiagnosticPhase
+  outcome: LocalCapabilityDiagnosticOutcome
+  failureCode: LocalCapabilityDiagnosticFailureCode
+  httpStatus: number | null
+  retryDelayMs: number
+  remainingLifetimeMs: number
+  activeAvailable: boolean
+}
+
+export function formatLocalCapabilityDiagnostic(event: LocalCapabilityDiagnostic): string {
+  return (
+    `[scope] name=${event.name} generation=${event.backendGeneration}` +
+    ` trigger=${event.trigger} phase=${event.phase} outcome=${event.outcome}` +
+    ` failure=${event.failureCode} http_status=${event.httpStatus ?? 'none'}` +
+    ` attempt=${event.attempt}` +
+    ` elapsed_ms=${event.elapsedMs} retry_delay_ms=${event.retryDelayMs}` +
+    ` remaining_lifetime_ms=${event.remainingLifetimeMs}` +
+    ` active_available=${event.activeAvailable}`
+  )
 }
 
 export type LocalCapabilityManagerOptions = {
@@ -77,6 +138,46 @@ type CapabilityState = {
   timer: NodeJS.Timeout | null
   retryAttempt: number
   abortController: AbortController
+}
+
+type DiagnosticContext = Pick<
+  LocalCapabilityDiagnostic,
+  'trigger' | 'phase' | 'outcome' | 'failureCode' | 'retryDelayMs'
+> & { httpStatus?: number | null }
+
+class CapabilityRotationAttemptError extends Error {
+  readonly phase: LocalCapabilityDiagnosticPhase
+  readonly failureCode: LocalCapabilityDiagnosticFailureCode
+  readonly httpStatus: number | null
+
+  constructor(
+    phase: LocalCapabilityDiagnosticPhase,
+    failureCode: LocalCapabilityDiagnosticFailureCode,
+    httpStatus: number | null,
+    cause: unknown
+  ) {
+    super('Local capability rotation step failed', { cause })
+    this.name = 'CapabilityRotationAttemptError'
+    this.phase = phase
+    this.failureCode = failureCode
+    this.httpStatus = httpStatus
+  }
+}
+
+class CapabilityProbeError extends Error {
+  readonly failureCode: LocalCapabilityDiagnosticFailureCode
+  readonly httpStatus: number | null
+
+  constructor(
+    failureCode: LocalCapabilityDiagnosticFailureCode,
+    httpStatus: number | null,
+    cause?: unknown
+  ) {
+    super('Local capability probe failed', { cause })
+    this.name = 'CapabilityProbeError'
+    this.failureCode = failureCode
+    this.httpStatus = httpStatus
+  }
 }
 
 export class LocalBackendCapabilityUnavailableError extends Error {
@@ -173,27 +274,81 @@ async function defaultProbe(
   signal: AbortSignal
 ): Promise<LocalCapabilityProbe> {
   const endpoint = new URL('/api/auth/scope-token-probe', baseUrl)
+  let response: Response
 
-  const response = await fetch(endpoint, {
-    method: 'GET',
-    headers: { Authorization: `Bearer ${bearer}` },
-    cache: 'no-store',
-    credentials: 'omit',
-    redirect: 'error',
-    signal
-  })
-
-  if (!response.ok) {
-    throw new Error(`Local capability probe failed (${response.status})`)
+  try {
+    response = await fetch(endpoint, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${bearer}` },
+      cache: 'no-store',
+      credentials: 'omit',
+      redirect: 'error',
+      signal
+    })
+  } catch (error) {
+    throw new CapabilityProbeError('probe_request_failed', null, error)
   }
 
-  return validatedProbe(await response.json())
+  if (!response.ok) {
+    throw new CapabilityProbeError('probe_http_error', response.status)
+  }
+
+  try {
+    return validatedProbe(await response.json())
+  } catch (error) {
+    throw new CapabilityProbeError('probe_response_invalid', response.status, error)
+  }
 }
 
 function unavailable(cause?: unknown): LocalBackendCapabilityUnavailableError {
   return new LocalBackendCapabilityUnavailableError('Local backend capability unavailable', {
     cause
   })
+}
+
+function diagnosticFailureCode(error: unknown): LocalCapabilityDiagnosticFailureCode {
+  if (error instanceof CapabilityRotationAttemptError) {
+    return error.failureCode
+  }
+
+  if (error instanceof LocalBackendCapabilityUnavailableError) {
+    return 'local_backend_unavailable'
+  }
+
+  if (error instanceof CapabilityProbeError) {
+    return error.failureCode
+  }
+
+  if (error instanceof Error && error.name === 'AbortError') {
+    return 'aborted'
+  }
+
+  return 'operation_failed'
+}
+
+function diagnosticHttpStatus(error: unknown): number | null {
+  if (
+    error instanceof CapabilityRotationAttemptError ||
+    error instanceof CapabilityProbeError
+  ) {
+    return error.httpStatus
+  }
+
+  return null
+}
+
+function rotationAttemptError(
+  phase: LocalCapabilityDiagnosticPhase,
+  error: unknown
+): CapabilityRotationAttemptError {
+  return error instanceof CapabilityRotationAttemptError
+    ? error
+    : new CapabilityRotationAttemptError(
+        phase,
+        diagnosticFailureCode(error),
+        diagnosticHttpStatus(error),
+        error
+      )
 }
 
 export class LocalCapabilityManager {
@@ -299,7 +454,13 @@ export class LocalCapabilityManager {
     state.candidate = null
     this.states.delete(key)
     state.binding.control.close(error)
-    this.diagnostic(state, 'scope_revoked', state.retryAttempt, this.clock())
+    this.diagnostic(state, 'scope_revoked', state.retryAttempt, this.clock(), {
+      trigger: 'lifecycle',
+      phase: 'lifecycle',
+      outcome: 'revoked',
+      failureCode: 'none',
+      retryDelayMs: 0
+    })
   }
 
   revokeByControl(control: BackendControlChannel): void {
@@ -352,7 +513,19 @@ export class LocalCapabilityManager {
         state.retryAttempt = 0
 
         if (attempt > 0) {
-          this.diagnostic(state, 'scope_rotation_recovered_backend', attempt, refreshStartedAt)
+          this.diagnostic(
+            state,
+            'scope_rotation_recovered_backend',
+            attempt,
+            refreshStartedAt,
+            {
+              trigger: reason,
+              phase: 'complete',
+              outcome: 'recovered',
+              failureCode: 'none',
+              retryDelayMs: 0
+            }
+          )
         }
 
         return snapshot
@@ -378,9 +551,17 @@ export class LocalCapabilityManager {
         const baseDelay = RETRY_DELAYS_SECONDS[Math.min(attempt, RETRY_DELAYS_SECONDS.length - 1)]
         const random = Math.min(1, Math.max(0, this.random()))
         const delay = Math.min(baseDelay * (1 + random * 0.2), remaining)
+        const failed = rotationAttemptError('complete', error)
         attempt += 1
         state.retryAttempt = attempt
-        this.diagnostic(state, 'scope_rotation_retry_scheduled', attempt, refreshStartedAt)
+        this.diagnostic(state, 'scope_rotation_retry_scheduled', attempt, refreshStartedAt, {
+          trigger: reason,
+          phase: failed.phase,
+          outcome: 'retry_scheduled',
+          failureCode: failed.failureCode,
+          httpStatus: failed.httpStatus,
+          retryDelayMs: delay * 1_000
+        })
         await this.waitForRetry(state, delay)
       }
     }
@@ -390,21 +571,31 @@ export class LocalCapabilityManager {
 
   private async rotateOnce(
     state: CapabilityState,
-    _reason: RotationReason,
+    reason: RotationReason,
     attempt: number
   ): Promise<LocalCapabilitySnapshot> {
     this.assertCurrent(state)
     const startedAt = this.clock()
-    const candidate = this.issueToken({ ...state.binding.scope })
-
-    if (!sameScope(candidate.scope, state.binding.scope)) {
-      throw new Error('Issued local capability has the wrong scope')
-    }
-
-    state.candidate = candidate
-    this.diagnostic(state, 'scope_rotation_started', attempt, startedAt)
+    let phase: LocalCapabilityDiagnosticPhase = 'issue'
+    let candidate: AuthScopeToken | null = null
 
     try {
+      candidate = this.issueToken({ ...state.binding.scope })
+
+      if (!sameScope(candidate.scope, state.binding.scope)) {
+        throw new Error('Issued local capability has the wrong scope')
+      }
+
+      state.candidate = candidate
+      this.diagnostic(state, 'scope_rotation_started', attempt, startedAt, {
+        trigger: reason,
+        phase,
+        outcome: 'started',
+        failureCode: 'none',
+        retryDelayMs: 0
+      })
+
+      phase = 'register'
       await this.awaitCurrent(
         state,
         state.binding.control.request(
@@ -414,17 +605,33 @@ export class LocalCapabilityManager {
         )
       )
       this.assertCandidate(state, candidate)
-      this.diagnostic(state, 'scope_candidate_acknowledged', attempt, startedAt)
+      this.diagnostic(state, 'scope_candidate_acknowledged', attempt, startedAt, {
+        trigger: reason,
+        phase,
+        outcome: 'succeeded',
+        failureCode: 'none',
+        retryDelayMs: 0
+      })
+
+      phase = 'candidate_probe'
 
       const probe = validatedProbe(
         await this.probeWithTimeout(state, candidate.bearer)
       )
 
       this.assertCandidateProbe(state, candidate, probe, 'candidate', null)
-      this.diagnostic(state, 'scope_candidate_probe_succeeded', attempt, startedAt)
+      this.diagnostic(state, 'scope_candidate_probe_succeeded', attempt, startedAt, {
+        trigger: reason,
+        phase,
+        outcome: 'succeeded',
+        failureCode: 'none',
+        retryDelayMs: 0
+      })
 
       const transitionId = this.issueTransitionId()
       const previousRegistrationId = state.active?.registrationId ?? null
+
+      phase = 'promote'
 
       try {
         await this.awaitCurrent(
@@ -444,6 +651,7 @@ export class LocalCapabilityManager {
         )
       } catch (error) {
         this.assertCandidate(state, candidate)
+        phase = 'promotion_confirmation'
 
         const confirmation = validatedProbe(
           await this.probeWithTimeout(state, candidate.bearer)
@@ -454,21 +662,54 @@ export class LocalCapabilityManager {
         if (state.abortController.signal.aborted) {
           throw unavailable(error)
         }
+
+        this.diagnostic(
+          state,
+          'scope_promotion_ack_recovered_by_probe',
+          attempt,
+          startedAt,
+          {
+            trigger: reason,
+            phase,
+            outcome: 'recovered',
+            failureCode: 'none',
+            retryDelayMs: 0
+          }
+        )
       }
 
       this.assertCandidate(state, candidate)
       state.active = candidate
       state.candidate = null
       this.scheduleRotation(state)
-      this.diagnostic(state, 'scope_rotation_promoted', attempt, startedAt)
+      this.diagnostic(state, 'scope_rotation_promoted', attempt, startedAt, {
+        trigger: reason,
+        phase: 'complete',
+        outcome: 'succeeded',
+        failureCode: 'none',
+        retryDelayMs: 0
+      })
 
       return this.toSnapshot(state, candidate)
     } catch (error) {
-      if (state.candidate === candidate) {
+      if (candidate && state.candidate === candidate) {
         state.candidate = null
       }
 
-      throw error
+      const failure = rotationAttemptError(phase, error)
+
+      if (this.isCurrent(state) && !state.abortController.signal.aborted) {
+        this.diagnostic(state, 'scope_rotation_attempt_failed', attempt, startedAt, {
+          trigger: reason,
+          phase: failure.phase,
+          outcome: 'failed',
+          failureCode: failure.failureCode,
+          httpStatus: failure.httpStatus,
+          retryDelayMs: 0
+        })
+      }
+
+      throw failure
     }
   }
 
@@ -620,7 +861,7 @@ export class LocalCapabilityManager {
       state.abortController.signal.addEventListener('abort', onStateAbort, { once: true })
 
       timer = setTimeout(() => {
-        controller.abort(new Error('Local capability probe timed out'))
+        controller.abort(new CapabilityProbeError('probe_timeout', null))
       }, this.probeTimeoutMs)
       timer.unref?.()
 
@@ -688,6 +929,13 @@ export class LocalCapabilityManager {
     state.active = null
     state.candidate = null
     state.binding.control.close(error)
+    this.diagnostic(state, 'scope_expired', state.retryAttempt, this.clock(), {
+      trigger: 'lifecycle',
+      phase: 'lifecycle',
+      outcome: 'expired',
+      failureCode: 'active_expired',
+      retryDelayMs: 0
+    })
   }
 
   private toSnapshot(state: CapabilityState, token: AuthScopeToken): LocalCapabilitySnapshot {
@@ -705,16 +953,29 @@ export class LocalCapabilityManager {
 
   private diagnostic(
     state: CapabilityState,
-    name: string,
+    name: LocalCapabilityDiagnosticName,
     attempt: number,
-    startedAt: number
+    startedAt: number,
+    context: DiagnosticContext
   ): void {
     try {
+      const now = this.clock()
+      const activeAvailable = Boolean(state.active && now < state.active.validUntil)
+
+      const remainingLifetimeMs = state.active
+        ? Math.max(0, Math.round((state.active.validUntil - now) * 1_000))
+        : 0
+
       this.onDiagnostic({
         name,
         backendGeneration: state.binding.backendGeneration,
         attempt,
-        elapsedMs: Math.max(0, (this.clock() - startedAt) * 1_000)
+        elapsedMs: Math.max(0, Math.round((now - startedAt) * 1_000)),
+        ...context,
+        httpStatus: context.httpStatus ?? null,
+        retryDelayMs: Math.max(0, Math.round(context.retryDelayMs)),
+        remainingLifetimeMs,
+        activeAvailable
       })
     } catch {
       // Diagnostics are best-effort and must never affect capability state.

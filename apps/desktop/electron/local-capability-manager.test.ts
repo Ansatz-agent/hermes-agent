@@ -11,8 +11,10 @@ import {
 } from './auth-scope-token'
 import type { BackendControlChannel } from './backend-control-channel'
 import {
+  formatLocalCapabilityDiagnostic,
   LocalBackendCapabilityUnavailableError,
   type LocalCapabilityBinding,
+  type LocalCapabilityDiagnostic,
   LocalCapabilityManager,
   type LocalCapabilityManagerOptions
 } from './local-capability-manager'
@@ -236,7 +238,7 @@ class FakeProbe {
 type Fixture = {
   clock: { now: number }
   control: FakeControl
-  diagnostics: Array<Record<string, unknown>>
+  diagnostics: LocalCapabilityDiagnostic[]
   manager: LocalCapabilityManager
   binding: LocalCapabilityBinding
   probe: FakeProbe
@@ -259,7 +261,7 @@ function managerFixture(
   const clock = { now: 100 }
   const control = new FakeControl()
   const probe = new FakeProbe()
-  const diagnostics: Array<Record<string, unknown>> = []
+  const diagnostics: LocalCapabilityDiagnostic[] = []
   const tokensByBearer = new Map<string, AuthScopeToken>()
   let tokenSequence = 0
   let transitionSequence = 0
@@ -787,9 +789,136 @@ test('snapshot returns an immutable copy and diagnostics never contain capabilit
   assert.ok(fixture.diagnostics.length > 0)
   assert.deepEqual(
     Object.keys(fixture.diagnostics[0]).sort(),
-    ['attempt', 'backendGeneration', 'elapsedMs', 'name']
+    [
+      'activeAvailable',
+      'attempt',
+      'backendGeneration',
+      'elapsedMs',
+      'failureCode',
+      'httpStatus',
+      'name',
+      'outcome',
+      'phase',
+      'remainingLifetimeMs',
+      'retryDelayMs',
+      'trigger'
+    ]
   )
   const diagnostics = JSON.stringify(fixture.diagnostics)
+  const rendered = fixture.diagnostics.map(formatLocalCapabilityDiagnostic).join('\n')
   assert.equal(diagnostics.includes(stable.bearer), false)
   assert.equal(diagnostics.includes(stable.registrationId), false)
+  assert.equal(diagnostics.includes(stable.scope.runtime_instance_id), false)
+  assert.equal(rendered.includes(stable.bearer), false)
+  assert.equal(rendered.includes(stable.registrationId), false)
+  assert.equal(rendered.includes(stable.scope.runtime_instance_id), false)
+})
+
+test('retry diagnostics identify the failed phase without copying arbitrary errors', async () => {
+  const fixture = managerFixture()
+  await activate(fixture)
+  const first = fixture.manager.snapshot('backend-1')
+  fixture.diagnostics.length = 0
+  fixture.clock.now = first.rotateAt
+  const rotating = fixture.manager.refresh('backend-1', 'timer')
+  const rejected = assert.rejects(rotating, LocalBackendCapabilityUnavailableError)
+
+  await fixture.control.waitForPending('register_scope_token')
+  fixture.control.rejectPending(
+    'register_scope_token',
+    new Error('diagnostic-secret-sentinel')
+  )
+
+  const failed = await eventually(
+    () =>
+      fixture.diagnostics.find(event => event.name === 'scope_rotation_attempt_failed') ?? null,
+    'Failure diagnostic was not emitted'
+  )
+
+  const retry = await eventually(
+    () =>
+      fixture.diagnostics.find(event => event.name === 'scope_rotation_retry_scheduled') ?? null,
+    'Retry diagnostic was not emitted'
+  )
+
+  assert.deepEqual(failed, {
+    name: 'scope_rotation_attempt_failed',
+    backendGeneration: 1,
+    attempt: 0,
+    elapsedMs: 0,
+    trigger: 'timer',
+    phase: 'register',
+    outcome: 'failed',
+    failureCode: 'operation_failed',
+    httpStatus: null,
+    retryDelayMs: 0,
+    remainingLifetimeMs: (first.validUntil - first.rotateAt) * 1_000,
+    activeAvailable: true
+  })
+  assert.equal(retry.phase, 'register')
+  assert.equal(retry.failureCode, 'operation_failed')
+  assert.equal(retry.retryDelayMs, 1_000)
+  assert.equal(retry.remainingLifetimeMs, (first.validUntil - first.rotateAt) * 1_000)
+  assert.equal(
+    formatLocalCapabilityDiagnostic(retry),
+    '[scope] name=scope_rotation_retry_scheduled generation=1 trigger=timer phase=register outcome=retry_scheduled failure=operation_failed http_status=none attempt=1 elapsed_ms=0 retry_delay_ms=1000 remaining_lifetime_ms=600000 active_available=true'
+  )
+  assert.equal(JSON.stringify(fixture.diagnostics).includes('diagnostic-secret-sentinel'), false)
+
+  fixture.manager.revoke('backend-1')
+  await rejected
+})
+
+test('expiry emits a terminal diagnostic distinct from account logout', async () => {
+  const fixture = managerFixture()
+  await activate(fixture)
+  const first = fixture.manager.snapshot('backend-1')
+  fixture.diagnostics.length = 0
+  fixture.clock.now = first.validUntil
+
+  assert.throws(
+    () => fixture.manager.snapshot('backend-1'),
+    LocalBackendCapabilityUnavailableError
+  )
+  assert.deepEqual(fixture.diagnostics, [
+    {
+      name: 'scope_expired',
+      backendGeneration: 1,
+      attempt: 0,
+      elapsedMs: 0,
+      trigger: 'lifecycle',
+      phase: 'lifecycle',
+      outcome: 'expired',
+      failureCode: 'active_expired',
+      httpStatus: null,
+      retryDelayMs: 0,
+      remainingLifetimeMs: 0,
+      activeAvailable: false
+    }
+  ])
+})
+
+test('production probe diagnostics expose status but never response content', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async () => new Response('backend-response-secret', { status: 503 }))
+  )
+  const fixture = managerFixture({ useDefaultProbe: true })
+  const activating = fixture.manager.activate(fixture.binding)
+
+  await fixture.control.waitForPending('register_scope_token')
+  fixture.control.ackRegistered()
+  await assert.rejects(activating, LocalBackendCapabilityUnavailableError)
+
+  const failed = fixture.diagnostics.find(
+    event => event.name === 'scope_rotation_attempt_failed'
+  )
+
+  assert.ok(failed)
+  assert.equal(failed.phase, 'candidate_probe')
+  assert.equal(failed.failureCode, 'probe_http_error')
+  assert.equal(failed.httpStatus, 503)
+  assert.equal(JSON.stringify(fixture.diagnostics).includes('backend-response-secret'), false)
+
+  fixture.manager.revoke('backend-1')
 })

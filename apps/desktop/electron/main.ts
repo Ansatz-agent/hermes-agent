@@ -227,7 +227,10 @@ import { prepareInstallFirstRuntime } from './install-first-runtime'
 import { removeLegacyAnsatzPartitions } from './legacy-product-cleanup'
 import { createLinkTitleWindow, guardLinkTitleSession, readLinkTitleWindowTitle } from './link-title-window'
 import { LocalBackendCapabilityLifecycle } from './local-backend-capability'
-import { LocalCapabilityManager } from './local-capability-manager'
+import {
+  formatLocalCapabilityDiagnostic,
+  LocalCapabilityManager
+} from './local-capability-manager'
 import { ensureMainWindow } from './main-window-lifecycle'
 import { createMediaProtocolHandler, MEDIA_PROTOCOL } from './media-protocol'
 import {
@@ -718,9 +721,7 @@ let desktopDisplayListenersRegistered = false
 const desktopLocalCapabilities = new LocalBackendCapabilityLifecycle(
   new LocalCapabilityManager({
     onDiagnostic: event => {
-      rememberLog(
-        `[scope] ${event.name} generation=${event.backendGeneration} attempt=${event.attempt} elapsed_ms=${event.elapsedMs}`
-      )
+      rememberLog(formatLocalCapabilityDiagnostic(event))
     }
   }),
   {
