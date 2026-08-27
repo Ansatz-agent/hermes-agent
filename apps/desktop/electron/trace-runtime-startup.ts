@@ -4,6 +4,7 @@ type TraceTimer = number | ReturnType<typeof setTimeout>
 type TraceRuntimeStartupRecoveryOptions = {
   clearTimer?: (timer: TraceTimer) => void
   isRecoverable?: (error: unknown) => boolean
+  onFailure?: (error: unknown, attempt: number) => void
   setTimer?: (callback: () => void, delay: number) => TraceTimer
 }
 
@@ -20,6 +21,7 @@ const MAX_RETRY_MS = 30_000
 export class TraceRuntimeStartupRecovery {
   private readonly clearTimer: (timer: TraceTimer) => void
   private readonly isRecoverable: (error: unknown) => boolean
+  private readonly onFailure: (error: unknown, attempt: number) => void
   private readonly setTimer: (callback: () => void, delay: number) => TraceTimer
   private attempt = 0
   private flight: Promise<void> | null = null
@@ -32,6 +34,7 @@ export class TraceRuntimeStartupRecovery {
   constructor(options: TraceRuntimeStartupRecoveryOptions = {}) {
     this.clearTimer = options.clearTimer ?? clearTimeout
     this.isRecoverable = options.isRecoverable ?? (() => true)
+    this.onFailure = options.onFailure ?? (() => {})
     this.setTimer = options.setTimer ?? setTimeout
   }
 
@@ -98,6 +101,8 @@ export class TraceRuntimeStartupRecovery {
         if (generation !== this.generation) {
           return
         }
+
+        this.onFailure(error, this.attempt + 1)
 
         if (!this.isRecoverable(error)) {
           this.status = 'idle'

@@ -39,7 +39,15 @@ function assertSafeStats(stats: Stats, type: 'directory' | 'file'): void {
 
   const uid = currentUid()
 
-  if ((uid !== null && stats.uid !== uid) || (stats.mode & PRIVATE_MODE_MASK) !== 0) {
+  // Windows does not expose POSIX permission bits through `Stats.mode`.
+  // Node returns the inherited DOS/ACL-derived mode (usually 0o666/0o777),
+  // so enforcing PRIVATE_MODE_MASK there rejects every normal userData path
+  // before the Trace outbox can create its key or journal. Windows ACLs are
+  // the authority for those paths; keep the owner/mode checks for Unix.
+  const hasUnsafeUnixOwnership = uid !== null && stats.uid !== uid
+  const hasUnsafeUnixPermissions = process.platform !== 'win32' && (stats.mode & PRIVATE_MODE_MASK) !== 0
+
+  if (hasUnsafeUnixOwnership || hasUnsafeUnixPermissions) {
     throw new Error(UNSAFE_PATH)
   }
 }
@@ -217,6 +225,14 @@ export const nodeTraceFileSystem: TraceFileSystem = {
   },
   async syncDirectory(path: string): Promise<void> {
     await assertSafePath(path, 'directory')
+
+    // Windows does not support fsync on directory handles (it returns
+    // EPERM). File contents are flushed by syncFile; NTFS journals the
+    // rename metadata, so there is no directory-handle equivalent here.
+    if (process.platform === 'win32') {
+      return
+    }
+
     const handle = await open(path, constants.O_RDONLY | constants.O_DIRECTORY | NO_FOLLOW)
 
     try {
@@ -227,7 +243,10 @@ export const nodeTraceFileSystem: TraceFileSystem = {
   },
   async syncFile(path: string): Promise<void> {
     await assertSafePath(path, 'file')
-    const handle = await openSafeFile(path, constants.O_RDONLY)
+    // FileHandle.sync() on Windows requires a writable handle; opening the
+    // file read-only consistently fails with EPERM. O_RDWR does not mutate
+    // the file and keeps the same no-follow/safety checks.
+    const handle = await openSafeFile(path, process.platform === 'win32' ? constants.O_RDWR : constants.O_RDONLY)
 
     try {
       await handle.sync()

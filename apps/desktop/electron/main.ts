@@ -749,7 +749,15 @@ async function writeBackendScopeToken(child, token) {
 }
 
 async function writeBackendTraceTransport(child, root) {
-  if (!desktopTraceIngress || !child?.stdin || child.stdin.destroyed || !child.stdin.writable) {
+  if (
+    !desktopTraceIngress ||
+    !desktopTraceFacade ||
+    !desktopTraceForwarder ||
+    !desktopTraceContext ||
+    !child?.stdin ||
+    child.stdin.destroyed ||
+    !child.stdin.writable
+  ) {
     throw new TraceTransportUnavailableError('trace_transport_pipe_unavailable')
   }
 
@@ -9028,11 +9036,19 @@ let desktopTraceGeneration = 0
 let desktopTraceStartupPromise = null
 
 const desktopTraceRuntimeStartup = new TraceRuntimeStartupRecovery({
-  isRecoverable: error => !(error instanceof AuthBridgeError)
+  isRecoverable: error => !(error instanceof AuthBridgeError),
+  onFailure: (error, attempt) => {
+    const message = error instanceof Error ? error.message : String(error)
+    rememberLog(`[trace] startup unavailable attempt=${attempt}: ${message}`)
+  }
 })
 
 function traceContextForBackendRoot(root) {
-  if (!desktopTraceIngress || !root) {
+  // The facade is created before the encrypted outbox/forwarder so startup
+  // can recover without blocking the local conversation. Do not advertise
+  // that half-initialized facade to a child: it has no delegate and would
+  // make Relay report a generic OTLP network error for every batch.
+  if (!desktopTraceIngress || !desktopTraceFacade || !desktopTraceForwarder || !desktopTraceContext || !root) {
     return null
   }
 
@@ -9097,7 +9113,14 @@ async function attachDesktopTraceTransportToRunningBackends() {
 }
 
 function scheduleDesktopTraceTransportAttachRetry(delayOverride = null) {
-  if (desktopTraceAttachRetryTimer || !desktopTraceIngress || desktopTraceBackends.active().length === 0) {
+  if (
+    desktopTraceAttachRetryTimer ||
+    !desktopTraceIngress ||
+    !desktopTraceFacade ||
+    !desktopTraceForwarder ||
+    !desktopTraceContext ||
+    desktopTraceBackends.active().length === 0
+  ) {
     return
   }
 
@@ -9416,6 +9439,10 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
       owner: { ...owner },
       scope: { ...scope }
     }
+    // A backend may have been registered while Trace was recovering. Now
+    // that the delegate is installed, attach the live transport immediately
+    // instead of waiting for the regular 30-second retry.
+    scheduleDesktopTraceTransportAttachRetry(0)
     lifecycle.start()
 
     return desktopTraceContext
@@ -10850,7 +10877,7 @@ async function spawnPoolBackend(profile, entry) {
 
   const traceBackendRegistered = registerDesktopTraceBackend(child, backend, traceBackendGeneration)
 
-  if (desktopTraceIngress && traceBackendRegistered) {
+  if (desktopTraceContext && traceBackendRegistered) {
     await writeBackendTraceTransport(child, backend.root).catch(() => {
       scheduleDesktopTraceTransportAttachRetry()
     })
@@ -11230,7 +11257,7 @@ async function startHermes() {
 
     const traceBackendRegistered = registerDesktopTraceBackend(hermesProcess, backend, traceBackendGeneration)
 
-    if (desktopTraceIngress && traceBackendRegistered) {
+    if (desktopTraceContext && traceBackendRegistered) {
       await writeBackendTraceTransport(hermesProcess, backend.root).catch(() => {
         scheduleDesktopTraceTransportAttachRetry()
       })
