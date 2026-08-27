@@ -303,7 +303,7 @@ import { createStreamThrottle } from './stream-throttle'
 import { nativeOverlayWidth as computeNativeOverlayWidth, macTitleBarOverlayHeight } from './titlebar-overlay-width'
 import { attachTraceBackends, TraceTransportUnavailableError } from './trace-backend-attacher'
 import { TraceBackendRegistry } from './trace-backend-registry'
-import { RefreshingTraceCredentialProvider, TraceForwarder } from './trace-forwarder'
+import { RefreshingTraceCredentialProvider, TraceForwarder, type TraceUploadEvent } from './trace-forwarder'
 import { TraceIngressFacade } from './trace-ingress-facade'
 import {
   migratePreviousLegacyTraceNamespace,
@@ -9032,7 +9032,7 @@ const desktopTraceRuntimeStartup = new TraceRuntimeStartupRecovery({
 })
 
 function traceContextForBackendRoot(root) {
-  if (!desktopTraceIngress) {
+  if (!desktopTraceIngress || !root) {
     return null
   }
 
@@ -9042,6 +9042,38 @@ function traceContextForBackendRoot(root) {
     localAuthorization: `Bearer ${desktopTraceIngress.localBearer}`,
     pluginsToml: path.join(root, 'config', 'ansatz-voice-trace', 'plugins.toml')
   }
+}
+
+// The product Relay config intentionally contains a sealed loopback
+// placeholder. Always apply the current per-process transport to the child
+// environment immediately before spawn, including backend candidates whose
+// resolver did not build a trace-aware env. The stdin registration frame
+// remains a rotation/recovery mechanism, but must not be the first opportunity
+// for Relay to learn the endpoint: it may initialize its exporter before that
+// frame is consumed.
+function applyDesktopTraceEnvironment(environment, root) {
+  const result = { ...environment }
+  const trace = traceContextForBackendRoot(root)
+
+  for (const key of [
+    'HERMES_NEMO_RELAY_PLUGINS_TOML',
+    'ANSATZ_TRACE_LOCAL_ENDPOINT',
+    'ANSATZ_TRACE_LOCAL_AUTHORIZATION',
+    'ANSATZ_TRACE_INSTALLATION_ID',
+    'ANSATZ_TRACE_ENTRYPOINT'
+  ]) {
+    delete result[key]
+  }
+
+  if (trace) {
+    result.HERMES_NEMO_RELAY_PLUGINS_TOML = trace.pluginsToml
+    result.ANSATZ_TRACE_LOCAL_ENDPOINT = trace.endpoint
+    result.ANSATZ_TRACE_LOCAL_AUTHORIZATION = trace.localAuthorization
+    result.ANSATZ_TRACE_INSTALLATION_ID = trace.installationId
+    result.ANSATZ_TRACE_ENTRYPOINT = 'desktop'
+  }
+
+  return result
 }
 
 async function attachDesktopTraceTransportToRunningBackends() {
@@ -9335,6 +9367,16 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
     const forwarder = new TraceForwarder({
       credentialProvider: provider,
       installationId: desktopInstallationId,
+      onUploadEvent: (event: TraceUploadEvent) => {
+        if (event.kind === 'success') {
+          rememberLog(`[trace] upload success outcome=${event.outcome} status=${event.status}`)
+        } else {
+          rememberLog(
+            `[trace] upload failure status=${event.status === null ? 'network' : event.status}; ` +
+              'durable retry/quarantine policy applied'
+          )
+        }
+      },
       onTerminalRevocation: revocation => {
         const coordinator = desktopAuthCoordinator
         if (coordinator) {
@@ -10759,7 +10801,10 @@ async function spawnPoolBackend(profile, entry) {
     hiddenWindowsChildOptions({
       cwd: hermesCwd,
       env: {
-        ...sanitizeAnsatzAuthChildEnvironment({ ...process.env, ...backend.env }, HERMES_HOME),
+        ...sanitizeAnsatzAuthChildEnvironment(
+          applyDesktopTraceEnvironment({ ...process.env, ...backend.env }, backend.root),
+          HERMES_HOME
+        ),
         // Pin the gateway's tool/terminal cwd to the same directory we chose for
         // the child process. Inherited TERMINAL_CWD (or a stale config bridge)
         // can still point at the install dir even when spawn cwd is home.
@@ -11126,7 +11171,10 @@ async function startHermes() {
       hiddenWindowsChildOptions({
         cwd: hermesCwd,
         env: {
-          ...sanitizeAnsatzAuthChildEnvironment({ ...process.env, ...backend.env }, HERMES_HOME),
+          ...sanitizeAnsatzAuthChildEnvironment(
+            applyDesktopTraceEnvironment({ ...process.env, ...backend.env }, backend.root),
+            HERMES_HOME
+          ),
           // Explicitly pin HERMES_HOME for the child so Python's get_hermes_home()
           // resolves to the SAME location our resolveHermesHome() picked. Without
           // this pin, Python falls back to ~/.hermes on every platform — fine on

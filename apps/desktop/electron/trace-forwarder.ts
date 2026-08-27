@@ -50,12 +50,17 @@ type TraceOutbox = {
 
 type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>
 
+export type TraceUploadEvent =
+  | { kind: 'success'; outcome: DurableReceipt['outcome']; status: number }
+  | { kind: 'failure'; status: number | null }
+
 type TraceForwarderOptions = {
   clock?: () => number
   credentialProvider: TraceCredentialProvider
   fetchImpl?: FetchLike
   installationId: string
   maxBodyBytes?: number
+  onUploadEvent?: (event: TraceUploadEvent) => void
   onTerminalRevocation?: (revocation: TerminalTraceRevocation) => void
   random?: () => number
   recovery?: RecoveryTrigger
@@ -99,6 +104,7 @@ export class TraceForwarder {
   private readonly fetchImpl: FetchLike
   private readonly installationId: string
   private readonly maxBodyBytes: number
+  private readonly onUploadEvent: (event: TraceUploadEvent) => void
   private readonly onTerminalRevocation: (revocation: TerminalTraceRevocation) => void
   private readonly random: () => number
   private readonly recovery: RecoveryTrigger
@@ -125,6 +131,7 @@ export class TraceForwarder {
     this.fetchImpl = options.fetchImpl ?? fetch
     this.installationId = options.installationId
     this.maxBodyBytes = Math.min(options.maxBodyBytes ?? MAX_LOOPBACK_BODY_BYTES, MAX_LOOPBACK_BODY_BYTES)
+    this.onUploadEvent = options.onUploadEvent ?? (() => {})
     this.onTerminalRevocation = options.onTerminalRevocation ?? (() => {})
     this.random = options.random ?? Math.random
     this.recovery = options.recovery ?? { trigger: () => {} }
@@ -388,6 +395,8 @@ export class TraceForwarder {
       return
     }
 
+    this.reportUploadEvent({ kind: 'failure', status: error.status })
+
     try {
       this.requireActiveOwner(batch.owner, generation)
     } catch {
@@ -447,12 +456,14 @@ export class TraceForwarder {
         this.retryByBatch.delete(batch.batchId)
       } catch (error) {
         if (!(error instanceof UpstreamFailure)) {
+          this.reportUploadEvent({ kind: 'failure', status: null })
           this.deferRetry(batch.batchId, null)
 
           return
         }
 
         if (error.status === 403) {
+          this.reportUploadEvent({ kind: 'failure', status: error.status })
           if (!this.terminalRevoked) {
             this.deferRetry(batch.batchId, error.retryAfterMs, 1_000)
           }
@@ -461,6 +472,7 @@ export class TraceForwarder {
         }
 
         if (error.status === 400 || error.status === 409 || error.status === 413 || error.status === 415) {
+          this.reportUploadEvent({ kind: 'failure', status: error.status })
           this.requireActiveOwner(owner, generation)
           await this.store.quarantine(batch.batchId, `gateway_${error.status}`)
           this.retryByBatch.delete(batch.batchId)
@@ -468,6 +480,7 @@ export class TraceForwarder {
           continue
         }
 
+        this.reportUploadEvent({ kind: 'failure', status: error.status })
         this.deferRetry(batch.batchId, error.retryAfterMs)
 
         return
@@ -502,7 +515,10 @@ export class TraceForwarder {
       this.requireActiveOwner(batch.owner, generation)
 
       if (response.status !== 401) {
-        return await this.requireGatewayReceipt(response, batch, generation)
+        const receipt = await this.requireGatewayReceipt(response, batch, generation)
+        this.reportUploadEvent({ kind: 'success', outcome: receipt.outcome, status: response.status })
+
+        return receipt
       }
 
       this.credentialProvider.invalidate()
@@ -514,7 +530,10 @@ export class TraceForwarder {
       const retried = await this.fetchUpstream(batch, refreshed)
       this.requireActiveOwner(batch.owner, generation)
 
-      return await this.requireGatewayReceipt(retried, batch, generation)
+      const receipt = await this.requireGatewayReceipt(retried, batch, generation)
+      this.reportUploadEvent({ kind: 'success', outcome: receipt.outcome, status: retried.status })
+
+      return receipt
     } catch (error) {
       if (error instanceof UpstreamFailure) {
         throw error
@@ -605,6 +624,14 @@ export class TraceForwarder {
       return await operation()
     } finally {
       release()
+    }
+  }
+
+  private reportUploadEvent(event: TraceUploadEvent): void {
+    try {
+      this.onUploadEvent(event)
+    } catch {
+      // Upload diagnostics must never affect durability or retry behavior.
     }
   }
 }
