@@ -117,7 +117,9 @@ Function AnsatzPrepareLegacyCleanup
   ; If this path is registered, electron-builder's own uninstallOldVersion
   ; flow remains authoritative. The custom path is for unregistered legacy
   ; copies such as the historical D:\an\Ansatz installation.
-  ReadRegStr $1 SHELL_CONTEXT "${ANSATZ_INSTALL_REGISTRY_KEY}" InstallLocation
+  ReadRegStr $1 HKCU "${ANSATZ_INSTALL_REGISTRY_KEY}" InstallLocation
+  StrCmp "$1" "$AnsatzLegacyInstallDir" done
+  ReadRegStr $1 HKLM "${ANSATZ_INSTALL_REGISTRY_KEY}" InstallLocation
   StrCmp "$1" "$AnsatzLegacyInstallDir" done
 
   ; Keep a recoverable sibling backup until the new files are installed. Do
