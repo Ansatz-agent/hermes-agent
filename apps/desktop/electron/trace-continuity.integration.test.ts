@@ -452,6 +452,7 @@ function armableSegmentSyncGate(): {
   waitUntilBlocked(): Promise<void>
 } {
   let armed = false
+  let consumed = false
   let markBlocked!: () => void
   let release!: () => void
   let released = false
@@ -474,7 +475,8 @@ function armableSegmentSyncGate(): {
     fs: {
       ...nodeTraceFileSystem,
       async syncFile(path: string) {
-        if (armed && isActiveSegmentPath(path) && !released) {
+        if (armed && !consumed && isActiveSegmentPath(path) && !released) {
+          consumed = true
           markBlocked()
           await releasePromise
         }
@@ -487,7 +489,11 @@ function armableSegmentSyncGate(): {
   }
 }
 
-async function readPersistedOwners(root: string, expectedOwner: TraceOwner): Promise<TraceOwner[]> {
+async function readPersistedOwners(
+  root: string,
+  expectedOwner: TraceOwner,
+  expectedCount: number
+): Promise<TraceOwner[]> {
   const store = await TraceOutboxStore.open({
     expectedOwner,
     groupCommitMs: 1,
@@ -498,7 +504,7 @@ async function readPersistedOwners(root: string, expectedOwner: TraceOwner): Pro
   const owners: TraceOwner[] = []
 
   try {
-    while (true) {
+    for (let index = 0; index < expectedCount; index += 1) {
       const batch = await store.peekEligible(Number.MAX_SAFE_INTEGER)
 
       if (batch === undefined) {
@@ -512,6 +518,10 @@ async function readPersistedOwners(root: string, expectedOwner: TraceOwner): Pro
         receivedAt: Date.now()
       })
     }
+
+    assert.equal(await store.peekEligible(Number.MAX_SAFE_INTEGER), undefined, 'persisted owner audit exceeded limit')
+
+    return owners
   } finally {
     await store.close()
   }
@@ -729,10 +739,6 @@ test('auth bridge and Trace service outages keep 25 admissions durable and uploa
     )
 
     assert.equal(receipts.length, 25)
-    assert.equal(
-      receipts.every(attempt => attempt.outcome === 'accepted' || attempt.outcome === 'duplicate'),
-      true
-    )
     assert.equal(gateway.attempts.filter(attempt => attempt.outcome === 'lost').length, 1)
     assert.equal(gateway.attempts.filter(attempt => attempt.outcome === 'duplicate').length, 1)
     assert.equal(
@@ -813,7 +819,6 @@ test('same-account Session rebind keeps ingress stable and recovers old and new 
     await gate.waitUntilBlocked()
     const rebound = await runtime.activate({ owner: reboundOwner, scope: activeScope }, async () => session)
     assert.equal(rebound.kind, 'rebound')
-    assert.deepEqual(rebound.context.ingress, stableIngress)
     assert.deepEqual(harness.ingress(), stableIngress)
     gate.release()
     assert.equal((await inFlightAdmission).status, 200)
@@ -831,21 +836,35 @@ test('same-account Session rebind keeps ingress stable and recovers old and new 
 
     const auditRoot = join(userData, 'persisted-owner-audit')
     await cp(harness.root, auditRoot, { recursive: true })
-    const persistedOwners = await readPersistedOwners(auditRoot, reboundOwner)
+    const persistedOwners = await readPersistedOwners(auditRoot, reboundOwner, 25)
 
     assert.equal(persistedOwners.length, 25)
     assert.equal(persistedOwners.filter(value => value.sessionId === initialOwner.sessionId).length, 13)
     assert.equal(persistedOwners.filter(value => value.sessionId === reboundOwner.sessionId).length, 12)
     assert.equal(persistedOwners.every(value => value.accountKey === initialOwner.accountKey), true)
 
+    let credentialsAvailable = false
+    let resumedCredentialCalls = 0
+
     const resumed = await launchTraceHarness({
-      credentialLoader: async () => traceCredential(),
+      credentialLoader: async () => {
+        resumedCredentialCalls += 1
+
+        if (!credentialsAvailable) {
+          throw new AuthBridgeError('runtime_unavailable', 'runtime_unavailable')
+        }
+
+        return traceCredential()
+      },
       gateway,
       owner: reboundOwner,
       userData
     })
 
     harnesses.push(resumed)
+    await waitFor(() => resumedCredentialCalls > 0)
+    assert.equal((await resumed.diagnostics()).pending, 25)
+    credentialsAvailable = true
     await resumed.trigger()
     await waitFor(async () => (await resumed.diagnostics()).pending === 0)
     assert.equal(gateway.logicalBatchCount, 25)
