@@ -4,10 +4,12 @@ import { test } from 'vitest'
 
 import type { ConnectionScope } from './auth-bridge'
 import {
+  isTraceDurabilityStartupError,
   TraceDurabilityCoordinator,
   type TraceDurabilityDiagnostic,
   TraceDurabilityRuntime,
-  type TraceDurabilitySession
+  type TraceDurabilitySession,
+  TraceDurabilityStartupError
 } from './trace-durability-runtime'
 import type { TraceOwner } from './trace-outbox-types'
 
@@ -159,6 +161,84 @@ test('coordinator installs one facade transport across same-account rebind and d
   await coordinator.lock('signed_out')
   assert.deepEqual(facadeCalls, ['install', 'detach', 'rotateBearer'])
   assert.equal(runtime.current(), null)
+})
+
+test('a failed backend transport publication does not reject ready durable admission', async () => {
+  const activeOwner = owner()
+  const activeScope = scope()
+  const fixture = sessionFixture(activeOwner, activeScope)
+  const facadeCalls: string[] = []
+  const runtime = new TraceDurabilityRuntime()
+
+  const coordinator = new TraceDurabilityCoordinator({
+    createSession: async () => fixture.session,
+    facade: {
+      detach: () => facadeCalls.push('detach'),
+      install: () => facadeCalls.push('install'),
+      rotateBearer: () => facadeCalls.push('rotateBearer')
+    },
+    onAdmissionReady: () => {
+      throw new Error('trace_transport_attach_unavailable')
+    },
+    runtime
+  })
+
+  const created = await coordinator.activate({ owner: activeOwner, scope: activeScope })
+  const reused = await coordinator.activate({ owner: activeOwner, scope: activeScope })
+
+  assert.equal(created.kind, 'created')
+  assert.equal(reused.kind, 'reused')
+  assert.deepEqual(facadeCalls, ['install'])
+  assert.deepEqual(runtime.current()?.owner, activeOwner)
+})
+
+test('a repeated hard lock detaches and rotates the facade only once', async () => {
+  const activeOwner = owner()
+  const activeScope = scope()
+  const fixture = sessionFixture(activeOwner, activeScope)
+  const stopped = deferred<void>()
+  const facadeCalls: string[] = []
+  const runtime = new TraceDurabilityRuntime()
+
+  fixture.setStopGate(stopped.promise)
+
+  const coordinator = new TraceDurabilityCoordinator({
+    createSession: async () => fixture.session,
+    facade: {
+      detach: () => facadeCalls.push('detach'),
+      install: () => facadeCalls.push('install'),
+      rotateBearer: () => facadeCalls.push('rotateBearer')
+    },
+    runtime
+  })
+
+  await coordinator.activate({ owner: activeOwner, scope: activeScope })
+  const firstLock = coordinator.lock('signed_out')
+  let repeatedLockSettled = false
+
+  const repeatedLock = coordinator.lock('signed_out').then(() => {
+    repeatedLockSettled = true
+  })
+
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(repeatedLockSettled, false)
+  stopped.resolve()
+  await Promise.all([firstLock, repeatedLock])
+
+  await coordinator.lock('signed_out')
+
+  assert.deepEqual(facadeCalls, ['install', 'detach', 'rotateBearer'])
+  assert.deepEqual(fixture.stopCalls, [3_000])
+})
+
+test('Trace durability startup errors remain identifiable without replacing the safe message', () => {
+  const cause = Object.assign(new Error('secure_key_storage_unavailable'), { code: 'ENOSPC' })
+  const error = new TraceDurabilityStartupError(cause)
+
+  assert.equal(error.message, 'secure_key_storage_unavailable')
+  assert.equal(error.cause, cause)
+  assert.equal(isTraceDurabilityStartupError(error), true)
+  assert.equal(isTraceDurabilityStartupError(cause), false)
 })
 
 test('coordinator fences an activation whose facade publication overlaps a hard lock', async () => {

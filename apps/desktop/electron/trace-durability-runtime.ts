@@ -30,6 +30,21 @@ export type TraceActivation = {
   kind: 'created' | 'rebound' | 'reused'
 }
 
+export class TraceDurabilityStartupError extends Error {
+  readonly cause: unknown
+  readonly code = 'trace_durability_startup_failed'
+
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : 'trace_durability_startup_failed')
+    this.name = 'TraceDurabilityStartupError'
+    this.cause = cause
+  }
+}
+
+export function isTraceDurabilityStartupError(error: unknown): error is TraceDurabilityStartupError {
+  return error instanceof TraceDurabilityStartupError
+}
+
 type TraceDurabilityFacadeAdapter = {
   detach(): void
   install(ingress: TraceIngressEndpoint): void
@@ -406,6 +421,8 @@ export class TraceDurabilityCoordinator {
   private readonly facade: TraceDurabilityFacadeAdapter
   private facadeReady = false
   private generation = 0
+  private lockFlight: Promise<void> | null = null
+  private locked = false
   private readonly onAdmissionReady: NonNullable<TraceDurabilityCoordinatorOptions['onAdmissionReady']>
   private publication: TraceFacadePublication | null = null
   private readonly runtime: TraceDurabilityRuntime
@@ -440,7 +457,15 @@ export class TraceDurabilityCoordinator {
 
         this.facade.install(context.ingress)
         this.facadeReady = true
-        await this.onAdmissionReady()
+        this.locked = false
+
+        try {
+          await this.onAdmissionReady()
+        } catch {
+          // Durable admission is already live. Publishing its descriptor to
+          // an existing backend is best-effort and has its own retry path.
+        }
+
         this.requireGeneration(generation)
         publication.resolve()
       } else if (publication !== null) {
@@ -473,7 +498,12 @@ export class TraceDurabilityCoordinator {
     return this.activate({ owner, scope: scope ?? current.scope })
   }
 
-  async lock(_reason: string, flushMs = 3_000): Promise<void> {
+  lock(_reason: string, flushMs = 3_000): Promise<void> {
+    if (this.locked) {
+      return this.lockFlight ?? Promise.resolve()
+    }
+
+    this.locked = true
     this.generation += 1
     this.facadeReady = false
     const publication = this.publication
@@ -482,7 +512,18 @@ export class TraceDurabilityCoordinator {
     publication?.reject(new Error('trace_activation_superseded'))
     this.facade.detach()
     this.facade.rotateBearer()
-    await this.runtime.lock(flushMs)
+    const locking = this.runtime.lock(flushMs)
+    this.lockFlight = locking
+
+    const clearLockFlight = () => {
+      if (this.lockFlight === locking) {
+        this.lockFlight = null
+      }
+    }
+
+    void locking.then(clearLockFlight, clearLockFlight)
+
+    return locking
   }
 
   private createPublication(): TraceFacadePublication {

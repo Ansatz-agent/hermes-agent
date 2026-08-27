@@ -305,9 +305,11 @@ import { attachTraceBackends, TraceTransportUnavailableError } from './trace-bac
 import { TraceBackendRegistry } from './trace-backend-registry'
 import { RebindableTraceCredentialSource } from './trace-credential-provider'
 import {
+  isTraceDurabilityStartupError,
   TraceDurabilityCoordinator,
   TraceDurabilityRuntime,
-  type TraceDurabilitySession
+  type TraceDurabilitySession,
+  TraceDurabilityStartupError
 } from './trace-durability-runtime'
 import { RefreshingTraceCredentialProvider, TraceForwarder } from './trace-forwarder'
 import { TraceIngressFacade } from './trace-ingress-facade'
@@ -900,17 +902,17 @@ async function startDesktopAuthRuntime() {
         if (connectionId === 'local' && status.state === 'authenticated') {
           enableDesktopCapabilityShell()
 
+          const traceScope = coordinator.scope('local')
+
+          if (traceScope) {
+            const traceOwner = traceOwnerFromScope(status, traceScope, desktopInstallationId)
+
+            void prepareDesktopTraceForwarder(traceScope, traceOwner).catch(error => {
+              rememberLog(`[trace] authenticated owner sync failed: ${String((error as Error)?.message || error)}`)
+            })
+          }
+
           if (mainWindow && !mainWindow.isDestroyed()) {
-            const traceScope = coordinator.scope('local')
-
-            if (traceScope) {
-              const traceOwner = traceOwnerFromScope(status, traceScope, desktopInstallationId)
-
-              void prepareDesktopTraceForwarder(traceScope, traceOwner).catch(error => {
-                rememberLog(`[trace] authenticated owner sync failed: ${String((error as Error)?.message || error)}`)
-              })
-            }
-
             void startHermes().catch(error => {
               const failureCode = error?.code || 'backend-start-failed'
               rememberLog(`[runtime] authenticated backend start failed: ${failureCode}`)
@@ -9217,6 +9219,7 @@ async function createDesktopTraceSession(
   if (validatedOwner === null || !sameTraceOwnerIdentity(validatedOwner, owner)) {
     credentialSource.clear()
     await forwarder.stop({ flushMs: 0 }).catch(() => {})
+    await store.close().catch(() => {})
     await migrationBarrier?.catch(() => {})
     throw new AuthBridgeError('auth_required', 'session_rejected')
   }
@@ -9242,7 +9245,14 @@ async function createDesktopTraceSession(
       const reboundScope = { ...nextScope }
 
       credentialSource.bind(reboundOwner, async () => loadCurrentDesktopTraceCredential(reboundOwner, reboundScope))
-      forwarder.rebindOwner(reboundOwner)
+
+      try {
+        forwarder.rebindOwner(reboundOwner)
+      } catch (error) {
+        credentialSource.bind(boundOwner, async () => loadCurrentDesktopTraceCredential(boundOwner, boundScope))
+        throw error
+      }
+
       boundOwner = reboundOwner
       boundScope = reboundScope
     },
@@ -9277,6 +9287,8 @@ const desktopTraceCoordinator = new TraceDurabilityCoordinator({
   async onAdmissionReady() {
     try {
       await attachDesktopTraceTransportToRunningBackends()
+    } catch (error) {
+      rememberLog(`[trace] transport attach deferred: ${String((error as Error)?.message || error)}`)
     } finally {
       scheduleDesktopTraceTransportAttachRetry(30_000)
     }
@@ -9285,32 +9297,36 @@ const desktopTraceCoordinator = new TraceDurabilityCoordinator({
 })
 
 async function ensureDesktopTraceForwarder(scope: ConnectionScope, requestedOwner: TraceOwner) {
-  await ensureDesktopTraceFacade()
+  try {
+    await ensureDesktopTraceFacade()
 
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      const activation = await desktopTraceCoordinator.activate({ owner: requestedOwner, scope })
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const activation = await desktopTraceCoordinator.activate({ owner: requestedOwner, scope })
 
-      return activation.context
-    } catch (error) {
-      if ((error as Error)?.message !== 'trace_activation_superseded' || attempt === 2) {
-        throw error
-      }
+        return activation.context
+      } catch (error) {
+        if ((error as Error)?.message !== 'trace_activation_superseded' || attempt === 2) {
+          throw error
+        }
 
-      const status = desktopAuthCoordinator?.status('local')
+        const status = desktopAuthCoordinator?.status('local')
 
-      const currentOwner =
-        status?.state === 'authenticated' && sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope)
-          ? traceOwnerFromScope(status, scope, desktopInstallationId)
-          : null
+        const currentOwner =
+          status?.state === 'authenticated' && sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope)
+            ? traceOwnerFromScope(status, scope, desktopInstallationId)
+            : null
 
-      if (currentOwner === null || !sameTraceOwnerIdentity(currentOwner, requestedOwner)) {
-        throw error
+        if (currentOwner === null || !sameTraceOwnerIdentity(currentOwner, requestedOwner)) {
+          throw error
+        }
       }
     }
-  }
 
-  throw new Error('trace_activation_superseded')
+    throw new Error('trace_activation_superseded')
+  } catch (error) {
+    throw isTraceDurabilityStartupError(error) ? error : new TraceDurabilityStartupError(error)
+  }
 }
 
 async function prepareDesktopTraceForwarder(scope: ConnectionScope, owner: TraceOwner) {
@@ -11216,12 +11232,12 @@ async function startHermes() {
 
     const message = error instanceof Error ? error.message : String(error)
 
-    // Only latch LOCAL boot failures. A remote failure (lapsed session / mint
-    // timeout / host briefly unreachable across sleep) is transient and has no
-    // child 'exit' handler to clear the cache — latching it would wedge the app
-    // on "session expired" until a full restart, defeating reconnect, the
-    // "Sign out & sign in" reload, and the wake-recovery revalidate path.
-    if (shouldLatchBackendStartFailure({ attemptedRemote })) {
+    // Latch ordinary LOCAL boot failures, but keep failures from establishing
+    // Trace durability retryable: strict ordering still blocks this attempt,
+    // while a later attempt can recover after disk/Safe Storage/listener health
+    // returns. Remote failures likewise remain retryable because they have no
+    // child 'exit' handler to clear the cache.
+    if (shouldLatchBackendStartFailure({ attemptedRemote }) && !isTraceDurabilityStartupError(error)) {
       backendStartFailure = error instanceof Error ? error : new Error(message)
     }
 
