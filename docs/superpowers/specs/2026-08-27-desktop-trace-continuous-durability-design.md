@@ -154,6 +154,13 @@ Electron Main 引入狭的 `TraceDurabilityRuntime`，避免继续将 Trace 状�
 ingress 保留现有 loopback-only、32-byte 随机 bearer、OTLP content type、body 上限和
 metadata 验证。它不读 auth bridge，也不获取云端 token。
 
+现有 `TraceIngressFacade` 只有在不再是“可为空的非耐久代理”时才可保留。实施可以将
+其吸收为 durable ingress，或让它在可信账户激活后永久终止到当前 admission；
+但在 `ACTIVE`、`CLOUD_UNREACHABLE` 或 `CLOUD_REAUTH_REQUIRED` 中不得存在
+`delegate === null` 的中间状态。只有账户硬锁定或 App 完整停止才允许 detach。
+如果冷启动时 outbox 无法打开，Main 应延后向 backend 发布 Trace descriptor 并报告
+本地存储故障，不得先发布一个只会返回 503 的入口。
+
 对每个合法 batch：
 
 1. 捕获当前 account generation 和 owner snapshot。
@@ -311,6 +318,8 @@ Electron `safeStorage` 将 Ansatz 的本地秘密保存在 macOS 登录钥匙串
 - 正式 release 路径增加产物门槛：ad-hoc、缺失 TeamIdentifier、签名无效、未通过
   notarization/staple 验证的产物不得标记或上传为正式发布。
 - 本地开发包可以 ad-hoc，但必须明确为开发产物，不声称可验收“不再弹钥匙串密码”。
+  签名强制只作用于正式 release/publish 任务，不得破坏日常 dev、test 或本地
+  ad-hoc 打包。
 
 当前开发机没有可用 Developer ID Application 身份，因此可完成 Trace 修复、测试和
 ad-hoc 打包验证，但最终不再弹窗的生产验收必须使用安装了正式证书的构建机
