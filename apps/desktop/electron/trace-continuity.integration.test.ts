@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import http from 'node:http'
 import { join } from 'node:path'
 
@@ -362,6 +362,9 @@ async function launchTraceHarness(options: {
     async diagnostics() {
       return store.diagnostics()
     },
+    ingress() {
+      return forwarder.ingress()
+    },
     async post(body: Buffer, sequence: number) {
       return postLoopback(started.endpoint, started.localBearer, body, sequence)
     },
@@ -371,9 +374,9 @@ async function launchTraceHarness(options: {
       currentOwner = { ...nextOwner }
     },
     async quit() {
+      credentialSource.clear()
       const [, summary] = await Promise.all([lifecycle.stop(), forwarder.stop({ flushMs: 3_000 })])
 
-      credentialSource.clear()
       await controller.stop()
 
       return summary
@@ -439,6 +442,78 @@ function segmentSyncGate(): {
     },
     release,
     waitUntilBlocked: () => blockedPromise
+  }
+}
+
+function armableSegmentSyncGate(): {
+  arm(): void
+  fs: TraceFileSystem
+  release(): void
+  waitUntilBlocked(): Promise<void>
+} {
+  let armed = false
+  let markBlocked!: () => void
+  let release!: () => void
+  let released = false
+
+  const blocked = new Promise<void>(resolve => {
+    markBlocked = resolve
+  })
+
+  const releasePromise = new Promise<void>(resolve => {
+    release = () => {
+      released = true
+      resolve()
+    }
+  })
+
+  return {
+    arm: () => {
+      armed = true
+    },
+    fs: {
+      ...nodeTraceFileSystem,
+      async syncFile(path: string) {
+        if (armed && isActiveSegmentPath(path) && !released) {
+          markBlocked()
+          await releasePromise
+        }
+
+        await nodeTraceFileSystem.syncFile(path)
+      }
+    },
+    release,
+    waitUntilBlocked: () => blocked
+  }
+}
+
+async function readPersistedOwners(root: string, expectedOwner: TraceOwner): Promise<TraceOwner[]> {
+  const store = await TraceOutboxStore.open({
+    expectedOwner,
+    groupCommitMs: 1,
+    keyProtector: protector(),
+    root
+  })
+
+  const owners: TraceOwner[] = []
+
+  try {
+    while (true) {
+      const batch = await store.peekEligible(Number.MAX_SAFE_INTEGER)
+
+      if (batch === undefined) {
+        return owners
+      }
+
+      owners.push({ ...batch.owner })
+      await store.acknowledge(batch.batchId, {
+        batchId: batch.batchId,
+        outcome: 'accepted',
+        receivedAt: Date.now()
+      })
+    }
+  } finally {
+    await store.close()
   }
 }
 
@@ -611,11 +686,14 @@ test('auth bridge and Trace service outages keep 25 admissions durable and uploa
   const userData = await temporaryUserData()
   const gateway = await ControllableGateway.start('online')
   const harnesses: TraceHarness[] = []
+  const bodies = Array.from({ length: 25 }, (_, index) => payload(`auth-outage-${index}`))
+  let credentialCalls = 0
   let upstreamCalls = 0
 
   try {
     const unavailable = await launchTraceHarness({
       credentialLoader: async () => {
+        credentialCalls += 1
         throw new AuthBridgeError('runtime_unavailable', 'runtime_unavailable')
       },
       fetchImpl: async () => {
@@ -629,25 +707,43 @@ test('auth bridge and Trace service outages keep 25 admissions durable and uploa
 
     harnesses.push(unavailable)
 
-    for (let index = 0; index < 25; index += 1) {
-      assert.equal((await unavailable.post(payload(`auth-outage-${index}`), index)).status, 200)
+    for (const [index, body] of bodies.entries()) {
+      assert.equal((await unavailable.post(body, index)).status, 200)
     }
 
     assert.equal((await unavailable.diagnostics()).pending, 25)
+    assert.ok(credentialCalls > 0)
     assert.equal(upstreamCalls, 0)
     assert.equal((await unavailable.quit()).pending, 25)
 
+    gateway.loseNextResponse()
     const resumed = await launchTraceHarness({ gateway, owner: owner('a'), userData })
     harnesses.push(resumed)
     await resumed.trigger()
     await waitFor(async () => (await resumed.diagnostics()).pending === 0)
 
     assert.equal(new Set(gateway.attempts.map(attempt => attempt.batchId)).size, 25)
+
+    const receipts = gateway.attempts.filter(
+      attempt => attempt.outcome === 'accepted' || attempt.outcome === 'duplicate'
+    )
+
+    assert.equal(receipts.length, 25)
     assert.equal(
-      gateway.attempts.every(attempt => attempt.outcome === 'accepted' || attempt.outcome === 'duplicate'),
+      receipts.every(attempt => attempt.outcome === 'accepted' || attempt.outcome === 'duplicate'),
       true
     )
+    assert.equal(gateway.attempts.filter(attempt => attempt.outcome === 'lost').length, 1)
+    assert.equal(gateway.attempts.filter(attempt => attempt.outcome === 'duplicate').length, 1)
+    assert.equal(
+      gateway.attempts.find(attempt => attempt.outcome === 'lost')?.batchId,
+      gateway.attempts.find(attempt => attempt.outcome === 'duplicate')?.batchId
+    )
     assert.equal(gateway.logicalBatchCount, 25)
+    assert.deepEqual(
+      [...gateway.logical.values()].map(batch => batch.digest),
+      bodies.map(sha256)
+    )
     await resumed.quit()
   } finally {
     await cleanupContinuityTest(harnesses, [gateway], userData)
@@ -671,17 +767,18 @@ test('same-account Session rebind keeps ingress stable and recovers old and new 
   }
 
   const harnesses: TraceHarness[] = []
-  let credentialsAvailable = false
+  const gate = armableSegmentSyncGate()
+
+  const bodies = Array.from({ length: 25 }, (_, index) =>
+    payload(index < 13 ? `before-rebind-${index}` : `after-rebind-${index}`)
+  )
 
   try {
     const harness = await launchTraceHarness({
       credentialLoader: async () => {
-        if (!credentialsAvailable) {
-          throw new AuthBridgeError('runtime_unavailable', 'runtime_unavailable')
-        }
-
-        return traceCredential()
+        throw new AuthBridgeError('runtime_unavailable', 'runtime_unavailable')
       },
+      fs: gate.fs,
       gateway,
       owner: initialOwner,
       userData
@@ -708,35 +805,61 @@ test('same-account Session rebind keeps ingress stable and recovers old and new 
     await runtime.activate({ owner: initialOwner, scope: activeScope }, async () => session)
 
     for (let index = 0; index < 12; index += 1) {
-      assert.equal((await harness.post(payload(`before-rebind-${index}`), index)).status, 200)
+      assert.equal((await harness.post(bodies[index], index)).status, 200)
     }
 
+    gate.arm()
+    const inFlightAdmission = harness.post(bodies[12], 12)
+    await gate.waitUntilBlocked()
     const rebound = await runtime.activate({ owner: reboundOwner, scope: activeScope }, async () => session)
     assert.equal(rebound.kind, 'rebound')
     assert.deepEqual(rebound.context.ingress, stableIngress)
-    assert.equal(harness.endpoint, stableIngress.endpoint)
-    assert.equal(harness.localBearer, stableIngress.localBearer)
+    assert.deepEqual(harness.ingress(), stableIngress)
+    gate.release()
+    assert.equal((await inFlightAdmission).status, 200)
 
-    for (let index = 12; index < 25; index += 1) {
-      assert.equal((await harness.post(payload(`after-rebind-${index}`), index)).status, 200)
+    for (let index = 13; index < 25; index += 1) {
+      assert.equal((await harness.post(bodies[index], index)).status, 200)
     }
 
     assert.equal(harness.admittedOwners.length, 25)
-    assert.equal(harness.admittedOwners.filter(value => value.sessionId === initialOwner.sessionId).length, 12)
-    assert.equal(harness.admittedOwners.filter(value => value.sessionId === reboundOwner.sessionId).length, 13)
+    assert.equal(harness.admittedOwners.filter(value => value.sessionId === initialOwner.sessionId).length, 13)
+    assert.equal(harness.admittedOwners.filter(value => value.sessionId === reboundOwner.sessionId).length, 12)
     assert.equal(harness.admittedOwners.every(value => value.accountKey === initialOwner.accountKey), true)
     assert.equal((await harness.diagnostics()).pending, 25)
+    assert.equal((await harness.quit()).pending, 25)
 
-    credentialsAvailable = true
-    await harness.trigger()
-    await waitFor(async () => (await harness.diagnostics()).pending === 0)
+    const auditRoot = join(userData, 'persisted-owner-audit')
+    await cp(harness.root, auditRoot, { recursive: true })
+    const persistedOwners = await readPersistedOwners(auditRoot, reboundOwner)
+
+    assert.equal(persistedOwners.length, 25)
+    assert.equal(persistedOwners.filter(value => value.sessionId === initialOwner.sessionId).length, 13)
+    assert.equal(persistedOwners.filter(value => value.sessionId === reboundOwner.sessionId).length, 12)
+    assert.equal(persistedOwners.every(value => value.accountKey === initialOwner.accountKey), true)
+
+    const resumed = await launchTraceHarness({
+      credentialLoader: async () => traceCredential(),
+      gateway,
+      owner: reboundOwner,
+      userData
+    })
+
+    harnesses.push(resumed)
+    await resumed.trigger()
+    await waitFor(async () => (await resumed.diagnostics()).pending === 0)
     assert.equal(gateway.logicalBatchCount, 25)
+    assert.deepEqual(
+      [...gateway.logical.values()].map(batch => batch.digest),
+      bodies.map(sha256)
+    )
     assert.equal(
       gateway.attempts.every(attempt => attempt.outcome === 'accepted' || attempt.outcome === 'duplicate'),
       true
     )
-    await harness.quit()
+    await resumed.quit()
   } finally {
+    gate.release()
     await cleanupContinuityTest(harnesses, [gateway], userData)
   }
 })
