@@ -258,6 +258,24 @@ def account_locked_payload() -> dict[str, object]:
     }
 
 
+_RECOVERABLE_LOCAL_AUTH_REASONS = frozenset(
+    {
+        "invalid_response",
+        "rate_limited",
+        "runtime_unavailable",
+        "server_unavailable",
+        "vault_unavailable",
+    }
+)
+
+
+def is_local_auth_unavailable(error: AuthRequired) -> bool:
+    """Return whether an auth denial is retryable without interactive login."""
+    return isinstance(error, BackendScopeTokenRejected) or (
+        error.reason in _RECOVERABLE_LOCAL_AUTH_REASONS
+    )
+
+
 _RECOVERABLE_BACKEND_SCOPE_CONTROL_REJECTIONS = frozenset(
     {
         "candidate_not_available",

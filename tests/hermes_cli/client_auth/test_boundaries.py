@@ -668,7 +668,7 @@ async def test_desktop_dashboard_candidate_probe_is_side_effect_free(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_dashboard_websocket_closes_when_runtime_is_locked():
+async def test_dashboard_websocket_uses_retryable_close_when_runtime_is_unavailable():
     from hermes_cli.web_server import _ws_client_runtime_authorized
 
     class FakeWebSocket:
@@ -682,7 +682,7 @@ async def test_dashboard_websocket_closes_when_runtime_is_locked():
     ws = FakeWebSocket()
 
     assert not await _ws_client_runtime_authorized(ws, "dashboard.ws.test")
-    assert ws.closed == {"code": 4401, "reason": "Ansatz login required"}
+    assert ws.closed == {"code": 1012, "reason": "Local capability unavailable"}
 
 
 @pytest.mark.asyncio
@@ -732,7 +732,7 @@ async def test_owner_eof_closes_connected_tui_websocket(monkeypatch):
     ws = FakeWebSocket()
     await ws_module.handle_ws(ws)
 
-    assert {"code": 4401, "reason": "Ansatz login required"} in ws.close_calls
+    assert {"code": 1012, "reason": "Local capability unavailable"} in ws.close_calls
 
 
 def test_agent_forwarder_rejects_before_reading_agent_or_creating_turn():

@@ -111,6 +111,7 @@ from hermes_cli.client_auth.runtime import (
     BackendScopeTokenRejected,
     account_locked_payload,
     backend_scope_tokens,
+    is_local_auth_unavailable,
     local_capability_rejection_payload,
     require_authorized,
     start_backend_scope_token_control,
@@ -15689,8 +15690,13 @@ def _ws_auth_reason(ws: "WebSocket") -> tuple[Optional[str], str]:
                 if ws_state is not None:
                     ws_state.desktop_scope_claim = claim
             return finish(None, "ticket")
-        except AuthRequired:
-            return finish("scope_invalid", "ticket")
+        except AuthRequired as error:
+            reason = (
+                "capability_unavailable"
+                if is_local_auth_unavailable(error)
+                else "scope_invalid"
+            )
+            return finish(reason, "ticket")
         except TicketInvalid as exc:
             audit_log(
                 AuditEvent.WS_TICKET_REJECTED,
@@ -15721,7 +15727,14 @@ async def _ws_client_runtime_authorized(ws: "WebSocket", boundary: str) -> bool:
         if getattr(ws_app.state, "desktop_scope_tokens_required", False):
             reason, credential = _ws_auth_reason(ws)
             if reason is not None:
-                raise AuthRequired("runtime_unavailable")
+                if reason == "capability_unavailable":
+                    with contextlib.suppress(Exception):
+                        await ws.close(
+                            code=1012,
+                            reason="Local capability unavailable",
+                        )
+                    return False
+                raise AuthRequired("session_rejected")
             claim = getattr(ws_state, "desktop_scope_claim", None)
             if credential == "ticket":
                 backend_scope_tokens.authorize_ws_claim(claim, boundary)
@@ -15732,9 +15745,15 @@ async def _ws_client_runtime_authorized(ws: "WebSocket", boundary: str) -> bool:
         else:
             require_authorized(boundary)
         return True
-    except AuthRequired:
+    except AuthRequired as error:
         with contextlib.suppress(Exception):
-            await ws.close(code=4401, reason="Ansatz login required")
+            if is_local_auth_unavailable(error):
+                await ws.close(
+                    code=1012,
+                    reason="Local capability unavailable",
+                )
+            else:
+                await ws.close(code=4401, reason="Ansatz login required")
         return False
 
 # Per-channel subscriber registry used by /api/pub (PTY-side gateway → dashboard)

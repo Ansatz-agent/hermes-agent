@@ -57,6 +57,7 @@ from hermes_cli.client_auth.runtime import (
     connect_runtime_owner,
     install_entrypoint_owner,
     install_runtime_consumer,
+    is_local_auth_unavailable,
     require_authorized,
     resolve_owner,
     parse_backend_scope_token_registration,
@@ -82,6 +83,29 @@ def _scope_bearer(seed: bytes = b"A") -> str:
 
 def _scope_control_id(seed: bytes) -> str:
     return base64.urlsafe_b64encode(seed * 16).decode("ascii").rstrip("=")
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        AuthRequired("invalid_response"),
+        AuthRequired("rate_limited"),
+        AuthRequired("runtime_unavailable"),
+        AuthRequired("server_unavailable"),
+        AuthRequired("vault_unavailable"),
+        BackendScopeTokenRejected("expired"),
+    ],
+)
+def test_local_auth_unavailable_classifier_accepts_only_retryable_failures(error):
+    assert is_local_auth_unavailable(error)
+
+
+@pytest.mark.parametrize(
+    "reason",
+    ["invalid_credentials", "session_expired", "session_rejected", "signed_out"],
+)
+def test_local_auth_unavailable_classifier_rejects_account_failures(reason):
+    assert not is_local_auth_unavailable(AuthRequired(reason))
 
 
 class _ControlTarget:

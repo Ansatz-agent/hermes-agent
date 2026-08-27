@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 
 from hermes_cli import web_server
 from hermes_cli.client_auth.runtime import (
+    AuthRequired,
     AuthScope,
     BackendScopeTokenRegistry,
 )
@@ -436,7 +437,95 @@ class TestWsAuthOkDesktopScope:
             ws,
             "dashboard.ws.message",
         )
+        assert ws.closed == {"code": 1012, "reason": "Local capability unavailable"}
+
+    @pytest.mark.asyncio
+    async def test_account_service_outage_never_closes_with_login_semantics(self):
+        online = [True]
+
+        def authorize(_boundary, *, expected):
+            if not online[0]:
+                raise AuthRequired("runtime_unavailable")
+            return expected
+
+        registry = BackendScopeTokenRegistry(
+            clock=lambda: 100.0,
+            authorize=authorize,
+        )
+        grant = registry.register(
+            "Y2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2M",
+            connection_id="local",
+            expected=self.auth,
+            ttl_seconds=60,
+        )
+        ticket = mint_ticket(
+            user_id="desktop:local",
+            provider="desktop-scope",
+            auth_scope=registry.ws_claim(grant),
+        )
+        online[0] = False
+        self._set_registry_for_test(registry)
+        ws = self._closable_ws(ticket)
+
+        assert not await web_server._ws_client_runtime_authorized(
+            ws,
+            "dashboard.ws.message",
+        )
+        assert ws.closed == {"code": 1012, "reason": "Local capability unavailable"}
+
+    @pytest.mark.asyncio
+    async def test_explicit_account_rejection_keeps_login_close_semantics(self):
+        authorized = [True]
+
+        def authorize(_boundary, *, expected):
+            if not authorized[0]:
+                raise AuthRequired("session_rejected")
+            return expected
+
+        registry = BackendScopeTokenRegistry(
+            clock=lambda: 100.0,
+            authorize=authorize,
+        )
+        grant = registry.register(
+            "ZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGQ",
+            connection_id="local",
+            expected=self.auth,
+            ttl_seconds=60,
+        )
+        ticket = mint_ticket(
+            user_id="desktop:local",
+            provider="desktop-scope",
+            auth_scope=registry.ws_claim(grant),
+        )
+        authorized[0] = False
+        self._set_registry_for_test(registry)
+        ws = self._closable_ws(ticket)
+
+        assert not await web_server._ws_client_runtime_authorized(
+            ws,
+            "dashboard.ws.message",
+        )
         assert ws.closed == {"code": 4401, "reason": "Ansatz login required"}
+
+    def _set_registry_for_test(self, registry):
+        web_server.backend_scope_tokens = registry
+
+    @staticmethod
+    def _closable_ws(ticket):
+        class FakeWebSocket:
+            def __init__(self):
+                template = _fake_ws(query={"ticket": ticket})
+                self.app = template.app
+                self.client = template.client
+                self.query_params = template.query_params
+                self.state = template.state
+                self.url = template.url
+                self.closed = None
+
+            async def close(self, **kwargs):
+                self.closed = kwargs
+
+        return FakeWebSocket()
 
 
 class TestWsRequestIsAllowedGated:
