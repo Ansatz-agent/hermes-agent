@@ -23,12 +23,15 @@ const installationId = '11111111-1111-4111-8111-111111111111'
 const protobuf = Buffer.from([0x0a, 0x03, 0x01, 0x02, 0x03])
 const traceCredentialNow = Date.parse('2099-08-23T14:00:00+00:00')
 
-function validOwner(): TraceOwner {
+function validOwner(overrides: Partial<TraceOwner> = {}): TraceOwner {
+  const accountId = overrides.accountId ?? '11111111-1111-4111-8111-111111111111'
+
   return {
-    accountId: '11111111-1111-4111-8111-111111111111',
-    accountKey: 'account-11111111-1111-4111-8111-111111111111',
+    accountId,
+    accountKey: `account-${accountId}`,
     installationId,
-    sessionId: '22222222-2222-4222-8222-222222222222'
+    sessionId: '22222222-2222-4222-8222-222222222222',
+    ...overrides
   }
 }
 
@@ -84,6 +87,40 @@ function envelope(label: string): TraceEnvelopeInput {
   }
 }
 
+function terminalRevocationResponse(
+  owner: TraceOwner,
+  code: 'account_disabled' | 'account_revoked' | 'session_revoked' = 'session_revoked'
+): Response {
+  return new Response(
+    JSON.stringify({
+      account_id: owner.accountId,
+      code,
+      retryable: false,
+      revoked_at: '2099-08-23T14:00:00Z',
+      session_id: owner.sessionId,
+      state: 'revoked'
+    }),
+    { status: 403, headers: { 'content-type': 'application/json' } }
+  )
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs = 1_000): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('test_timeout')), timeoutMs)
+      })
+    ])
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer)
+    }
+  }
+}
+
 function receiptSyncFailureStore(batchId: string, phase: 'before' | 'after') {
   const durable = new Promise<DurableTraceBatch>(() => {})
 
@@ -95,6 +132,25 @@ function receiptSyncFailureStore(batchId: string, phase: 'before' | 'after') {
         throw new Error(`receipt_sync_${phase}_local_commit_failed`)
       },
       durable
+    }),
+    diagnostics: async () => emptyDiagnostics(),
+    async peekEligible(_now: number): Promise<DurableTraceBatch | undefined> {
+      return undefined
+    },
+    async quarantine(_batchId: string, _errorClass: string): Promise<void> {},
+    async quarantineInput(_input: TraceEnvelopeInput, _errorClass: string): Promise<DurableTraceBatch> {
+      throw new Error('unexpected_quarantine')
+    }
+  }
+}
+
+function failedDurabilityStore(batchId: string) {
+  return {
+    async acknowledge(_batchId: string, _receipt: DurableReceipt): Promise<void> {},
+    beginEnqueue: () => ({
+      batchId,
+      cancelForGatewayReceipt: async () => {},
+      durable: Promise.reject<DurableTraceBatch>(new Error('local_durability_failed'))
     }),
     diagnostics: async () => emptyDiagnostics(),
     async peekEligible(_now: number): Promise<DurableTraceBatch | undefined> {
@@ -316,6 +372,115 @@ test('an existing durable backlog disables direct Gateway upload until recovery 
   }
 })
 
+test('same-account owner rebind keeps ingress and durably records the new session owner', async () => {
+  const { root, store } = await temporaryStore()
+  const ownerA = validOwner()
+  const ownerB = validOwner({ sessionId: '33333333-3333-4333-8333-333333333333' })
+
+  const forwarder = new TraceForwarder({
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
+    fetchImpl: async () => new Response(Buffer.alloc(0), { status: 503 }),
+    installationId,
+    store,
+    uploadBarrier: async () => {}
+  })
+
+  const ingress = await forwarder.start(ownerA)
+
+  try {
+    forwarder.rebindOwner(ownerB)
+    assert.deepEqual(forwarder.ingress(), ingress)
+    assert.equal((await post(ingress.endpoint, ingress.localBearer)).status, 200)
+    assert.deepEqual((await store.peekEligible(traceCredentialNow))?.owner, ownerB)
+  } finally {
+    await forwarder.stop({ flushMs: 0 })
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('cross-account owner rebind is rejected without changing ingress', async () => {
+  const { root, store } = await temporaryStore()
+  const ownerA = validOwner()
+  const ownerB = validOwner({ accountId: '44444444-4444-4444-8444-444444444444' })
+
+  const forwarder = new TraceForwarder({
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
+    fetchImpl: async () => new Response(Buffer.alloc(0), { status: 503 }),
+    installationId,
+    store
+  })
+
+  const ingress = await forwarder.start(ownerA)
+
+  try {
+    assert.throws(() => forwarder.rebindOwner(ownerB), /trace_owner_account_mismatch/)
+    assert.deepEqual(forwarder.ingress(), ingress)
+  } finally {
+    await forwarder.stop({ flushMs: 0 })
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('a stale terminal 403 cannot revoke a rebound owner while its current generation can', async () => {
+  const { root, store } = await temporaryStore()
+  const ownerA = validOwner()
+  const ownerB = validOwner({ sessionId: '55555555-5555-4555-8555-555555555555' })
+  const staleResponse = deferred<Response>()
+  const revocations: unknown[] = []
+  let calls = 0
+
+  await store.enqueue(envelope('stale-owner'))
+
+  const forwarder = new TraceForwarder({
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
+    fetchImpl: async () => {
+      calls += 1
+
+      return calls === 1 ? staleResponse.promise : terminalRevocationResponse(ownerB)
+    },
+    installationId,
+    onTerminalRevocation: revocation => {
+      revocations.push(revocation)
+
+      return true
+    },
+    store,
+    uploadBarrier: async () => {}
+  })
+
+  const ingress = await forwarder.start(ownerA)
+  const stalePump = forwarder.pump()
+
+  try {
+    await waitFor(() => calls === 1)
+    forwarder.rebindOwner(ownerB)
+    assert.deepEqual(forwarder.ingress(), ingress)
+
+    staleResponse.resolve(terminalRevocationResponse(ownerA))
+    await stalePump
+    assert.deepEqual(revocations, [])
+    assert.equal((await post(ingress.endpoint, ingress.localBearer)).status, 200)
+
+    await forwarder.pump()
+    assert.equal(calls, 2)
+    assert.deepEqual(revocations, [
+      {
+        accountId: ownerB.accountId,
+        code: 'session_revoked',
+        revokedAt: '2099-08-23T14:00:00Z',
+        sessionId: ownerB.sessionId
+      }
+    ])
+
+    await forwarder.pump()
+    assert.equal(calls, 2)
+  } finally {
+    staleResponse.resolve(new Response(Buffer.alloc(0), { status: 503 }))
+    await forwarder.stop({ flushMs: 0 })
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
 test('recovery pump uploads a durable account backlog in FIFO order', async () => {
   const { root, store } = await temporaryStore()
   await store.enqueue(envelope('older'))
@@ -426,7 +591,11 @@ test('a matching structured terminal 403 pauses its owner exactly once without a
       )
     },
     installationId,
-    onTerminalRevocation: revocation => revocations.push(revocation),
+    onTerminalRevocation: revocation => {
+      revocations.push(revocation)
+
+      return true
+    },
     store
   })
 
@@ -446,6 +615,146 @@ test('a matching structured terminal 403 pauses its owner exactly once without a
         sessionId: validOwner().sessionId
       }
     ])
+  } finally {
+    await forwarder.stop({ flushMs: 0 })
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('a confirmed terminal revocation remains locked across same-account owner rebind', async () => {
+  const { root, store } = await temporaryStore()
+  const ownerA = validOwner()
+  const ownerB = validOwner({ sessionId: '66666666-6666-4666-8666-666666666666' })
+  let calls = 0
+
+  await store.enqueue(envelope('account-disabled'))
+
+  const forwarder = new TraceForwarder({
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
+    fetchImpl: async () => {
+      calls += 1
+
+      return terminalRevocationResponse(ownerA, 'account_disabled')
+    },
+    installationId,
+    onTerminalRevocation: () => true,
+    store
+  })
+
+  await forwarder.start(ownerA)
+
+  try {
+    await forwarder.pump()
+    forwarder.rebindOwner(ownerB)
+    await forwarder.pump()
+
+    assert.equal(calls, 1)
+    assert.equal((await store.diagnostics()).pending, 1)
+  } finally {
+    await forwarder.stop({ flushMs: 0 })
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('a direct terminal revocation cannot deadlock stop when local durability fails', async () => {
+  const stopped = deferred<void>()
+  let callbackEntered = false
+  let forwarder!: TraceForwarder
+
+  forwarder = new TraceForwarder({
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
+    fetchImpl: async () => terminalRevocationResponse(validOwner()),
+    installationId,
+    onTerminalRevocation: async () => {
+      callbackEntered = true
+      await forwarder.stop({ flushMs: 0 })
+      stopped.resolve()
+
+      return true
+    },
+    store: failedDurabilityStore('00000000-0000-4000-8000-000000000020')
+  })
+
+  const ingress = await forwarder.start(validOwner())
+
+  const response = await withTimeout(
+    post(ingress.endpoint, ingress.localBearer).then(
+      value => `status:${value.status}`,
+      error => `error:${String((error as Error).message)}`
+    )
+  )
+
+  await withTimeout(stopped.promise)
+
+  assert.match(response, /^(?:status:503|error:socket hang up)$/)
+  assert.equal(callbackEntered, true)
+})
+
+test('a confirmed direct terminal revocation clears its speculative retry deadline', async () => {
+  const { root, store } = await temporaryStore()
+  const confirmation = deferred<boolean>()
+
+  const forwarder = new TraceForwarder({
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
+    fetchImpl: async () => terminalRevocationResponse(validOwner()),
+    installationId,
+    onTerminalRevocation: () => confirmation.promise,
+    store
+  })
+
+  const ingress = await forwarder.start(validOwner())
+
+  try {
+    assert.equal((await post(ingress.endpoint, ingress.localBearer)).status, 200)
+    await waitFor(() => forwarder.nextRecoveryAt() !== null)
+
+    confirmation.resolve(true)
+    await waitFor(() => forwarder.nextRecoveryAt() === null)
+    assert.equal((await store.diagnostics()).pending, 1)
+  } finally {
+    confirmation.resolve(false)
+    await forwarder.stop({ flushMs: 0 })
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
+test('a matching terminal 403 remains retryable until revocation ownership is confirmed', async () => {
+  const { root, store } = await temporaryStore()
+  await store.enqueue(envelope('unconfirmed-revocation'))
+  let now = traceCredentialNow
+  let calls = 0
+  let revocations = 0
+
+  const forwarder = new TraceForwarder({
+    clock: () => now,
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
+    fetchImpl: async () => {
+      calls += 1
+
+      return terminalRevocationResponse(validOwner())
+    },
+    installationId,
+    onTerminalRevocation: () => {
+      revocations += 1
+
+      return false
+    },
+    random: () => 0,
+    store
+  })
+
+  await forwarder.start(validOwner())
+
+  try {
+    await forwarder.pump()
+    assert.equal(calls, 1)
+    assert.equal(revocations, 1)
+    assert.notEqual(forwarder.nextRecoveryAt(), null)
+
+    now = forwarder.nextRecoveryAt() ?? now
+    await forwarder.pump()
+    assert.equal(calls, 2)
+    assert.equal(revocations, 2)
   } finally {
     await forwarder.stop({ flushMs: 0 })
     await rm(root, { force: true, recursive: true })
@@ -479,7 +788,11 @@ test.each([
       return new Response(JSON.stringify(body), { status: 403 })
     },
     installationId,
-    onTerminalRevocation: revocation => revocations.push(revocation),
+    onTerminalRevocation: revocation => {
+      revocations.push(revocation)
+
+      return true
+    },
     random: () => 0,
     store
   })

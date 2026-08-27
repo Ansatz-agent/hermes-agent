@@ -9190,9 +9190,8 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
       installationId: desktopInstallationId,
       onTerminalRevocation: revocation => {
         const coordinator = desktopAuthCoordinator
-        if (coordinator) {
-          void coordinator.applyTraceTerminalRevocation(revocation)
-        }
+
+        return coordinator ? coordinator.applyTraceTerminalRevocation(revocation) : false
       },
       recovery: controller,
       store,
