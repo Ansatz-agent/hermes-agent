@@ -624,6 +624,7 @@ async def test_desktop_dashboard_candidate_probe_is_side_effect_free(monkeypatch
             state=SimpleNamespace(desktop_scope_tokens_required=True)
         ),
         headers={"X-Hermes-Session-Token": bearer},
+        method="GET",
         state=SimpleNamespace(),
         url=SimpleNamespace(path="/api/auth/scope-token-probe"),
     )
@@ -649,6 +650,21 @@ async def test_desktop_dashboard_candidate_probe_is_side_effect_free(monkeypatch
     assert "token_digest" not in payload
     assert "valid_until" not in payload
     assert "username" not in payload
+
+    request.method = "POST"
+    non_get_response = await web_server.client_runtime_auth_middleware(
+        request,
+        business_handler,
+    )
+    assert non_get_response.status_code == 401
+    assert json.loads(non_get_response.body) == {
+        "detail": "Local capability rejected",
+        "code": "local_capability_rejected",
+        "reason": "candidate_not_active",
+        "failure_phase": "pre_dispatch",
+        "retryable": True,
+    }
+    assert handler_calls == 0
 
 
 @pytest.mark.asyncio

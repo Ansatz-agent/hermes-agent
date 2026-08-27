@@ -214,18 +214,22 @@ def test_probe_is_read_only_and_reports_the_completed_promotion_transition():
     )
     candidate = registry.register_candidate(registration, expected=AUTH_SCOPE)
     candidate_snapshot = dict(registry._registrations)
+    candidate_records = dict(registry._records)
 
     assert registry.probe(registration.bearer) == candidate
     assert registry.probe(registration.bearer) == candidate
     assert registry._registrations == candidate_snapshot
+    assert registry._records == candidate_records
 
     active = registry.promote(promotion, expected=AUTH_SCOPE)
     active_snapshot = dict(registry._registrations)
+    active_records = dict(registry._records)
 
     assert registry.probe(registration.bearer) == active
     assert active.state is BackendScopeGrantState.ACTIVE
     assert active.promoted_transition_id == promotion.transition_id
     assert registry._registrations == active_snapshot
+    assert registry._records == active_records
     assert registration.bearer not in repr(active)
 
 

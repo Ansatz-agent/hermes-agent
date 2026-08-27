@@ -931,7 +931,10 @@ async def client_runtime_auth_middleware(request: Request, call_next):
             request_app = getattr(request, "app", app)
             if getattr(request_app.state, "desktop_scope_tokens_required", False):
                 bearer = request.headers.get(_SESSION_HEADER_NAME, "")
-                if request.url.path == DESKTOP_SCOPE_TOKEN_PROBE_PATH:
+                if (
+                    request.url.path == DESKTOP_SCOPE_TOKEN_PROBE_PATH
+                    and request.method == "GET"
+                ):
                     grant = backend_scope_tokens.probe(bearer)
                     return JSONResponse(
                         status_code=200,
