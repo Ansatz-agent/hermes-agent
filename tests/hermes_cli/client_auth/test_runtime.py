@@ -344,6 +344,163 @@ def test_invalid_trace_control_frame_isolated_from_scope_and_later_registration(
     assert len(target.frames) == 2
 
 
+def test_recoverable_promotion_rejection_keeps_control_reader_and_active_grant(
+    monkeypatch,
+):
+    from hermes_cli.client_auth import runtime
+
+    current = AuthScope("0123456789abcdef0123456789abcdef", 7)
+    registry = BackendScopeTokenRegistry(
+        authorize=lambda _boundary, *, expected: expected
+    )
+    monkeypatch.setattr(runtime, "backend_scope_tokens", registry)
+
+    bearers = {name: _scope_bearer(name.encode("ascii")) for name in "ABCD"}
+    registration_ids = {
+        name: _scope_control_id(name.encode("ascii")) for name in "ABCD"
+    }
+
+    def register(name):
+        return {
+            "version": 2,
+            "operation": "register_scope_token",
+            "registration_id": registration_ids[name],
+            "bearer": bearers[name],
+            "connection_id": "local",
+            "runtime_instance_id": current.runtime_instance_id,
+            "epoch": current.epoch,
+            "ttl_seconds": 1_800,
+        }
+
+    def promote(name, previous):
+        return {
+            "version": 2,
+            "operation": "promote_scope_token",
+            "transition_id": _scope_control_id(name.lower().encode("ascii")),
+            "registration_id": registration_ids[name],
+            "previous_registration_id": (
+                registration_ids[previous] if previous is not None else None
+            ),
+            "connection_id": "local",
+            "runtime_instance_id": current.runtime_instance_id,
+            "epoch": current.epoch,
+            "overlap_seconds": 60,
+        }
+
+    frames = [
+        register("A"),
+        promote("A", None),
+        register("B"),
+        promote("B", "A"),
+        register("C"),
+        # Simulate a lost B promotion ACK: the client still believes A is active.
+        promote("C", "A"),
+        register("D"),
+        promote("D", "B"),
+    ]
+
+    class ObservingStream:
+        def __init__(self):
+            self.index = 0
+            self.observed_final_active = False
+
+        def readline(self, _limit):
+            if self.index == len(frames):
+                assert registry.authorize(
+                    bearers["D"],
+                    "dashboard.api.request",
+                ).state is BackendScopeGrantState.ACTIVE
+                self.observed_final_active = True
+                return b""
+            frame = json.dumps(frames[self.index]).encode("utf-8") + b"\n"
+            self.index += 1
+            return frame
+
+    stream = ObservingStream()
+    target = _ControlTarget()
+    runtime._run_backend_scope_token_control(stream, target)
+
+    assert stream.index == len(frames)
+    assert stream.observed_final_active
+    assert len(target.frames) == 7
+    assert target.flushes == 7
+
+
+def test_authoritative_scope_revocation_still_terminates_control_reader(
+    monkeypatch,
+):
+    from hermes_cli.client_auth import runtime
+
+    current = AuthScope("0123456789abcdef0123456789abcdef", 7)
+    authorized = True
+
+    def authorize(_boundary, *, expected):
+        if not authorized:
+            raise AuthRequired("runtime_unavailable")
+        return expected
+
+    registry = BackendScopeTokenRegistry(authorize=authorize)
+    monkeypatch.setattr(runtime, "backend_scope_tokens", registry)
+    registration_id = _scope_control_id(b"A")
+    bearer = _scope_bearer(b"A")
+    frames = [
+        {
+            "version": 2,
+            "operation": "register_scope_token",
+            "registration_id": registration_id,
+            "bearer": bearer,
+            "connection_id": "local",
+            "runtime_instance_id": current.runtime_instance_id,
+            "epoch": current.epoch,
+            "ttl_seconds": 1_800,
+        },
+        {
+            "version": 2,
+            "operation": "promote_scope_token",
+            "transition_id": _scope_control_id(b"a"),
+            "registration_id": registration_id,
+            "previous_registration_id": None,
+            "connection_id": "local",
+            "runtime_instance_id": current.runtime_instance_id,
+            "epoch": current.epoch,
+            "overlap_seconds": 60,
+        },
+        {
+            "version": 2,
+            "operation": "register_scope_token",
+            "registration_id": _scope_control_id(b"B"),
+            "bearer": _scope_bearer(b"B"),
+            "connection_id": "local",
+            "runtime_instance_id": current.runtime_instance_id,
+            "epoch": current.epoch,
+            "ttl_seconds": 1_800,
+        },
+        {"unreachable": True},
+    ]
+
+    class RevokingStream:
+        def __init__(self):
+            self.index = 0
+
+        def readline(self, _limit):
+            nonlocal authorized
+            if self.index == 2:
+                authorized = False
+            frame = json.dumps(frames[self.index]).encode("utf-8") + b"\n"
+            self.index += 1
+            return frame
+
+    stream = RevokingStream()
+    target = _ControlTarget()
+    runtime._run_backend_scope_token_control(stream, target)
+
+    assert stream.index == 3
+    assert len(target.frames) == 2
+    assert target.flushes == 2
+    with pytest.raises(BackendScopeTokenRejected, match="unknown_token"):
+        registry.authorize(bearer, "dashboard.api.request")
+
+
 def test_scope_token_control_eof_revokes_every_registered_bearer(monkeypatch):
     from hermes_cli.client_auth import runtime
 

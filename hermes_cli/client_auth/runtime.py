@@ -237,6 +237,18 @@ class BackendScopeTokenRejected(AuthRequired):
         self.failure_phase = "pre_dispatch"
 
 
+_RECOVERABLE_BACKEND_SCOPE_CONTROL_REJECTIONS = frozenset(
+    {
+        "candidate_not_available",
+        "expired",
+        "previous_registration_mismatch",
+        "registration_conflict",
+        "scope_mismatch",
+        "transition_conflict",
+    }
+)
+
+
 class BackendScopeGrantState(StrEnum):
     CANDIDATE = "candidate"
     ACTIVE = "active"
@@ -4525,6 +4537,16 @@ def _run_backend_scope_token_control(source: Any, target: Any) -> None:
                         raise BackendScopeTokenRejected("invalid_control_frame")
                     target.write(encode_control_ack(ack))
                     target.flush()
+                except BackendScopeTokenRejected as error:
+                    if (
+                        error.reason
+                        in _RECOVERABLE_BACKEND_SCOPE_CONTROL_REJECTIONS
+                    ):
+                        # A rejected candidate/promotion receives no ACK. The
+                        # parent times out and retries while the existing
+                        # active grant and this control reader remain usable.
+                        continue
+                    break
                 except (AuthRequired, OSError, UnicodeError, ValueError):
                     break
     finally:
