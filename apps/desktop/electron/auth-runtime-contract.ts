@@ -5,6 +5,7 @@ import path from 'node:path'
 
 import { resolveAnsatzCliPath } from './ansatz-product'
 import { AUTH_BRIDGE_PROTOCOL_VERSION, buildAuthBridgeEnvironment } from './auth-bridge'
+import { DESKTOP_SCOPE_PROTOCOL_VERSION } from './auth-scope-token'
 import { execProbeSync, PROBE_TIMEOUT_MS } from './backend-probes'
 
 const AUTH_MARKER_NAME = '.hermes-auth-bootstrap-complete'
@@ -82,6 +83,26 @@ function sha256File(filePath: string): string | null {
 
   try {
     return crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex')
+  } catch {
+    return null
+  }
+}
+
+function declaredDesktopScopeProtocol(activeRoot: string): number | null {
+  const protocolPath = path.join(activeRoot, 'hermes_cli', 'client_auth', 'backend_scope_protocol.py')
+
+  try {
+    const source = fs.readFileSync(protocolPath, 'utf8')
+
+    if (source.length > 128 * 1024) {
+      return null
+    }
+
+    const matches = [
+      ...source.matchAll(/^DESKTOP_SCOPE_PROTOCOL_VERSION(?:\s*:\s*[^=\r\n#]+)?\s*=\s*(\d+)(?:\s*#.*)?\s*$/gm)
+    ]
+
+    return matches.length === 1 ? Number(matches[0][1]) : null
   } catch {
     return null
   }
@@ -183,6 +204,7 @@ export function authRuntimeRequiredPaths(
     authPython,
     path.join(activeRoot, 'hermes_cli', 'main.py'),
     path.join(activeRoot, 'hermes_cli', 'client_auth', 'bridge.py'),
+    path.join(activeRoot, 'hermes_cli', 'client_auth', 'backend_scope_protocol.py'),
     path.join(activeRoot, 'hermes_cli', 'client_auth', 'cli.py'),
     path.join(activeRoot, 'desktop_auth_runtime', 'uv.lock')
   ]
@@ -227,6 +249,10 @@ export function validateAuthRuntimeContract({
     return fail('missing_auth_artifact')
   }
 
+  if (declaredDesktopScopeProtocol(activeRoot) !== DESKTOP_SCOPE_PROTOCOL_VERSION) {
+    return fail('scope_protocol_mismatch')
+  }
+
   const markerPath = path.join(activeRoot, AUTH_MARKER_NAME)
 
   if (!isRegularFile(markerPath)) {
@@ -266,8 +292,16 @@ export function validateAuthRuntimeContract({
   return { ok: true, reason: null, pythonPath, marker }
 }
 
-export function authRuntimeProbeSnippet(protocolVersion = AUTH_BRIDGE_PROTOCOL_VERSION): string {
-  return 'import hermes_cli.client_auth.bridge as bridge; ' + `assert bridge.PROTOCOL_VERSION == ${protocolVersion}`
+export function authRuntimeProbeSnippet(
+  protocolVersion = AUTH_BRIDGE_PROTOCOL_VERSION,
+  scopeProtocolVersion = DESKTOP_SCOPE_PROTOCOL_VERSION
+): string {
+  return [
+    'import hermes_cli.client_auth.bridge as bridge',
+    'from hermes_cli.client_auth.backend_scope_protocol import DESKTOP_SCOPE_PROTOCOL_VERSION',
+    `assert bridge.PROTOCOL_VERSION == ${protocolVersion}`,
+    `assert DESKTOP_SCOPE_PROTOCOL_VERSION == ${scopeProtocolVersion}`
+  ].join('; ')
 }
 
 export function probeAuthRuntime({

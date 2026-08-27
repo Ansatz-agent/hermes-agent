@@ -24,6 +24,7 @@ const signedOut: BridgeStatus = {
   runtime_instance_id: 'runtime-1',
   epoch: 1,
   valid_until: 0,
+  cloud_state: null,
   validation_state: 'unknown',
   validation_reason: null,
   last_validated_at: null,
@@ -41,6 +42,7 @@ const authenticated: BridgeStatus = {
   session_id: '33333333-3333-4333-8333-333333333333',
   installation_id: '11111111-1111-4111-8111-111111111111',
   principal_key: 'account:22222222-2222-4222-8222-222222222222',
+  cloud_state: 'active',
   validation_state: 'online',
   last_validated_at: '2026-08-24T12:00:00+00:00',
   reason: null

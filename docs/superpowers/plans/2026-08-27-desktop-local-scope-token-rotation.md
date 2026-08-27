@@ -1440,7 +1440,7 @@ Expected before fixture completion: FAIL；Python process/endpoint 尚不可用�
 ```python
 import hermes_cli.client_auth.bridge as bridge
 from hermes_cli.client_auth.backend_scope_protocol import DESKTOP_SCOPE_PROTOCOL_VERSION
-assert bridge.PROTOCOL_VERSION == 1
+assert bridge.PROTOCOL_VERSION == 2
 assert DESKTOP_SCOPE_PROTOCOL_VERSION == 2
 ```
 

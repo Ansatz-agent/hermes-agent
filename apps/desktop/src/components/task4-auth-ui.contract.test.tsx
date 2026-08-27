@@ -16,6 +16,7 @@ const signedOut: DesktopAccountStatus = {
   runtime_instance_id: 'runtime-1',
   epoch: 1,
   valid_until: 0,
+  cloud_state: null,
   validation_state: 'unknown',
   validation_reason: null,
   last_validated_at: null,
@@ -30,6 +31,7 @@ const authenticated = {
   username: 'alice',
   epoch: 2,
   valid_until: 60,
+  cloud_state: 'active' as const,
   reason: null,
   runtime_ready: false
 }
