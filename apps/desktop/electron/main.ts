@@ -38,7 +38,13 @@ import {
   resolveAnsatzDesktopRuntimeRoot,
   resolveAnsatzSshControlDirectory
 } from './ansatz-product'
-import { AuthBridgeError, DesktopAuthBridge } from './auth-bridge'
+import {
+  AuthBridgeError,
+  type ConnectionScope,
+  DesktopAuthBridge,
+  sameConnectionScope,
+  type TraceCredential
+} from './auth-bridge'
 import { AuthCoordinator } from './auth-coordinator'
 import { isAuthRuntimeUsable } from './auth-runtime-contract'
 import {
@@ -228,10 +234,7 @@ import { prepareInstallFirstRuntime } from './install-first-runtime'
 import { removeLegacyAnsatzPartitions } from './legacy-product-cleanup'
 import { createLinkTitleWindow, guardLinkTitleSession, readLinkTitleWindowTitle } from './link-title-window'
 import { LocalBackendCapabilityLifecycle } from './local-backend-capability'
-import {
-  formatLocalCapabilityDiagnostic,
-  LocalCapabilityManager
-} from './local-capability-manager'
+import { formatLocalCapabilityDiagnostic, LocalCapabilityManager } from './local-capability-manager'
 import { ensureMainWindow } from './main-window-lifecycle'
 import { createMediaProtocolHandler, MEDIA_PROTOCOL } from './media-protocol'
 import {
@@ -300,6 +303,12 @@ import { createStreamThrottle } from './stream-throttle'
 import { nativeOverlayWidth as computeNativeOverlayWidth, macTitleBarOverlayHeight } from './titlebar-overlay-width'
 import { attachTraceBackends, TraceTransportUnavailableError } from './trace-backend-attacher'
 import { TraceBackendRegistry } from './trace-backend-registry'
+import { RebindableTraceCredentialSource } from './trace-credential-provider'
+import {
+  TraceDurabilityCoordinator,
+  TraceDurabilityRuntime,
+  type TraceDurabilitySession
+} from './trace-durability-runtime'
 import { RefreshingTraceCredentialProvider, TraceForwarder } from './trace-forwarder'
 import { TraceIngressFacade } from './trace-ingress-facade'
 import {
@@ -312,7 +321,6 @@ import { createSafeStorageTraceKeyProtector } from './trace-outbox-crypto'
 import { TraceOutboxStore } from './trace-outbox-store'
 import { sameTraceOwnerIdentity, type TraceOwner, validateTraceOwner } from './trace-outbox-types'
 import { TraceRecoveryController, TraceRecoveryLifecycle } from './trace-recovery-controller'
-import { resolveLocalBackendWithTrace, TraceRuntimeStartupRecovery } from './trace-runtime-startup'
 import {
   compareApiUrl,
   parseCompareBehindCount,
@@ -736,7 +744,14 @@ const desktopLocalCapabilities = new LocalBackendCapabilityLifecycle(
 )
 
 async function writeBackendTraceTransport(child, root) {
-  if (!desktopTraceIngress || !child?.stdin || child.stdin.destroyed || !child.stdin.writable) {
+  if (
+    !desktopTraceFacadeReady ||
+    !desktopTraceRuntime.current() ||
+    !desktopTraceIngress ||
+    !child?.stdin ||
+    child.stdin.destroyed ||
+    !child.stdin.writable
+  ) {
     throw new TraceTransportUnavailableError('trace_transport_pipe_unavailable')
   }
 
@@ -760,16 +775,6 @@ async function writeBackendTraceTransport(child, root) {
   } catch {
     throw new TraceTransportUnavailableError('trace_transport_pipe_unavailable')
   }
-}
-
-function sameConnectionScope(left, right) {
-  return Boolean(
-    left &&
-    right &&
-    left.connection_id === right.connection_id &&
-    left.runtime_instance_id === right.runtime_instance_id &&
-    left.epoch === right.epoch
-  )
 }
 
 function createDesktopAuthBridge() {
@@ -896,6 +901,16 @@ async function startDesktopAuthRuntime() {
           enableDesktopCapabilityShell()
 
           if (mainWindow && !mainWindow.isDestroyed()) {
+            const traceScope = coordinator.scope('local')
+
+            if (traceScope) {
+              const traceOwner = traceOwnerFromScope(status, traceScope, desktopInstallationId)
+
+              void prepareDesktopTraceForwarder(traceScope, traceOwner).catch(error => {
+                rememberLog(`[trace] authenticated owner sync failed: ${String((error as Error)?.message || error)}`)
+              })
+            }
+
             void startHermes().catch(error => {
               const failureCode = error?.code || 'backend-start-failed'
               rememberLog(`[runtime] authenticated backend start failed: ${failureCode}`)
@@ -6129,7 +6144,7 @@ function sendOpenFolderRequested() {
 // renderer's WebSocket to the local backend; the renderer reconnects on this
 // signal so the chat composer doesn't stay stuck on "Starting Hermes...".
 function sendPowerResume() {
-  desktopTraceLifecycle?.trigger('resume')
+  desktopTraceRuntime.trigger('resume')
 
   if (!mainWindow || mainWindow.isDestroyed()) {
     return
@@ -6154,7 +6169,7 @@ let onBatteryPower: boolean | null = null
 // Renderer-side battery gating seeds from this and stays current via the
 // 'hermes:power-battery' push below.
 guardedHandle('hermes:power-battery:get', () => onBatteryPower === true)
-guardedOn('hermes:trace:online', () => desktopTraceLifecycle?.trigger('renderer-online'))
+guardedOn('hermes:trace:online', () => desktopTraceRuntime.trigger('renderer-online'))
 
 function broadcastBatteryState(next: boolean) {
   if (onBatteryPower === next) {
@@ -6186,7 +6201,7 @@ function registerPowerResumeListeners() {
     powerMonitor.on('unlock-screen', sendPowerResume)
     powerMonitor.on('on-battery', () => broadcastBatteryState(true))
     powerMonitor.on('on-ac', () => broadcastBatteryState(false))
-    app.on('browser-window-focus', () => desktopTraceLifecycle?.trigger('focus'))
+    app.on('browser-window-focus', () => desktopTraceRuntime.trigger('focus'))
     onBatteryPower = powerMonitor.isOnBatteryPower()
   } catch {
     // powerMonitor is unavailable before app 'ready' on some platforms; the
@@ -8867,25 +8882,17 @@ const sshConnections = new Map<string, any>()
 const sshAuthBridges = new Map<string, any>()
 const desktopInstallationId = loadOrCreateInstallationId(DESKTOP_INSTALLATION_PATH)
 
-let desktopTraceContext = null
-let desktopTraceForwarder = null
-let desktopTraceLifecycle = null
-let desktopTraceOutboxStore: TraceOutboxStore | null = null
 let desktopTraceFacade: TraceIngressFacade | null = null
 let desktopTraceIngress = null
+let desktopTraceFacadeReady = false
 let desktopTraceFacadeStartupPromise = null
 let desktopTraceAttachRetryTimer = null
 let desktopTraceAttachRetryAttempt = 0
 const desktopTraceBackends = new TraceBackendRegistry<any>()
-let desktopTraceGeneration = 0
-let desktopTraceStartupPromise = null
-
-const desktopTraceRuntimeStartup = new TraceRuntimeStartupRecovery({
-  isRecoverable: error => !(error instanceof AuthBridgeError)
-})
+const desktopTraceRuntime = new TraceDurabilityRuntime(event => rememberLog(`[trace] ${JSON.stringify(event)}`))
 
 function traceContextForBackendRoot(root) {
-  if (!desktopTraceIngress) {
+  if (!desktopTraceFacadeReady || !desktopTraceRuntime.current() || !desktopTraceIngress) {
     return null
   }
 
@@ -8918,7 +8925,13 @@ async function attachDesktopTraceTransportToRunningBackends() {
 }
 
 function scheduleDesktopTraceTransportAttachRetry(delayOverride = null) {
-  if (desktopTraceAttachRetryTimer || !desktopTraceIngress || desktopTraceBackends.active().length === 0) {
+  if (
+    desktopTraceAttachRetryTimer ||
+    !desktopTraceFacadeReady ||
+    !desktopTraceRuntime.current() ||
+    !desktopTraceIngress ||
+    desktopTraceBackends.active().length === 0
+  ) {
     return
   }
 
@@ -8936,12 +8949,15 @@ function scheduleDesktopTraceTransportAttachRetry(delayOverride = null) {
   desktopTraceAttachRetryTimer.unref?.()
 }
 
-function rotateDesktopTraceIngressBearer() {
+function rotateDesktopTraceIngressBearer({ reattach = true } = {}) {
   const rotated = desktopTraceFacade?.rotateBearer()
 
   if (rotated) {
     desktopTraceIngress = rotated
-    scheduleDesktopTraceTransportAttachRetry(0)
+
+    if (reattach) {
+      scheduleDesktopTraceTransportAttachRetry(0)
+    }
   }
 }
 
@@ -8982,8 +8998,6 @@ async function ensureDesktopTraceFacade() {
     const ingress = await facade.start()
     desktopTraceFacade = facade
     desktopTraceIngress = ingress
-    scheduleDesktopTraceTransportAttachRetry(30_000)
-    await attachDesktopTraceTransportToRunningBackends()
 
     return ingress
   })()
@@ -9014,258 +9028,272 @@ function traceOwnerForScope(scope): TraceOwner {
   return traceOwnerFromScope(status, scope, desktopInstallationId)
 }
 
-async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
-  await ensureDesktopTraceFacade()
-  await attachDesktopTraceTransportToRunningBackends()
+async function loadCurrentDesktopTraceCredential(
+  expectedOwner: TraceOwner,
+  expectedScope: ConnectionScope
+): Promise<TraceCredential> {
+  const bridge = desktopAuthBridge
+  const status = desktopAuthCoordinator?.status('local')
 
-  // A pinned runtime scope string can survive a same-account session change;
-  // the forwarder must rebind whenever the requested TraceOwner differs.
   if (
-    desktopTraceContext &&
-    sameConnectionScope(desktopTraceContext.scope, scope) &&
-    sameTraceOwnerIdentity(desktopTraceContext.owner, requestedOwner)
+    !bridge ||
+    status?.state !== 'authenticated' ||
+    !sameConnectionScope(desktopAuthCoordinator?.scope('local'), expectedScope)
   ) {
-    return desktopTraceContext
+    throw new AuthBridgeError('runtime_unavailable', 'runtime_unavailable')
   }
 
-  if (desktopTraceStartupPromise) {
-    await desktopTraceStartupPromise
+  const before = traceOwnerFromScope(status, expectedScope, desktopInstallationId)
 
-    if (
-      desktopTraceContext &&
-      sameConnectionScope(desktopTraceContext.scope, scope) &&
-      sameTraceOwnerIdentity(desktopTraceContext.owner, requestedOwner)
-    ) {
-      return desktopTraceContext
-    }
+  if (!sameTraceOwnerIdentity(before, expectedOwner)) {
+    throw new AuthBridgeError('auth_required', 'session_rejected')
   }
 
-  const generation = ++desktopTraceGeneration
+  const credential = await bridge.traceToken({
+    installation_id: desktopInstallationId,
+    client_version: app.getVersion(),
+    telemetry_schema_version: '1'
+  })
 
-  const startup = (async () => {
-    const previous = desktopTraceForwarder
-    const previousLifecycle = desktopTraceLifecycle
+  const validated = desktopAuthCoordinator?.status('local')
 
-    desktopTraceForwarder = null
-    desktopTraceLifecycle = null
-    desktopTraceOutboxStore = null
-    desktopTraceContext = null
-    desktopTraceFacade?.detach()
+  if (
+    validated?.state !== 'authenticated' ||
+    !sameConnectionScope(desktopAuthCoordinator?.scope('local'), expectedScope)
+  ) {
+    throw new AuthBridgeError('runtime_unavailable', 'runtime_unavailable')
+  }
 
-    await Promise.all([
-      previousLifecycle?.stop() ?? Promise.resolve(),
-      previous?.stop({ flushMs: 0 }) ?? Promise.resolve()
-    ])
+  const after = traceOwnerFromScope(validated, expectedScope, desktopInstallationId)
 
-    const owner = validateTraceOwner(requestedOwner).owner
+  if (!sameTraceOwnerIdentity(after, expectedOwner)) {
+    throw new AuthBridgeError('auth_required', 'session_rejected')
+  }
 
-    // A failed prior startup may have attached the current bearer to running
-    // backends without ever publishing a context, so there is no previous
-    // owner to compare against: every non-reused startup rotates the bearer
-    // before this owner's delegate can be installed.
-    rotateDesktopTraceIngressBearer()
+  return credential
+}
 
-    const traceOutboxRoot = path.join(app.getPath('userData'), 'trace-outbox')
-    const status = desktopAuthCoordinator?.status('local')
+async function createDesktopTraceSession(
+  scope: ConnectionScope,
+  requestedOwner: TraceOwner
+): Promise<TraceDurabilitySession> {
+  const owner = validateTraceOwner(requestedOwner).owner
+  const traceOutboxRoot = path.join(app.getPath('userData'), 'trace-outbox')
+  const status = desktopAuthCoordinator?.status('local')
 
-    if (!status || status.principal_key === null) {
-      throw new AuthBridgeError('auth_required', 'session_rejected')
-    }
+  if (!status || status.principal_key === null) {
+    throw new AuthBridgeError('auth_required', 'session_rejected')
+  }
 
-    const currentOwner = traceOwnerFromScope(status, scope, desktopInstallationId)
-    if (
-      currentOwner.accountKey !== owner.accountKey ||
-      currentOwner.accountId !== owner.accountId ||
-      currentOwner.sessionId !== owner.sessionId
-    ) {
-      throw new AuthBridgeError('auth_required', 'session_rejected')
-    }
+  const currentOwner = traceOwnerFromScope(status, scope, desktopInstallationId)
 
-    const ownerValidation = validateTraceOwner(owner)
+  if (
+    currentOwner.accountKey !== owner.accountKey ||
+    currentOwner.accountId !== owner.accountId ||
+    currentOwner.sessionId !== owner.sessionId
+  ) {
+    throw new AuthBridgeError('auth_required', 'session_rejected')
+  }
 
-    if (!ownerValidation.uploadable) {
-      await migratePreviousLegacyTraceNamespace({
-        currentAccountKey: owner.accountKey,
-        previousAccountKey: previousLegacyTraceAccountKey(scope, desktopInstallationId),
-        rename: (source, destination) => fs.promises.rename(source, destination),
-        root: traceOutboxRoot
-      })
-    }
+  const ownerValidation = validateTraceOwner(owner)
 
-    const store = await TraceOutboxStore.open({
-      expectedOwner: owner,
-      isConversationStreaming: isDesktopConversationStreaming,
-      keyProtector: createSafeStorageTraceKeyProtector(safeStorage),
-      root: path.join(traceOutboxRoot, owner.accountKey)
+  if (!ownerValidation.uploadable) {
+    await migratePreviousLegacyTraceNamespace({
+      currentAccountKey: owner.accountKey,
+      previousAccountKey: previousLegacyTraceAccountKey(scope, desktopInstallationId),
+      rename: (source, destination) => fs.promises.rename(source, destination),
+      root: traceOutboxRoot
     })
-    const sourceOwner = ownerValidation.uploadable ? traceMigrationSourceOwner(status, desktopInstallationId) : null
-    const migrationBarrier =
-      sourceOwner === null
-        ? null
-        : store.migrateTrustedSource({
-            keyProtector: createSafeStorageTraceKeyProtector(safeStorage),
-            removeSourceDirectory: source => fs.promises.rm(source, { force: false, recursive: true }),
-            sourceOwner,
-            sourceRoot: path.join(traceOutboxRoot, sourceOwner.accountKey)
-          })
-    if (migrationBarrier !== null) {
-      void migrationBarrier.catch(error => {
-        rememberLog(`[trace] background namespace migration failed: ${String((error as Error)?.message || error)}`)
-      })
-    }
-    // Recovery only rebuilds the index. Start reclaim before the backend can
-    // accept the next turn without making a large outbox a backend-start
-    // prerequisite. Compaction rechecks the authoritative active-work counter
-    // between bounded record reads and aborts before replace if a turn starts.
-    void store.compactIfIdle().catch(error => {
-      rememberLog(`[trace] startup outbox maintenance failed: ${String((error as Error)?.message || error)}`)
-    })
+  }
 
-    const provider = new RefreshingTraceCredentialProvider({
-      load: async () => {
-        const bridge = desktopAuthBridge
-        const currentScope = desktopAuthCoordinator?.scope('local')
-        const currentStatus = desktopAuthCoordinator?.status('local')
+  const store = await TraceOutboxStore.open({
+    expectedOwner: owner,
+    isConversationStreaming: isDesktopConversationStreaming,
+    keyProtector: createSafeStorageTraceKeyProtector(safeStorage),
+    root: path.join(traceOutboxRoot, owner.accountKey)
+  })
 
-        if (!bridge || !currentStatus || !sameConnectionScope(currentScope, scope)) {
-          throw new AuthBridgeError('auth_required', 'session_rejected')
-        }
+  const sourceOwner = ownerValidation.uploadable ? traceMigrationSourceOwner(status, desktopInstallationId) : null
 
-        const issuanceOwner = traceOwnerFromScope(currentStatus, scope, desktopInstallationId)
-        if (
-          issuanceOwner.accountKey !== owner.accountKey ||
-          issuanceOwner.accountId !== owner.accountId ||
-          issuanceOwner.sessionId !== owner.sessionId
-        ) {
-          throw new AuthBridgeError('auth_required', 'session_rejected')
-        }
-
-        const credential = await bridge.traceToken({
-          installation_id: desktopInstallationId,
-          client_version: app.getVersion(),
-          telemetry_schema_version: '1'
+  const migrationBarrier =
+    sourceOwner === null
+      ? null
+      : store.migrateTrustedSource({
+          keyProtector: createSafeStorageTraceKeyProtector(safeStorage),
+          removeSourceDirectory: source => fs.promises.rm(source, { force: false, recursive: true }),
+          sourceOwner,
+          sourceRoot: path.join(traceOutboxRoot, sourceOwner.accountKey)
         })
 
-        const validatedStatus = desktopAuthCoordinator?.status('local')
-        const validatedOwner = validatedStatus
-          ? traceOwnerFromScope(validatedStatus, scope, desktopInstallationId)
-          : null
-
-        if (
-          generation !== desktopTraceGeneration ||
-          !sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope) ||
-          validatedOwner === null ||
-          validatedOwner.accountKey !== owner.accountKey ||
-          validatedOwner.accountId !== owner.accountId ||
-          validatedOwner.sessionId !== owner.sessionId
-        ) {
-          throw new AuthBridgeError('auth_required', 'session_rejected')
-        }
-
-        return credential
-      }
+  if (migrationBarrier !== null) {
+    void migrationBarrier.catch(error => {
+      rememberLog(`[trace] background namespace migration failed: ${String((error as Error)?.message || error)}`)
     })
+  }
 
-    if (generation !== desktopTraceGeneration || !sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope)) {
-      // Another generation owns this outbox root now: close our writer and
-      // settle the migration barrier before aborting so a rerun never races
-      // two stores on one root.
-      await store.close().catch(() => {})
-      await migrationBarrier?.catch(() => {})
-      throw new AuthBridgeError('auth_required', 'session_rejected')
+  // Recovery only rebuilds the index. Start reclaim before the backend can
+  // accept the next turn without making a large outbox a backend-start
+  // prerequisite. Compaction rechecks the authoritative active-work counter
+  // between bounded record reads and aborts before replace if a turn starts.
+  void store.compactIfIdle().catch(error => {
+    rememberLog(`[trace] startup outbox maintenance failed: ${String((error as Error)?.message || error)}`)
+  })
+
+  const credentialSource = new RebindableTraceCredentialSource()
+
+  credentialSource.bind(owner, async () => loadCurrentDesktopTraceCredential(owner, scope))
+
+  const provider = new RefreshingTraceCredentialProvider(credentialSource, {
+    installationId: desktopInstallationId
+  })
+
+  let lifecycle: TraceRecoveryLifecycle | undefined
+
+  const controller = new TraceRecoveryController({
+    accountKey: owner.accountKey,
+    pump: async () => {
+      await forwarder.pump()
+      lifecycle?.scheduleRetryAt(forwarder.nextRecoveryAt())
     }
+  })
 
-    let lifecycle: TraceRecoveryLifecycle | undefined
+  const forwarder = new TraceForwarder({
+    credentialProvider: provider,
+    installationId: desktopInstallationId,
+    onTerminalRevocation: revocation => {
+      const coordinator = desktopAuthCoordinator
 
-    const controller = new TraceRecoveryController({
-      accountKey: owner.accountKey,
-      pump: async () => {
-        await forwarder.pump()
-        lifecycle?.scheduleRetryAt(forwarder.nextRecoveryAt())
-      }
-    })
+      return coordinator ? coordinator.applyTraceTerminalRevocation(revocation) : false
+    },
+    recovery: controller,
+    store,
+    uploadBarrier: migrationBarrier === null ? undefined : () => migrationBarrier
+  })
 
-    const forwarder = new TraceForwarder({
-      credentialProvider: provider,
-      installationId: desktopInstallationId,
-      onTerminalRevocation: revocation => {
-        const coordinator = desktopAuthCoordinator
-
-        return coordinator ? coordinator.applyTraceTerminalRevocation(revocation) : false
-      },
-      recovery: controller,
-      store,
-      uploadBarrier: migrationBarrier === null ? undefined : () => migrationBarrier
-    })
-
-    let started
-
-    try {
-      started = await forwarder.start(owner)
-    } catch (error) {
-      await forwarder.stop({ flushMs: 0 }).catch(() => {})
-      await store.close().catch(() => {})
-      await migrationBarrier?.catch(() => {})
-      throw error
-    }
-
-    lifecycle = new TraceRecoveryLifecycle({ controller, credentialProvider: provider })
-
-    if (generation !== desktopTraceGeneration || !sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope)) {
-      await forwarder.stop({ flushMs: 0 })
-      await store.close().catch(() => {})
-      await migrationBarrier?.catch(() => {})
-      throw new AuthBridgeError('auth_required', 'session_rejected')
-    }
-
-    desktopTraceForwarder = forwarder
-    desktopTraceLifecycle = lifecycle
-    desktopTraceOutboxStore = store
-    desktopTraceFacade?.install(started)
-    desktopTraceContext = {
-      owner: { ...owner },
-      scope: { ...scope }
-    }
-    lifecycle.start()
-
-    return desktopTraceContext
-  })()
-
-  desktopTraceStartupPromise = startup
+  let started
 
   try {
-    return await startup
-  } finally {
-    if (desktopTraceStartupPromise === startup) {
-      desktopTraceStartupPromise = null
-    }
+    started = await forwarder.start(owner)
+  } catch (error) {
+    await forwarder.stop({ flushMs: 0 }).catch(() => {})
+    await store.close().catch(() => {})
+    await migrationBarrier?.catch(() => {})
+    throw error
+  }
+
+  const validatedStatus = desktopAuthCoordinator?.status('local')
+
+  const validatedOwner =
+    validatedStatus?.state === 'authenticated' &&
+    sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope)
+      ? traceOwnerFromScope(validatedStatus, scope, desktopInstallationId)
+      : null
+
+  if (validatedOwner === null || !sameTraceOwnerIdentity(validatedOwner, owner)) {
+    credentialSource.clear()
+    await forwarder.stop({ flushMs: 0 }).catch(() => {})
+    await migrationBarrier?.catch(() => {})
+    throw new AuthBridgeError('auth_required', 'session_rejected')
+  }
+
+  lifecycle = new TraceRecoveryLifecycle({ controller, credentialProvider: provider })
+  let boundOwner = { ...owner }
+  let boundScope = { ...scope }
+
+  lifecycle.start()
+
+  return {
+    compactIfIdle: () => store.compactIfIdle(),
+    context: () => ({ ingress: started, owner: boundOwner, scope: boundScope }),
+    rebind(nextOwner, nextScope) {
+      const reboundOwner = { ...nextOwner }
+      const reboundScope = { ...nextScope }
+
+      credentialSource.bind(reboundOwner, async () => loadCurrentDesktopTraceCredential(reboundOwner, reboundScope))
+      forwarder.rebindOwner(reboundOwner)
+      boundOwner = reboundOwner
+      boundScope = reboundScope
+    },
+    async stop(flushMs) {
+      credentialSource.clear()
+      await Promise.all([lifecycle.stop(), forwarder.stop({ flushMs })])
+      await migrationBarrier?.catch(() => {})
+    },
+    trigger: reason => lifecycle.trigger(reason)
   }
 }
 
-async function prepareDesktopTraceForwarder(scope, owner: TraceOwner) {
-  await desktopTraceRuntimeStartup.prepare(owner.accountKey, () => ensureDesktopTraceForwarder(scope, owner))
+const desktopTraceCoordinator = new TraceDurabilityCoordinator({
+  createSession: (owner, scope) => createDesktopTraceSession(scope, owner),
+  facade: {
+    detach() {
+      desktopTraceFacadeReady = false
+      desktopTraceFacade?.detach()
+    },
+    install(ingress) {
+      if (desktopTraceFacade === null) {
+        throw new Error('trace_ingress_facade_unavailable')
+      }
+
+      desktopTraceFacade.install(ingress)
+      desktopTraceFacadeReady = true
+    },
+    rotateBearer() {
+      rotateDesktopTraceIngressBearer({ reattach: false })
+    }
+  },
+  async onAdmissionReady() {
+    try {
+      await attachDesktopTraceTransportToRunningBackends()
+    } finally {
+      scheduleDesktopTraceTransportAttachRetry(30_000)
+    }
+  },
+  runtime: desktopTraceRuntime
+})
+
+async function ensureDesktopTraceForwarder(scope: ConnectionScope, requestedOwner: TraceOwner) {
+  await ensureDesktopTraceFacade()
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const activation = await desktopTraceCoordinator.activate({ owner: requestedOwner, scope })
+
+      return activation.context
+    } catch (error) {
+      if ((error as Error)?.message !== 'trace_activation_superseded' || attempt === 2) {
+        throw error
+      }
+
+      const status = desktopAuthCoordinator?.status('local')
+
+      const currentOwner =
+        status?.state === 'authenticated' && sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope)
+          ? traceOwnerFromScope(status, scope, desktopInstallationId)
+          : null
+
+      if (currentOwner === null || !sameTraceOwnerIdentity(currentOwner, requestedOwner)) {
+        throw error
+      }
+    }
+  }
+
+  throw new Error('trace_activation_superseded')
+}
+
+async function prepareDesktopTraceForwarder(scope: ConnectionScope, owner: TraceOwner) {
+  await ensureDesktopTraceForwarder(scope, owner)
 }
 
 async function stopDesktopTraceForwarder(flushMs = 3_000) {
-  await desktopTraceRuntimeStartup.stop()
-  desktopTraceGeneration += 1
-  const forwarder = desktopTraceForwarder
-  const lifecycle = desktopTraceLifecycle
-
-  desktopTraceForwarder = null
-  desktopTraceLifecycle = null
-  desktopTraceOutboxStore = null
-  desktopTraceContext = null
-  desktopTraceFacade?.detach()
-  rotateDesktopTraceIngressBearer()
-
-  await Promise.all([lifecycle?.stop() ?? Promise.resolve(), forwarder?.stop({ flushMs }) ?? Promise.resolve()])
+  await desktopTraceCoordinator.lock('signed_out', flushMs)
 }
 
 async function stopDesktopTraceFacade() {
   const facade = desktopTraceFacade
   desktopTraceFacade = null
   desktopTraceIngress = null
+  desktopTraceFacadeReady = false
   desktopTraceFacadeStartupPromise = null
   desktopTraceAttachRetryAttempt = 0
   desktopTraceBackends.clear()
@@ -10922,12 +10950,9 @@ async function startHermes() {
         await advanceBootProgress('backend.runtime', 'Resolving Hermes runtime', 28)
         const owner = traceOwnerForScope(connectionScope)
 
-        return resolveLocalBackendWithTrace({
-          key: owner.accountKey,
-          recovery: desktopTraceRuntimeStartup,
-          resolveBackend: () => resolveHermesBackend(backendArgs),
-          startEncryptedTrace: () => ensureDesktopTraceForwarder(connectionScope, owner)
-        })
+        await ensureDesktopTraceForwarder(connectionScope, owner)
+
+        return resolveHermesBackend(backendArgs)
       },
       resolveRemote: () => {
         // Classify immediately before each throwing resolve. This callback runs
@@ -14103,12 +14128,9 @@ function compactDesktopTraceOutboxIfIdle(): void {
     return
   }
 
-  const store = desktopTraceOutboxStore
-  if (store) {
-    void store.compactIfIdle().catch(error => {
-      rememberLog(`[trace] idle outbox maintenance failed: ${String((error as Error)?.message || error)}`)
-    })
-  }
+  void desktopTraceRuntime.compactIfIdle().catch(error => {
+    rememberLog(`[trace] idle outbox maintenance failed: ${String((error as Error)?.message || error)}`)
+  })
 }
 
 // The same merged picture drives background throttling: chat windows run

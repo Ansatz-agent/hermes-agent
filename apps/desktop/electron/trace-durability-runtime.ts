@@ -22,6 +22,25 @@ export type TraceActivation = {
   kind: 'created' | 'rebound' | 'reused'
 }
 
+type TraceDurabilityFacadeAdapter = {
+  detach(): void
+  install(ingress: TraceIngressEndpoint): void
+  rotateBearer(): void
+}
+
+type TraceDurabilityCoordinatorOptions = {
+  createSession(owner: TraceOwner, scope: ConnectionScope): Promise<TraceDurabilitySession>
+  facade: TraceDurabilityFacadeAdapter
+  onAdmissionReady?: () => Promise<void> | void
+  runtime: TraceDurabilityRuntime
+}
+
+type TraceFacadePublication = {
+  promise: Promise<void>
+  reject(error: unknown): void
+  resolve(): void
+}
+
 export type TraceDurabilityDiagnostic = {
   code:
     | 'trace_admission_ready'
@@ -186,5 +205,120 @@ export class TraceDurabilityRuntime {
     }
 
     this.diagnostic({ code: 'trace_terminal_locked' })
+  }
+}
+
+export class TraceDurabilityCoordinator {
+  private readonly createSession: TraceDurabilityCoordinatorOptions['createSession']
+  private readonly facade: TraceDurabilityFacadeAdapter
+  private facadeReady = false
+  private generation = 0
+  private readonly onAdmissionReady: NonNullable<TraceDurabilityCoordinatorOptions['onAdmissionReady']>
+  private publication: TraceFacadePublication | null = null
+  private readonly runtime: TraceDurabilityRuntime
+
+  constructor(options: TraceDurabilityCoordinatorOptions) {
+    this.createSession = options.createSession
+    this.facade = options.facade
+    this.onAdmissionReady = options.onAdmissionReady ?? (() => {})
+    this.runtime = options.runtime
+  }
+
+  async activate(requested: { owner: TraceOwner; scope: ConnectionScope }): Promise<TraceActivation> {
+    const generation = this.generation
+    let publication = this.publication
+    let ownsPublication = false
+
+    if (publication === null && !this.facadeReady) {
+      publication = this.createPublication()
+      this.publication = publication
+      ownsPublication = true
+    }
+
+    try {
+      const activation = await this.runtime.activate(requested, () =>
+        this.createSession(requested.owner, requested.scope)
+      )
+
+      this.requireGeneration(generation)
+
+      if (ownsPublication) {
+        const context = this.requireCurrentContext()
+
+        this.facade.install(context.ingress)
+        this.facadeReady = true
+        await this.onAdmissionReady()
+        this.requireGeneration(generation)
+        publication.resolve()
+      } else if (publication !== null) {
+        await publication.promise
+      }
+
+      this.requireGeneration(generation)
+
+      return { context: this.requireCurrentContext(), kind: activation.kind }
+    } catch (error) {
+      if (ownsPublication) {
+        publication.reject(error)
+      }
+
+      throw error
+    } finally {
+      if (ownsPublication && this.publication === publication) {
+        this.publication = null
+      }
+    }
+  }
+
+  applySameAccountOwner(owner: TraceOwner, scope?: ConnectionScope): Promise<TraceActivation> {
+    const current = this.runtime.current()
+
+    if (current === null) {
+      return Promise.reject(new Error('trace_runtime_unavailable'))
+    }
+
+    return this.activate({ owner, scope: scope ?? current.scope })
+  }
+
+  async lock(_reason: string, flushMs = 3_000): Promise<void> {
+    this.generation += 1
+    this.facadeReady = false
+    const publication = this.publication
+
+    this.publication = null
+    publication?.reject(new Error('trace_activation_superseded'))
+    this.facade.detach()
+    this.facade.rotateBearer()
+    await this.runtime.lock(flushMs)
+  }
+
+  private createPublication(): TraceFacadePublication {
+    let reject!: (error: unknown) => void
+    let resolve!: () => void
+
+    const promise = new Promise<void>((currentResolve, currentReject) => {
+      reject = currentReject
+      resolve = currentResolve
+    })
+
+    void promise.catch(() => {})
+
+    return { promise, reject, resolve }
+  }
+
+  private requireCurrentContext(): TraceDurabilityContext {
+    const context = this.runtime.current()
+
+    if (context === null) {
+      throw new Error('trace_activation_superseded')
+    }
+
+    return context
+  }
+
+  private requireGeneration(generation: number): void {
+    if (generation !== this.generation) {
+      throw new Error('trace_activation_superseded')
+    }
   }
 }

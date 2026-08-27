@@ -4,6 +4,7 @@ import { test } from 'vitest'
 
 import type { ConnectionScope } from './auth-bridge'
 import {
+  TraceDurabilityCoordinator,
   type TraceDurabilityDiagnostic,
   TraceDurabilityRuntime,
   type TraceDurabilitySession
@@ -116,6 +117,129 @@ test('same-account owner activation rebinds one durable session without replacin
   assert.deepEqual(fixture.reboundOwners, [ownerB])
   assert.deepEqual(runtime.current()?.ingress, first.context.ingress)
   assert.deepEqual(diagnostics, [{ code: 'trace_admission_ready' }, { code: 'trace_owner_rebound' }])
+})
+
+test('coordinator installs one facade transport across same-account rebind and detaches only on hard lock', async () => {
+  const ownerA = owner()
+  const ownerB = owner({ sessionId: '44444444-4444-4444-8444-444444444444' })
+  const activeScope = scope()
+  const fixture = sessionFixture(ownerA, activeScope)
+
+  const stableDescriptor = {
+    endpoint: 'http://127.0.0.1:4318/v1/traces',
+    localBearer: 'stable-facade-bearer'
+  }
+
+  const facadeCalls: string[] = []
+  const backendTransportDescriptors: (typeof stableDescriptor)[] = []
+  const runtime = new TraceDurabilityRuntime()
+
+  const coordinator = new TraceDurabilityCoordinator({
+    createSession: async () => fixture.session,
+    facade: {
+      detach: () => facadeCalls.push('detach'),
+      install: () => facadeCalls.push('install'),
+      rotateBearer: () => facadeCalls.push('rotateBearer')
+    },
+    onAdmissionReady: () => {
+      backendTransportDescriptors.push({ ...stableDescriptor })
+    },
+    runtime
+  })
+
+  await coordinator.activate({ owner: ownerA, scope: activeScope })
+  assert.deepEqual(facadeCalls, ['install'])
+  assert.deepEqual(backendTransportDescriptors, [stableDescriptor])
+
+  await coordinator.applySameAccountOwner(ownerB)
+  assert.deepEqual(facadeCalls, ['install'])
+  assert.deepEqual(backendTransportDescriptors, [stableDescriptor])
+  assert.deepEqual(runtime.current()?.owner, ownerB)
+
+  await coordinator.lock('signed_out')
+  assert.deepEqual(facadeCalls, ['install', 'detach', 'rotateBearer'])
+  assert.equal(runtime.current(), null)
+})
+
+test('coordinator fences an activation whose facade publication overlaps a hard lock', async () => {
+  const activeOwner = owner()
+  const activeScope = scope()
+  const fixture = sessionFixture(activeOwner, activeScope)
+  const admissionReady = deferred<void>()
+  const facadeInstalled = deferred<void>()
+  const facadeCalls: string[] = []
+  const runtime = new TraceDurabilityRuntime()
+
+  const coordinator = new TraceDurabilityCoordinator({
+    createSession: async () => fixture.session,
+    facade: {
+      detach: () => facadeCalls.push('detach'),
+      install: () => {
+        facadeCalls.push('install')
+        facadeInstalled.resolve()
+      },
+      rotateBearer: () => facadeCalls.push('rotateBearer')
+    },
+    onAdmissionReady: () => admissionReady.promise,
+    runtime
+  })
+
+  const activation = coordinator.activate({ owner: activeOwner, scope: activeScope })
+
+  await facadeInstalled.promise
+  assert.deepEqual(facadeCalls, ['install'])
+  const locking = coordinator.lock('signed_out')
+
+  admissionReady.resolve()
+  await assert.rejects(activation, /trace_activation_superseded/)
+  await locking
+  assert.deepEqual(facadeCalls, ['install', 'detach', 'rotateBearer'])
+  assert.equal(runtime.current(), null)
+  assert.deepEqual(fixture.stopCalls, [3_000])
+})
+
+test('concurrent coordinator activations wait for the first facade transport publication', async () => {
+  const activeOwner = owner()
+  const activeScope = scope()
+  const fixture = sessionFixture(activeOwner, activeScope)
+  const admissionReady = deferred<void>()
+  const facadeInstalled = deferred<void>()
+  const facadeCalls: string[] = []
+  const runtime = new TraceDurabilityRuntime()
+
+  const coordinator = new TraceDurabilityCoordinator({
+    createSession: async () => fixture.session,
+    facade: {
+      detach: () => facadeCalls.push('detach'),
+      install: () => {
+        facadeCalls.push('install')
+        facadeInstalled.resolve()
+      },
+      rotateBearer: () => facadeCalls.push('rotateBearer')
+    },
+    onAdmissionReady: () => admissionReady.promise,
+    runtime
+  })
+
+  let joinedResolved = false
+
+  const creator = coordinator.activate({ owner: activeOwner, scope: activeScope })
+  await facadeInstalled.promise
+
+  const joined = coordinator.activate({ owner: activeOwner, scope: activeScope }).then(result => {
+    joinedResolved = true
+
+    return result
+  })
+
+  await new Promise(resolve => setTimeout(resolve, 0))
+  assert.equal(joinedResolved, false)
+
+  admissionReady.resolve()
+  const [created, reused] = await Promise.all([creator, joined])
+  assert.equal(created.kind, 'created')
+  assert.equal(reused.kind, 'reused')
+  assert.deepEqual(facadeCalls, ['install'])
 })
 
 test('one hundred concurrent same-account activations create exactly one session', async () => {

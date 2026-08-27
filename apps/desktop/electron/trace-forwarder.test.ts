@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import { mkdtemp, rm, stat } from 'node:fs/promises'
 import http from 'node:http'
 import { join } from 'node:path'
@@ -1638,31 +1637,6 @@ test('stop consumes only expected socket errors with oversized and held requests
   }
 })
 
-test('desktop lifecycle starts local backend through degraded Trace recovery and stops Trace before teardown', () => {
-  const source = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
-  const prepareStart = source.indexOf('prepareLocalBackend: async () => {')
-  const prepareEnd = source.indexOf('resolveRemote:', prepareStart)
-  const prepare = source.slice(prepareStart, prepareEnd)
-
-  assert.ok(prepareStart >= 0)
-  assert.match(prepare, /return resolveLocalBackendWithTrace\(\{/)
-  assert.match(prepare, /resolveBackend: \(\) => resolveHermesBackend\(backendArgs\)/)
-  assert.match(prepare, /startEncryptedTrace: \(\) => ensureDesktopTraceForwarder\(connectionScope, owner\)/)
-
-  const cleanupStart = source.indexOf("async function cleanupDesktopCapabilities(connectionId = 'local')")
-  const cleanupEnd = source.indexOf('function enableDesktopCapabilityShell()', cleanupStart)
-  const cleanup = source.slice(cleanupStart, cleanupEnd)
-
-  assert.ok(cleanupStart >= 0)
-  assert.ok(
-    cleanup.indexOf('await stopDesktopTraceForwarder(3_000)') <
-      cleanup.indexOf('teardownPrimaryBackendAndWait({ soft: true })')
-  )
-  assert.match(source, /trace: traceContextForBackendRoot\(root\)/)
-  assert.match(source, /trace: traceContextForBackendRoot\(ACTIVE_HERMES_ROOT\)/)
-  assert.match(source, /pluginsToml: path\.join\(root, 'config', 'ansatz-voice-trace', 'plugins\.toml'\)/)
-})
-
 test('local backend preparation does not wait for Trace token acquisition', async () => {
   const token = deferred<Awaited<ReturnType<TraceCredentialSource['load']>>>()
   let tokenLoads = 0
@@ -1718,60 +1692,4 @@ test('local backend preparation does not wait for Trace token acquisition', asyn
     await forwarder.stop({ flushMs: 0 })
     await rm(root, { force: true, recursive: true })
   }
-})
-
-test('desktop trace startup aborts settle the opened store and migration, rebind on owner change, and rotate the ingress bearer on detach', () => {
-  const source = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
-  const ensureStart = source.indexOf('async function ensureDesktopTraceForwarder(')
-  const ensureEnd = source.indexOf('async function prepareDesktopTraceForwarder(')
-  assert.ok(ensureStart >= 0 && ensureEnd > ensureStart)
-  const ensure = source.slice(ensureStart, ensureEnd)
-
-  // A pinned scope string must not keep a stale forwarder bound to an old
-  // same-account session: the early returns must also compare the owner.
-  assert.match(ensure, /sameTraceOwnerIdentity\(desktopTraceContext\.owner, requestedOwner\)/)
-  assert.match(ensure, /owner: \{ \.\.\.owner \}/)
-
-  // Aborting after the store is open must close it and settle the migration
-  // barrier so a rerun never opens a second writer on the same root.
-  assert.match(ensure, /await store\.close\(\)\.catch/)
-  assert.ok(
-    (ensure.match(/await migrationBarrier\?\.catch/g) ?? []).length >= 2,
-    'every post-open abort path must settle the migration barrier'
-  )
-
-  const stopStart = source.indexOf('async function stopDesktopTraceForwarder(')
-  const stopEnd = source.indexOf('async function stopDesktopTraceFacade(')
-  assert.ok(stopStart >= 0 && stopEnd > stopStart)
-  const stop = source.slice(stopStart, stopEnd)
-
-  // Detaching an account/session must rotate the stable ingress bearer so a
-  // surviving old backend cannot inject into a later account.
-  assert.match(stop, /rotateDesktopTraceIngressBearer\(\)/)
-})
-
-test('every non-reused desktop trace startup rotates the ingress bearer after owner validation', () => {
-  const source = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
-  const ensureStart = source.indexOf('async function ensureDesktopTraceForwarder(')
-  const ensureEnd = source.indexOf('async function prepareDesktopTraceForwarder(')
-  assert.ok(ensureStart >= 0 && ensureEnd > ensureStart)
-  const ensure = source.slice(ensureStart, ensureEnd)
-
-  // A startup that failed before publishing desktopTraceContext leaves no
-  // previous owner to compare against, so the rotation must not be
-  // conditional on an observed owner change.
-  assert.doesNotMatch(ensure, /previousOwner/)
-  assert.match(
-    ensure,
-    /const owner = validateTraceOwner\(requestedOwner\)\.owner\n(?:\n| {4}\/\/[^\n]*\n)* {4}rotateDesktopTraceIngressBearer\(\)\n/,
-    'the startup path must rotate unconditionally right after owner validation'
-  )
-
-  // The rotation lives inside the startup closure (after the fast-path
-  // reuse returns) and appears exactly once, so reuse never rotates.
-  const startupIndex = ensure.indexOf('const startup = (async () => {')
-  const rotationIndex = ensure.indexOf('rotateDesktopTraceIngressBearer()')
-  assert.ok(startupIndex >= 0)
-  assert.ok(rotationIndex > startupIndex)
-  assert.equal(ensure.indexOf('rotateDesktopTraceIngressBearer()', rotationIndex + 1), -1)
 })
