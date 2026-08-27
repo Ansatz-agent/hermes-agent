@@ -192,7 +192,7 @@ test('a failed backend transport publication does not reject ready durable admis
   assert.deepEqual(runtime.current()?.owner, activeOwner)
 })
 
-test('a repeated hard lock detaches and rotates the facade only once', async () => {
+test('concurrent hard locks share one drain, but a later lock rotates the facade again', async () => {
   const activeOwner = owner()
   const activeScope = scope()
   const fixture = sessionFixture(activeOwner, activeScope)
@@ -227,7 +227,7 @@ test('a repeated hard lock detaches and rotates the facade only once', async () 
 
   await coordinator.lock('signed_out')
 
-  assert.deepEqual(facadeCalls, ['install', 'detach', 'rotateBearer'])
+  assert.deepEqual(facadeCalls, ['install', 'detach', 'rotateBearer', 'detach', 'rotateBearer'])
   assert.deepEqual(fixture.stopCalls, [3_000])
 })
 

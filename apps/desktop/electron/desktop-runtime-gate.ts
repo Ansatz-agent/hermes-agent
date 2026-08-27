@@ -1,5 +1,26 @@
 export type DesktopRuntimeState = 'failed' | 'not-ready' | 'preparing' | 'ready'
 
+export interface AuthenticatedDesktopRuntimeActions {
+  enableCapabilities: () => void
+  rendererAvailable: boolean
+  startBackend: () => void
+  syncTraceOwner: () => void
+}
+
+/**
+ * Coordinates the side effects of an authenticated local status update.
+ * Trace owner synchronization is independent of renderer-window availability;
+ * only backend startup needs a live window.
+ */
+export function coordinateAuthenticatedDesktopRuntime(actions: AuthenticatedDesktopRuntimeActions): void {
+  actions.enableCapabilities()
+  actions.syncTraceOwner()
+
+  if (actions.rendererAvailable) {
+    actions.startBackend()
+  }
+}
+
 export class DesktopRuntimeGate {
   private generation = 0
   private inFlight: Promise<void> | null = null

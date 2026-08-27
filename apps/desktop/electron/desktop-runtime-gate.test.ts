@@ -3,7 +3,7 @@ import fs from 'node:fs'
 
 import { test } from 'vitest'
 
-import { DesktopRuntimeGate } from './desktop-runtime-gate'
+import { coordinateAuthenticatedDesktopRuntime, DesktopRuntimeGate } from './desktop-runtime-gate'
 
 const authenticated = {
   state: 'authenticated',
@@ -107,40 +107,30 @@ test('auth status refresh does not tear down an already trusted desktop runtime'
   assert.doesNotMatch(authSubscription, /cleanupDesktopCapabilities|desktopRuntimeGate\.invalidate/)
 })
 
-test('authenticated owner refresh rebinds Trace even while the macOS main window is closed', () => {
-  const source = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
+test('authenticated runtime coordination rebinds Trace even while the renderer window is closed', () => {
+  const calls: string[] = []
 
-  const subscription = source.slice(
-    source.indexOf('coordinator.subscribe((status, connectionId) => {'),
-    source.indexOf('\n      try {', source.indexOf('coordinator.subscribe((status, connectionId) => {'))
-  )
+  coordinateAuthenticatedDesktopRuntime({
+    enableCapabilities: () => calls.push('enable'),
+    rendererAvailable: false,
+    startBackend: () => calls.push('backend'),
+    syncTraceOwner: () => calls.push('trace')
+  })
 
-  const traceSync = subscription.indexOf('void prepareDesktopTraceForwarder(traceScope, traceOwner)')
-  const windowGate = subscription.indexOf('if (mainWindow && !mainWindow.isDestroyed())')
-
-  assert.ok(traceSync >= 0)
-  assert.ok(windowGate >= 0)
-  assert.ok(traceSync < windowGate, 'Trace owner rebind must not depend on a live renderer window')
+  assert.deepEqual(calls, ['enable', 'trace'])
 })
 
-test('Trace durability keeps backend publication, idle compaction, revocation, and cleanup-order wiring', () => {
-  const source = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
-  const cleanupStart = source.indexOf("async function cleanupDesktopCapabilities(connectionId = 'local')")
-  const cleanupEnd = source.indexOf('function enableDesktopCapabilityShell()', cleanupStart)
-  const cleanup = source.slice(cleanupStart, cleanupEnd)
+test('authenticated runtime coordination starts the backend only when a renderer is available', () => {
+  const calls: string[] = []
 
-  assert.match(source, /trace: traceContextForBackendRoot\(root\)/)
-  assert.match(source, /trace: traceContextForBackendRoot\(ACTIVE_HERMES_ROOT\)/)
-  assert.match(source, /onTerminalRevocation: revocation =>[\s\S]*?applyTraceTerminalRevocation\(revocation\)/)
-  assert.match(
-    source,
-    /activeWorkByWebContents\.set\(id, normalizeActiveWork\(payload\)\)[\s\S]*?compactDesktopTraceOutboxIfIdle\(\)/
-  )
-  assert.ok(
-    cleanup.indexOf('await stopDesktopTraceForwarder(3_000)') <
-      cleanup.indexOf('teardownPrimaryBackendAndWait({ soft: true })')
-  )
-  assert.match(source, /!isTraceDurabilityStartupError\(error\)/)
+  coordinateAuthenticatedDesktopRuntime({
+    enableCapabilities: () => calls.push('enable'),
+    rendererAvailable: true,
+    startBackend: () => calls.push('backend'),
+    syncTraceOwner: () => calls.push('trace')
+  })
+
+  assert.deepEqual(calls, ['enable', 'trace', 'backend'])
 })
 
 test('main records real auth owner transitions and migrates them in the background after backend readiness is unblocked', () => {

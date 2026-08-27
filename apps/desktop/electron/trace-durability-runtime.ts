@@ -422,7 +422,6 @@ export class TraceDurabilityCoordinator {
   private facadeReady = false
   private generation = 0
   private lockFlight: Promise<void> | null = null
-  private locked = false
   private readonly onAdmissionReady: NonNullable<TraceDurabilityCoordinatorOptions['onAdmissionReady']>
   private publication: TraceFacadePublication | null = null
   private readonly runtime: TraceDurabilityRuntime
@@ -457,7 +456,6 @@ export class TraceDurabilityCoordinator {
 
         this.facade.install(context.ingress)
         this.facadeReady = true
-        this.locked = false
 
         try {
           await this.onAdmissionReady()
@@ -499,11 +497,10 @@ export class TraceDurabilityCoordinator {
   }
 
   lock(_reason: string, flushMs = 3_000): Promise<void> {
-    if (this.locked) {
-      return this.lockFlight ?? Promise.resolve()
+    if (this.lockFlight !== null) {
+      return this.lockFlight
     }
 
-    this.locked = true
     this.generation += 1
     this.facadeReady = false
     const publication = this.publication

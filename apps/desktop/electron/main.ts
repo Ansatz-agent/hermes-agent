@@ -135,7 +135,7 @@ import { adoptServedDashboardToken } from './dashboard-token'
 import { DESKTOP_WINDOW_TITLE } from './desktop-branding'
 import { loadOrCreateInstallationId, sshOwnershipId } from './desktop-installation'
 import { formatDesktopLogLine } from './desktop-log-line'
-import { DesktopRuntimeGate } from './desktop-runtime-gate'
+import { coordinateAuthenticatedDesktopRuntime, DesktopRuntimeGate } from './desktop-runtime-gate'
 import {
   buildPosixCleanupScript,
   buildWindowsCleanupScript,
@@ -900,24 +900,29 @@ async function startDesktopAuthRuntime() {
         broadcastDesktopAuthStatus(status, connectionId)
 
         if (connectionId === 'local' && status.state === 'authenticated') {
-          enableDesktopCapabilityShell()
+          coordinateAuthenticatedDesktopRuntime({
+            enableCapabilities: enableDesktopCapabilityShell,
+            rendererAvailable: Boolean(mainWindow && !mainWindow.isDestroyed()),
+            startBackend: () => {
+              void startHermes().catch(error => {
+                const failureCode = error?.code || 'backend-start-failed'
+                rememberLog(`[runtime] authenticated backend start failed: ${failureCode}`)
+              })
+            },
+            syncTraceOwner: () => {
+              const traceScope = coordinator.scope('local')
 
-          const traceScope = coordinator.scope('local')
+              if (traceScope) {
+                const traceOwner = traceOwnerFromScope(status, traceScope, desktopInstallationId)
 
-          if (traceScope) {
-            const traceOwner = traceOwnerFromScope(status, traceScope, desktopInstallationId)
-
-            void prepareDesktopTraceForwarder(traceScope, traceOwner).catch(error => {
-              rememberLog(`[trace] authenticated owner sync failed: ${String((error as Error)?.message || error)}`)
-            })
-          }
-
-          if (mainWindow && !mainWindow.isDestroyed()) {
-            void startHermes().catch(error => {
-              const failureCode = error?.code || 'backend-start-failed'
-              rememberLog(`[runtime] authenticated backend start failed: ${failureCode}`)
-            })
-          }
+                void prepareDesktopTraceForwarder(traceScope, traceOwner).catch(error => {
+                  rememberLog(
+                    `[trace] authenticated owner sync failed: ${String((error as Error)?.message || error)}`
+                  )
+                })
+              }
+            }
+          })
         }
       })
 
@@ -11237,7 +11242,12 @@ async function startHermes() {
     // while a later attempt can recover after disk/Safe Storage/listener health
     // returns. Remote failures likewise remain retryable because they have no
     // child 'exit' handler to clear the cache.
-    if (shouldLatchBackendStartFailure({ attemptedRemote }) && !isTraceDurabilityStartupError(error)) {
+    if (
+      shouldLatchBackendStartFailure({
+        attemptedRemote,
+        traceDurabilityStartup: isTraceDurabilityStartupError(error)
+      })
+    ) {
       backendStartFailure = error instanceof Error ? error : new Error(message)
     }
 
