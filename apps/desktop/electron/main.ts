@@ -51,6 +51,7 @@ import { dashboardFallbackArgs, sourceDeclaresServe } from './backend-command'
 import { createBackendConnectionState } from './backend-connection-state'
 import { buildDesktopBackendEnv, hermesManagedNodePathEntries, normalizeHermesHomeRoot } from './backend-env'
 import { isReauthRequiredError, waitForHermesReady } from './backend-health'
+import { requestJsonWithLocalCapability } from './backend-json-client'
 import {
   backendCommandMatches,
   createBackendOwnership,
@@ -13259,6 +13260,17 @@ async function postJsonForBackend(descriptor, path, body, opts: any = {}) {
     return fetchJsonViaOauthSession(url, { ...opts, body: body ?? {}, method: 'POST' })
   }
 
+  if (descriptor.authMode === 'scope') {
+    return requestJsonWithLocalCapability({
+      manager: desktopLocalCapabilities,
+      key: descriptor.localCapabilityKey,
+      url,
+      method: 'POST',
+      body: body ?? {},
+      timeoutMs: opts.timeoutMs
+    })
+  }
+
   return fetchJson(url, descriptor.token, { ...opts, body: body ?? {}, method: 'POST' })
 }
 
@@ -13269,6 +13281,16 @@ async function getJsonForBackend(descriptor, path, opts: any = {}) {
 
   if (descriptor.authMode === 'oauth') {
     return fetchJsonViaOauthSession(url, opts)
+  }
+
+  if (descriptor.authMode === 'scope') {
+    return requestJsonWithLocalCapability({
+      manager: desktopLocalCapabilities,
+      key: descriptor.localCapabilityKey,
+      url,
+      method: 'GET',
+      timeoutMs: opts.timeoutMs
+    })
   }
 
   return fetchJson(url, descriptor.token, opts)
@@ -13780,6 +13802,17 @@ guardedHandle('hermes:api', async (_event, request) => {
     }
 
     return fetchJsonViaOauthSession(url, {
+      method: request?.method,
+      body: request?.body,
+      timeoutMs
+    })
+  }
+
+  if (connection.authMode === 'scope' && !request?.upload) {
+    return requestJsonWithLocalCapability({
+      manager: desktopLocalCapabilities,
+      key: connection.localCapabilityKey,
+      url,
       method: request?.method,
       body: request?.body,
       timeoutMs

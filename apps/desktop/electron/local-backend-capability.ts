@@ -6,7 +6,8 @@ import { BackendControlChannel, type ChildProcessLike } from './backend-control-
 import {
   LocalBackendCapabilityUnavailableError,
   LocalCapabilityManager,
-  type LocalCapabilitySnapshot
+  type LocalCapabilitySnapshot,
+  type RotationReason
 } from './local-capability-manager'
 
 export class LocalRuntimeProtocolError extends Error {
@@ -191,6 +192,10 @@ export class LocalBackendCapabilityLifecycle {
 
   snapshot(key: string): LocalCapabilitySnapshot {
     return this.manager.snapshot(key)
+  }
+
+  refresh(key: string, reason: RotationReason): Promise<LocalCapabilitySnapshot> {
+    return this.manager.refresh(key, reason)
   }
 
   snapshotDescriptor<T extends LocalCapabilityDescriptor>(descriptor: T): T {
