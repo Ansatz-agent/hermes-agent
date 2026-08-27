@@ -162,6 +162,7 @@ function parseScopeControlAck(line: string): ScopeControlAck | null {
 
 export class BackendControlChannel {
   private readonly child: ChildProcessLike
+  private readonly onClose: (reason: Error) => void
   private readonly onLog: (line: string) => void
   private readonly readyWaiters = new Set<ReadyWaiter>()
   private readonly ackWaiters: AckWaiter[] = []
@@ -170,8 +171,12 @@ export class BackendControlChannel {
   private ready: BackendReady | null = null
   private closedReason: Error | null = null
 
-  constructor(child: ChildProcessLike, options: { onLog: (line: string) => void }) {
+  constructor(
+    child: ChildProcessLike,
+    options: { onClose?: (reason: Error) => void; onLog: (line: string) => void }
+  ) {
     this.child = child
+    this.onClose = options.onClose ?? (() => undefined)
     this.onLog = options.onLog
     child.stdout.on('data', this.handleStdout)
     child.on('error', this.handleChildError)
@@ -292,6 +297,12 @@ export class BackendControlChannel {
     for (const waiter of [...this.ackWaiters]) {
       this.removeAckWaiter(waiter)
       waiter.reject(reason)
+    }
+
+    try {
+      this.onClose(reason)
+    } catch {
+      // Closing the channel is authoritative even if optional cleanup fails.
     }
   }
 

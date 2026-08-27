@@ -42,9 +42,7 @@ import { AuthBridgeError, DesktopAuthBridge } from './auth-bridge'
 import { AuthCoordinator } from './auth-coordinator'
 import { isAuthRuntimeUsable } from './auth-runtime-contract'
 import {
-  encodeScopeTokenRegistration,
   encodeTraceTransportRegistration,
-  issueAuthScopeToken,
   sanitizeAnsatzAuthChildEnvironment,
   sanitizeAuthChildEnvironment
 } from './auth-scope-token'
@@ -66,7 +64,6 @@ import {
   shouldTrustHermesOverride,
   verifyHermesCli
 } from './backend-probes'
-import { waitForDashboardPortAnnouncement } from './backend-ready'
 import { shouldLatchBackendStartFailure, shouldLatchRemoteReauthFailure } from './backend-start-failure'
 import { bundledSourceBackupPath, readBundledSourceMarker } from './bootstrap-payload'
 import {
@@ -229,6 +226,8 @@ import { imageContextMenuItems } from './image-context-menu'
 import { prepareInstallFirstRuntime } from './install-first-runtime'
 import { removeLegacyAnsatzPartitions } from './legacy-product-cleanup'
 import { createLinkTitleWindow, guardLinkTitleSession, readLinkTitleWindowTitle } from './link-title-window'
+import { LocalBackendCapabilityLifecycle } from './local-backend-capability'
+import { LocalCapabilityManager } from './local-capability-manager'
 import { ensureMainWindow } from './main-window-lifecycle'
 import { createMediaProtocolHandler, MEDIA_PROTOCOL } from './media-protocol'
 import {
@@ -715,24 +714,24 @@ let desktopAuthStartupPromise: Promise<void> | null = null
 const desktopRuntimeGate = new DesktopRuntimeGate()
 let desktopCapabilityShellEnabled = false
 let desktopDisplayListenersRegistered = false
-const desktopBackendScopeTokens = new Map<string, any>()
 
-async function writeBackendScopeToken(child, token) {
-  if (!child?.stdin || child.stdin.destroyed || !child.stdin.writable) {
-    throw new AuthBridgeError('runtime_unavailable', 'runtime_unavailable')
+const desktopLocalCapabilities = new LocalBackendCapabilityLifecycle(
+  new LocalCapabilityManager({
+    onDiagnostic: event => {
+      rememberLog(
+        `[scope] ${event.name} generation=${event.backendGeneration} attempt=${event.attempt} elapsed_ms=${event.elapsedMs}`
+      )
+    }
+  }),
+  {
+    onControlClosed: child => {
+      stopBackendChildImpl(child as unknown as Parameters<typeof stopBackendChildImpl>[0], {
+        forceKillProcessTree,
+        isWindows: IS_WINDOWS
+      })
+    }
   }
-
-  const frame = encodeScopeTokenRegistration(token)
-  await new Promise<void>((resolve, reject) => {
-    child.stdin.write(frame, error => {
-      if (error) {
-        reject(new AuthBridgeError('runtime_unavailable', 'runtime_unavailable'))
-      } else {
-        resolve()
-      }
-    })
-  })
-}
+)
 
 async function writeBackendTraceTransport(child, root) {
   if (!desktopTraceIngress || !child?.stdin || child.stdin.destroyed || !child.stdin.writable) {
@@ -769,46 +768,6 @@ function sameConnectionScope(left, right) {
     left.runtime_instance_id === right.runtime_instance_id &&
     left.epoch === right.epoch
   )
-}
-
-async function ensureFreshDesktopScopeToken(descriptor) {
-  if (descriptor?.authMode !== 'scope') {
-    return descriptor
-  }
-
-  const state = desktopBackendScopeTokens.get(descriptor.baseUrl)
-  const scope = desktopAuthCoordinator?.scope(state?.scope?.connection_id || descriptor.connectionId || 'local')
-
-  if (!state || !sameConnectionScope(state.scope, scope)) {
-    throw new AuthBridgeError('auth_required', 'session_rejected')
-  }
-
-  if (state.token.validUntil - os.uptime() <= 10) {
-    const token = issueAuthScopeToken(scope)
-    await writeBackendScopeToken(state.child, token)
-    state.token = token
-  }
-
-  descriptor.token = state.token.bearer
-
-  return descriptor
-}
-
-function forgetDesktopBackendScopeTokens(child) {
-  for (const [baseUrl, state] of desktopBackendScopeTokens) {
-    if (state.child === child) {
-      desktopBackendScopeTokens.delete(baseUrl)
-    }
-  }
-
-  // EOF is the control-channel revocation signal. Close it before process
-  // teardown so a slow/refusing child clears its in-memory token registry even
-  // if it has not exited yet. Never write the bearer during revocation.
-  try {
-    child?.stdin?.end()
-  } catch {
-    // The pipe may already be gone; process teardown remains authoritative.
-  }
 }
 
 function createDesktopAuthBridge() {
@@ -7659,7 +7618,7 @@ async function freshGatewayWsUrl(profile) {
   const connection = await ensureBackend(profile)
 
   if (connection.authMode === 'scope') {
-    await ensureFreshDesktopScopeToken(connection)
+    desktopLocalCapabilities.snapshotDescriptor(connection)
     const ticket = await mintDesktopScopeWsTicket(connection.baseUrl, connection.token)
 
     return buildGatewayWsUrlWithTicket(connection.baseUrl, ticket)
@@ -10122,7 +10081,7 @@ async function testDesktopConnectionConfig(input: any = {}) {
     }
   } else {
     const remote = (await resolveRemoteBackend(key)) || (await startHermes())
-    await ensureFreshDesktopScopeToken(remote)
+    desktopLocalCapabilities.snapshotDescriptor(remote)
     baseUrl = remote.baseUrl
     token = remote.token
     authMode = remote.authMode === 'scope' ? 'scope' : normAuthMode(remote.authMode)
@@ -10177,8 +10136,9 @@ function resetBootProgressForReconnect() {
 }
 
 function stopBackendChild(child) {
-  forgetDesktopBackendScopeTokens(child)
-  stopBackendChildImpl(child, { forceKillProcessTree, isWindows: IS_WINDOWS })
+  if (!desktopLocalCapabilities.revokeByChild(child)) {
+    stopBackendChildImpl(child, { forceKillProcessTree, isWindows: IS_WINDOWS })
+  }
 }
 
 // Soft gateway-mode apply: tear down the primary without resetting boot UI or
@@ -10317,7 +10277,7 @@ async function ensureBackend(profile) {
       ? { ...connection, profile: route.descriptorProfile, sharedPrimary: true }
       : connection
 
-    return ensureFreshDesktopScopeToken(descriptor)
+    return desktopLocalCapabilities.snapshotDescriptor(descriptor)
   }
 
   const existing = backendPool.get(key)
@@ -10325,7 +10285,7 @@ async function ensureBackend(profile) {
   if (existing) {
     existing.lastActiveAt = Date.now()
 
-    return ensureFreshDesktopScopeToken(await existing.connectionPromise)
+    return desktopLocalCapabilities.snapshotDescriptor(await existing.connectionPromise)
   }
 
   evictLruPoolBackends(POOL_MAX_BACKENDS - 1)
@@ -10351,7 +10311,7 @@ async function ensureBackend(profile) {
   backendPool.set(key, entry)
   startPoolIdleReaper()
 
-  return ensureFreshDesktopScopeToken(await entry.connectionPromise)
+  return desktopLocalCapabilities.snapshotDescriptor(await entry.connectionPromise)
 }
 
 // ── Registry-scoped backends (multi-connection, PR 2 of the campaign) ──────
@@ -10606,7 +10566,6 @@ async function spawnPoolBackend(profile, entry) {
   }
 
   const connectionScope = await requireDesktopConnectionScope()
-  const scopeToken = issueAuthScopeToken(connectionScope)
   await prepareDesktopTraceForwarder(connectionScope, traceOwnerForScope(connectionScope))
 
   // Same update mutual exclusion as the primary window's waitForLocalStart
@@ -10672,10 +10631,20 @@ async function spawnPoolBackend(profile, entry) {
     })
   )
 
+  const localCapabilityKey = `pool:${profile}`
+
+  const capabilityPreparation = desktopLocalCapabilities.prepare({
+    child,
+    key: localCapabilityKey,
+    onLog: rememberLog,
+    scope: connectionScope,
+    ...(readyFile ? { readyFile } : {})
+  })
+
+  void capabilityPreparation.catch(() => undefined)
+
   entry.process = child
-  entry.token = scopeToken.bearer
   await claimBackendChild(child, `${backend.command} ${backend.args.join(' ')}`, profile, backendNonce)
-  await writeBackendScopeToken(child, scopeToken)
   const traceBackendGeneration = backendNonce
 
   const traceBackendRegistered = registerDesktopTraceBackend(child, backend, traceBackendGeneration)
@@ -10686,13 +10655,12 @@ async function spawnPoolBackend(profile, entry) {
     })
   }
 
-  child.stdout.on('data', rememberLog)
   child.stderr.on('data', rememberLog)
 
   let ready = false
   let rejectStart = null
 
-  const startFailed = new Promise((_resolve, reject) => {
+  const startFailed = new Promise<never>((_resolve, reject) => {
     rejectStart = reject
   })
 
@@ -10716,21 +10684,15 @@ async function spawnPoolBackend(profile, entry) {
     }
   })
 
-  // Discover the ephemeral port the child bound to
-  const port = await Promise.race([waitForDashboardPortAnnouncement(child, { readyFile }), startFailed])
+  const capability = await Promise.race([capabilityPreparation, startFailed])
 
   if (readyFile) {
     fs.unlink(readyFile, () => {})
   }
 
-  entry.port = port
-
-  const baseUrl = `http://127.0.0.1:${port}`
-  desktopBackendScopeTokens.set(baseUrl, {
-    child,
-    scope: connectionScope,
-    token: scopeToken
-  })
+  const baseUrl = capability.baseUrl
+  const scopeToken = desktopLocalCapabilities.snapshot(localCapabilityKey)
+  entry.port = Number(new URL(baseUrl).port)
   await Promise.race([waitForHermes(baseUrl, scopeToken.bearer, undefined, 'scope'), startFailed])
   ready = true
 
@@ -10755,6 +10717,7 @@ async function spawnPoolBackend(profile, entry) {
     source: 'local',
     authMode: 'scope',
     token: scopeToken.bearer,
+    localCapabilityKey,
     profile,
     wsUrl: `${baseUrl.replace(/^http/, 'ws')}/api/ws`,
     logs: hermesLog.slice(-80),
@@ -10937,7 +10900,6 @@ async function startHermes() {
     await advanceBootProgress('backend.resolve', 'Resolving Hermes backend', 8)
     // Resolve for the desktop's primary profile so a per-profile remote
     // override on the active profile is honored (falls back to env / global).
-    const scopeToken = issueAuthScopeToken(connectionScope)
     // --port 0: the OS assigns an ephemeral port; the child announces it on stdout.
     const backendArgs = ['serve', '--host', '127.0.0.1', '--port', '0']
     // Pin the desktop's chosen profile via the global --profile flag. This is
@@ -11029,8 +10991,19 @@ async function startHermes() {
       })
     )
 
+    const localCapabilityKey = 'primary'
+
+    const capabilityPreparation = desktopLocalCapabilities.prepare({
+      child: hermesProcess,
+      key: localCapabilityKey,
+      onLog: rememberLog,
+      scope: connectionScope,
+      ...(readyFile ? { readyFile } : {})
+    })
+
+    void capabilityPreparation.catch(() => undefined)
+
     await claimBackendChild(hermesProcess, `${backend.command} ${backend.args.join(' ')}`, profile, backendNonce)
-    await writeBackendScopeToken(hermesProcess, scopeToken)
 
     const processOwner = backendConnectionState.attachProcess(connectionAttempt, hermesProcess)
 
@@ -11051,12 +11024,11 @@ async function startHermes() {
       })
     }
 
-    hermesProcess.stdout.on('data', rememberLog)
     hermesProcess.stderr.on('data', rememberLog)
     let backendReady = false
     let rejectBackendStart = null
 
-    const backendStartFailed = new Promise((_resolve, reject) => {
+    const backendStartFailed = new Promise<never>((_resolve, reject) => {
       rejectBackendStart = reject
     })
 
@@ -11122,23 +11094,15 @@ async function startHermes() {
 
     await advanceBootProgress('backend.port', 'Waiting for Hermes backend to launch', 86)
 
-    // Discover the ephemeral port the child bound to
-    const port = await Promise.race([
-      waitForDashboardPortAnnouncement(hermesProcess, { readyFile }),
-      backendStartFailed
-    ])
+    const capability = await Promise.race([capabilityPreparation, backendStartFailed])
 
     if (readyFile) {
       fs.unlink(readyFile, () => {})
     }
 
-    const baseUrl = `http://127.0.0.1:${port}`
+    const baseUrl = capability.baseUrl
+    const scopeToken = desktopLocalCapabilities.snapshot(localCapabilityKey)
     await advanceBootProgress('backend.wait', 'Waiting for Hermes backend to become ready', 90)
-    desktopBackendScopeTokens.set(baseUrl, {
-      child: hermesProcess,
-      scope: connectionScope,
-      token: scopeToken
-    })
     await Promise.race([waitForHermes(baseUrl, scopeToken.bearer, undefined, 'scope'), backendStartFailed])
     backendReady = true
     backendStartFailure = null
@@ -11174,6 +11138,7 @@ async function startHermes() {
       source: 'local',
       authMode: 'scope',
       token: scopeToken.bearer,
+      localCapabilityKey,
       wsUrl: `${baseUrl.replace(/^http/, 'ws')}/api/ws`,
       logs: hermesLog.slice(-80),
       ...getWindowState()
@@ -13115,7 +13080,7 @@ guardedHandle('hermes:connections:test', async (_event, id) => {
 
   if (entry.kind === 'local') {
     const local = await startHermes()
-    await ensureFreshDesktopScopeToken(local)
+    desktopLocalCapabilities.snapshotDescriptor(local)
     baseUrl = local.baseUrl
     token = local.token
     authMode = local.authMode === 'scope' ? 'scope' : normAuthMode(local.authMode)
@@ -13218,7 +13183,7 @@ guardedHandle('hermes:gateway:ws-url-for', async (_event, payload) => {
     const connection: any = await ensureRegistryBackend(connectionId, profile)
 
     if (connection.authMode === 'scope') {
-      await ensureFreshDesktopScopeToken(connection)
+      desktopLocalCapabilities.snapshotDescriptor(connection)
       const ticket = await mintDesktopScopeWsTicket(connection.baseUrl, connection.token)
 
       return buildGatewayWsUrlWithTicket(connection.baseUrl, ticket)
@@ -13286,7 +13251,7 @@ guardedHandle('hermes:connections:update-all', async () => {
 // authenticate via the OAuth partition's cookies (same split as the rest of
 // the REST surface).
 async function postJsonForBackend(descriptor, path, body, opts: any = {}) {
-  await ensureFreshDesktopScopeToken(descriptor)
+  desktopLocalCapabilities.snapshotDescriptor(descriptor)
   const url = `${descriptor.baseUrl}${path}`
 
   if (descriptor.authMode === 'oauth') {
@@ -13298,7 +13263,7 @@ async function postJsonForBackend(descriptor, path, body, opts: any = {}) {
 
 // GET twin of postJsonForBackend — same token/cookie auth split.
 async function getJsonForBackend(descriptor, path, opts: any = {}) {
-  await ensureFreshDesktopScopeToken(descriptor)
+  desktopLocalCapabilities.snapshotDescriptor(descriptor)
   const url = `${descriptor.baseUrl}${path}`
 
   if (descriptor.authMode === 'oauth') {
@@ -13770,7 +13735,7 @@ guardedHandle('hermes:api', async (_event, request) => {
     ? await ensureRegistryBackend(requestedConnectionId, routeProfile)
     : await ensureBackend(routeProfile)
 
-  await ensureFreshDesktopScopeToken(connection)
+  desktopLocalCapabilities.snapshotDescriptor(connection)
   const timeoutMs = resolveTimeoutMs(request?.timeoutMs, DEFAULT_FETCH_TIMEOUT_MS)
 
   const requestPath = pathWithGlobalRemoteProfile(
