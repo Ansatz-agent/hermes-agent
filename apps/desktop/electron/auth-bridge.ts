@@ -207,6 +207,19 @@ export function requireAuthenticatedConnectionScope(value: unknown): ConnectionS
   return value as ConnectionScope
 }
 
+export function sameConnectionScope(
+  left: ConnectionScope | null | undefined,
+  right: ConnectionScope | null | undefined
+): boolean {
+  return Boolean(
+    left &&
+    right &&
+    left.connection_id === right.connection_id &&
+    left.runtime_instance_id === right.runtime_instance_id &&
+    left.epoch === right.epoch
+  )
+}
+
 export class DesktopAuthBridge {
   private readonly child: ChildLike
   private readonly clock: () => number

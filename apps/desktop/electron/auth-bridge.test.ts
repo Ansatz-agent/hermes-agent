@@ -4,7 +4,7 @@ import { PassThrough } from 'node:stream'
 
 import { afterEach, test, vi } from 'vitest'
 
-import { AuthBridgeError, DesktopAuthBridge } from './auth-bridge'
+import { AuthBridgeError, DesktopAuthBridge, sameConnectionScope } from './auth-bridge'
 
 const authenticatedStatus = {
   state: 'authenticated' as const,
@@ -38,6 +38,16 @@ const traceCredential = {
 }
 
 const traceCredentialNow = Date.parse('2099-08-23T14:00:00Z')
+
+test('connection scope equality requires the exact connection, runtime, and epoch tuple', () => {
+  const value = { connection_id: 'local', epoch: 7, runtime_instance_id: 'runtime-a' }
+
+  assert.equal(sameConnectionScope(value, { ...value }), true)
+  assert.equal(sameConnectionScope(value, { ...value, connection_id: 'remote' }), false)
+  assert.equal(sameConnectionScope(value, { ...value, runtime_instance_id: 'runtime-b' }), false)
+  assert.equal(sameConnectionScope(value, { ...value, epoch: 8 }), false)
+  assert.equal(sameConnectionScope(value, null), false)
+})
 
 class FakeChild extends EventEmitter {
   readonly stdin = new PassThrough()
