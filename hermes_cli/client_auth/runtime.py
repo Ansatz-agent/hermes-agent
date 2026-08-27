@@ -287,7 +287,7 @@ class BackendScopeGrant:
     promoted_transition_id: str | None = None
 
     def claim(self) -> dict[str, object]:
-        """Return the legacy bearer-bound WS claim until Task 8 migrates callers."""
+        """Return the schema-v1 bearer-bound claim for compatibility tests."""
         return {
             "connection_id": self.connection_id,
             "runtime_instance_id": self.auth.runtime_instance_id,

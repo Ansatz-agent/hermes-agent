@@ -921,6 +921,7 @@ class DashboardHealth:
 
 DASHBOARD_HEALTH = DashboardHealth()
 DESKTOP_SCOPE_TOKEN_PROBE_PATH = "/api/auth/scope-token-probe"
+DESKTOP_SCOPE_WS_TICKET_PATH = "/api/auth/ws-ticket"
 
 
 @app.middleware("http")
@@ -956,6 +957,10 @@ async def client_runtime_auth_middleware(request: Request, call_next):
                 )
                 request.state.desktop_scope_authenticated = True
                 request.state.desktop_scope_grant = grant
+                if request.url.path == DESKTOP_SCOPE_WS_TICKET_PATH:
+                    request.state.desktop_scope_claim = (
+                        backend_scope_tokens.ws_claim(grant)
+                    )
             else:
                 require_authorized("dashboard.api.request")
         except BackendScopeTokenRejected as error:
@@ -15677,7 +15682,7 @@ def _ws_auth_reason(ws: "WebSocket") -> tuple[Optional[str], str]:
             info = consume_ticket(ticket)
             if desktop_scope_required:
                 claim = info.get("auth_scope")
-                backend_scope_tokens.authorize_claim(
+                backend_scope_tokens.authorize_ws_claim(
                     claim,
                     "dashboard.ws.upgrade",
                 )
@@ -15719,7 +15724,7 @@ async def _ws_client_runtime_authorized(ws: "WebSocket", boundary: str) -> bool:
                 raise AuthRequired("runtime_unavailable")
             claim = getattr(ws_state, "desktop_scope_claim", None)
             if credential == "ticket":
-                backend_scope_tokens.authorize_claim(claim, boundary)
+                backend_scope_tokens.authorize_ws_claim(claim, boundary)
             elif credential == "internal":
                 require_authorized(boundary)
             else:

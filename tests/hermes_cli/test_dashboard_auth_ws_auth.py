@@ -135,7 +135,7 @@ def desktop_scope_app(monkeypatch):
 
 
 def grant_claim(registry: BackendScopeTokenRegistry, bearer: str) -> dict[str, object]:
-    return registry.authorize(bearer, "test.inspect").claim()
+    return registry.ws_claim(registry.authorize(bearer, "test.inspect"))
 
 
 def _logged_in(client: TestClient) -> None:
@@ -328,7 +328,9 @@ class TestWsAuthOkDesktopScope:
         web_server.app.state.desktop_scope_tokens_required = True
         monkeypatch.setattr(web_server, "backend_scope_tokens", registry)
         self.now = now
+        self.auth = auth
         self.grant = grant
+        self.registry = registry
         yield
         web_server.app.state.desktop_scope_tokens_required = previous
 
@@ -336,11 +338,27 @@ class TestWsAuthOkDesktopScope:
         ticket = mint_ticket(
             user_id="desktop:local",
             provider="desktop-scope",
-            auth_scope=self.grant.claim(),
+            auth_scope=self.registry.ws_claim(self.grant),
         )
 
         assert web_server._ws_auth_ok(_fake_ws(query={"ticket": ticket})) is True
         assert web_server._ws_auth_ok(_fake_ws(query={"ticket": ticket})) is False
+
+    def test_ticket_minted_before_rotation_is_accepted_after_promotion(self):
+        ticket = mint_ticket(
+            user_id="desktop:local",
+            provider="desktop-scope",
+            auth_scope=self.registry.ws_claim(self.grant),
+        )
+        self.now[0] = 120.0
+        self.registry.register(
+            "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI",
+            connection_id="local",
+            expected=self.auth,
+            ttl_seconds=60,
+        )
+
+        assert web_server._ws_auth_ok(_fake_ws(query={"ticket": ticket})) is True
 
     def test_legacy_query_token_and_unbound_ticket_are_rejected(self):
         token_ws = _fake_ws(query={"token": web_server._SESSION_TOKEN})
@@ -350,11 +368,13 @@ class TestWsAuthOkDesktopScope:
         assert web_server._ws_auth_ok(_fake_ws(query={"ticket": unbound})) is False
 
     @pytest.mark.asyncio
-    async def test_expired_scope_closes_an_established_socket_before_next_message(self):
+    async def test_scope_rotation_and_bearer_expiry_do_not_interrupt_an_established_socket(
+        self,
+    ):
         ticket = mint_ticket(
             user_id="desktop:local",
             provider="desktop-scope",
-            auth_scope=self.grant.claim(),
+            auth_scope=self.registry.ws_claim(self.grant),
         )
 
         class FakeWebSocket:
@@ -372,7 +392,45 @@ class TestWsAuthOkDesktopScope:
 
         ws = FakeWebSocket()
         assert web_server._ws_auth_ok(ws) is True
+        self.now[0] = 120.0
+        self.registry.register(
+            "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI",
+            connection_id="local",
+            expected=self.auth,
+            ttl_seconds=60,
+        )
         self.now[0] = self.grant.valid_until
+
+        assert await web_server._ws_client_runtime_authorized(
+            ws,
+            "dashboard.ws.message",
+        )
+        assert ws.closed is None
+
+    @pytest.mark.asyncio
+    async def test_explicit_scope_revocation_closes_an_established_socket(self):
+        ticket = mint_ticket(
+            user_id="desktop:local",
+            provider="desktop-scope",
+            auth_scope=self.registry.ws_claim(self.grant),
+        )
+
+        class FakeWebSocket:
+            def __init__(self):
+                template = _fake_ws(query={"ticket": ticket})
+                self.app = template.app
+                self.client = template.client
+                self.query_params = template.query_params
+                self.state = template.state
+                self.url = template.url
+                self.closed = None
+
+            async def close(self, **kwargs):
+                self.closed = kwargs
+
+        ws = FakeWebSocket()
+        assert web_server._ws_auth_ok(ws) is True
+        self.registry.revoke(connection_id="local", expected=self.auth)
 
         assert not await web_server._ws_client_runtime_authorized(
             ws,
