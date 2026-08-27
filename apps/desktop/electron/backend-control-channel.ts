@@ -1,7 +1,11 @@
 import type fs from 'node:fs'
 import { StringDecoder } from 'node:string_decoder'
 
-import { type ScopeControlAck } from './auth-scope-token'
+import {
+  AUTH_SCOPE_TOKEN_OVERLAP_SECONDS,
+  AUTH_SCOPE_TOKEN_TTL_SECONDS,
+  type ScopeControlAck
+} from './auth-scope-token'
 import {
   type BackendReady,
   parseBackendReadyLine,
@@ -9,7 +13,8 @@ import {
   resolvePortAnnounceTimeoutMs
 } from './backend-ready'
 
-const CONTROL_ACK_PREFIX = 'ANSATZ_SCOPE_CONTROL_V2 '
+const CONTROL_ACK_MARKER = 'ANSATZ_SCOPE_CONTROL_V2'
+const CONTROL_ACK_PREFIX = `${CONTROL_ACK_MARKER} `
 const MAX_CONTROL_ACK_LINE_BYTES = 4_096
 const MAX_STDOUT_LINE_BYTES = 1_048_576
 const DEFAULT_ACK_TIMEOUT_MS = 5_000
@@ -115,7 +120,7 @@ function parseScopeControlAck(line: string): ScopeControlAck | null {
       !validConnectionId(record.connection_id) ||
       !validRuntimeInstanceId(record.runtime_instance_id) ||
       !validEpoch(record.epoch) ||
-      !validSeconds(record.ttl_seconds, 1_800)
+      !validSeconds(record.ttl_seconds, AUTH_SCOPE_TOKEN_TTL_SECONDS)
     ) {
       return null
     }
@@ -144,7 +149,7 @@ function parseScopeControlAck(line: string): ScopeControlAck | null {
       !validConnectionId(record.connection_id) ||
       !validRuntimeInstanceId(record.runtime_instance_id) ||
       !validEpoch(record.epoch) ||
-      !validSeconds(record.overlap_seconds, 60)
+      !validSeconds(record.overlap_seconds, AUTH_SCOPE_TOKEN_OVERLAP_SECONDS)
     ) {
       return null
     }
@@ -333,8 +338,11 @@ export class BackendControlChannel {
   }
 
   private routeLine(line: string): void {
-    if (line.startsWith(CONTROL_ACK_PREFIX)) {
-      if (Buffer.byteLength(line, 'utf8') > MAX_CONTROL_ACK_LINE_BYTES) {
+    if (line.startsWith(CONTROL_ACK_MARKER)) {
+      if (
+        !line.startsWith(CONTROL_ACK_PREFIX) ||
+        Buffer.byteLength(line, 'utf8') > MAX_CONTROL_ACK_LINE_BYTES
+      ) {
         return
       }
 
