@@ -2,7 +2,8 @@
 
 ## 状态
 
-已确认，等待实施计划。
+已确认。Trace 连续耐久化进入实施计划；macOS Developer ID 正式签名由于
+当前没有可用证书，已经用户确认延后，不是本轮 Trace 修复的完成阻塞。
 
 本设计修复 Ansatz Desktop 中 Trace 本地入口仍然存在、但实际
 forwarder 已停止监听后，新 Trace 无法进入加密 outbox 的生命周期缺陷。
@@ -325,6 +326,10 @@ Electron `safeStorage` 将 Ansatz 的本地秘密保存在 macOS 登录钥匙串
 ad-hoc 打包验证，但最终不再弹窗的生产验收必须使用安装了正式证书的构建机
 或 CI 产生的已签名、已公证包。
 
+本轮不实现上述正式签名和发布门槛，也不修改 CI 凭据。它保留为后续拥有
+Developer ID 证书时的独立交付项。当前 Trace 实施只要通过 ad-hoc 开发 DMG 的打包、
+安装和运行验收即可完成。
+
 ## 测试设计
 
 实施使用 TDD：每个行为先用当前代码必然失败的测试复现，确认红色失败原因
@@ -396,5 +401,7 @@ ad-hoc 打包验证，但最终不再弹窗的生产验收必须使用安装了�
 8. 模型请求、模型配置、会话、WebSocket、terminal、文件和本地 scope token 轮换不受破坏。
 9. 故障注入和真实安装验收中不出现由 Trace 或本地存储错误产生的
    `Ansatz login required`。
-10. 正式 macOS release 无法在 ad-hoc/缺失 TeamIdentifier/未公证的状态下成功发布。
-11. 使用 Node 26 的定向、全量、集成、typecheck、lint、打包和安装验收全部通过。
+10. 使用 Node 26 的定向、全量、集成、typecheck、lint、ad-hoc 打包和安装验收
+    全部通过。
+
+正式 Developer ID 签名、TeamIdentifier 和 notarization 门槛不在本轮完成标准中。
