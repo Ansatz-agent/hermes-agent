@@ -350,6 +350,29 @@ test('redacts and bounds backend error previews without changing provider classi
   assert.equal(error.message.includes(secret), false)
 })
 
+test('redacts complete bearer and API credential values from JSON error previews', () => {
+  const authorizationSecret = 'authorization-secret-sentinel'
+  const apiKeySecret = 'api-key-secret-sentinel'
+  const accessTokenSecret = 'access-token-secret-sentinel'
+
+  const error = new BackendHttpError(
+    401,
+    { code: 'provider_unauthorized' },
+    JSON.stringify({
+      authorization: `Bearer ${authorizationSecret}`,
+      api_key: apiKeySecret,
+      access_token: accessTokenSecret
+    })
+  )
+
+  for (const secret of [authorizationSecret, apiKeySecret, accessTokenSecret]) {
+    assert.equal(error.bodyPreview.includes(secret), false)
+    assert.equal(error.message.includes(secret), false)
+  }
+
+  assert.equal(error.bodyPreview.includes('Bearer'), false)
+})
+
 test('preserves a sanitized provider error body in the IPC-visible message', () => {
   const error = new BackendHttpError(
     400,

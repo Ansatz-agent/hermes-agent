@@ -10,6 +10,8 @@ import { redactSecrets } from './ssh-connection'
 const DEFAULT_TIMEOUT_MS = 20_000
 const MAX_RECOVERY_WAIT_MS = 20_000
 const MAX_BODY_PREVIEW_CHARS = 200
+const SENSITIVE_BODY_KEY = /^(?:authorization|bearer|cookie|csrf|password|secret|client[_-]?secret|(?:x[_-]?hermes[_-]?)?session[_-]?token|(?:access|refresh|id)[_-]?token|api[_-]?key|token)$/i
+const SENSITIVE_BODY_ASSIGNMENT = /(["']?(?:authorization|bearer|cookie|csrf|password|secret|client[_-]?secret|(?:x[_-]?hermes[_-]?)?session[_-]?token|(?:access|refresh|id)[_-]?token|api[_-]?key|token)["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,\r\n}]+)/gi
 
 type LocalCapabilitySource = {
   snapshot: (key: string) => LocalCapabilitySnapshot
@@ -49,13 +51,41 @@ function safeBody(value: unknown): Record<string, unknown> {
     : {}
 }
 
+function redactStructuredBody(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(redactStructuredBody)
+  }
+
+  if (!value || typeof value !== 'object') {
+    return value
+  }
+
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
+      key,
+      SENSITIVE_BODY_KEY.test(key) ? '<redacted>' : redactStructuredBody(entry)
+    ])
+  )
+}
+
 function redactBodyPreview(value: string): string {
-  return redactSecrets(value)
-    .replace(
-      /(["']?(?:authorization|bearer|cookie|csrf|password|secret|session[_-]?token|token)["']?\s*[:=]\s*["']?)([^\s,"'}]+)(["']?)/gi,
-      '$1<redacted>$3'
-    )
-    .slice(0, MAX_BODY_PREVIEW_CHARS)
+  let preview = value
+  let parsed = false
+
+  try {
+    preview = JSON.stringify(redactStructuredBody(JSON.parse(value)))
+    parsed = true
+  } catch {
+    // Preserve non-JSON provider error text; the assignment scrub below is
+    // deliberately tolerant of malformed bodies.
+  }
+
+  const sanitized = redactSecrets(preview)
+
+  return (parsed
+    ? sanitized
+    : sanitized.replace(SENSITIVE_BODY_ASSIGNMENT, '$1<redacted>')
+  ).slice(0, MAX_BODY_PREVIEW_CHARS)
 }
 
 export class BackendHttpError extends Error {

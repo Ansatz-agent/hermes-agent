@@ -598,6 +598,68 @@ async def test_desktop_dashboard_api_requires_the_registered_scope_header(monkey
 
 
 @pytest.mark.asyncio
+async def test_desktop_dashboard_epoch_change_is_a_retryable_capability_rejection(
+    monkeypatch,
+):
+    from hermes_cli import web_server
+
+    snapshot = RuntimeSnapshot.new_authenticated(
+        "test-user",
+        now=0.0,
+        ttl=10**12,
+    )
+    install_runtime_consumer(
+        RuntimeConsumer(
+            snapshot,
+            liveness_probe=lambda: True,
+            clock=lambda: 0.0,
+        )
+    )
+    registry = BackendScopeTokenRegistry()
+    bearer = "U0NTU0NTU0NTU0NTU0NTU0NTU0NTU0NTU0NTU0NTU0M"
+    registry.register(
+        bearer,
+        connection_id="local",
+        expected=snapshot.scope,
+        ttl_seconds=60,
+    )
+    monkeypatch.setattr(web_server, "backend_scope_tokens", registry)
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(desktop_scope_tokens_required=True)
+    )
+    request = SimpleNamespace(
+        app=app,
+        headers={"X-Hermes-Session-Token": bearer},
+        method="GET",
+        state=SimpleNamespace(),
+        url=SimpleNamespace(path="/api/status"),
+    )
+
+    advanced = replace(snapshot, epoch=snapshot.epoch + 1)
+    install_runtime_consumer(
+        RuntimeConsumer(
+            advanced,
+            liveness_probe=lambda: True,
+            clock=lambda: 0.0,
+        )
+    )
+    response = await web_server.client_runtime_auth_middleware(
+        request,
+        lambda _request: pytest.fail("stale capability reached handler"),
+    )
+
+    assert response.status_code == 401
+    assert json.loads(response.body) == {
+        "detail": "Local capability rejected",
+        "code": "local_capability_rejected",
+        "reason": "scope_not_authorized",
+        "failure_phase": "pre_dispatch",
+        "retryable": True,
+    }
+
+
+@pytest.mark.asyncio
 async def test_desktop_dashboard_candidate_probe_is_side_effect_free(monkeypatch):
     from hermes_cli import web_server
 
