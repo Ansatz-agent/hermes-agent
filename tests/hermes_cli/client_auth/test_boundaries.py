@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import base64
 import json
 from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
-from hermes_cli.client_auth.backend_scope_protocol import ScopeTokenRegistration
+from hermes_cli.client_auth.backend_scope_protocol import (
+    BACKEND_SCOPE_TOKEN_OVERLAP_SECONDS,
+    ScopeTokenPromotion,
+    ScopeTokenRegistration,
+)
 from hermes_cli.client_auth.runtime import (
     AuthRequired,
     BackendScopeTokenRegistry,
@@ -665,6 +670,112 @@ async def test_desktop_dashboard_candidate_probe_is_side_effect_free(monkeypatch
         "retryable": True,
     }
     assert handler_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_model_config_requests_stay_authorized_through_scope_rotation(monkeypatch):
+    from hermes_cli import web_server
+
+    now = [100.0]
+    scope = _install_authenticated_consumer()
+    registry = BackendScopeTokenRegistry(clock=lambda: now[0])
+
+    def encoded(size, byte):
+        return base64.urlsafe_b64encode(byte * size).decode("ascii").rstrip("=")
+
+    def registration(identifier, bearer):
+        return ScopeTokenRegistration(
+            registration_id=identifier,
+            bearer=bearer,
+            connection_id="local",
+            runtime_instance_id=scope.runtime_instance_id,
+            epoch=scope.epoch,
+            ttl_seconds=1_800,
+        )
+
+    first = registration(encoded(16, b"A"), encoded(32, b"a"))
+    second = registration(encoded(16, b"B"), encoded(32, b"b"))
+    registry.register_candidate(first, expected=scope)
+    registry.promote(
+        ScopeTokenPromotion(
+            transition_id=encoded(16, b"1"),
+            registration_id=first.registration_id,
+            previous_registration_id=None,
+            connection_id="local",
+            runtime_instance_id=scope.runtime_instance_id,
+            epoch=scope.epoch,
+            overlap_seconds=BACKEND_SCOPE_TOKEN_OVERLAP_SECONDS,
+        ),
+        expected=scope,
+    )
+    registry.register_candidate(second, expected=scope)
+    monkeypatch.setattr(web_server, "backend_scope_tokens", registry)
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(desktop_scope_tokens_required=True)
+    )
+    handled = []
+
+    async def handler(request):
+        handled.append((request.method, request.url.path))
+        return "allowed"
+
+    async def request(bearer, method, path):
+        value = SimpleNamespace(
+            app=app,
+            headers={"X-Hermes-Session-Token": bearer},
+            method=method,
+            state=SimpleNamespace(),
+            url=SimpleNamespace(path=path),
+        )
+        return await web_server.client_runtime_auth_middleware(value, handler)
+
+    # A save and its parallel refreshes keep using the old active bearer while
+    # the replacement is only a candidate.
+    assert await request(first.bearer, "PUT", "/api/config") == "allowed"
+    assert await request(first.bearer, "GET", "/api/config") == "allowed"
+    assert await request(first.bearer, "GET", "/api/model/options") == "allowed"
+
+    candidate_denial = await request(second.bearer, "PUT", "/api/config")
+    assert candidate_denial.status_code == 401
+    candidate_payload = json.loads(candidate_denial.body)
+    assert candidate_payload["code"] == "local_capability_rejected"
+    assert "login" not in candidate_payload["detail"].lower()
+
+    registry.promote(
+        ScopeTokenPromotion(
+            transition_id=encoded(16, b"2"),
+            registration_id=second.registration_id,
+            previous_registration_id=first.registration_id,
+            connection_id="local",
+            runtime_instance_id=scope.runtime_instance_id,
+            epoch=scope.epoch,
+            overlap_seconds=BACKEND_SCOPE_TOKEN_OVERLAP_SECONDS,
+        ),
+        expected=scope,
+    )
+
+    # In-flight old-bearer traffic survives the bounded overlap; new traffic
+    # immediately uses the promoted bearer.
+    assert await request(first.bearer, "PUT", "/api/config") == "allowed"
+    assert await request(second.bearer, "GET", "/api/model/options") == "allowed"
+
+    now[0] += BACKEND_SCOPE_TOKEN_OVERLAP_SECONDS
+    expired_old = await request(first.bearer, "GET", "/api/config")
+    assert expired_old.status_code == 401
+    expired_payload = json.loads(expired_old.body)
+    assert expired_payload["code"] == "local_capability_rejected"
+    assert expired_payload["retryable"] is True
+    assert "login" not in expired_payload["detail"].lower()
+    assert await request(second.bearer, "PUT", "/api/config") == "allowed"
+    assert handled == [
+        ("PUT", "/api/config"),
+        ("GET", "/api/config"),
+        ("GET", "/api/model/options"),
+        ("PUT", "/api/config"),
+        ("GET", "/api/model/options"),
+        ("PUT", "/api/config"),
+    ]
 
 
 @pytest.mark.asyncio

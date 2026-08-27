@@ -365,24 +365,51 @@ test('keeps the old descriptor until candidate ACK, probe, and promotion all fin
   const fixture = managerFixture()
   await activate(fixture)
   const first = fixture.manager.snapshot('backend-1')
+  const modelConfigRequests: Array<{ method: string; path: string; bearer: string }> = []
+
+  const captureModelConfigRequest = (method: string, path: string) => {
+    modelConfigRequests.push({
+      method,
+      path,
+      bearer: fixture.manager.snapshot('backend-1').bearer
+    })
+  }
 
   fixture.clock.now = first.rotateAt
   const rotating = fixture.manager.refresh('backend-1', 'timer')
   await fixture.control.waitForPending('register_scope_token')
+  captureModelConfigRequest('PUT', '/api/config')
   assert.equal(fixture.manager.snapshot('backend-1').registrationId, first.registrationId)
 
   assert.equal(fixture.control.ackRegistered(), true)
   const pendingProbe = await fixture.probe.waitForPending()
+  captureModelConfigRequest('GET', '/api/config')
   assert.equal(pendingProbe.signal?.aborted, false)
   assert.equal(fixture.manager.snapshot('backend-1').registrationId, first.registrationId)
 
   fixture.resolveProbe('candidate')
   await fixture.control.waitForPending('promote_scope_token')
+  captureModelConfigRequest('GET', '/api/model/options')
   assert.equal(fixture.manager.snapshot('backend-1').registrationId, first.registrationId)
 
   assert.equal(fixture.control.ackPromoted(), true)
   await rotating
-  assert.notEqual(fixture.manager.snapshot('backend-1').registrationId, first.registrationId)
+  const second = fixture.manager.snapshot('backend-1')
+  captureModelConfigRequest('GET', '/api/model/options')
+  assert.notEqual(second.registrationId, first.registrationId)
+  assert.deepEqual(
+    modelConfigRequests.map(request => [request.method, request.path]),
+    [
+      ['PUT', '/api/config'],
+      ['GET', '/api/config'],
+      ['GET', '/api/model/options'],
+      ['GET', '/api/model/options']
+    ]
+  )
+  assert.deepEqual(
+    modelConfigRequests.map(request => request.bearer),
+    [first.bearer, first.bearer, first.bearer, second.bearer]
+  )
 })
 
 test('coalesces one hundred concurrent timer and recovery signals', async () => {
