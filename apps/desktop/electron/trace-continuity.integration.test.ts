@@ -6,6 +6,9 @@ import { join } from 'node:path'
 
 import { test } from 'vitest'
 
+import { AuthBridgeError, type TraceCredential } from './auth-bridge'
+import { RebindableTraceCredentialSource } from './trace-credential-provider'
+import { TraceDurabilityRuntime, type TraceDurabilitySession } from './trace-durability-runtime'
 import { RefreshingTraceCredentialProvider, TraceForwarder } from './trace-forwarder'
 import { createSafeStorageTraceKeyProtector, type TraceKeyProtector } from './trace-outbox-crypto'
 import { nodeTraceFileSystem, type TraceFileSystem } from './trace-outbox-journal'
@@ -28,6 +31,17 @@ function owner(account: 'a' | 'b'): TraceOwner {
 
 function payload(label: string): Buffer {
   return Buffer.from(`otlp-continuity-fixture:${label}:${'payload-not-plaintext-on-disk'.repeat(4)}`, 'utf8')
+}
+
+function traceCredential(): TraceCredential {
+  const expiresAt = Date.now() + 10 * 60_000
+
+  return {
+    access_token: 'integration-trace-token-abcdefghijklmnopqrstuvwxyz',
+    expires_at: new Date(expiresAt).toISOString(),
+    expires_in: 600,
+    installation_id: installationId
+  }
 }
 
 function sha256(body: Buffer): string {
@@ -208,6 +222,8 @@ class ControllableGateway {
 type TraceHarness = Awaited<ReturnType<typeof launchTraceHarness>>
 
 async function launchTraceHarness(options: {
+  credentialLoader?: (owner: TraceOwner, forceRefresh: boolean) => Promise<TraceCredential>
+  fetchImpl?: (input: string | URL, init?: RequestInit) => Promise<Response>
   fs?: TraceFileSystem
   gateway: ControllableGateway
   groupCommitMs?: number
@@ -217,6 +233,8 @@ async function launchTraceHarness(options: {
   userData: string
 }) {
   const root = join(options.userData, 'trace-outbox', options.owner.accountKey)
+  let currentOwner = { ...options.owner }
+  const admittedOwners: TraceOwner[] = []
 
   const store = await TraceOutboxStore.open({
     expectedOwner: options.owner,
@@ -227,21 +245,29 @@ async function launchTraceHarness(options: {
     root
   })
 
-  const credentialProvider = new RefreshingTraceCredentialProvider(
-    {
-      async load() {
-        const expiresAt = Date.now() + 10 * 60_000
+  const credentialLoader = options.credentialLoader ?? (async () => traceCredential())
+  const credentialSource = new RebindableTraceCredentialSource()
 
-        return {
-          access_token: 'integration-trace-token-abcdefghijklmnopqrstuvwxyz',
-          expires_at: new Date(expiresAt).toISOString(),
-          expires_in: 600,
-          installation_id: installationId
-        }
-      }
+  const bindCredential = (nextOwner: TraceOwner) => {
+    credentialSource.bind(nextOwner, forceRefresh => credentialLoader(nextOwner, forceRefresh))
+  }
+
+  bindCredential(currentOwner)
+  const credentialProvider = new RefreshingTraceCredentialProvider(credentialSource, { installationId })
+
+  const forwarderStore = {
+    acknowledge: store.acknowledge.bind(store),
+    beginEnqueue(input: TraceEnvelopeInput) {
+      admittedOwners.push({ ...input.owner })
+
+      return store.beginEnqueue(input)
     },
-    { installationId }
-  )
+    close: () => store.close(),
+    diagnostics: () => store.diagnostics(),
+    peekEligible: (now: number) => store.peekEligible(now),
+    quarantine: (batchId: string, errorClass: string) => store.quarantine(batchId, errorClass),
+    quarantineInput: (input: TraceEnvelopeInput, errorClass: string) => store.quarantineInput(input, errorClass)
+  }
 
   let forwarder!: TraceForwarder
   let lifecycle!: TraceRecoveryLifecycle
@@ -256,10 +282,10 @@ async function launchTraceHarness(options: {
 
   forwarder = new TraceForwarder({
     credentialProvider,
-    fetchImpl: fetch,
+    fetchImpl: options.fetchImpl ?? fetch,
     installationId,
     recovery: controller,
-    store,
+    store: forwarderStore,
     upstreamUrl: options.gateway.endpoint
   })
   const started = await forwarder.start(options.owner)
@@ -267,9 +293,12 @@ async function launchTraceHarness(options: {
   lifecycle.start()
 
   return {
+    admittedOwners,
     endpoint: started.endpoint,
     localBearer: started.localBearer,
-    owner: options.owner,
+    get owner() {
+      return { ...currentOwner }
+    },
     root,
     store,
     async diagnostics() {
@@ -278,9 +307,15 @@ async function launchTraceHarness(options: {
     async post(body: Buffer, sequence: number) {
       return postLoopback(started.endpoint, started.localBearer, body, sequence)
     },
+    rebind(nextOwner: TraceOwner) {
+      bindCredential(nextOwner)
+      forwarder.rebindOwner(nextOwner)
+      currentOwner = { ...nextOwner }
+    },
     async quit() {
       await lifecycle.stop()
       const summary = await forwarder.stop({ flushMs: 3_000 })
+      credentialSource.clear()
       await controller.stop()
 
       return summary
@@ -489,6 +524,140 @@ test('offline accepted Trace survives quit and uploads FIFO only from the same-a
       ['accepted', 'accepted']
     )
     await resumed.quit()
+  } finally {
+    await cleanupContinuityTest(harnesses, [gateway], userData)
+  }
+})
+
+test('auth bridge and Trace service outages keep 25 admissions durable and upload them after restart', async () => {
+  const userData = await temporaryUserData()
+  const gateway = await ControllableGateway.start('online')
+  const harnesses: TraceHarness[] = []
+  let upstreamCalls = 0
+
+  try {
+    const unavailable = await launchTraceHarness({
+      credentialLoader: async () => {
+        throw new AuthBridgeError('runtime_unavailable', 'runtime_unavailable')
+      },
+      fetchImpl: async () => {
+        upstreamCalls += 1
+        throw new Error('trace-upstream-offline')
+      },
+      gateway,
+      owner: owner('a'),
+      userData
+    })
+
+    harnesses.push(unavailable)
+
+    for (let index = 0; index < 25; index += 1) {
+      assert.equal((await unavailable.post(payload(`auth-outage-${index}`), index)).status, 200)
+    }
+
+    assert.equal((await unavailable.diagnostics()).pending, 25)
+    assert.equal(upstreamCalls, 0)
+    assert.equal((await unavailable.quit()).pending, 25)
+
+    const resumed = await launchTraceHarness({ gateway, owner: owner('a'), userData })
+    harnesses.push(resumed)
+    await resumed.trigger()
+    await waitFor(async () => (await resumed.diagnostics()).pending === 0)
+
+    assert.equal(new Set(gateway.attempts.map(attempt => attempt.batchId)).size, 25)
+    assert.equal(
+      gateway.attempts.every(attempt => attempt.outcome === 'accepted' || attempt.outcome === 'duplicate'),
+      true
+    )
+    assert.equal(gateway.logicalBatchCount, 25)
+    await resumed.quit()
+  } finally {
+    await cleanupContinuityTest(harnesses, [gateway], userData)
+  }
+})
+
+test('same-account Session rebind keeps ingress stable and recovers old and new owner batches together', async () => {
+  const userData = await temporaryUserData()
+  const gateway = await ControllableGateway.start('online')
+  const initialOwner = owner('a')
+
+  const reboundOwner = {
+    ...initialOwner,
+    sessionId: 'aaaaaaaa-3333-4333-8333-aaaaaaaaaaaa'
+  }
+
+  const activeScope = {
+    connection_id: 'local',
+    epoch: 11,
+    runtime_instance_id: 'runtime-continuity'
+  }
+
+  const harnesses: TraceHarness[] = []
+  let credentialsAvailable = false
+
+  try {
+    const harness = await launchTraceHarness({
+      credentialLoader: async () => {
+        if (!credentialsAvailable) {
+          throw new AuthBridgeError('runtime_unavailable', 'runtime_unavailable')
+        }
+
+        return traceCredential()
+      },
+      gateway,
+      owner: initialOwner,
+      userData
+    })
+
+    harnesses.push(harness)
+    const stableIngress = { endpoint: harness.endpoint, localBearer: harness.localBearer }
+    let currentOwner = { ...initialOwner }
+    let currentScope = { ...activeScope }
+
+    const session: TraceDurabilitySession = {
+      compactIfIdle: async () => false,
+      context: () => ({ ingress: stableIngress, owner: currentOwner, scope: currentScope }),
+      rebind(nextOwner, nextScope) {
+        harness.rebind(nextOwner)
+        currentOwner = { ...nextOwner }
+        currentScope = { ...nextScope }
+      },
+      stop: async () => {},
+      trigger: () => void harness.trigger()
+    }
+
+    const runtime = new TraceDurabilityRuntime()
+    await runtime.activate({ owner: initialOwner, scope: activeScope }, async () => session)
+
+    for (let index = 0; index < 12; index += 1) {
+      assert.equal((await harness.post(payload(`before-rebind-${index}`), index)).status, 200)
+    }
+
+    const rebound = await runtime.activate({ owner: reboundOwner, scope: activeScope }, async () => session)
+    assert.equal(rebound.kind, 'rebound')
+    assert.deepEqual(rebound.context.ingress, stableIngress)
+    assert.equal(harness.endpoint, stableIngress.endpoint)
+    assert.equal(harness.localBearer, stableIngress.localBearer)
+
+    for (let index = 12; index < 25; index += 1) {
+      assert.equal((await harness.post(payload(`after-rebind-${index}`), index)).status, 200)
+    }
+
+    assert.equal(harness.admittedOwners.length, 25)
+    assert.equal(harness.admittedOwners.filter(value => value.sessionId === initialOwner.sessionId).length, 12)
+    assert.equal(harness.admittedOwners.filter(value => value.sessionId === reboundOwner.sessionId).length, 13)
+    assert.equal(harness.admittedOwners.every(value => value.accountKey === initialOwner.accountKey), true)
+    assert.equal((await harness.diagnostics()).pending, 25)
+
+    credentialsAvailable = true
+    await harness.trigger()
+    await waitFor(async () => (await harness.diagnostics()).pending === 0)
+    assert.equal(gateway.logicalBatchCount, 25)
+    assert.equal(
+      gateway.attempts.every(attempt => attempt.outcome === 'accepted' || attempt.outcome === 'duplicate'),
+      true
+    )
+    await harness.quit()
   } finally {
     await cleanupContinuityTest(harnesses, [gateway], userData)
   }
