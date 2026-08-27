@@ -15690,6 +15690,8 @@ def _ws_auth_reason(ws: "WebSocket") -> tuple[Optional[str], str]:
                 if ws_state is not None:
                     ws_state.desktop_scope_claim = claim
             return finish(None, "ticket")
+        except BackendScopeTokenRejected:
+            return finish("capability_changed", "ticket")
         except AuthRequired as error:
             reason = (
                 "capability_unavailable"
@@ -15734,6 +15736,13 @@ async def _ws_client_runtime_authorized(ws: "WebSocket", boundary: str) -> bool:
                             reason="Local capability unavailable",
                         )
                     return False
+                if reason == "capability_changed":
+                    with contextlib.suppress(Exception):
+                        await ws.close(
+                            code=4403,
+                            reason="Local capability changed",
+                        )
+                    return False
                 raise AuthRequired("session_rejected")
             claim = getattr(ws_state, "desktop_scope_claim", None)
             if credential == "ticket":
@@ -15745,6 +15754,10 @@ async def _ws_client_runtime_authorized(ws: "WebSocket", boundary: str) -> bool:
         else:
             require_authorized(boundary)
         return True
+    except BackendScopeTokenRejected:
+        with contextlib.suppress(Exception):
+            await ws.close(code=4403, reason="Local capability changed")
+        return False
     except AuthRequired as error:
         with contextlib.suppress(Exception):
             if is_local_auth_unavailable(error):

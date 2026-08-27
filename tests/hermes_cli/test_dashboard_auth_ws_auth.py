@@ -13,6 +13,7 @@ pre-existing regression unrelated to dashboard-auth.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -24,6 +25,7 @@ from hermes_cli.client_auth.runtime import (
     AuthRequired,
     AuthScope,
     BackendScopeTokenRegistry,
+    RuntimeSnapshot,
 )
 from hermes_cli.dashboard_auth import clear_providers, register_provider
 from hermes_cli.dashboard_auth.ws_tickets import (
@@ -437,7 +439,47 @@ class TestWsAuthOkDesktopScope:
             ws,
             "dashboard.ws.message",
         )
-        assert ws.closed == {"code": 1012, "reason": "Local capability unavailable"}
+        assert ws.closed == {"code": 4403, "reason": "Local capability changed"}
+
+    @pytest.mark.asyncio
+    async def test_owner_epoch_change_closes_as_capability_changed(self):
+        snapshots = [
+            RuntimeSnapshot.new_authenticated("alice", now=100.0, ttl=60.0)
+        ]
+
+        def authorize(boundary, *, expected):
+            return snapshots[0].require_authorized(
+                boundary,
+                expected=expected,
+                now=100.0,
+            )
+
+        registry = BackendScopeTokenRegistry(
+            clock=lambda: 100.0,
+            authorize=authorize,
+        )
+        grant = registry.register(
+            "ZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWU",
+            connection_id="local",
+            expected=snapshots[0].scope,
+            ttl_seconds=60,
+        )
+        ticket = mint_ticket(
+            user_id="desktop:local",
+            provider="desktop-scope",
+            auth_scope=registry.ws_claim(grant),
+        )
+        self._set_registry_for_test(registry)
+        ws = self._closable_ws(ticket)
+
+        assert web_server._ws_auth_ok(ws) is True
+        snapshots[0] = replace(snapshots[0], epoch=snapshots[0].epoch + 1)
+
+        assert not await web_server._ws_client_runtime_authorized(
+            ws,
+            "dashboard.ws.message",
+        )
+        assert ws.closed == {"code": 4403, "reason": "Local capability changed"}
 
     @pytest.mark.asyncio
     async def test_account_service_outage_never_closes_with_login_semantics(self):

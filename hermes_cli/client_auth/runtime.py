@@ -204,6 +204,10 @@ class AuthRequired(RuntimeError):
         self.reason = reason
 
 
+class AuthScopeChanged(AuthRequired):
+    """The caller's exact account scope no longer matches the owner."""
+
+
 @dataclass(frozen=True)
 class BackendScopeTokenRegistration:
     bearer: str
@@ -271,8 +275,9 @@ _RECOVERABLE_LOCAL_AUTH_REASONS = frozenset(
 
 def is_local_auth_unavailable(error: AuthRequired) -> bool:
     """Return whether an auth denial is retryable without interactive login."""
-    return isinstance(error, BackendScopeTokenRejected) or (
-        error.reason in _RECOVERABLE_LOCAL_AUTH_REASONS
+    return not isinstance(error, AuthScopeChanged) and (
+        isinstance(error, BackendScopeTokenRejected)
+        or error.reason in _RECOVERABLE_LOCAL_AUTH_REASONS
     )
 
 
@@ -717,7 +722,12 @@ class BackendScopeTokenRegistry:
         *,
         expected: AuthScope,
     ) -> AuthScope:
-        authorized = self._authorize(boundary, expected=expected)
+        try:
+            authorized = self._authorize(boundary, expected=expected)
+        except AuthRequired as error:
+            if isinstance(error, AuthScopeChanged):
+                raise BackendScopeTokenRejected("scope_not_authorized") from None
+            raise
         if authorized != expected:
             raise BackendScopeTokenRejected("scope_not_authorized")
         return authorized
@@ -1178,7 +1188,7 @@ class RuntimeSnapshot:
         if (self.principal_key is None and now >= self.valid_until) or _read_boot_id() != self.boot_id:
             raise AuthRequired("session_expired")
         if expected != self.scope:
-            raise AuthRequired("runtime_unavailable")
+            raise AuthScopeChanged("runtime_unavailable")
         return self.scope
 
     def public_dict_v1(self) -> dict[str, object]:
@@ -3048,6 +3058,8 @@ class RemoteRuntimeOwner:
                 and reason == "runtime_unavailable"
             ):
                 raise _OwnerProtocolRejected()
+            if reason == "scope_changed":
+                raise AuthScopeChanged("runtime_unavailable")
             raise AuthRequired(reason)
         return response
 
@@ -3381,6 +3393,8 @@ class OwnerBroker:
                 }
             else:
                 raise AuthRequired("runtime_unavailable")
+        except AuthScopeChanged:
+            return _runtime_error("scope_changed", version=version)
         except AuthRequired as error:
             return _runtime_error(error.reason or error.code, version=version)
         except Exception:

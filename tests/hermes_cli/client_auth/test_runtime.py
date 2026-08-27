@@ -32,6 +32,7 @@ from hermes_cli.client_auth.runtime import (
     OWNER_IDLE_SECONDS,
     AuthRequired,
     AuthScope,
+    AuthScopeChanged,
     AuthState,
     BackendScopeGrantState,
     BackendScopeTokenRegistry,
@@ -672,7 +673,7 @@ def test_dead_liveness_connection_overrides_cached_authenticated_state():
 def test_expiry_and_epoch_comparison_fail_closed():
     state = RuntimeSnapshot.new_authenticated("alice", now=10.0, ttl=60.0)
 
-    with pytest.raises(AuthRequired, match="runtime_unavailable"):
+    with pytest.raises(AuthScopeChanged, match="runtime_unavailable"):
         state.require_authorized(
             "worker",
             expected=AuthScope(state.runtime_instance_id, state.epoch + 1),
@@ -3368,6 +3369,14 @@ def test_unix_broker_shares_login_authorization_and_revocation():
             with pytest.raises(AuthRequired, match="signed_out"):
                 consumer.require_authorized(
                     "child.next_boundary",
+                    expected=authenticated.scope,
+                )
+
+            renewed = owner.login("alice", bytearray(b"secret"))
+            assert renewed.scope != authenticated.scope
+            with pytest.raises(AuthScopeChanged, match="runtime_unavailable"):
+                consumer.require_authorized(
+                    "child.stale_scope",
                     expected=authenticated.scope,
                 )
         finally:
