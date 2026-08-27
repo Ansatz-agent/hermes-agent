@@ -41,6 +41,16 @@ from hermes_cli.client_auth.client import (
     SessionStatus,
     TraceCredential,
 )
+from hermes_cli.client_auth.backend_scope_protocol import (
+    BACKEND_SCOPE_CONTROL_FRAME_LIMIT,
+    BACKEND_SCOPE_TOKEN_OVERLAP_SECONDS,
+    DESKTOP_SCOPE_PROTOCOL_VERSION,
+    DESKTOP_SCOPE_TOKEN_TTL_SECONDS,
+    ScopeTokenPromotion,
+    ScopeTokenRegistration,
+    encode_control_ack,
+    parse_control_frame,
+)
 
 AUTH_EXIT_CODE = 20
 LEASE_SECONDS = 60.0
@@ -51,7 +61,7 @@ DURABLE_AUTHORIZATION_VALID_UNTIL = 253_402_300_799.0
 LOGIN_ATTEMPT_LIMIT = 5
 LOGIN_ATTEMPT_WINDOW_SECONDS = 60.0
 OWNER_IDLE_SECONDS = 15.0 * 60.0
-BACKEND_SCOPE_TOKEN_TTL_SECONDS = 60.0
+_LEGACY_BACKEND_SCOPE_TOKEN_TTL_SECONDS = 60.0
 _BACKEND_SCOPE_TOKEN_BYTES = 32
 _RUNTIME_REQUEST_TIMEOUT_SECONDS = 15.0
 _RUNTIME_LOGIN_TIMEOUT_SECONDS = 70.0
@@ -212,13 +222,39 @@ class TraceTransportRegistration:
 
 
 @dataclass(frozen=True)
+class BackendScopeWsClaim:
+    connection_id: str
+    runtime_instance_id: str
+    epoch: int
+    backend_generation: str
+
+
+class BackendScopeTokenRejected(AuthRequired):
+    code = "local_capability_rejected"
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.failure_phase = "pre_dispatch"
+
+
+class BackendScopeGrantState(StrEnum):
+    CANDIDATE = "candidate"
+    ACTIVE = "active"
+    OVERLAP = "overlap"
+
+
+@dataclass(frozen=True)
 class BackendScopeGrant:
+    registration_id: str
     connection_id: str
     auth: AuthScope
+    state: BackendScopeGrantState
     valid_until: float
     token_digest: str
+    promoted_transition_id: str | None = None
 
     def claim(self) -> dict[str, object]:
+        """Return the legacy bearer-bound WS claim until Task 8 migrates callers."""
         return {
             "connection_id": self.connection_id,
             "runtime_instance_id": self.auth.runtime_instance_id,
@@ -226,6 +262,21 @@ class BackendScopeGrant:
             "valid_until": self.valid_until,
             "token_digest": self.token_digest,
         }
+
+
+@dataclass(frozen=True)
+class _BackendScopeTransition:
+    promotion: ScopeTokenPromotion
+    grant: BackendScopeGrant
+
+
+@dataclass(frozen=True)
+class _BackendScopeRegistrationRecord:
+    registration_id: str
+    connection_id: str
+    auth: AuthScope
+    ttl_seconds: float
+    token_digest: str
 
 
 class BackendScopeTokenRegistry:
@@ -246,6 +297,158 @@ class BackendScopeTokenRegistry:
         )
         self._lock = threading.RLock()
         self._records: dict[bytes, BackendScopeGrant] = {}
+        self._registrations: dict[str, BackendScopeGrant] = {}
+        self._registration_records: dict[
+            str, _BackendScopeRegistrationRecord
+        ] = {}
+        self._transitions: dict[str, _BackendScopeTransition] = {}
+        self._generation_scopes: set[ConnectionScope] = set()
+        self._active_registration_id: str | None = None
+        self._backend_generation = secrets.token_hex(16)
+
+    @property
+    def backend_generation(self) -> str:
+        with self._lock:
+            return self._backend_generation
+
+    def register_candidate(
+        self,
+        registration: ScopeTokenRegistration,
+        *,
+        expected: AuthScope,
+    ) -> BackendScopeGrant:
+        registration = _validated_scope_token_registration(registration)
+        scope = AuthScope(registration.runtime_instance_id, registration.epoch)
+        if scope != expected:
+            raise BackendScopeTokenRejected("scope_mismatch")
+        self._require_scope_authorized(
+            "backend.scope_token.register",
+            expected=expected,
+        )
+        now = self._clock()
+        digest = hashlib.sha256(registration.bearer.encode("ascii")).digest()
+        registration_record = _BackendScopeRegistrationRecord(
+            registration_id=registration.registration_id,
+            connection_id=registration.connection_id,
+            auth=scope,
+            ttl_seconds=registration.ttl_seconds,
+            token_digest=digest.hex(),
+        )
+        with self._lock:
+            self._prune_locked(now)
+            existing_record = self._registration_records.get(
+                registration.registration_id
+            )
+            if existing_record is not None:
+                if existing_record != registration_record:
+                    raise BackendScopeTokenRejected("registration_conflict")
+                existing = self._registrations.get(registration.registration_id)
+                if existing is None:
+                    raise BackendScopeTokenRejected("expired")
+                return existing
+            if digest in self._records:
+                raise BackendScopeTokenRejected("registration_conflict")
+            for grant in tuple(self._registrations.values()):
+                if (
+                    grant.state is BackendScopeGrantState.CANDIDATE
+                    and grant.connection_id == registration.connection_id
+                    and grant.auth == scope
+                ):
+                    self._remove_grant_locked(grant)
+            grant = BackendScopeGrant(
+                registration_id=registration.registration_id,
+                connection_id=registration.connection_id,
+                auth=scope,
+                state=BackendScopeGrantState.CANDIDATE,
+                valid_until=now + registration.ttl_seconds,
+                token_digest=digest.hex(),
+            )
+            self._records[digest] = grant
+            self._registrations[grant.registration_id] = grant
+            self._registration_records[grant.registration_id] = registration_record
+            self._generation_scopes.add(
+                ConnectionScope(registration.connection_id, scope)
+            )
+            return grant
+
+    def promote(
+        self,
+        promotion: ScopeTokenPromotion,
+        *,
+        expected: AuthScope,
+    ) -> BackendScopeGrant:
+        promotion = _validated_scope_token_promotion(promotion)
+        scope = AuthScope(promotion.runtime_instance_id, promotion.epoch)
+        if scope != expected:
+            raise BackendScopeTokenRejected("scope_mismatch")
+        self._require_scope_authorized(
+            "backend.scope_token.promote",
+            expected=expected,
+        )
+        now = self._clock()
+        with self._lock:
+            self._prune_locked(now)
+            completed = self._transitions.get(promotion.transition_id)
+            if completed is not None:
+                if completed.promotion != promotion:
+                    raise BackendScopeTokenRejected("transition_conflict")
+                return completed.grant
+
+            candidate = self._registrations.get(promotion.registration_id)
+            if candidate is None or candidate.state is not BackendScopeGrantState.CANDIDATE:
+                raise BackendScopeTokenRejected("candidate_not_available")
+            if (
+                candidate.connection_id != promotion.connection_id
+                or candidate.auth != scope
+            ):
+                raise BackendScopeTokenRejected("scope_mismatch")
+            if promotion.previous_registration_id != self._active_registration_id:
+                raise BackendScopeTokenRejected("previous_registration_mismatch")
+
+            previous: BackendScopeGrant | None = None
+            if promotion.previous_registration_id is not None:
+                previous = self._registrations.get(
+                    promotion.previous_registration_id
+                )
+                if (
+                    previous is None
+                    or previous.state is not BackendScopeGrantState.ACTIVE
+                    or previous.connection_id != promotion.connection_id
+                    or previous.auth != scope
+                ):
+                    raise BackendScopeTokenRejected("previous_registration_mismatch")
+
+            if previous is not None:
+                overlap = replace(
+                    previous,
+                    state=BackendScopeGrantState.OVERLAP,
+                    valid_until=min(
+                        previous.valid_until,
+                        now + promotion.overlap_seconds,
+                    ),
+                )
+                self._store_grant_locked(overlap)
+
+            active = replace(
+                candidate,
+                state=BackendScopeGrantState.ACTIVE,
+                promoted_transition_id=promotion.transition_id,
+            )
+            self._store_grant_locked(active)
+            self._active_registration_id = active.registration_id
+            self._transitions[promotion.transition_id] = _BackendScopeTransition(
+                promotion=promotion,
+                grant=active,
+            )
+            return active
+
+    def probe(self, bearer: str) -> BackendScopeGrant:
+        grant = self._lookup_bearer(bearer)
+        self._require_scope_authorized(
+            "backend.scope_token.probe",
+            expected=grant.auth,
+        )
+        return grant
 
     def register(
         self,
@@ -255,28 +458,28 @@ class BackendScopeTokenRegistry:
         expected: AuthScope,
         ttl_seconds: float,
     ) -> BackendScopeGrant:
-        _validate_backend_scope_bearer(bearer)
-        _validate_connection_id(connection_id)
-        _validate_auth_scope(expected)
-        if (
-            isinstance(ttl_seconds, bool)
-            or not isinstance(ttl_seconds, (int, float))
-            or not 0 < float(ttl_seconds) <= BACKEND_SCOPE_TOKEN_TTL_SECONDS
-        ):
-            raise AuthRequired("runtime_unavailable")
-        self._authorize("backend.scope_token.register", expected=expected)
-        now = self._clock()
-        digest = hashlib.sha256(bearer.encode("ascii")).digest()
-        grant = BackendScopeGrant(
+        """Compatibility helper for tests and callers migrated in later tasks."""
+        registration = ScopeTokenRegistration(
+            registration_id=secrets.token_urlsafe(16),
+            bearer=bearer,
             connection_id=connection_id,
-            auth=expected,
-            valid_until=now + float(ttl_seconds),
-            token_digest=digest.hex(),
+            runtime_instance_id=expected.runtime_instance_id,
+            epoch=expected.epoch,
+            ttl_seconds=float(ttl_seconds),
         )
-        with self._lock:
-            self._prune_locked(now)
-            self._records[digest] = grant
-        return grant
+        self.register_candidate(registration, expected=expected)
+        return self.promote(
+            ScopeTokenPromotion(
+                transition_id=secrets.token_urlsafe(16),
+                registration_id=registration.registration_id,
+                previous_registration_id=self._active_registration_id,
+                connection_id=connection_id,
+                runtime_instance_id=expected.runtime_instance_id,
+                epoch=expected.epoch,
+                overlap_seconds=BACKEND_SCOPE_TOKEN_OVERLAP_SECONDS,
+            ),
+            expected=expected,
+        )
 
     def authorize(
         self,
@@ -285,14 +488,9 @@ class BackendScopeTokenRegistry:
         *,
         connection_id: str | None = None,
     ) -> BackendScopeGrant:
-        _validate_backend_scope_bearer(bearer)
-        digest = hashlib.sha256(bearer.encode("ascii")).digest()
-        with self._lock:
-            grant = self._records.get(digest)
-        if grant is None:
-            raise AuthRequired("runtime_unavailable")
+        grant = self._lookup_bearer(bearer)
         if connection_id is not None and grant.connection_id != connection_id:
-            raise AuthRequired("runtime_unavailable")
+            raise BackendScopeTokenRejected("connection_mismatch")
         return self._authorize_grant(grant, boundary)
 
     def authorize_claim(
@@ -300,34 +498,127 @@ class BackendScopeTokenRegistry:
         claim: object,
         boundary: str,
     ) -> BackendScopeGrant:
-        grant = _grant_from_claim(claim)
+        legacy_claim = _grant_from_claim(claim)
         try:
-            digest = bytes.fromhex(grant.token_digest)
+            digest = bytes.fromhex(legacy_claim.token_digest)
         except ValueError:
-            raise AuthRequired("runtime_unavailable") from None
+            raise BackendScopeTokenRejected("invalid_ws_claim") from None
         if len(digest) != hashlib.sha256().digest_size:
-            raise AuthRequired("runtime_unavailable")
+            raise BackendScopeTokenRejected("invalid_ws_claim")
         with self._lock:
             current = self._records.get(digest)
-        if current != grant:
-            raise AuthRequired("runtime_unavailable")
+        if (
+            current is None
+            or current.connection_id != legacy_claim.connection_id
+            or current.auth != legacy_claim.auth
+            or current.valid_until != legacy_claim.valid_until
+            or current.token_digest != legacy_claim.token_digest
+        ):
+            raise BackendScopeTokenRejected("invalid_ws_claim")
         return self._authorize_grant(current, boundary)
+
+    def ws_claim(self, grant: BackendScopeGrant) -> dict[str, object]:
+        now = self._clock()
+        digest = bytes.fromhex(grant.token_digest)
+        with self._lock:
+            current = self._records.get(digest)
+            if current is None or current.registration_id != grant.registration_id:
+                raise BackendScopeTokenRejected("unknown_token")
+            if now >= current.valid_until:
+                self._remove_grant_locked(current)
+                raise BackendScopeTokenRejected("expired")
+            if current.state is BackendScopeGrantState.CANDIDATE:
+                raise BackendScopeTokenRejected("candidate_not_active")
+            generation = self._backend_generation
+        self._require_scope_authorized(
+            "backend.scope_token.ws_claim",
+            expected=current.auth,
+        )
+        return {
+            "connection_id": current.connection_id,
+            "runtime_instance_id": current.auth.runtime_instance_id,
+            "epoch": current.auth.epoch,
+            "backend_generation": generation,
+        }
+
+    def authorize_ws_claim(
+        self,
+        claim: object,
+        boundary: str,
+    ) -> AuthScope:
+        if not isinstance(claim, dict) or set(claim) != {
+            "connection_id",
+            "runtime_instance_id",
+            "epoch",
+            "backend_generation",
+        }:
+            raise BackendScopeTokenRejected("invalid_ws_claim")
+        connection_id = claim.get("connection_id")
+        generation = claim.get("backend_generation")
+        scope = AuthScope(
+            claim.get("runtime_instance_id"),  # type: ignore[arg-type]
+            claim.get("epoch"),  # type: ignore[arg-type]
+        )
+        try:
+            _validate_connection_id(connection_id)  # type: ignore[arg-type]
+            _validate_auth_scope(scope)
+        except AuthRequired:
+            raise BackendScopeTokenRejected("invalid_ws_claim") from None
+        if (
+            not isinstance(generation, str)
+            or re.fullmatch(r"[0-9a-f]{32}", generation) is None
+        ):
+            raise BackendScopeTokenRejected("invalid_ws_claim")
+        with self._lock:
+            if generation != self._backend_generation:
+                raise BackendScopeTokenRejected("backend_generation_changed")
+            if ConnectionScope(connection_id, scope) not in self._generation_scopes:
+                raise BackendScopeTokenRejected("invalid_ws_claim")
+        self._require_scope_authorized(boundary, expected=scope)
+        return scope
 
     def revoke(self, *, connection_id: str, expected: AuthScope) -> None:
         _validate_connection_id(connection_id)
         _validate_auth_scope(expected)
         with self._lock:
+            connection_scope = ConnectionScope(connection_id, expected)
             doomed = [
-                digest
-                for digest, grant in self._records.items()
+                grant
+                for grant in self._registrations.values()
                 if grant.connection_id == connection_id and grant.auth == expected
             ]
-            for digest in doomed:
-                self._records.pop(digest, None)
+            for grant in doomed:
+                self._remove_grant_locked(grant)
+            self._registration_records = {
+                registration_id: record
+                for registration_id, record in self._registration_records.items()
+                if ConnectionScope(record.connection_id, record.auth) != connection_scope
+            }
+            self._transitions = {
+                transition_id: transition
+                for transition_id, transition in self._transitions.items()
+                if ConnectionScope(
+                    transition.promotion.connection_id,
+                    AuthScope(
+                        transition.promotion.runtime_instance_id,
+                        transition.promotion.epoch,
+                    ),
+                )
+                != connection_scope
+            }
+            if connection_scope in self._generation_scopes:
+                self._generation_scopes.remove(connection_scope)
+                self._backend_generation = secrets.token_hex(16)
 
     def clear(self) -> None:
         with self._lock:
             self._records.clear()
+            self._registrations.clear()
+            self._registration_records.clear()
+            self._transitions.clear()
+            self._generation_scopes.clear()
+            self._active_registration_id = None
+            self._backend_generation = secrets.token_hex(16)
 
     def _authorize_grant(
         self,
@@ -337,19 +628,114 @@ class BackendScopeTokenRegistry:
         now = self._clock()
         if now >= grant.valid_until:
             with self._lock:
-                self._records.pop(bytes.fromhex(grant.token_digest), None)
-            raise AuthRequired("session_expired")
-        self._authorize(boundary, expected=grant.auth)
+                self._remove_grant_locked(grant)
+            raise BackendScopeTokenRejected("expired")
+        if grant.state is BackendScopeGrantState.CANDIDATE:
+            raise BackendScopeTokenRejected("candidate_not_active")
+        self._require_scope_authorized(boundary, expected=grant.auth)
         return grant
 
     def _prune_locked(self, now: float) -> None:
         expired = [
-            digest
-            for digest, grant in self._records.items()
+            grant
+            for grant in self._registrations.values()
             if now >= grant.valid_until
         ]
-        for digest in expired:
-            self._records.pop(digest, None)
+        for grant in expired:
+            self._remove_grant_locked(grant)
+
+    def _lookup_bearer(self, bearer: str) -> BackendScopeGrant:
+        try:
+            _validate_backend_scope_bearer(bearer)
+        except AuthRequired:
+            raise BackendScopeTokenRejected("unknown_token") from None
+        digest = hashlib.sha256(bearer.encode("ascii")).digest()
+        now = self._clock()
+        with self._lock:
+            grant = self._records.get(digest)
+            if grant is None:
+                raise BackendScopeTokenRejected("unknown_token")
+            if now >= grant.valid_until:
+                self._remove_grant_locked(grant)
+                raise BackendScopeTokenRejected("expired")
+            return grant
+
+    def _require_scope_authorized(
+        self,
+        boundary: str,
+        *,
+        expected: AuthScope,
+    ) -> AuthScope:
+        try:
+            authorized = self._authorize(boundary, expected=expected)
+        except AuthRequired:
+            raise BackendScopeTokenRejected("scope_not_authorized") from None
+        if authorized != expected:
+            raise BackendScopeTokenRejected("scope_not_authorized")
+        return authorized
+
+    def _store_grant_locked(self, grant: BackendScopeGrant) -> None:
+        digest = bytes.fromhex(grant.token_digest)
+        self._records[digest] = grant
+        self._registrations[grant.registration_id] = grant
+
+    def _remove_grant_locked(self, grant: BackendScopeGrant) -> None:
+        digest = bytes.fromhex(grant.token_digest)
+        self._records.pop(digest, None)
+        self._registrations.pop(grant.registration_id, None)
+        if self._active_registration_id == grant.registration_id:
+            self._active_registration_id = None
+
+
+def _validated_scope_token_registration(
+    registration: ScopeTokenRegistration,
+) -> ScopeTokenRegistration:
+    if not isinstance(registration, ScopeTokenRegistration):
+        raise BackendScopeTokenRejected("invalid_registration")
+    try:
+        parsed = parse_control_frame(
+            {
+                "version": DESKTOP_SCOPE_PROTOCOL_VERSION,
+                "operation": "register_scope_token",
+                "registration_id": registration.registration_id,
+                "bearer": registration.bearer,
+                "connection_id": registration.connection_id,
+                "runtime_instance_id": registration.runtime_instance_id,
+                "epoch": registration.epoch,
+                "ttl_seconds": registration.ttl_seconds,
+            }
+        )
+    except (UnicodeError, ValueError):
+        raise BackendScopeTokenRejected("invalid_registration") from None
+    if not isinstance(parsed, ScopeTokenRegistration):
+        raise BackendScopeTokenRejected("invalid_registration")
+    return parsed
+
+
+def _validated_scope_token_promotion(
+    promotion: ScopeTokenPromotion,
+) -> ScopeTokenPromotion:
+    if not isinstance(promotion, ScopeTokenPromotion):
+        raise BackendScopeTokenRejected("invalid_promotion")
+    try:
+        parsed = parse_control_frame(
+            {
+                "version": DESKTOP_SCOPE_PROTOCOL_VERSION,
+                "operation": "promote_scope_token",
+                "transition_id": promotion.transition_id,
+                "registration_id": promotion.registration_id,
+                "previous_registration_id": promotion.previous_registration_id,
+                "connection_id": promotion.connection_id,
+                "runtime_instance_id": promotion.runtime_instance_id,
+                "epoch": promotion.epoch,
+                "overlap_seconds": promotion.overlap_seconds,
+            }
+        )
+    except (UnicodeError, ValueError):
+        raise BackendScopeTokenRejected("invalid_promotion") from None
+    if not isinstance(parsed, ScopeTokenPromotion):
+        raise BackendScopeTokenRejected("invalid_promotion")
+    return parsed
 
 
 def parse_backend_scope_token_registration(
@@ -382,7 +768,7 @@ def parse_backend_scope_token_registration(
     if (
         isinstance(ttl_seconds, bool)
         or not isinstance(ttl_seconds, (int, float))
-        or not 0 < float(ttl_seconds) <= BACKEND_SCOPE_TOKEN_TTL_SECONDS
+        or not 0 < float(ttl_seconds) <= _LEGACY_BACKEND_SCOPE_TOKEN_TTL_SECONDS
     ):
         raise AuthRequired("runtime_unavailable")
     return BackendScopeTokenRegistration(
@@ -492,12 +878,20 @@ def _validate_auth_scope(scope: AuthScope) -> None:
         or any(character not in "0123456789abcdef" for character in scope.runtime_instance_id)
         or not isinstance(scope.epoch, int)
         or isinstance(scope.epoch, bool)
-        or scope.epoch < 0
+        or not 0 <= scope.epoch <= 2**53 - 1
     ):
         raise AuthRequired("runtime_unavailable")
 
 
-def _grant_from_claim(value: object) -> BackendScopeGrant:
+@dataclass(frozen=True)
+class _LegacyBackendScopeClaim:
+    connection_id: str
+    auth: AuthScope
+    valid_until: float
+    token_digest: str
+
+
+def _grant_from_claim(value: object) -> _LegacyBackendScopeClaim:
     expected_keys = {
         "connection_id",
         "runtime_instance_id",
@@ -525,7 +919,7 @@ def _grant_from_claim(value: object) -> BackendScopeGrant:
         or len(token_digest) != 64
     ):
         raise AuthRequired("runtime_unavailable")
-    return BackendScopeGrant(
+    return _LegacyBackendScopeClaim(
         connection_id=connection_id,
         auth=auth,
         valid_until=float(valid_until),
@@ -3944,7 +4338,6 @@ def _validate_uuid4(value: str) -> None:
 
 _consumer_lock = threading.RLock()
 _consumer: RuntimeConsumer | None = None
-_BACKEND_SCOPE_CONTROL_FRAME_LIMIT = 4_096
 _backend_scope_control_lock = threading.Lock()
 _backend_scope_control_thread: threading.Thread | None = None
 
@@ -4041,12 +4434,16 @@ backend_scope_tokens = BackendScopeTokenRegistry()
 
 
 def register_backend_scope_token(value: object) -> BackendScopeGrant:
-    registration = parse_backend_scope_token_registration(value)
-    return backend_scope_tokens.register(
-        registration.bearer,
-        connection_id=registration.connection_id,
-        expected=registration.auth,
-        ttl_seconds=registration.ttl_seconds,
+    registration = parse_control_frame(value)
+    if not isinstance(registration, ScopeTokenRegistration):
+        raise BackendScopeTokenRejected("invalid_registration")
+    expected = AuthScope(
+        registration.runtime_instance_id,
+        registration.epoch,
+    )
+    return backend_scope_tokens.register_candidate(
+        registration,
+        expected=expected,
     )
 
 
@@ -4063,16 +4460,16 @@ def register_backend_trace_transport(value: object) -> None:
     )
 
 
-def _run_backend_scope_token_control(stream: Any) -> None:
+def _run_backend_scope_token_control(source: Any, target: Any) -> None:
     try:
         while True:
             try:
-                raw = stream.readline(_BACKEND_SCOPE_CONTROL_FRAME_LIMIT + 1)
+                raw = source.readline(BACKEND_SCOPE_CONTROL_FRAME_LIMIT + 1)
             except (OSError, ValueError):
                 break
             if not raw:
                 break
-            if len(raw) > _BACKEND_SCOPE_CONTROL_FRAME_LIMIT or not raw.endswith(b"\n"):
+            if len(raw) > BACKEND_SCOPE_CONTROL_FRAME_LIMIT or not raw.endswith(b"\n"):
                 break
             try:
                 value = json.loads(raw)
@@ -4089,8 +4486,46 @@ def _run_backend_scope_token_control(stream: Any) -> None:
                     continue
             else:
                 try:
-                    register_backend_scope_token(value)
-                except (AuthRequired, UnicodeError, ValueError):
+                    frame = parse_control_frame(value)
+                    expected = AuthScope(
+                        frame.runtime_instance_id,
+                        frame.epoch,
+                    )
+                    if isinstance(frame, ScopeTokenRegistration):
+                        backend_scope_tokens.register_candidate(
+                            frame,
+                            expected=expected,
+                        )
+                        ack = {
+                            "version": DESKTOP_SCOPE_PROTOCOL_VERSION,
+                            "operation": "scope_token_registered",
+                            "registration_id": frame.registration_id,
+                            "connection_id": frame.connection_id,
+                            "runtime_instance_id": frame.runtime_instance_id,
+                            "epoch": frame.epoch,
+                            "ttl_seconds": frame.ttl_seconds,
+                        }
+                    elif isinstance(frame, ScopeTokenPromotion):
+                        backend_scope_tokens.promote(
+                            frame,
+                            expected=expected,
+                        )
+                        ack = {
+                            "version": DESKTOP_SCOPE_PROTOCOL_VERSION,
+                            "operation": "scope_token_promoted",
+                            "transition_id": frame.transition_id,
+                            "registration_id": frame.registration_id,
+                            "previous_registration_id": frame.previous_registration_id,
+                            "connection_id": frame.connection_id,
+                            "runtime_instance_id": frame.runtime_instance_id,
+                            "epoch": frame.epoch,
+                            "overlap_seconds": frame.overlap_seconds,
+                        }
+                    else:  # pragma: no cover - closed union defensive guard
+                        raise BackendScopeTokenRejected("invalid_control_frame")
+                    target.write(encode_control_ack(ack))
+                    target.flush()
+                except (AuthRequired, OSError, UnicodeError, ValueError):
                     break
     finally:
         backend_scope_tokens.clear()
@@ -4098,6 +4533,7 @@ def _run_backend_scope_token_control(stream: Any) -> None:
 
 def start_backend_scope_token_control(
     stream: Any | None = None,
+    target: Any | None = None,
 ) -> threading.Thread:
     """Read the Desktop-only token protocol from inherited stdin.
 
@@ -4106,14 +4542,15 @@ def start_backend_scope_token_control(
     malformed input revokes every grant for this backend process.
     """
     global _backend_scope_control_thread
-    selected = stream if stream is not None else sys.stdin.buffer
+    selected_source = stream if stream is not None else sys.stdin.buffer
+    selected_target = target if target is not None else sys.stdout.buffer
     with _backend_scope_control_lock:
         running = _backend_scope_control_thread
         if running is not None and running.is_alive():
             return running
         thread = threading.Thread(
             target=_run_backend_scope_token_control,
-            args=(selected,),
+            args=(selected_source, selected_target),
             daemon=True,
             name="hermes-backend-scope-control",
         )

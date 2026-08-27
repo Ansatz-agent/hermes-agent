@@ -24,6 +24,7 @@ from hermes_cli.client_auth.client import (
     SessionStatus,
     TraceCredential,
 )
+from hermes_cli.client_auth.backend_scope_protocol import CONTROL_ACK_PREFIX
 from hermes_cli.client_auth.runtime import (
     LEASE_SECONDS,
     LOGIN_ATTEMPT_LIMIT,
@@ -32,7 +33,9 @@ from hermes_cli.client_auth.runtime import (
     AuthRequired,
     AuthScope,
     AuthState,
+    BackendScopeGrantState,
     BackendScopeTokenRegistry,
+    BackendScopeTokenRejected,
     MemoryOwner,
     OwnerBroker,
     OwnerElectionContext,
@@ -75,6 +78,26 @@ BOB_SESSION_ID = "55555555-5555-4555-8555-555555555555"
 
 def _scope_bearer(seed: bytes = b"A") -> str:
     return base64.urlsafe_b64encode(seed * 32).decode("ascii").rstrip("=")
+
+
+def _scope_control_id(seed: bytes) -> str:
+    return base64.urlsafe_b64encode(seed * 16).decode("ascii").rstrip("=")
+
+
+class _ControlTarget:
+    def __init__(self, on_write=None):
+        self.frames = []
+        self.flushes = 0
+        self._on_write = on_write
+
+    def write(self, frame):
+        if self._on_write is not None:
+            self._on_write(frame)
+        self.frames.append(frame)
+        return len(frame)
+
+    def flush(self):
+        self.flushes += 1
 
 
 def test_backend_scope_token_is_hashed_bounded_and_exactly_scope_bound():
@@ -140,12 +163,12 @@ def test_backend_scope_token_expires_revokes_and_rejects_owner_epoch_change():
     )
 
     current = AuthScope(current.runtime_instance_id, current.epoch + 1)
-    with pytest.raises(AuthRequired, match="runtime_unavailable"):
+    with pytest.raises(BackendScopeTokenRejected, match="scope_not_authorized"):
         registry.authorize_claim(grant.claim(), "dashboard.ws.message")
 
     current = grant.auth
     registry.revoke(connection_id="local", expected=grant.auth)
-    with pytest.raises(AuthRequired):
+    with pytest.raises(BackendScopeTokenRejected, match="invalid_ws_claim"):
         registry.authorize_claim(grant.claim(), "dashboard.ws.message")
 
     replacement = registry.register(
@@ -155,7 +178,7 @@ def test_backend_scope_token_expires_revokes_and_rejects_owner_epoch_change():
         ttl_seconds=30,
     )
     clock.now = replacement.valid_until
-    with pytest.raises(AuthRequired, match="session_expired"):
+    with pytest.raises(BackendScopeTokenRejected, match="expired"):
         registry.authorize_claim(replacement.claim(), "dashboard.ws.message")
 
 
@@ -233,10 +256,12 @@ def test_running_backend_control_attaches_trace_transport_without_restart(monkey
             self.sent = True
             return frame
 
-    runtime._run_backend_scope_token_control(Stream())
+    target = _ControlTarget()
+    runtime._run_backend_scope_token_control(Stream(), target)
 
     assert len(registrations) == 1
     assert registrations[0]["endpoint"] == "http://127.0.0.1:49152/v1/traces"
+    assert target.frames == []
 
 
 def test_invalid_trace_control_frame_isolated_from_scope_and_later_registration(
@@ -255,14 +280,27 @@ def test_invalid_trace_control_frame_isolated_from_scope_and_later_registration(
         lambda **transport: registered.append(transport),
     )
     bearer = _scope_bearer()
+    registration_id = _scope_control_id(b"R")
     scope_frame = {
-        "version": 1,
+        "version": 2,
         "operation": "register_scope_token",
+        "registration_id": registration_id,
         "bearer": bearer,
         "connection_id": "local",
         "runtime_instance_id": current.runtime_instance_id,
         "epoch": current.epoch,
-        "ttl_seconds": 60,
+        "ttl_seconds": 1_800,
+    }
+    promote_frame = {
+        "version": 2,
+        "operation": "promote_scope_token",
+        "transition_id": _scope_control_id(b"T"),
+        "registration_id": registration_id,
+        "previous_registration_id": None,
+        "connection_id": "local",
+        "runtime_instance_id": current.runtime_instance_id,
+        "epoch": current.epoch,
+        "overlap_seconds": 60,
     }
     trace_frame = {
         "version": 1,
@@ -273,78 +311,147 @@ def test_invalid_trace_control_frame_isolated_from_scope_and_later_registration(
         "entrypoint": "desktop",
         "plugins_toml": "/opt/Ansatz/config/ansatz-voice-trace/plugins.toml",
     }
-    frames = [scope_frame, {**trace_frame, "endpoint": "https://invalid.example/v1/traces"}, trace_frame]
+    frames = [
+        scope_frame,
+        {**trace_frame, "endpoint": "https://invalid.example/v1/traces"},
+        trace_frame,
+        promote_frame,
+    ]
 
     class ObservingStream:
         index = 0
 
         def readline(self, _limit):
-            if self.index == 2:
-                assert registry.authorize(bearer, "dashboard.api.request").auth == current
+            if self.index == 1:
+                assert registry.probe(bearer).state is BackendScopeGrantState.CANDIDATE
             if self.index == 3:
                 assert len(registered) == 1
+            if self.index == 4:
+                assert registry.authorize(
+                    bearer,
+                    "dashboard.api.request",
+                ).state is BackendScopeGrantState.ACTIVE
                 return b""
             frame = json.dumps(frames[self.index]).encode() + b"\n"
             self.index += 1
             return frame
 
     stream = ObservingStream()
-    runtime._run_backend_scope_token_control(stream)
-    assert stream.index == 3
+    target = _ControlTarget()
+    runtime._run_backend_scope_token_control(stream, target)
+    assert stream.index == 4
     assert len(registered) == 1
+    assert len(target.frames) == 2
 
 
 def test_scope_token_control_eof_revokes_every_registered_bearer(monkeypatch):
     from hermes_cli.client_auth import runtime
 
-    registered = threading.Event()
+    promoted = threading.Event()
     release_eof = threading.Event()
     current = AuthScope("0123456789abcdef0123456789abcdef", 7)
 
     def authorize(_boundary, *, expected):
         assert expected == current
-        registered.set()
         return expected
 
     registry = BackendScopeTokenRegistry(authorize=authorize)
     monkeypatch.setattr(runtime, "backend_scope_tokens", registry)
     bearer = _scope_bearer()
-    frame = json.dumps(
+    registration_id = _scope_control_id(b"R")
+    transition_id = _scope_control_id(b"T")
+    frames = [
         {
-            "version": 1,
+            "version": 2,
             "operation": "register_scope_token",
+            "registration_id": registration_id,
             "bearer": bearer,
             "connection_id": "local",
             "runtime_instance_id": current.runtime_instance_id,
             "epoch": current.epoch,
-            "ttl_seconds": 60,
-        }
-    ).encode("utf-8") + b"\n"
+            "ttl_seconds": 1_800,
+        },
+        {
+            "version": 2,
+            "operation": "promote_scope_token",
+            "transition_id": transition_id,
+            "registration_id": registration_id,
+            "previous_registration_id": None,
+            "connection_id": "local",
+            "runtime_instance_id": current.runtime_instance_id,
+            "epoch": current.epoch,
+            "overlap_seconds": 60,
+        },
+    ]
 
     class BlockingStream:
         def __init__(self):
-            self.first = True
+            self.index = 0
 
         def readline(self, _limit):
-            if self.first:
-                self.first = False
+            if self.index < len(frames):
+                frame = json.dumps(frames[self.index]).encode("utf-8") + b"\n"
+                self.index += 1
                 return frame
             release_eof.wait(timeout=2)
             return b""
 
+    def observe_ack(frame):
+        assert bearer.encode("ascii") not in frame
+        payload = json.loads(
+            frame.removeprefix(CONTROL_ACK_PREFIX.encode("ascii"))
+        )
+        if payload["operation"] == "scope_token_registered":
+            assert set(payload) == {
+                "version",
+                "operation",
+                "registration_id",
+                "connection_id",
+                "runtime_instance_id",
+                "epoch",
+                "ttl_seconds",
+            }
+            assert registry.probe(bearer).state is BackendScopeGrantState.CANDIDATE
+        elif payload["operation"] == "scope_token_promoted":
+            assert set(payload) == {
+                "version",
+                "operation",
+                "transition_id",
+                "registration_id",
+                "previous_registration_id",
+                "connection_id",
+                "runtime_instance_id",
+                "epoch",
+                "overlap_seconds",
+            }
+            assert registry.authorize(
+                bearer,
+                "dashboard.api.request",
+            ).state is BackendScopeGrantState.ACTIVE
+            promoted.set()
+        else:
+            pytest.fail(f"unexpected control ACK: {payload}")
+
+    target = _ControlTarget(on_write=observe_ack)
+
     control = threading.Thread(
         target=runtime._run_backend_scope_token_control,
-        args=(BlockingStream(),),
+        args=(BlockingStream(), target),
     )
     control.start()
-    assert registered.wait(timeout=2)
-    assert registry.authorize(bearer, "dashboard.api.request").auth == current
+    assert promoted.wait(timeout=2)
+    grant = registry.authorize(bearer, "dashboard.api.request")
+    claim = registry.ws_claim(grant)
+    assert len(target.frames) == 2
+    assert target.flushes == 2
 
     release_eof.set()
     control.join(timeout=2)
     assert not control.is_alive()
-    with pytest.raises(AuthRequired):
+    with pytest.raises(BackendScopeTokenRejected):
         registry.authorize(bearer, "dashboard.api.request")
+    with pytest.raises(BackendScopeTokenRejected, match="backend_generation_changed"):
+        registry.authorize_ws_claim(claim, "dashboard.ws.message")
 
 
 def status_at(*, server_second: int = 0, expiry_second: int = 120) -> SessionStatus:

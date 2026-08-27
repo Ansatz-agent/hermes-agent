@@ -3,19 +3,20 @@ from __future__ import annotations
 import base64
 import json
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Mapping
 
 
 DESKTOP_SCOPE_PROTOCOL_VERSION = 2
-BACKEND_SCOPE_TOKEN_TTL_SECONDS = 1_800
+DESKTOP_SCOPE_TOKEN_TTL_SECONDS = 1_800
 BACKEND_SCOPE_TOKEN_OVERLAP_SECONDS = 60
 BACKEND_SCOPE_CONTROL_FRAME_LIMIT = 4_096
 CONTROL_ACK_PREFIX = "ANSATZ_SCOPE_CONTROL_V2 "
 
 _BEARER_BYTES = 32
 _CONTROL_ID_BYTES = 16
-_REGISTER_KEYS = {
+_REGISTER_KEYS = frozenset(
+    {
     "version",
     "operation",
     "registration_id",
@@ -24,8 +25,10 @@ _REGISTER_KEYS = {
     "runtime_instance_id",
     "epoch",
     "ttl_seconds",
-}
-_PROMOTE_KEYS = {
+    }
+)
+_PROMOTE_KEYS = frozenset(
+    {
     "version",
     "operation",
     "transition_id",
@@ -35,7 +38,8 @@ _PROMOTE_KEYS = {
     "runtime_instance_id",
     "epoch",
     "overlap_seconds",
-}
+    }
+)
 _REGISTERED_ACK_KEYS = _REGISTER_KEYS - {"bearer"}
 _PROMOTED_ACK_KEYS = _PROMOTE_KEYS
 
@@ -44,10 +48,10 @@ _PROMOTED_ACK_KEYS = _PROMOTE_KEYS
 class ScopeTokenRegistration:
     registration_id: str
     bearer: str = field(repr=False)
-    connection_id: str = ""
-    runtime_instance_id: str = ""
-    epoch: int = 0
-    ttl_seconds: float = 0.0
+    connection_id: str
+    runtime_instance_id: str
+    epoch: int
+    ttl_seconds: float
 
 
 @dataclass(frozen=True)
@@ -99,6 +103,32 @@ def encode_control_ack(payload: Mapping[str, object]) -> bytes:
     encoded = f"{CONTROL_ACK_PREFIX}{body}\n".encode("ascii")
     if len(encoded) > BACKEND_SCOPE_CONTROL_FRAME_LIMIT:
         raise ValueError("control ack is too large")
+
+    if operation == "scope_token_registered":
+        _control_id(payload.get("registration_id"), "registration_id")
+        _connection_id(payload.get("connection_id"))
+        _runtime_instance_id(payload.get("runtime_instance_id"))
+        _epoch(payload.get("epoch"))
+        _bounded_seconds(
+            payload.get("ttl_seconds"),
+            maximum=DESKTOP_SCOPE_TOKEN_TTL_SECONDS,
+            field_name="ttl_seconds",
+        )
+    else:
+        _control_id(payload.get("transition_id"), "transition_id")
+        _control_id(payload.get("registration_id"), "registration_id")
+        previous = payload.get("previous_registration_id")
+        if previous is not None:
+            _control_id(previous, "previous_registration_id")
+        _connection_id(payload.get("connection_id"))
+        _runtime_instance_id(payload.get("runtime_instance_id"))
+        _epoch(payload.get("epoch"))
+        _bounded_seconds(
+            payload.get("overlap_seconds"),
+            maximum=BACKEND_SCOPE_TOKEN_OVERLAP_SECONDS,
+            field_name="overlap_seconds",
+        )
+
     return encoded
 
 
@@ -112,7 +142,7 @@ def _parse_registration(value: dict[object, object]) -> ScopeTokenRegistration:
     epoch = _epoch(value.get("epoch"))
     ttl_seconds = _bounded_seconds(
         value.get("ttl_seconds"),
-        maximum=BACKEND_SCOPE_TOKEN_TTL_SECONDS,
+        maximum=DESKTOP_SCOPE_TOKEN_TTL_SECONDS,
         field_name="ttl_seconds",
     )
     return ScopeTokenRegistration(
@@ -188,7 +218,11 @@ def _runtime_instance_id(value: object) -> str:
 
 
 def _epoch(value: object) -> int:
-    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or not 0 <= value <= 2**53 - 1
+    ):
         raise ValueError("invalid epoch")
     return value
 
