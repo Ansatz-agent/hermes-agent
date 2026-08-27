@@ -168,7 +168,7 @@ test('pins local backend children to the same non-legacy Ansatz auth owner as th
   )
 
   assert.deepEqual(sanitized, {
-    HERMES_AUTH_RUNTIME_NAMESPACE: 'ansatz-voice-trace-client-auth-v1',
+    HERMES_AUTH_RUNTIME_NAMESPACE: 'ansatz-voice-trace-client-auth-v2',
     HERMES_AUTH_KEYRING_SERVICE: 'cn.c2sml.ansatz.voice-trace-client.remote-auth',
     HERMES_HOME: '/Users/a/.ansatz-voice-trace-client',
     PATH: '/usr/bin'

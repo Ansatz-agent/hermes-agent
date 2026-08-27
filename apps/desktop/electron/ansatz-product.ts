@@ -12,7 +12,7 @@ const ANSATZ_PRODUCT = Object.freeze({
   posixRuntimeDirectory: '.ansatz-voice-trace-client',
   windowsRuntimeDirectory: 'AnsatzVoiceTraceClient',
   runtimeHomeOverrideEnvironmentVariable: 'ANSATZ_VOICE_TRACE_CLIENT_HOME',
-  authRuntimeNamespace: 'ansatz-voice-trace-client-auth-v1',
+  authRuntimeNamespace: 'ansatz-voice-trace-client-auth-v2',
   authKeyringService: 'cn.c2sml.ansatz.voice-trace-client.remote-auth',
   legacyAuthKeyringService: 'cn.c2sml.hermes.remote-auth',
   mediaProtocol: 'ansatz-media',
