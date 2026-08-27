@@ -8,7 +8,11 @@ import { test } from 'vitest'
 
 import { AuthBridgeError, type TraceCredential } from './auth-bridge'
 import { RebindableTraceCredentialSource } from './trace-credential-provider'
-import { TraceDurabilityRuntime, type TraceDurabilitySession } from './trace-durability-runtime'
+import {
+  type TraceDurabilityDiagnostic,
+  TraceDurabilityRuntime,
+  type TraceDurabilitySession
+} from './trace-durability-runtime'
 import { RefreshingTraceCredentialProvider, TraceForwarder } from './trace-forwarder'
 import { createSafeStorageTraceKeyProtector, type TraceKeyProtector } from './trace-outbox-crypto'
 import { nodeTraceFileSystem, type TraceFileSystem } from './trace-outbox-journal'
@@ -93,6 +97,7 @@ class ControllableGateway {
 
   readonly attempts: GatewayAttempt[] = []
   readonly logical = new Map<string, { body: Buffer; digest: string }>()
+  private heldAllResponses: { received: () => void; release: Promise<void> } | null = null
   private loseResponses = 0
   private heldResponse: { received: () => void; release: Promise<void> } | null = null
   private readonly server: http.Server
@@ -133,6 +138,34 @@ class ControllableGateway {
     this.heldResponse = { received: markReceived, release: released }
 
     return { received, release }
+  }
+
+  holdAllResponses(): { received: Promise<void>; release(): void } {
+    let markReceived!: () => void
+    let releaseGate!: () => void
+
+    const received = new Promise<void>(resolve => {
+      markReceived = resolve
+    })
+
+    const released = new Promise<void>(resolve => {
+      releaseGate = resolve
+    })
+
+    const gate = { received: markReceived, release: released }
+
+    this.heldAllResponses = gate
+
+    return {
+      received,
+      release: () => {
+        if (this.heldAllResponses === gate) {
+          this.heldAllResponses = null
+        }
+
+        releaseGate()
+      }
+    }
   }
 
   setOnline(online: boolean): void {
@@ -193,6 +226,13 @@ class ControllableGateway {
     const outcome = existing ? 'duplicate' : 'accepted'
     this.logical.set(batchId, { body: Buffer.from(body), digest })
 
+    const heldAllResponses = this.heldAllResponses
+
+    if (heldAllResponses !== null) {
+      heldAllResponses.received()
+      await heldAllResponses.release
+    }
+
     const heldResponse = this.heldResponse
 
     if (heldResponse !== null) {
@@ -228,8 +268,10 @@ async function launchTraceHarness(options: {
   gateway: ControllableGateway
   groupCommitMs?: number
   keyProtector?: TraceKeyProtector
+  localCommitError?: Error
   owner: TraceOwner
   receiptCapacityBytes?: number
+  runtime?: TraceDurabilityRuntime
   userData: string
 }) {
   const root = join(options.userData, 'trace-outbox', options.owner.accountKey)
@@ -247,6 +289,7 @@ async function launchTraceHarness(options: {
 
   const credentialLoader = options.credentialLoader ?? (async () => traceCredential())
   const credentialSource = new RebindableTraceCredentialSource()
+  const diagnosticScope = options.runtime?.bindDiagnostics()
 
   const bindCredential = (nextOwner: TraceOwner) => {
     credentialSource.bind(nextOwner, forceRefresh => credentialLoader(nextOwner, forceRefresh))
@@ -260,6 +303,16 @@ async function launchTraceHarness(options: {
     beginEnqueue(input: TraceEnvelopeInput) {
       admittedOwners.push({ ...input.owner })
 
+      if (options.localCommitError) {
+        return {
+          batchId: sha256(Buffer.concat([input.body, Buffer.from(input.runId, 'utf8')])),
+          cancelForGatewayReceipt: async () => {
+            throw options.localCommitError
+          },
+          durable: Promise.reject(options.localCommitError)
+        }
+      }
+
       return store.beginEnqueue(input)
     },
     close: () => store.close(),
@@ -269,6 +322,8 @@ async function launchTraceHarness(options: {
     quarantineInput: (input: TraceEnvelopeInput, errorClass: string) => store.quarantineInput(input, errorClass)
   }
 
+  const observedStore = diagnosticScope?.observeStore(forwarderStore) ?? forwarderStore
+
   let forwarder!: TraceForwarder
   let lifecycle!: TraceRecoveryLifecycle
 
@@ -276,7 +331,10 @@ async function launchTraceHarness(options: {
     accountKey: options.owner.accountKey,
     pump: async () => {
       await forwarder.pump()
-      lifecycle.scheduleRetryAt(forwarder.nextRecoveryAt())
+      const nextRecoveryAt = forwarder.nextRecoveryAt()
+
+      diagnosticScope?.observeRecovery(await store.diagnostics(), nextRecoveryAt)
+      lifecycle.scheduleRetryAt(nextRecoveryAt)
     }
   })
 
@@ -285,7 +343,7 @@ async function launchTraceHarness(options: {
     fetchImpl: options.fetchImpl ?? fetch,
     installationId,
     recovery: controller,
-    store: forwarderStore,
+    store: observedStore,
     upstreamUrl: options.gateway.endpoint
   })
   const started = await forwarder.start(options.owner)
@@ -313,8 +371,8 @@ async function launchTraceHarness(options: {
       currentOwner = { ...nextOwner }
     },
     async quit() {
-      await lifecycle.stop()
-      const summary = await forwarder.stop({ flushMs: 3_000 })
+      const [, summary] = await Promise.all([lifecycle.stop(), forwarder.stop({ flushMs: 3_000 })])
+
       credentialSource.clear()
       await controller.stop()
 
@@ -381,6 +439,26 @@ function segmentSyncGate(): {
     },
     release,
     waitUntilBlocked: () => blockedPromise
+  }
+}
+
+function failingCommitFileSystem(kind: 'disk-full' | 'journal-integrity'): TraceFileSystem {
+  return {
+    ...nodeTraceFileSystem,
+    appendFile: async (path, data) => {
+      if (kind === 'disk-full' && isActiveSegmentPath(path)) {
+        throw Object.assign(new Error('Bearer secret access_token wrappedKey payload'), { code: 'ENOSPC' })
+      }
+
+      await nodeTraceFileSystem.appendFile(path, data)
+    },
+    syncFile: async path => {
+      if (kind === 'journal-integrity' && path.endsWith('index.journal')) {
+        throw Object.assign(new Error('invalid_journal_checksum Bearer secret payload'), { code: 'EIO' })
+      }
+
+      await nodeTraceFileSystem.syncFile(path)
+    }
   }
 }
 
@@ -660,6 +738,190 @@ test('same-account Session rebind keeps ingress stable and recovers old and new 
     await harness.quit()
   } finally {
     await cleanupContinuityTest(harnesses, [gateway], userData)
+  }
+})
+
+test('local durability failures return 503 and emit one secret-free storage transition', async () => {
+  const cases: readonly {
+    errorClass: string
+    fs?: TraceFileSystem
+    label: string
+    localCommitError?: Error
+  }[] = [
+    {
+      errorClass: 'disk_full',
+      fs: failingCommitFileSystem('disk-full'),
+      label: 'enospc'
+    },
+    {
+      errorClass: 'secure_key_storage_unavailable',
+      label: 'secure-storage',
+      localCommitError: Object.assign(new Error('secure_key_storage_unavailable'), {
+        secret: 'Bearer secret access_token wrappedKey payload'
+      })
+    },
+    {
+      errorClass: 'journal_integrity_failure',
+      fs: failingCommitFileSystem('journal-integrity'),
+      label: 'journal-integrity'
+    }
+  ]
+
+  for (const testCase of cases) {
+    const userData = await temporaryUserData()
+    const gateway = await ControllableGateway.start('online')
+    const events: TraceDurabilityDiagnostic[] = []
+    const runtime = new TraceDurabilityRuntime(event => events.push(event))
+    const harnesses: TraceHarness[] = []
+    let upstreamCalls = 0
+
+    try {
+      const harness = await launchTraceHarness({
+        fetchImpl: async () => {
+          upstreamCalls += 1
+          throw new Error('trace-upstream-offline')
+        },
+        fs: testCase.fs,
+        gateway,
+        localCommitError: testCase.localCommitError,
+        owner: owner('a'),
+        runtime,
+        userData
+      })
+
+      harnesses.push(harness)
+      assert.equal((await harness.post(payload(`storage-${testCase.label}`), 1)).status, 503)
+      assert.equal(upstreamCalls, 1)
+      assert.deepEqual(events.map(event => event.code), ['trace_storage_failed'])
+      assert.equal(events[0]?.errorClass, testCase.errorClass)
+      assert.doesNotMatch(JSON.stringify(events), /Bearer |access_token|wrappedKey|payload/)
+    } finally {
+      await cleanupContinuityTest(harnesses, [gateway], userData)
+    }
+  }
+})
+
+test('an unavailable real key protector is classified as a local storage failure before publication', async () => {
+  const userData = await temporaryUserData()
+  const events: TraceDurabilityDiagnostic[] = []
+  const runtime = new TraceDurabilityRuntime(event => events.push(event))
+  const diagnostics = runtime.bindDiagnostics()
+
+  try {
+    await assert.rejects(
+      (async () => {
+        try {
+          await TraceOutboxStore.open({
+            expectedOwner: owner('a'),
+            keyProtector: {
+              available: () => false,
+              unwrap: () => {
+                throw new Error('must_not_unwrap')
+              },
+              wrap: () => {
+                throw new Error('must_not_wrap')
+              }
+            },
+            root: join(userData, 'trace-outbox', owner('a').accountKey)
+          })
+        } catch (error) {
+          diagnostics.storageFailed(error)
+          throw error
+        }
+      })(),
+      /secure_key_storage_unavailable/
+    )
+
+    assert.deepEqual(events, [
+      { code: 'trace_storage_failed', errorClass: 'secure_key_storage_unavailable' }
+    ])
+  } finally {
+    await rm(userData, { force: true, recursive: true })
+  }
+})
+
+test('hard lock isolates account B from account A storage and a delayed account A receipt', async () => {
+  const userData = await temporaryUserData()
+  const gatewayA = await ControllableGateway.start('online')
+  const gatewayB = await ControllableGateway.start('online')
+  const heldA = gatewayA.holdAllResponses()
+  const ownerA = owner('a')
+  const ownerB = owner('b')
+
+  const activeScope = {
+    connection_id: 'local',
+    epoch: 21,
+    runtime_instance_id: 'runtime-isolation'
+  }
+
+  const harnesses: TraceHarness[] = []
+  const runtime = new TraceDurabilityRuntime()
+
+  try {
+    const harnessA = await launchTraceHarness({ gateway: gatewayA, owner: ownerA, runtime, userData })
+    harnesses.push(harnessA)
+
+    const sessionA: TraceDurabilitySession = {
+      compactIfIdle: async () => false,
+      context: () => ({
+        ingress: { endpoint: harnessA.endpoint, localBearer: harnessA.localBearer },
+        owner: ownerA,
+        scope: activeScope
+      }),
+      rebind: nextOwner => harnessA.rebind(nextOwner),
+      stop: async () => void (await harnessA.quit()),
+      trigger: () => void harnessA.trigger()
+    }
+
+    await runtime.activate({ owner: ownerA, scope: activeScope }, async () => sessionA)
+    assert.equal((await harnessA.post(payload('account-a-delayed'), 1)).status, 200)
+    await heldA.received
+    const accountABatch = await harnessA.store.peekEligible(Number.MAX_SAFE_INTEGER)
+
+    assert.ok(accountABatch)
+    assert.equal((await harnessA.diagnostics()).pending, 1)
+    await runtime.lock(0)
+
+    const harnessB = await launchTraceHarness({ gateway: gatewayB, owner: ownerB, runtime, userData })
+    harnesses.push(harnessB)
+
+    const sessionB: TraceDurabilitySession = {
+      compactIfIdle: async () => false,
+      context: () => ({
+        ingress: { endpoint: harnessB.endpoint, localBearer: harnessB.localBearer },
+        owner: ownerB,
+        scope: activeScope
+      }),
+      rebind: nextOwner => harnessB.rebind(nextOwner),
+      stop: async () => void (await harnessB.quit()),
+      trigger: () => void harnessB.trigger()
+    }
+
+    await runtime.activate({ owner: ownerB, scope: activeScope }, async () => sessionB)
+    assert.equal((await harnessB.post(payload('account-b-accepted'), 2)).status, 200)
+    await waitFor(async () => (await harnessB.diagnostics()).pending === 0)
+
+    const beforeDelayedReceipt = await harnessB.diagnostics()
+    const accountBKey = await readFile(join(harnessB.root, 'key.json'), 'utf8')
+    const accountBBatchId = gatewayB.attempts[0]?.batchId
+
+    assert.notEqual(harnessA.root, harnessB.root)
+    assert.equal(harnessB.admittedOwners.every(value => value.accountKey === ownerB.accountKey), true)
+    assert.equal(accountBKey.includes(ownerA.accountKey), false)
+    assert.equal(accountBKey.includes(ownerA.sessionId!), false)
+    assert.notEqual(accountBBatchId, accountABatch.batchId)
+    assert.equal(await harnessB.store.lookupReceipt(accountABatch.batchId), undefined)
+
+    heldA.release()
+    await waitFor(() => gatewayA.attempts.length > 0)
+    await new Promise(resolve => setTimeout(resolve, 20))
+
+    assert.deepEqual(await harnessB.diagnostics(), beforeDelayedReceipt)
+    assert.equal(await harnessB.store.lookupReceipt(accountABatch.batchId), undefined)
+    assert.deepEqual(runtime.current()?.owner, ownerB)
+  } finally {
+    heldA.release()
+    await cleanupContinuityTest(harnesses, [gatewayA, gatewayB], userData)
   }
 })
 

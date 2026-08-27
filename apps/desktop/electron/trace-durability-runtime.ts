@@ -1,7 +1,15 @@
 import { type ConnectionScope, sameConnectionScope } from './auth-bridge'
 import type { TraceRecoveryReason } from './trace-forwarder'
 import type { TraceIngressEndpoint } from './trace-ingress-facade'
-import { sameTraceOwnerIdentity, type TraceOwner, validateTraceOwner } from './trace-outbox-types'
+import type { PendingLocalCommit, TraceOutboxStoreDiagnostics } from './trace-outbox-store'
+import {
+  type DurableReceipt,
+  type DurableTraceBatch,
+  sameTraceOwnerIdentity,
+  type TraceEnvelopeInput,
+  type TraceOwner,
+  validateTraceOwner
+} from './trace-outbox-types'
 
 export type TraceDurabilityContext = {
   ingress: TraceIngressEndpoint
@@ -56,11 +64,31 @@ export type TraceDurabilityDiagnostic = {
   retryAttempt?: number
 }
 
+type TraceDurabilityCounts = Pick<TraceOutboxStoreDiagnostics, 'pending' | 'pendingBytes'>
+
+export type TraceDurabilityStore = {
+  acknowledge(batchId: string, receipt: DurableReceipt): Promise<void>
+  beginEnqueue(input: TraceEnvelopeInput): PendingLocalCommit
+  close?(): Promise<void>
+  diagnostics(): Promise<TraceOutboxStoreDiagnostics>
+  peekEligible(now: number): Promise<DurableTraceBatch | undefined>
+  quarantine(batchId: string, errorClass: string): Promise<void>
+  quarantineInput(input: TraceEnvelopeInput, errorClass: string): Promise<DurableTraceBatch>
+}
+
+export type TraceDurabilityDiagnosticScope = {
+  observeRecovery(counts: TraceDurabilityCounts, nextRetryAt: number | null): void
+  observeStore(store: TraceDurabilityStore): TraceDurabilityStore
+  storageFailed(error: unknown, counts?: Partial<TraceDurabilityCounts>): void
+}
+
 export class TraceDurabilityRuntime {
   private active: TraceDurabilitySession | null = null
+  private diagnosticScope = 0
   private flight: Promise<TraceDurabilitySession> | null = null
   private generation = 0
   private lockFlight: Promise<void> | null = null
+  private storageFailureGeneration: number | null = null
 
   constructor(private readonly diagnostic: (event: TraceDurabilityDiagnostic) => void = () => {}) {}
 
@@ -74,6 +102,119 @@ export class TraceDurabilityRuntime {
           scope: { ...value.scope }
         }
       : null
+  }
+
+  bindDiagnostics(): TraceDurabilityDiagnosticScope {
+    const generation = this.generation
+    const scope = (this.diagnosticScope += 1)
+    let backlogSeen = false
+    let uploadDegraded = false
+
+    const active = () => generation === this.generation && scope === this.diagnosticScope
+
+    const reportStorageFailure = (error: unknown, counts?: Partial<TraceDurabilityCounts>) => {
+      if (!active() || this.storageFailureGeneration === generation) {
+        return
+      }
+
+      this.storageFailureGeneration = generation
+      this.emit({
+        code: 'trace_storage_failed',
+        errorClass: classifyTraceStorageFailure(error),
+        ...safeTraceCounts(counts)
+      })
+    }
+
+    const reportStoreFailure = async (error: unknown, store: TraceDurabilityStore) => {
+      let counts: Partial<TraceDurabilityCounts> | undefined
+
+      try {
+        counts = await store.diagnostics()
+      } catch {
+        counts = undefined
+      }
+
+      reportStorageFailure(error, counts)
+    }
+
+    const observeMutation = <T>(operation: () => Promise<T>, store: TraceDurabilityStore): Promise<T> => {
+      let result: Promise<T>
+
+      try {
+        result = operation()
+      } catch (error) {
+        reportStorageFailure(error)
+        throw error
+      }
+
+      return result.catch(async error => {
+        await reportStoreFailure(error, store)
+        throw error
+      })
+    }
+
+    const observeStore = (store: TraceDurabilityStore): TraceDurabilityStore => ({
+      acknowledge: (batchId, receipt) => observeMutation(() => store.acknowledge(batchId, receipt), store),
+      beginEnqueue: input => {
+        let pending: PendingLocalCommit
+
+        try {
+          pending = store.beginEnqueue(input)
+        } catch (error) {
+          reportStorageFailure(error)
+          throw error
+        }
+
+        return {
+          ...pending,
+          cancelForGatewayReceipt: receipt =>
+            observeMutation(() => pending.cancelForGatewayReceipt(receipt), store),
+          durable: pending.durable.catch(async error => {
+            await reportStoreFailure(error, store)
+            throw error
+          })
+        }
+      },
+      close: store.close ? () => observeMutation(() => store.close!(), store) : undefined,
+      diagnostics: () => observeMutation(() => store.diagnostics(), store),
+      peekEligible: now => observeMutation(() => store.peekEligible(now), store),
+      quarantine: (batchId, errorClass) =>
+        observeMutation(() => store.quarantine(batchId, errorClass), store),
+      quarantineInput: (input, errorClass) =>
+        observeMutation(() => store.quarantineInput(input, errorClass), store)
+    })
+
+    return {
+      observeRecovery: (counts, nextRetryAt) => {
+        if (!active()) {
+          return
+        }
+
+        const safeCounts = safeTraceCounts(counts)
+        const pending = safeCounts.pending ?? 0
+
+        if (pending > 0) {
+          backlogSeen = true
+        }
+
+        if (pending > 0 && nextRetryAt !== null) {
+          if (!uploadDegraded) {
+            uploadDegraded = true
+            this.emit({ code: 'trace_upload_degraded', ...safeCounts, retryAttempt: 1 })
+          }
+        } else if (uploadDegraded) {
+          uploadDegraded = false
+          this.emit({ code: 'trace_upload_recovered', ...safeCounts })
+        }
+
+        if (pending === 0 && backlogSeen) {
+          backlogSeen = false
+          this.emit({ code: 'trace_backlog_recovered', ...safeCounts })
+        }
+      },
+      observeStore,
+      storageFailed: reportStorageFailure
+    }
   }
 
   async activate(
@@ -103,7 +244,7 @@ export class TraceDurabilityRuntime {
       }
 
       this.active!.rebind(owner, requestedScope)
-      this.diagnostic({ code: 'trace_owner_rebound' })
+      this.emit({ code: 'trace_owner_rebound' })
 
       return { context: this.current()!, kind: 'rebound' }
     }
@@ -182,7 +323,8 @@ export class TraceDurabilityRuntime {
     }
 
     this.active = session
-    this.diagnostic({ code: 'trace_admission_ready' })
+    this.storageFailureGeneration = null
+    this.emit({ code: 'trace_admission_ready' })
 
     return session
   }
@@ -204,8 +346,59 @@ export class TraceDurabilityRuntime {
       await session.stop(flushMs)
     }
 
-    this.diagnostic({ code: 'trace_terminal_locked' })
+    this.emit({ code: 'trace_terminal_locked' })
   }
+
+  private emit(event: TraceDurabilityDiagnostic): void {
+    try {
+      this.diagnostic(event)
+    } catch {
+      // Diagnostics must never change Trace durability behavior.
+    }
+  }
+}
+
+function classifyTraceStorageFailure(error: unknown): string {
+  const code = typeof error === 'object' && error !== null ? (error as NodeJS.ErrnoException).code : undefined
+  const message = error instanceof Error ? error.message : ''
+
+  if (code === 'ENOSPC') {
+    return 'disk_full'
+  }
+
+  if (code === 'EDQUOT') {
+    return 'quota_exceeded'
+  }
+
+  if (message === 'secure_key_storage_unavailable') {
+    return 'secure_key_storage_unavailable'
+  }
+
+  if (
+    message.startsWith('invalid_journal_') ||
+    message.startsWith('invalid_trace_outbox_key') ||
+    message.startsWith('trace_outbox_journal_')
+  ) {
+    return 'journal_integrity_failure'
+  }
+
+  return 'storage_io_failure'
+}
+
+function safeTraceCounts(counts: Partial<TraceDurabilityCounts> | undefined): Partial<TraceDurabilityCounts> {
+  const safe: Partial<TraceDurabilityCounts> = {}
+  const pending = counts?.pending
+  const pendingBytes = counts?.pendingBytes
+
+  if (typeof pending === 'number' && Number.isSafeInteger(pending) && pending >= 0) {
+    safe.pending = pending
+  }
+
+  if (typeof pendingBytes === 'number' && Number.isSafeInteger(pendingBytes) && pendingBytes >= 0) {
+    safe.pendingBytes = pendingBytes
+  }
+
+  return safe
 }
 
 export class TraceDurabilityCoordinator {

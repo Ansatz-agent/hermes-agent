@@ -402,3 +402,45 @@ test('runtime forwards recovery and compaction while returning defensive context
   assert.deepEqual(fixture.compactCalls, [1])
   assert.deepEqual(runtime.current(), { ingress, owner: activeOwner, scope: activeScope })
 })
+
+test('diagnostic scopes emit bounded safe transitions and ignore stale account generations', async () => {
+  const events: TraceDurabilityDiagnostic[] = []
+  const runtime = new TraceDurabilityRuntime(event => events.push(event))
+  const stale = runtime.bindDiagnostics()
+  const secretFailure = Object.assign(new Error('Bearer secret access_token wrappedKey payload'), { code: 'ENOSPC' })
+
+  stale.storageFailed(secretFailure, { pending: 3, pendingBytes: 1_024 })
+  stale.storageFailed(secretFailure, { pending: 4, pendingBytes: 2_048 })
+  stale.observeRecovery({ pending: 3, pendingBytes: 1_024 }, Date.now() + 5_000)
+  stale.observeRecovery({ pending: 4, pendingBytes: 2_048 }, Date.now() + 5_000)
+  stale.observeRecovery({ pending: 0, pendingBytes: 0 }, null)
+
+  assert.deepEqual(events, [
+    { code: 'trace_storage_failed', errorClass: 'disk_full', pending: 3, pendingBytes: 1_024 },
+    { code: 'trace_upload_degraded', pending: 3, pendingBytes: 1_024, retryAttempt: 1 },
+    { code: 'trace_upload_recovered', pending: 0, pendingBytes: 0 },
+    { code: 'trace_backlog_recovered', pending: 0, pendingBytes: 0 }
+  ])
+  assert.doesNotMatch(JSON.stringify(events), /Bearer |access_token|wrappedKey|payload/)
+  assert.equal(
+    events.every(event =>
+      Object.keys(event).every(key => ['code', 'errorClass', 'pending', 'pendingBytes', 'retryAttempt'].includes(key))
+    ),
+    true
+  )
+
+  runtime.bindDiagnostics().storageFailed(Object.assign(new Error('same account retry'), { code: 'EIO' }))
+  assert.equal(events.length, 4)
+
+  await runtime.lock(0)
+  const afterLock = events.length
+  stale.storageFailed(Object.assign(new Error('late account A failure'), { code: 'EIO' }))
+  stale.observeRecovery({ pending: 9, pendingBytes: 9_999 }, Date.now() + 5_000)
+  assert.equal(events.length, afterLock)
+
+  runtime.bindDiagnostics().storageFailed(new Error('secure_key_storage_unavailable'))
+  assert.deepEqual(events.at(-1), {
+    code: 'trace_storage_failed',
+    errorClass: 'secure_key_storage_unavailable'
+  })
+})

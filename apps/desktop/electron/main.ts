@@ -9095,23 +9095,38 @@ async function createDesktopTraceSession(
     throw new AuthBridgeError('auth_required', 'session_rejected')
   }
 
+  const traceDiagnostics = desktopTraceRuntime.bindDiagnostics()
   const ownerValidation = validateTraceOwner(owner)
 
   if (!ownerValidation.uploadable) {
-    await migratePreviousLegacyTraceNamespace({
-      currentAccountKey: owner.accountKey,
-      previousAccountKey: previousLegacyTraceAccountKey(scope, desktopInstallationId),
-      rename: (source, destination) => fs.promises.rename(source, destination),
-      root: traceOutboxRoot
-    })
+    try {
+      await migratePreviousLegacyTraceNamespace({
+        currentAccountKey: owner.accountKey,
+        previousAccountKey: previousLegacyTraceAccountKey(scope, desktopInstallationId),
+        rename: (source, destination) => fs.promises.rename(source, destination),
+        root: traceOutboxRoot
+      })
+    } catch (error) {
+      traceDiagnostics.storageFailed(error)
+      throw error
+    }
   }
 
-  const store = await TraceOutboxStore.open({
-    expectedOwner: owner,
-    isConversationStreaming: isDesktopConversationStreaming,
-    keyProtector: createSafeStorageTraceKeyProtector(safeStorage),
-    root: path.join(traceOutboxRoot, owner.accountKey)
-  })
+  let store: TraceOutboxStore
+
+  try {
+    store = await TraceOutboxStore.open({
+      expectedOwner: owner,
+      isConversationStreaming: isDesktopConversationStreaming,
+      keyProtector: createSafeStorageTraceKeyProtector(safeStorage),
+      root: path.join(traceOutboxRoot, owner.accountKey)
+    })
+  } catch (error) {
+    traceDiagnostics.storageFailed(error)
+    throw error
+  }
+
+  const observedStore = traceDiagnostics.observeStore(store)
 
   const sourceOwner = ownerValidation.uploadable ? traceMigrationSourceOwner(status, desktopInstallationId) : null
 
@@ -9127,6 +9142,7 @@ async function createDesktopTraceSession(
 
   if (migrationBarrier !== null) {
     void migrationBarrier.catch(error => {
+      traceDiagnostics.storageFailed(error)
       rememberLog(`[trace] background namespace migration failed: ${String((error as Error)?.message || error)}`)
     })
   }
@@ -9136,6 +9152,7 @@ async function createDesktopTraceSession(
   // prerequisite. Compaction rechecks the authoritative active-work counter
   // between bounded record reads and aborts before replace if a turn starts.
   void store.compactIfIdle().catch(error => {
+    traceDiagnostics.storageFailed(error)
     rememberLog(`[trace] startup outbox maintenance failed: ${String((error as Error)?.message || error)}`)
   })
 
@@ -9153,7 +9170,15 @@ async function createDesktopTraceSession(
     accountKey: owner.accountKey,
     pump: async () => {
       await forwarder.pump()
-      lifecycle?.scheduleRetryAt(forwarder.nextRecoveryAt())
+      const nextRecoveryAt = forwarder.nextRecoveryAt()
+
+      try {
+        traceDiagnostics.observeRecovery(await store.diagnostics(), nextRecoveryAt)
+      } catch (error) {
+        traceDiagnostics.storageFailed(error)
+      }
+
+      lifecycle?.scheduleRetryAt(nextRecoveryAt)
     }
   })
 
@@ -9166,7 +9191,7 @@ async function createDesktopTraceSession(
       return coordinator ? coordinator.applyTraceTerminalRevocation(revocation) : false
     },
     recovery: controller,
-    store,
+    store: observedStore,
     uploadBarrier: migrationBarrier === null ? undefined : () => migrationBarrier
   })
 
@@ -9203,7 +9228,14 @@ async function createDesktopTraceSession(
   lifecycle.start()
 
   return {
-    compactIfIdle: () => store.compactIfIdle(),
+    async compactIfIdle() {
+      try {
+        return await store.compactIfIdle()
+      } catch (error) {
+        traceDiagnostics.storageFailed(error)
+        throw error
+      }
+    },
     context: () => ({ ingress: started, owner: boundOwner, scope: boundScope }),
     rebind(nextOwner, nextScope) {
       const reboundOwner = { ...nextOwner }
