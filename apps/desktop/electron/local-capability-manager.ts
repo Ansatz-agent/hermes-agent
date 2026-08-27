@@ -279,7 +279,7 @@ async function defaultProbe(
   try {
     response = await fetch(endpoint, {
       method: 'GET',
-      headers: { Authorization: `Bearer ${bearer}` },
+      headers: { 'X-Hermes-Session-Token': bearer },
       cache: 'no-store',
       credentials: 'omit',
       redirect: 'error',

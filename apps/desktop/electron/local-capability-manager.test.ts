@@ -749,9 +749,12 @@ test('a throwing diagnostic observer cannot interrupt activation or rotation', a
 
 test('the production probe is a non-redirecting GET to the bound loopback backend', async () => {
   const fetchMock = vi.fn(async (_input: URL | RequestInfo, init?: RequestInit) => {
-    const authorization = new Headers(init?.headers).get('Authorization')
-    assert.ok(authorization?.startsWith('Bearer '))
-    const token = fixture.tokensByBearer.get(authorization.slice('Bearer '.length))
+    const headers = new Headers(init?.headers)
+    const bearer = headers.get('X-Hermes-Session-Token')
+
+    assert.equal(headers.get('Authorization'), null)
+    assert.ok(bearer)
+    const token = fixture.tokensByBearer.get(bearer)
     assert.ok(token)
 
     return new Response(
