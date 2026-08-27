@@ -9,6 +9,7 @@ export type BridgeStatus = {
   runtime_instance_id: string
   epoch: number
   valid_until: number
+  cloud_state: 'active' | 'unreachable' | 'reauth_required' | null
   validation_state: 'unknown' | 'validating' | 'online' | 'degraded'
   validation_reason: string | null
   last_validated_at: string | null

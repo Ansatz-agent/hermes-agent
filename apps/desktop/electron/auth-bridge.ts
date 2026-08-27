@@ -637,6 +637,7 @@ function isBridgeStatus(value: unknown): value is BridgeStatus {
       'runtime_instance_id',
       'epoch',
       'valid_until',
+      'cloud_state',
       'validation_state',
       'validation_reason',
       'last_validated_at',
@@ -653,6 +654,7 @@ function isBridgeStatus(value: unknown): value is BridgeStatus {
         'runtime_instance_id',
         'epoch',
         'valid_until',
+        'cloud_state',
         'validation_state',
         'validation_reason',
         'last_validated_at',
@@ -680,6 +682,9 @@ function isBridgeStatus(value: unknown): value is BridgeStatus {
     typeof value.valid_until === 'number' &&
     Number.isFinite(value.valid_until) &&
     value.valid_until >= 0 &&
+    (value.cloud_state === null || ['active', 'unreachable', 'reauth_required'].includes(value.cloud_state)) &&
+    (value.state === 'authenticated') === (value.cloud_state !== null) &&
+    (value.validation_state !== 'online' || value.cloud_state === 'active') &&
     ['unknown', 'validating', 'online', 'degraded'].includes(value.validation_state) &&
     (value.validation_reason === null ||
       (typeof value.validation_reason === 'string' && VALIDATION_REASONS.has(value.validation_reason))) &&

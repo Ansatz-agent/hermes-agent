@@ -11,6 +11,7 @@ const authenticated = {
   runtime_instance_id: 'runtime',
   epoch: 1,
   valid_until: 60,
+  cloud_state: 'active',
   session_expires_at: null,
   reason: null
 }
@@ -23,6 +24,22 @@ test('renderer status reports installed runtime readiness across sign-in and sig
   assert.equal(gate.rendererStatus(authenticated).runtime_ready, true)
   assert.equal(gate.rendererStatus({ ...authenticated, state: 'signed_out' }).runtime_ready, true)
   assert.equal(gate.ready, true)
+})
+
+test('renderer status preserves degraded cloud state after the local runtime is ready', async () => {
+  const gate = new DesktopRuntimeGate()
+  await gate.prepare(async () => {})
+
+  const status = gate.rendererStatus({
+    ...authenticated,
+    valid_until: 0,
+    cloud_state: 'unreachable',
+    reason: 'server_unavailable'
+  })
+
+  assert.equal(status.state, 'authenticated')
+  assert.equal(status.cloud_state, 'unreachable')
+  assert.equal(status.runtime_ready, true)
 })
 
 test('runtime preparation is single-flight', async () => {
