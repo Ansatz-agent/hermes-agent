@@ -37,6 +37,20 @@ _EXAMPLE_PLUGIN_FIXTURE = (
 )
 
 
+def test_desktop_ready_file_advertises_scope_protocol_v2(tmp_path, monkeypatch):
+    from hermes_cli import web_server
+
+    ready_file = tmp_path / "ready.json"
+    monkeypatch.setenv("HERMES_DESKTOP_READY_FILE", str(ready_file))
+
+    web_server._write_dashboard_ready_file(43_210)
+
+    assert json.loads(ready_file.read_text(encoding="utf-8")) == {
+        "port": 43_210,
+        "desktop_scope_protocol": 2,
+    }
+
+
 @pytest.fixture
 def _install_example_plugin(_isolate_hermes_home):
     """Drop the example-dashboard fixture into the per-test HERMES_HOME

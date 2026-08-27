@@ -18384,7 +18384,13 @@ def _write_dashboard_ready_file(actual_port: int) -> None:
     try:
         path = Path(target)
         path.parent.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps({"port": int(actual_port)}, separators=(",", ":"))
+        payload = json.dumps(
+            {
+                "port": int(actual_port),
+                "desktop_scope_protocol": DESKTOP_SCOPE_PROTOCOL_VERSION,
+            },
+            separators=(",", ":"),
+        )
         with tempfile.NamedTemporaryFile(
             "w",
             encoding="utf-8",
@@ -18780,7 +18786,11 @@ def start_server(
             # plain backend, not a dashboard, so it announces a neutral token;
             # `dashboard` keeps the legacy one. The desktop matches either.
             ready_token = "HERMES_BACKEND_READY" if headless else "HERMES_DASHBOARD_READY"
-            print(f"{ready_token} port={actual_port}", flush=True)
+            print(
+                f"{ready_token} port={actual_port} "
+                f"desktop_scope_protocol={DESKTOP_SCOPE_PROTOCOL_VERSION}",
+                flush=True,
+            )
             if headless:
                 # No SPA, and the JSON-RPC/WS endpoints are auth-gated — don't
                 # advertise a paste-and-connect URL, just announce the bind.

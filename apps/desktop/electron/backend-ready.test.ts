@@ -22,6 +22,8 @@ import { test } from 'vitest'
 import {
   DEFAULT_PORT_ANNOUNCE_TIMEOUT_MS,
   MIN_PORT_ANNOUNCE_TIMEOUT_MS,
+  parseBackendReadyLine,
+  readBackendReadyFile,
   readDashboardReadyFile,
   resolvePortAnnounceTimeoutMs,
   waitForDashboardPort,
@@ -84,6 +86,19 @@ test('falls back to the default for malformed / non-positive overrides', () => {
 // ---------------------------------------------------------------------------
 // waitForDashboardPort
 // ---------------------------------------------------------------------------
+
+test('parses v2 and legacy ready lines without assuming protocol support', () => {
+  assert.deepEqual(
+    parseBackendReadyLine('HERMES_BACKEND_READY port=54321 desktop_scope_protocol=2'),
+    { port: 54_321, desktopScopeProtocol: 2 }
+  )
+  assert.deepEqual(parseBackendReadyLine('HERMES_DASHBOARD_READY port=43210'), {
+    port: 43_210,
+    desktopScopeProtocol: null
+  })
+  assert.equal(parseBackendReadyLine('prefix HERMES_BACKEND_READY port=54321'), null)
+  assert.equal(parseBackendReadyLine('HERMES_BACKEND_READY port=70000 desktop_scope_protocol=2'), null)
+})
 
 test('resolves with the announced port', async () => {
   const child = makeFakeChild()
@@ -164,6 +179,25 @@ test('readDashboardReadyFile returns a valid port from JSON', () => {
   }
 })
 
+test('readBackendReadyFile preserves the advertised protocol and legacy null', () => {
+  const tmp = mkTmpReadyFile()
+
+  try {
+    fs.writeFileSync(tmp.file, JSON.stringify({ port: 4567, desktop_scope_protocol: 2 }))
+    assert.deepEqual(readBackendReadyFile(tmp.file), {
+      port: 4567,
+      desktopScopeProtocol: 2
+    })
+    fs.writeFileSync(tmp.file, JSON.stringify({ port: 4568 }))
+    assert.deepEqual(readBackendReadyFile(tmp.file), {
+      port: 4568,
+      desktopScopeProtocol: null
+    })
+  } finally {
+    tmp.cleanup()
+  }
+})
+
 test('readDashboardReadyFile ignores missing, malformed, or invalid files', () => {
   const tmp = mkTmpReadyFile()
 
@@ -173,6 +207,10 @@ test('readDashboardReadyFile ignores missing, malformed, or invalid files', () =
     assert.equal(readDashboardReadyFile(tmp.file), null)
     fs.writeFileSync(tmp.file, JSON.stringify({ port: 0 }))
     assert.equal(readDashboardReadyFile(tmp.file), null)
+    fs.writeFileSync(tmp.file, JSON.stringify({ port: true, desktop_scope_protocol: 2 }))
+    assert.equal(readBackendReadyFile(tmp.file), null)
+    fs.writeFileSync(tmp.file, JSON.stringify({ port: 4321, desktop_scope_protocol: '2' }))
+    assert.equal(readBackendReadyFile(tmp.file), null)
   } finally {
     tmp.cleanup()
   }
