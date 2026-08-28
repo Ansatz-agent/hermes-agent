@@ -137,7 +137,7 @@ export class TraceDurabilityRuntime {
     const active = () => generation === this.generation && scope === this.diagnosticScope
 
     const reportStorageFailure = (error: unknown, counts?: Partial<TraceDurabilityCounts>) => {
-      if (!active() || this.storageFailureGeneration === generation) {
+      if (isTraceStoreControlFlowError(error) || !active() || this.storageFailureGeneration === generation) {
         return
       }
 
@@ -380,6 +380,12 @@ export class TraceDurabilityRuntime {
       // Diagnostics must never change Trace durability behavior.
     }
   }
+}
+
+function isTraceStoreControlFlowError(error: unknown): boolean {
+  return (
+    error instanceof Error && (error.message === 'local_commit_cancelled' || error.message === 'trace_outbox_closed')
+  )
 }
 
 function classifyTraceStorageFailure(error: unknown): string {

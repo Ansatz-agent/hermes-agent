@@ -541,3 +541,16 @@ test('diagnostic scopes emit bounded safe transitions and ignore stale account g
     errorClass: 'secure_key_storage_unavailable'
   })
 })
+
+test('store shutdown control flow does not consume the real storage failure diagnostic slot', () => {
+  const events: TraceDurabilityDiagnostic[] = []
+  const diagnostics = new TraceDurabilityRuntime(event => events.push(event)).bindDiagnostics()
+
+  diagnostics.storageFailed(new Error('trace_outbox_closed'), { pending: 0, pendingBytes: 0 })
+  diagnostics.storageFailed(Object.assign(new Error('disk full after shutdown race'), { code: 'ENOSPC' }), {
+    pending: 2,
+    pendingBytes: 512
+  })
+
+  assert.deepEqual(events, [{ code: 'trace_storage_failed', errorClass: 'disk_full', pending: 2, pendingBytes: 512 }])
+})

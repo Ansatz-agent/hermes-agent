@@ -1417,6 +1417,66 @@ test('a durable online Gateway receipt leaves only a bounded payload-free tombst
   }
 })
 
+test('gateway-first cancellation leaves storage diagnostics available for a later real failure', async () => {
+  const userData = await temporaryUserData()
+  const gateway = await ControllableGateway.start('online')
+  const events: TraceDurabilityDiagnostic[] = []
+  const runtime = new TraceDurabilityRuntime(event => events.push(event))
+  const harnesses: TraceHarness[] = []
+  let acceptDirectUpload = true
+  let failLocalCommit = false
+
+  const fs: TraceFileSystem = {
+    ...nodeTraceFileSystem,
+    appendFile: async (path, data) => {
+      if (failLocalCommit && isActiveSegmentPath(path)) {
+        throw Object.assign(new Error('disk full after gateway-first cancellation'), { code: 'ENOSPC' })
+      }
+
+      await nodeTraceFileSystem.appendFile(path, data)
+    }
+  }
+
+  try {
+    const harness = await launchTraceHarness({
+      fetchImpl: async (_input, init) => {
+        if (!acceptDirectUpload) {
+          throw new Error('trace-upstream-offline')
+        }
+
+        const batchId = new Headers(init?.headers).get('idempotency-key')
+        assert.ok(batchId)
+
+        return new Response(null, {
+          headers: {
+            'x-trace-batch-id': batchId,
+            'x-trace-receipt': 'accepted'
+          },
+          status: 202
+        })
+      },
+      fs,
+      gateway,
+      groupCommitMs: 50,
+      owner: owner('a'),
+      runtime,
+      userData
+    })
+
+    harnesses.push(harness)
+    assert.equal((await harness.post(payload('gateway-first-no-storage-failure'), 1)).status, 200)
+    await waitFor(async () => (await harness.diagnostics()).pending === 0)
+    assert.deepEqual(events, [])
+
+    acceptDirectUpload = false
+    failLocalCommit = true
+    assert.equal((await harness.post(payload('real-storage-failure'), 2)).status, 503)
+    assert.deepEqual(events, [{ code: 'trace_storage_failed', errorClass: 'disk_full', pending: 0, pendingBytes: 0 }])
+  } finally {
+    await cleanupContinuityTest(harnesses, [gateway], userData)
+  }
+})
+
 test('a lost durable Gateway response reuses the same batch id and digest after restart-safe local commit', async () => {
   const userData = await temporaryUserData()
   const gateway = await ControllableGateway.start('online')
