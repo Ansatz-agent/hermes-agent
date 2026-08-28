@@ -306,6 +306,7 @@ import { TraceBackendRegistry } from './trace-backend-registry'
 import { RebindableTraceCredentialSource } from './trace-credential-provider'
 import {
   isTraceDurabilityStartupError,
+  safeTraceFailureCode,
   TraceDurabilityCoordinator,
   TraceDurabilityRuntime,
   type TraceDurabilitySession,
@@ -916,9 +917,7 @@ async function startDesktopAuthRuntime() {
                 const traceOwner = traceOwnerFromScope(status, traceScope, desktopInstallationId)
 
                 void prepareDesktopTraceForwarder(traceScope, traceOwner).catch(error => {
-                  rememberLog(
-                    `[trace] authenticated owner sync failed: ${String((error as Error)?.message || error)}`
-                  )
+                  rememberLog(`[trace] authenticated owner sync failed: ${safeTraceFailureCode(error)}`)
                 })
               }
             }
@@ -9150,7 +9149,7 @@ async function createDesktopTraceSession(
   if (migrationBarrier !== null) {
     void migrationBarrier.catch(error => {
       traceDiagnostics.storageFailed(error)
-      rememberLog(`[trace] background namespace migration failed: ${String((error as Error)?.message || error)}`)
+      rememberLog(`[trace] background namespace migration failed: ${safeTraceFailureCode(error)}`)
     })
   }
 
@@ -9160,7 +9159,7 @@ async function createDesktopTraceSession(
   // between bounded record reads and aborts before replace if a turn starts.
   void store.compactIfIdle().catch(error => {
     traceDiagnostics.storageFailed(error)
-    rememberLog(`[trace] startup outbox maintenance failed: ${String((error as Error)?.message || error)}`)
+    rememberLog(`[trace] startup outbox maintenance failed: ${safeTraceFailureCode(error)}`)
   })
 
   const credentialSource = new RebindableTraceCredentialSource()
@@ -14187,7 +14186,7 @@ function compactDesktopTraceOutboxIfIdle(): void {
   }
 
   void desktopTraceRuntime.compactIfIdle().catch(error => {
-    rememberLog(`[trace] idle outbox maintenance failed: ${String((error as Error)?.message || error)}`)
+    rememberLog(`[trace] idle outbox maintenance failed: ${safeTraceFailureCode(error)}`)
   })
 }
 

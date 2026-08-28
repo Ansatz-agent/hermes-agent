@@ -45,6 +45,15 @@ export function isTraceDurabilityStartupError(error: unknown): error is TraceDur
   return error instanceof TraceDurabilityStartupError
 }
 
+export function safeTraceFailureCode(error: unknown): string {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error ? (error as { code?: unknown }).code : undefined
+
+  return typeof code === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(code)
+    ? code
+    : 'trace_operation_failed'
+}
+
 type TraceDurabilityFacadeAdapter = {
   detach(): void
   install(ingress: TraceIngressEndpoint): void

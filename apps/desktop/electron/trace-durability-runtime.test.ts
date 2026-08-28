@@ -5,6 +5,7 @@ import { test } from 'vitest'
 import type { ConnectionScope } from './auth-bridge'
 import {
   isTraceDurabilityStartupError,
+  safeTraceFailureCode,
   TraceDurabilityCoordinator,
   type TraceDurabilityDiagnostic,
   TraceDurabilityRuntime,
@@ -239,6 +240,22 @@ test('Trace durability startup errors remain identifiable without replacing the 
   assert.equal(error.cause, cause)
   assert.equal(isTraceDurabilityStartupError(error), true)
   assert.equal(isTraceDurabilityStartupError(cause), false)
+})
+
+test('Trace failure log codes are bounded identifiers and never fall back to error messages', () => {
+  const accountId = '11111111-1111-4111-8111-111111111111'
+
+  assert.equal(
+    safeTraceFailureCode(Object.assign(new Error(`/trace-outbox/account-${accountId}`), { code: 'ENOSPC' })),
+    'ENOSPC'
+  )
+  assert.equal(
+    safeTraceFailureCode(
+      Object.assign(new Error(`/trace-outbox/account-${accountId}`), { code: `unsafe\naccount-${accountId}` })
+    ),
+    'trace_operation_failed'
+  )
+  assert.equal(safeTraceFailureCode(new Error(`/trace-outbox/account-${accountId}`)), 'trace_operation_failed')
 })
 
 test('coordinator fences an activation whose facade publication overlaps a hard lock', async () => {
