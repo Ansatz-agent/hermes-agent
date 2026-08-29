@@ -14,7 +14,7 @@ import { AuthBootstrapProgress } from '@/components/auth-bootstrap-progress'
 import { Button } from '@/components/ui/button'
 import type { DesktopBootstrapProgressUnit, DesktopSafeBootstrapEvent, DesktopSafeBootstrapState } from '@/global'
 import { useViewedInterval } from '@/hooks/use-viewed-interval'
-import { type Translations, useI18n, validationHealthText } from '@/i18n'
+import { type Translations, useI18n } from '@/i18n'
 import { sanitizeAuthBootstrapText } from '@/lib/auth-bootstrap-progress'
 
 import type { BridgeStatus } from '../../auth-bridge-status'
@@ -89,6 +89,7 @@ const unavailableStatus = (): DesktopAccountStatus => ({
   runtime_instance_id: 'unavailable',
   epoch: 0,
   valid_until: 0,
+  cloud_state: null,
   validation_state: 'unknown',
   validation_reason: 'runtime_unavailable',
   last_validated_at: null,
@@ -125,7 +126,13 @@ function isMatchingExplicitTerminal(
 
 function degradedFrom(current: DesktopAccountStatus, reason: string): DesktopAccountStatus {
   return hasCachedLocalAuthorization(current)
-    ? { ...current, validation_state: 'degraded', validation_reason: reason, reason: null }
+    ? {
+        ...current,
+        cloud_state: 'unreachable',
+        validation_state: 'degraded',
+        validation_reason: reason,
+        reason: null
+      }
     : unavailableStatus()
 }
 
@@ -491,11 +498,6 @@ export function AuthGate({
     return (
       <DesktopAuthContext.Provider key={`${connectionId}:${status.principal_key}`} value={authenticatedContext}>
         {children}
-        {status.validation_state === 'degraded' ? (
-          <p className="sr-only" role="status">
-            {validationHealthText(t.auth)}
-          </p>
-        ) : null}
       </DesktopAuthContext.Provider>
     )
   }

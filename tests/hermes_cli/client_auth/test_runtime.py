@@ -24,6 +24,7 @@ from hermes_cli.client_auth.client import (
     SessionStatus,
     TraceCredential,
 )
+from hermes_cli.client_auth.backend_scope_protocol import CONTROL_ACK_PREFIX
 from hermes_cli.client_auth.runtime import (
     LEASE_SECONDS,
     LOGIN_ATTEMPT_LIMIT,
@@ -31,14 +32,18 @@ from hermes_cli.client_auth.runtime import (
     OWNER_IDLE_SECONDS,
     AuthRequired,
     AuthScope,
+    AuthScopeChanged,
     AuthState,
+    BackendScopeGrantState,
     BackendScopeTokenRegistry,
+    BackendScopeTokenRejected,
     MemoryOwner,
     OwnerBroker,
     OwnerElectionContext,
     ProcessHardener,
     RuntimeConsumer,
     RuntimeSnapshot,
+    CloudState,
     ValidationState,
     RemoteRuntimeOwner,
     SocketLivenessProbe,
@@ -54,6 +59,7 @@ from hermes_cli.client_auth.runtime import (
     connect_runtime_owner,
     install_entrypoint_owner,
     install_runtime_consumer,
+    is_local_auth_unavailable,
     require_authorized,
     resolve_owner,
     parse_backend_scope_token_registration,
@@ -75,6 +81,49 @@ BOB_SESSION_ID = "55555555-5555-4555-8555-555555555555"
 
 def _scope_bearer(seed: bytes = b"A") -> str:
     return base64.urlsafe_b64encode(seed * 32).decode("ascii").rstrip("=")
+
+
+def _scope_control_id(seed: bytes) -> str:
+    return base64.urlsafe_b64encode(seed * 16).decode("ascii").rstrip("=")
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        AuthRequired("invalid_response"),
+        AuthRequired("rate_limited"),
+        AuthRequired("runtime_unavailable"),
+        AuthRequired("server_unavailable"),
+        AuthRequired("vault_unavailable"),
+        BackendScopeTokenRejected("expired"),
+    ],
+)
+def test_local_auth_unavailable_classifier_accepts_only_retryable_failures(error):
+    assert is_local_auth_unavailable(error)
+
+
+@pytest.mark.parametrize(
+    "reason",
+    ["invalid_credentials", "session_expired", "session_rejected", "signed_out"],
+)
+def test_local_auth_unavailable_classifier_rejects_account_failures(reason):
+    assert not is_local_auth_unavailable(AuthRequired(reason))
+
+
+class _ControlTarget:
+    def __init__(self, on_write=None):
+        self.frames = []
+        self.flushes = 0
+        self._on_write = on_write
+
+    def write(self, frame):
+        if self._on_write is not None:
+            self._on_write(frame)
+        self.frames.append(frame)
+        return len(frame)
+
+    def flush(self):
+        self.flushes += 1
 
 
 def test_backend_scope_token_is_hashed_bounded_and_exactly_scope_bound():
@@ -145,7 +194,7 @@ def test_backend_scope_token_expires_revokes_and_rejects_owner_epoch_change():
 
     current = grant.auth
     registry.revoke(connection_id="local", expected=grant.auth)
-    with pytest.raises(AuthRequired):
+    with pytest.raises(BackendScopeTokenRejected, match="invalid_ws_claim"):
         registry.authorize_claim(grant.claim(), "dashboard.ws.message")
 
     replacement = registry.register(
@@ -155,7 +204,7 @@ def test_backend_scope_token_expires_revokes_and_rejects_owner_epoch_change():
         ttl_seconds=30,
     )
     clock.now = replacement.valid_until
-    with pytest.raises(AuthRequired, match="session_expired"):
+    with pytest.raises(BackendScopeTokenRejected, match="expired"):
         registry.authorize_claim(replacement.claim(), "dashboard.ws.message")
 
 
@@ -233,10 +282,12 @@ def test_running_backend_control_attaches_trace_transport_without_restart(monkey
             self.sent = True
             return frame
 
-    runtime._run_backend_scope_token_control(Stream())
+    target = _ControlTarget()
+    runtime._run_backend_scope_token_control(Stream(), target)
 
     assert len(registrations) == 1
     assert registrations[0]["endpoint"] == "http://127.0.0.1:49152/v1/traces"
+    assert target.frames == []
 
 
 def test_invalid_trace_control_frame_isolated_from_scope_and_later_registration(
@@ -255,14 +306,27 @@ def test_invalid_trace_control_frame_isolated_from_scope_and_later_registration(
         lambda **transport: registered.append(transport),
     )
     bearer = _scope_bearer()
+    registration_id = _scope_control_id(b"R")
     scope_frame = {
-        "version": 1,
+        "version": 2,
         "operation": "register_scope_token",
+        "registration_id": registration_id,
         "bearer": bearer,
         "connection_id": "local",
         "runtime_instance_id": current.runtime_instance_id,
         "epoch": current.epoch,
-        "ttl_seconds": 60,
+        "ttl_seconds": 1_800,
+    }
+    promote_frame = {
+        "version": 2,
+        "operation": "promote_scope_token",
+        "transition_id": _scope_control_id(b"T"),
+        "registration_id": registration_id,
+        "previous_registration_id": None,
+        "connection_id": "local",
+        "runtime_instance_id": current.runtime_instance_id,
+        "epoch": current.epoch,
+        "overlap_seconds": 60,
     }
     trace_frame = {
         "version": 1,
@@ -273,78 +337,304 @@ def test_invalid_trace_control_frame_isolated_from_scope_and_later_registration(
         "entrypoint": "desktop",
         "plugins_toml": "/opt/Ansatz/config/ansatz-voice-trace/plugins.toml",
     }
-    frames = [scope_frame, {**trace_frame, "endpoint": "https://invalid.example/v1/traces"}, trace_frame]
+    frames = [
+        scope_frame,
+        {**trace_frame, "endpoint": "https://invalid.example/v1/traces"},
+        trace_frame,
+        promote_frame,
+    ]
 
     class ObservingStream:
         index = 0
 
         def readline(self, _limit):
-            if self.index == 2:
-                assert registry.authorize(bearer, "dashboard.api.request").auth == current
+            if self.index == 1:
+                assert registry.probe(bearer).state is BackendScopeGrantState.CANDIDATE
             if self.index == 3:
                 assert len(registered) == 1
+            if self.index == 4:
+                assert registry.authorize(
+                    bearer,
+                    "dashboard.api.request",
+                ).state is BackendScopeGrantState.ACTIVE
                 return b""
             frame = json.dumps(frames[self.index]).encode() + b"\n"
             self.index += 1
             return frame
 
     stream = ObservingStream()
-    runtime._run_backend_scope_token_control(stream)
-    assert stream.index == 3
+    target = _ControlTarget()
+    runtime._run_backend_scope_token_control(stream, target)
+    assert stream.index == 4
     assert len(registered) == 1
+    assert len(target.frames) == 2
+
+
+def test_recoverable_promotion_rejection_keeps_control_reader_and_active_grant(
+    monkeypatch,
+):
+    from hermes_cli.client_auth import runtime
+
+    current = AuthScope("0123456789abcdef0123456789abcdef", 7)
+    registry = BackendScopeTokenRegistry(
+        authorize=lambda _boundary, *, expected: expected
+    )
+    monkeypatch.setattr(runtime, "backend_scope_tokens", registry)
+
+    bearers = {name: _scope_bearer(name.encode("ascii")) for name in "ABCD"}
+    registration_ids = {
+        name: _scope_control_id(name.encode("ascii")) for name in "ABCD"
+    }
+
+    def register(name):
+        return {
+            "version": 2,
+            "operation": "register_scope_token",
+            "registration_id": registration_ids[name],
+            "bearer": bearers[name],
+            "connection_id": "local",
+            "runtime_instance_id": current.runtime_instance_id,
+            "epoch": current.epoch,
+            "ttl_seconds": 1_800,
+        }
+
+    def promote(name, previous):
+        return {
+            "version": 2,
+            "operation": "promote_scope_token",
+            "transition_id": _scope_control_id(name.lower().encode("ascii")),
+            "registration_id": registration_ids[name],
+            "previous_registration_id": (
+                registration_ids[previous] if previous is not None else None
+            ),
+            "connection_id": "local",
+            "runtime_instance_id": current.runtime_instance_id,
+            "epoch": current.epoch,
+            "overlap_seconds": 60,
+        }
+
+    frames = [
+        register("A"),
+        promote("A", None),
+        register("B"),
+        promote("B", "A"),
+        register("C"),
+        # Simulate a lost B promotion ACK: the client still believes A is active.
+        promote("C", "A"),
+        register("D"),
+        promote("D", "B"),
+    ]
+
+    class ObservingStream:
+        def __init__(self):
+            self.index = 0
+            self.observed_final_active = False
+
+        def readline(self, _limit):
+            if self.index == len(frames):
+                assert registry.authorize(
+                    bearers["D"],
+                    "dashboard.api.request",
+                ).state is BackendScopeGrantState.ACTIVE
+                self.observed_final_active = True
+                return b""
+            frame = json.dumps(frames[self.index]).encode("utf-8") + b"\n"
+            self.index += 1
+            return frame
+
+    stream = ObservingStream()
+    target = _ControlTarget()
+    runtime._run_backend_scope_token_control(stream, target)
+
+    assert stream.index == len(frames)
+    assert stream.observed_final_active
+    assert len(target.frames) == 7
+    assert target.flushes == 7
+
+
+def test_authoritative_scope_revocation_still_terminates_control_reader(
+    monkeypatch,
+):
+    from hermes_cli.client_auth import runtime
+
+    current = AuthScope("0123456789abcdef0123456789abcdef", 7)
+    authorized = True
+
+    def authorize(_boundary, *, expected):
+        if not authorized:
+            raise AuthRequired("runtime_unavailable")
+        return expected
+
+    registry = BackendScopeTokenRegistry(authorize=authorize)
+    monkeypatch.setattr(runtime, "backend_scope_tokens", registry)
+    registration_id = _scope_control_id(b"A")
+    bearer = _scope_bearer(b"A")
+    frames = [
+        {
+            "version": 2,
+            "operation": "register_scope_token",
+            "registration_id": registration_id,
+            "bearer": bearer,
+            "connection_id": "local",
+            "runtime_instance_id": current.runtime_instance_id,
+            "epoch": current.epoch,
+            "ttl_seconds": 1_800,
+        },
+        {
+            "version": 2,
+            "operation": "promote_scope_token",
+            "transition_id": _scope_control_id(b"a"),
+            "registration_id": registration_id,
+            "previous_registration_id": None,
+            "connection_id": "local",
+            "runtime_instance_id": current.runtime_instance_id,
+            "epoch": current.epoch,
+            "overlap_seconds": 60,
+        },
+        {
+            "version": 2,
+            "operation": "register_scope_token",
+            "registration_id": _scope_control_id(b"B"),
+            "bearer": _scope_bearer(b"B"),
+            "connection_id": "local",
+            "runtime_instance_id": current.runtime_instance_id,
+            "epoch": current.epoch,
+            "ttl_seconds": 1_800,
+        },
+        {"unreachable": True},
+    ]
+
+    class RevokingStream:
+        def __init__(self):
+            self.index = 0
+
+        def readline(self, _limit):
+            nonlocal authorized
+            if self.index == 2:
+                authorized = False
+            frame = json.dumps(frames[self.index]).encode("utf-8") + b"\n"
+            self.index += 1
+            return frame
+
+    stream = RevokingStream()
+    target = _ControlTarget()
+    runtime._run_backend_scope_token_control(stream, target)
+
+    assert stream.index == 3
+    assert len(target.frames) == 2
+    assert target.flushes == 2
+    with pytest.raises(BackendScopeTokenRejected, match="unknown_token"):
+        registry.authorize(bearer, "dashboard.api.request")
 
 
 def test_scope_token_control_eof_revokes_every_registered_bearer(monkeypatch):
     from hermes_cli.client_auth import runtime
 
-    registered = threading.Event()
+    promoted = threading.Event()
     release_eof = threading.Event()
     current = AuthScope("0123456789abcdef0123456789abcdef", 7)
 
     def authorize(_boundary, *, expected):
         assert expected == current
-        registered.set()
         return expected
 
     registry = BackendScopeTokenRegistry(authorize=authorize)
     monkeypatch.setattr(runtime, "backend_scope_tokens", registry)
     bearer = _scope_bearer()
-    frame = json.dumps(
+    registration_id = _scope_control_id(b"R")
+    transition_id = _scope_control_id(b"T")
+    frames = [
         {
-            "version": 1,
+            "version": 2,
             "operation": "register_scope_token",
+            "registration_id": registration_id,
             "bearer": bearer,
             "connection_id": "local",
             "runtime_instance_id": current.runtime_instance_id,
             "epoch": current.epoch,
-            "ttl_seconds": 60,
-        }
-    ).encode("utf-8") + b"\n"
+            "ttl_seconds": 1_800,
+        },
+        {
+            "version": 2,
+            "operation": "promote_scope_token",
+            "transition_id": transition_id,
+            "registration_id": registration_id,
+            "previous_registration_id": None,
+            "connection_id": "local",
+            "runtime_instance_id": current.runtime_instance_id,
+            "epoch": current.epoch,
+            "overlap_seconds": 60,
+        },
+    ]
 
     class BlockingStream:
         def __init__(self):
-            self.first = True
+            self.index = 0
 
         def readline(self, _limit):
-            if self.first:
-                self.first = False
+            if self.index < len(frames):
+                frame = json.dumps(frames[self.index]).encode("utf-8") + b"\n"
+                self.index += 1
                 return frame
             release_eof.wait(timeout=2)
             return b""
 
+    def observe_ack(frame):
+        assert bearer.encode("ascii") not in frame
+        payload = json.loads(
+            frame.removeprefix(CONTROL_ACK_PREFIX.encode("ascii"))
+        )
+        if payload["operation"] == "scope_token_registered":
+            assert set(payload) == {
+                "version",
+                "operation",
+                "registration_id",
+                "connection_id",
+                "runtime_instance_id",
+                "epoch",
+                "ttl_seconds",
+            }
+            assert registry.probe(bearer).state is BackendScopeGrantState.CANDIDATE
+        elif payload["operation"] == "scope_token_promoted":
+            assert set(payload) == {
+                "version",
+                "operation",
+                "transition_id",
+                "registration_id",
+                "previous_registration_id",
+                "connection_id",
+                "runtime_instance_id",
+                "epoch",
+                "overlap_seconds",
+            }
+            assert registry.authorize(
+                bearer,
+                "dashboard.api.request",
+            ).state is BackendScopeGrantState.ACTIVE
+            promoted.set()
+        else:
+            pytest.fail(f"unexpected control ACK: {payload}")
+
+    target = _ControlTarget(on_write=observe_ack)
+
     control = threading.Thread(
         target=runtime._run_backend_scope_token_control,
-        args=(BlockingStream(),),
+        args=(BlockingStream(), target),
     )
     control.start()
-    assert registered.wait(timeout=2)
-    assert registry.authorize(bearer, "dashboard.api.request").auth == current
+    assert promoted.wait(timeout=2)
+    grant = registry.authorize(bearer, "dashboard.api.request")
+    claim = registry.ws_claim(grant)
+    assert len(target.frames) == 2
+    assert target.flushes == 2
 
     release_eof.set()
     control.join(timeout=2)
     assert not control.is_alive()
-    with pytest.raises(AuthRequired):
+    with pytest.raises(BackendScopeTokenRejected):
         registry.authorize(bearer, "dashboard.api.request")
+    with pytest.raises(BackendScopeTokenRejected, match="backend_generation_changed"):
+        registry.authorize_ws_claim(claim, "dashboard.ws.message")
 
 
 def status_at(*, server_second: int = 0, expiry_second: int = 120) -> SessionStatus:
@@ -384,7 +674,7 @@ def test_dead_liveness_connection_overrides_cached_authenticated_state():
 def test_expiry_and_epoch_comparison_fail_closed():
     state = RuntimeSnapshot.new_authenticated("alice", now=10.0, ttl=60.0)
 
-    with pytest.raises(AuthRequired, match="runtime_unavailable"):
+    with pytest.raises(AuthScopeChanged, match="runtime_unavailable"):
         state.require_authorized(
             "worker",
             expected=AuthScope(state.runtime_instance_id, state.epoch + 1),
@@ -741,6 +1031,61 @@ def test_trace_token_waits_for_native_validation_client_call():
     assert not trace.is_alive()
 
 
+def test_trace_token_rechecks_cloud_state_after_waiting_for_failed_validation():
+    class FailingValidationClient(BlockingNativeAuthClient):
+        def __init__(self):
+            super().__init__()
+            self.trace_calls = 0
+
+        def trace_token(self, credential):
+            self.trace_calls += 1
+            return TraceCredential(
+                access_token="must-not-be-issued",
+                expires_at="2099-08-23T14:15:00+00:00",
+                expires_in=900,
+                installation_id=credential.installation_id,
+            )
+
+    client = FailingValidationClient()
+    client.native_status_error = AuthServiceError("server_unavailable")
+    owner = MemoryOwner(
+        client,
+        hardener=RecordingHardener(),
+        secret_backend=FakeSecretBackend(),
+        clock=FakeClock(),
+        jitter=lambda _low, _high: 0.5,
+    )
+    owner.login(
+        "alice",
+        bytearray(b"secret"),
+        installation_id=INSTALLATION_ID,
+        client_version="0.17.0",
+    )
+    validation = threading.Thread(target=owner.validate_now)
+    trace_failures: list[AuthRequired] = []
+
+    def issue_trace() -> None:
+        try:
+            owner.trace_token(
+                installation_id=INSTALLATION_ID,
+                client_version="0.17.0",
+                telemetry_schema_version="1",
+            )
+        except AuthRequired as error:
+            trace_failures.append(error)
+
+    trace = threading.Thread(target=issue_trace)
+    validation.start()
+    assert client.validation_started.wait(timeout=1)
+    trace.start()
+    client.release_validation.set()
+    validation.join(timeout=2)
+    trace.join(timeout=2)
+
+    assert [error.reason for error in trace_failures] == ["server_unavailable"]
+    assert client.trace_calls == 0
+
+
 class BlockingBobWriteBackend(FakeSecretBackend):
     """Stops immediately after Bob's blob reaches the backend."""
 
@@ -850,6 +1195,213 @@ def test_native_validation_failure_preserves_scope_and_cached_authorization(reas
         reason,
     )
     assert backend.raw is not None
+
+
+def test_desktop_local_continuity_is_explicit_and_does_not_enable_cloud_features():
+    owner, _backend, client, clock = native_owner_factory()
+    owner.enable_desktop_local_continuity()
+    active = owner.login(
+        "alice",
+        bytearray(b"secret"),
+        installation_id=INSTALLATION_ID,
+        client_version="0.17.0",
+    )
+    local = owner.connect_consumer(allow_local_continuity=True)
+    strict = owner.connect_consumer(allow_local_continuity=False)
+    client.native_status_error = AuthServiceError("server_unavailable")
+    clock.now = owner.next_refresh_at
+
+    degraded = owner.validate_now()
+
+    assert degraded.state is AuthState.AUTHENTICATED
+    assert degraded.cloud_state is CloudState.UNREACHABLE
+    assert degraded.scope == active.scope
+    assert local.require_authorized(
+        "desktop.local.file",
+        expected=active.scope,
+    ) == active.scope
+    with pytest.raises(AuthRequired, match="server_unavailable"):
+        strict.require_authorized("cli.tool", expected=active.scope)
+    with pytest.raises(AuthRequired, match="server_unavailable"):
+        owner.trace_token(
+            installation_id=INSTALLATION_ID,
+            client_version="0.17.0",
+            telemetry_schema_version="1",
+        )
+
+
+def test_consumer_cannot_request_local_continuity_before_desktop_owner_enables_it():
+    owner, _backend, client, clock = native_owner_factory()
+    active = owner.login(
+        "alice",
+        bytearray(b"secret"),
+        installation_id=INSTALLATION_ID,
+        client_version="0.17.0",
+    )
+    requested = owner.connect_consumer(allow_local_continuity=True)
+    client.native_status_error = AuthServiceError("server_unavailable")
+    clock.now = owner.next_refresh_at
+
+    owner.validate_now()
+
+    with pytest.raises(AuthRequired, match="server_unavailable"):
+        requested.require_authorized(
+            "desktop.local.not-enabled",
+            expected=active.scope,
+        )
+
+
+def test_reauth_required_keeps_only_explicit_desktop_local_authorization():
+    active = RuntimeSnapshot.new_authenticated("alice", now=0.0, ttl=1.0)
+    degraded = active.degraded("session_expired")
+
+    assert degraded.cloud_state is CloudState.REAUTH_REQUIRED
+    with pytest.raises(AuthRequired, match="session_expired"):
+        degraded.require_authorized(
+            "cli.after-expiry",
+            expected=active.scope,
+            now=2.0,
+        )
+    assert degraded.require_authorized(
+        "desktop.local.after-expiry",
+        expected=active.scope,
+        now=2.0,
+        allow_local_continuity=True,
+    ) == active.scope
+
+
+def test_desktop_owner_restores_trusted_native_scope_offline_but_strict_consumer_stays_locked():
+    first, backend, _client, _clock = native_owner_factory()
+    active = first.login(
+        "alice",
+        bytearray(b"secret"),
+        installation_id=INSTALLATION_ID,
+        client_version="0.17.0",
+    )
+    restarted = VaultOwner(
+        FakeAuthClient(),
+        secret_backend=backend,
+        clock=FakeClock(),
+        jitter=lambda *_: 1.0,
+    )
+    restarted.enable_desktop_local_continuity()
+
+    restored = restarted.refresh()
+
+    assert restored.state is AuthState.AUTHENTICATED
+    assert restored.cloud_state is CloudState.UNREACHABLE
+    assert restored.username == "alice"
+    assert restored.runtime_instance_id != active.runtime_instance_id
+    assert restarted.connect_consumer(
+        allow_local_continuity=True
+    ).require_authorized(
+        "desktop.local.restart",
+        expected=restored.scope,
+    ) == restored.scope
+    with pytest.raises(AuthRequired, match="server_unavailable"):
+        restarted.connect_consumer(
+            allow_local_continuity=False
+        ).require_authorized(
+            "cli.restart",
+            expected=restored.scope,
+        )
+
+
+def test_logout_persists_secret_free_tombstone_that_blocks_offline_restart():
+    owner, backend, _client, _clock = native_owner_factory()
+    owner.enable_desktop_local_continuity()
+    owner.login(
+        "alice",
+        bytearray(b"secret"),
+        installation_id=INSTALLATION_ID,
+        client_version="0.17.0",
+    )
+
+    signed_out = owner.logout()
+
+    payload = json.loads(backend.raw)
+    assert payload == {"kind": "signed_out", "reason": "signed_out", "version": 3}
+    assert "session_token" not in backend.raw
+    restarted = VaultOwner(
+        FakeAuthClient(),
+        secret_backend=backend,
+        clock=FakeClock(),
+        jitter=lambda *_: 1.0,
+    )
+    restarted.enable_desktop_local_continuity()
+    restored = restarted.refresh()
+    assert restored.state is AuthState.SIGNED_OUT
+    assert restored.cloud_state is None
+    with pytest.raises(AuthRequired, match="signed_out"):
+        restarted.connect_consumer(
+            allow_local_continuity=True
+        ).require_authorized("desktop.after-logout", expected=signed_out.scope)
+
+
+def test_logout_removes_old_credential_when_tombstone_write_fails():
+    owner, backend, _client, _clock = native_owner_factory()
+    owner.login(
+        "alice",
+        bytearray(b"secret"),
+        installation_id=INSTALLATION_ID,
+        client_version="0.17.0",
+    )
+    backend.fail_writes = True
+
+    signed_out = owner.logout()
+
+    assert signed_out.state is AuthState.SIGNED_OUT
+    assert backend.raw is None
+    restarted = VaultOwner(
+        FakeAuthClient(),
+        secret_backend=backend,
+        clock=FakeClock(),
+        jitter=lambda *_: 1.0,
+    )
+    assert restarted.refresh().state is AuthState.SIGNED_OUT
+
+
+def test_desktop_local_continuity_never_opens_first_install_or_unreadable_vault():
+    first_install, _backend, _client, _clock = native_owner_factory()
+    first_install.enable_desktop_local_continuity()
+    snapshot = first_install.refresh()
+    assert snapshot.state is AuthState.SIGNED_OUT
+    assert snapshot.cloud_state is None
+
+    unreadable, _backend, _client, _clock = native_owner_factory(fail_reads=True)
+    unreadable.enable_desktop_local_continuity()
+    with pytest.raises(AuthRequired, match="vault_unavailable"):
+        unreadable.refresh()
+    assert unreadable.snapshot().state is AuthState.LOCKED
+    assert unreadable.snapshot().cloud_state is None
+
+
+def test_authoritative_legacy_session_rejection_tombstones_and_locks_desktop_local_access():
+    owner, backend, client, _clock = vault_owner_factory()
+    owner.enable_desktop_local_continuity()
+    active = owner.login("alice", bytearray(b"secret"))
+    client.status_error = SessionRejected()
+
+    with pytest.raises(AuthRequired, match="session_rejected"):
+        owner.refresh()
+
+    locked = owner.snapshot()
+    assert locked.state is AuthState.LOCKED
+    assert locked.cloud_state is None
+    assert locked.epoch == active.epoch + 1
+    assert json.loads(backend.raw) == {
+        "kind": "signed_out",
+        "reason": "session_rejected",
+        "version": 3,
+    }
+    restarted = VaultOwner(
+        FakeAuthClient(),
+        secret_backend=backend,
+        clock=FakeClock(),
+        jitter=lambda *_: 1.0,
+    )
+    restarted.enable_desktop_local_continuity()
+    assert restarted.refresh().state is AuthState.LOCKED
 
 
 def test_native_cache_restores_before_network_after_process_restart():
@@ -1007,7 +1559,11 @@ def test_stale_native_validation_cannot_restore_credentials_after_logout():
     validation.join(timeout=2)
 
     assert outcomes == [signed_out]
-    assert backend.raw is None
+    assert json.loads(backend.raw) == {
+        "kind": "signed_out",
+        "reason": "signed_out",
+        "version": 3,
+    }
     restarted = VaultOwner(client, secret_backend=backend, clock=FakeClock(), jitter=lambda *_: 1.0)
     assert restarted.refresh().state is AuthState.SIGNED_OUT
 
@@ -1161,6 +1717,35 @@ def test_matching_explicit_revoke_writes_secret_free_tombstone_once():
     assert "session-token-sentinel" not in backend.raw
     assert owner.validate_now() == revoked
     assert backend.write_count == 2
+
+
+def test_explicit_revoke_still_locks_and_removes_credential_when_tombstone_write_fails():
+    owner, backend, client, _clock = native_owner_factory()
+    owner.enable_desktop_local_continuity()
+    active = owner.login(
+        "alice",
+        bytearray(b"secret"),
+        installation_id=INSTALLATION_ID,
+        client_version="0.17.0",
+    )
+    backend.fail_writes = True
+    client.native_status_error = ExplicitSessionRevocation(
+        code="session_revoked",
+        account_id=active.account_id,
+        session_id=active.session_id,
+        revoked_at="2026-08-24T12:00:00+00:00",
+    )
+
+    revoked = owner.validate_now()
+
+    assert revoked.state is AuthState.LOCKED
+    assert revoked.reason == "session_revoked"
+    assert revoked.cloud_state is None
+    assert backend.raw is None
+    with pytest.raises(AuthRequired, match="session_revoked"):
+        owner.connect_consumer(
+            allow_local_continuity=True
+        ).require_authorized("desktop.after-revoke", expected=active.scope)
 
 
 @pytest.mark.parametrize(
@@ -1326,7 +1911,11 @@ def test_owner_login_status_logout_and_rotation_are_identical(owner_factory):
     signed_out = owner.logout()
     assert signed_out.state is AuthState.SIGNED_OUT
     assert signed_out.epoch == snapshot.epoch + 1
-    assert secret_backend.read() is None
+    assert json.loads(secret_backend.read()) == {
+        "kind": "signed_out",
+        "reason": "signed_out",
+        "version": 3,
+    }
 
 
 @pytest.mark.parametrize("owner_factory", [vault_owner_factory, memory_owner_factory])
@@ -1544,7 +2133,11 @@ def test_logout_locks_and_clears_secret_even_when_remote_logout_fails():
 
     assert after.state is AuthState.SIGNED_OUT
     assert after.epoch == before.epoch + 1
-    assert secret_backend.read() is None
+    assert json.loads(secret_backend.read()) == {
+        "kind": "signed_out",
+        "reason": "signed_out",
+        "version": 3,
+    }
 
 
 def test_native_refresh_failure_preserves_scope_without_extra_grace():
@@ -2445,7 +3038,7 @@ def test_remote_owner_trace_credential_protocol_is_exact_and_installation_bound(
 
     assert result.installation_id == installation_id
     assert json.loads(connection.sent) == {
-        "version": 2,
+        "version": 3,
         "operation": "trace_token",
         "installation_id": installation_id,
         "client_version": "0.17.0",
@@ -3081,6 +3674,51 @@ def test_unix_broker_shares_login_authorization_and_revocation():
                 consumer.require_authorized(
                     "child.next_boundary",
                     expected=authenticated.scope,
+                )
+
+            renewed = owner.login("alice", bytearray(b"secret"))
+            assert renewed.scope != authenticated.scope
+            with pytest.raises(AuthScopeChanged, match="runtime_unavailable"):
+                consumer.require_authorized(
+                    "child.stale_scope",
+                    expected=authenticated.scope,
+                )
+        finally:
+            broker.close()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Unix runtime protocol")
+def test_unix_broker_requires_owner_enable_and_consumer_flag_for_offline_local_access():
+    owner, _backend, client, _clock = native_owner_factory()
+    active = owner.login(
+        "alice",
+        bytearray(b"secret"),
+        installation_id=INSTALLATION_ID,
+        client_version="0.17.0",
+    )
+    with tempfile.TemporaryDirectory(prefix="ha-local-continuity-") as temporary:
+        endpoint = UnixEndpoint.for_directory(
+            Path(temporary),
+            random_name="abcdef0123456789abcdef0123456789",
+        )
+        broker = OwnerBroker.start(owner, endpoint=endpoint)
+        try:
+            remote = connect_runtime_owner(endpoint=endpoint)
+            remote.enable_desktop_local_continuity()
+            local = remote.connect_consumer(allow_local_continuity=True)
+            strict = remote.connect_consumer(allow_local_continuity=False)
+            client.native_status_error = AuthServiceError("server_unavailable")
+            degraded = owner.validate_now()
+
+            assert degraded.cloud_state is CloudState.UNREACHABLE
+            assert local.require_authorized(
+                "desktop.local.remote",
+                expected=active.scope,
+            ) == active.scope
+            with pytest.raises(AuthRequired, match="server_unavailable"):
+                strict.require_authorized(
+                    "cli.remote",
+                    expected=active.scope,
                 )
         finally:
             broker.close()
@@ -3936,8 +4574,14 @@ def test_owner_broker_versions_snapshot_shape_for_rolling_upgrade():
             assert v2["ok"] is True
             assert LEGACY_SNAPSHOT_WIRE_KEYS < set(v2["snapshot"])
             assert "principal_key" in v2["snapshot"]
+            assert "cloud_state" not in v2["snapshot"]
 
-            for invalid in (3, "1", None):
+            v3 = roundtrip(3)
+            assert v3["version"] == 3
+            assert v3["ok"] is True
+            assert v3["snapshot"]["cloud_state"] is None
+
+            for invalid in (4, "1", None):
                 rejected = roundtrip(invalid)
                 assert rejected["ok"] is False
         finally:
@@ -3980,11 +4624,52 @@ def test_remote_owner_falls_back_to_protocol_v1_for_an_old_owner():
     first = owner.refresh(timeout=1.0)
     assert first.state is AuthState.SIGNED_OUT
     versions = [json.loads(frame)["version"] for frame in sent_frames]
-    assert versions == [2, 1], "client must probe v2 then fall back to v1 for an old owner"
+    assert versions == [3, 2, 1], "client must negotiate down to an old v1 owner"
 
     owner.refresh(timeout=1.0)
     versions = [json.loads(frame)["version"] for frame in sent_frames]
-    assert versions == [2, 1, 1], "the downgrade must be sticky for the owner connection"
+    assert versions == [3, 2, 1, 1], "the downgrade must be sticky for the owner connection"
+
+
+def test_remote_owner_falls_back_to_protocol_v2_without_misreading_cloud_state():
+    signed_out = RuntimeSnapshot.signed_out()
+    v2_wire = signed_out.public_dict()
+    v2_wire.pop("cloud_state")
+    sent_frames: list[bytes] = []
+
+    class V2OwnerConnection:
+        def settimeout(self, _timeout):
+            return None
+
+        def sendall(self, data):
+            sent_frames.append(bytes(data))
+
+        def recv(self, _size):
+            request = json.loads(sent_frames[-1])
+            if request.get("version") != 2:
+                return b'{"ok":false,"reason":"runtime_unavailable","version":1}\n'
+            return (
+                json.dumps({"version": 2, "ok": True, "snapshot": v2_wire}).encode(
+                    "utf-8"
+                )
+                + b"\n"
+            )
+
+        def close(self):
+            return None
+
+    class Endpoint:
+        def connect_current(self, *, timeout):
+            assert timeout > 0
+            return V2OwnerConnection()
+
+    owner = RemoteRuntimeOwner(Endpoint())
+
+    snapshot = owner.refresh(timeout=1.0)
+
+    assert snapshot.state is AuthState.SIGNED_OUT
+    assert snapshot.cloud_state is None
+    assert [json.loads(frame)["version"] for frame in sent_frames] == [3, 2]
 
 
 def _seeded_legacy_backend(client: FakeAuthClient, principal_key: str) -> FakeSecretBackend:
@@ -4152,7 +4837,7 @@ def test_owner_broker_status_with_native_context_performs_legacy_upgrade():
             broker.close()
 
 
-def test_remote_owner_sends_native_context_only_on_protocol_v2():
+def test_remote_owner_sends_native_context_only_on_protocol_v2_or_newer():
     signed_out = RuntimeSnapshot.signed_out()
     legacy_wire = {
         key: signed_out.public_dict()[key] for key in LEGACY_SNAPSHOT_WIRE_KEYS
@@ -4188,9 +4873,10 @@ def test_remote_owner_sends_native_context_only_on_protocol_v2():
 
     assert result.state is AuthState.SIGNED_OUT
     requests = [json.loads(frame) for frame in sent_frames]
-    assert [request["version"] for request in requests] == [2, 1]
-    assert requests[0]["installation_id"] == INSTALLATION_ID
-    assert requests[0]["client_version"] == "0.17.0"
-    assert set(requests[1]) == {"version", "operation"}, (
+    assert [request["version"] for request in requests] == [3, 2, 1]
+    for request in requests[:2]:
+        assert request["installation_id"] == INSTALLATION_ID
+        assert request["client_version"] == "0.17.0"
+    assert set(requests[2]) == {"version", "operation"}, (
         "an old owner cannot upgrade, so the v1 fallback must drop the context"
     )

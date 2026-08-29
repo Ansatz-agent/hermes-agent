@@ -97,7 +97,10 @@ from agent.interrupt_compat import request_hard_interrupt
 from gateway.readiness import collect_runtime_readiness
 from hermes_cli.client_auth.runtime import (
     AuthRequired,
+    BackendScopeTokenRejected,
+    account_locked_payload,
     backend_scope_tokens,
+    local_capability_rejection_payload,
     require_authorized,
 )
 
@@ -1020,13 +1023,16 @@ if AIOHTTP_AVAILABLE:
         """Reject every API request when the central Hermes login is locked."""
         try:
             _require_client_runtime_request(request)
+        except BackendScopeTokenRejected as error:
+            if os.environ.get("HERMES_DESKTOP") == "1":
+                return web.json_response(
+                    local_capability_rejection_payload(error),
+                    status=401,
+                )
+            return web.json_response(account_locked_payload(), status=401)
         except AuthRequired:
             return web.json_response(
-                {
-                    "error": "Ansatz login required",
-                    "code": "login_required",
-                    "hint": "Run `ansatz login` and retry.",
-                },
+                account_locked_payload(),
                 status=401,
             )
         return await handler(request)

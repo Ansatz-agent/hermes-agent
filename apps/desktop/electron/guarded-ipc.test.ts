@@ -2,7 +2,13 @@ import assert from 'node:assert/strict'
 
 import { test, vi } from 'vitest'
 
-import { AUTH_FREE_CHANNELS, CHANNEL_AUTH_POLICY, createGuardedIpc, IpcAuthRequiredError } from './guarded-ipc'
+import {
+  AUTH_FREE_CHANNELS,
+  CHANNEL_AUTH_POLICY,
+  createGuardedIpc,
+  IpcAuthorizationUnavailableError,
+  IpcAuthRequiredError
+} from './guarded-ipc'
 
 class FakeIpcMain {
   readonly handles = new Map<string, (...args: any[]) => any>()
@@ -92,11 +98,33 @@ test('a protected handle resolves the execution connection and authorizes before
   assert.equal(handler.mock.calls.length, 1)
 })
 
-test('locked and stale authorities fail closed with one redacted error', async () => {
+test('only an explicit authority rejection becomes login required', async () => {
+  const { guarded, ipcMain } = fixture({
+    require: vi.fn(async () => {
+      throw Object.assign(new Error('session details must stay private'), { code: 'AUTH_REQUIRED' })
+    })
+  })
+
+  const handler = vi.fn()
+  guarded.handle('hermes:fs:writeText', handler)
+
+  await assert.rejects(
+    ipcMain.handles.get('hermes:fs:writeText')?.(knownEvent, '/tmp/a', 'content'),
+    error =>
+      error instanceof IpcAuthRequiredError &&
+      error.code === 'AUTH_REQUIRED' &&
+      !error.message.includes('session details')
+  )
+  assert.equal(handler.mock.calls.length, 0)
+})
+
+test('runtime and unknown authority failures stay redacted without login semantics', async () => {
   for (const secret of ['agent_history_sessionid=do-not-leak', 'stale scope password-sentinel']) {
     const { guarded, ipcMain } = fixture({
       require: vi.fn(async () => {
-        throw new Error(secret)
+        throw Object.assign(new Error(secret), {
+          code: secret.startsWith('agent_history') ? 'runtime_unavailable' : undefined
+        })
       })
     })
 
@@ -106,7 +134,10 @@ test('locked and stale authorities fail closed with one redacted error', async (
     await assert.rejects(
       ipcMain.handles.get('hermes:fs:writeText')?.(knownEvent, '/tmp/a', 'content'),
       error =>
-        error instanceof IpcAuthRequiredError && error.code === 'AUTH_REQUIRED' && !error.message.includes(secret)
+        error instanceof IpcAuthorizationUnavailableError &&
+        error.code === 'AUTHORIZATION_UNAVAILABLE' &&
+        !error.message.includes(secret) &&
+        !error.message.includes('AUTH_REQUIRED')
     )
     assert.equal(handler.mock.calls.length, 0)
   }
@@ -150,7 +181,7 @@ test('an explicitly malformed connection id is rejected instead of falling back 
   assert.equal(handler.mock.calls.length, 0)
 })
 
-test('send-style handlers are denied without executing their side effect', async () => {
+test('send-style handlers preserve unavailable versus explicit login-required semantics', async () => {
   const { guarded, ipcMain } = fixture({
     require: vi.fn(async () => {
       throw new Error('private bridge failure')
@@ -161,7 +192,20 @@ test('send-style handlers are denied without executing their side effect', async
   guarded.on('hermes:terminal:write', handler)
 
   ipcMain.listeners.get('hermes:terminal:write')?.(knownEvent, 'pty-1', 'whoami')
-  await vi.waitFor(() => assert.deepEqual(knownEvent.returnValue, { error: { code: 'AUTH_REQUIRED' } }))
+  await vi.waitFor(() => assert.deepEqual(knownEvent.returnValue, { error: { code: 'AUTHORIZATION_UNAVAILABLE' } }))
+  assert.equal(handler.mock.calls.length, 0)
+
+  const explicit = fixture({
+    require: vi.fn(async () => {
+      throw Object.assign(new Error('private terminal state'), { code: 'AUTH_REQUIRED' })
+    })
+  })
+
+  const explicitEvent = { sender: { id: 7 }, returnValue: undefined }
+
+  explicit.guarded.on('hermes:terminal:write', handler)
+  explicit.ipcMain.listeners.get('hermes:terminal:write')?.(explicitEvent, 'pty-1', 'whoami')
+  await vi.waitFor(() => assert.deepEqual(explicitEvent.returnValue, { error: { code: 'AUTH_REQUIRED' } }))
   assert.equal(handler.mock.calls.length, 0)
 })
 

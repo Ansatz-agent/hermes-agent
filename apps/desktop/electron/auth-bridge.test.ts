@@ -4,7 +4,7 @@ import { PassThrough } from 'node:stream'
 
 import { afterEach, test, vi } from 'vitest'
 
-import { AuthBridgeError, DesktopAuthBridge } from './auth-bridge'
+import { AuthBridgeError, DesktopAuthBridge, sameConnectionScope } from './auth-bridge'
 
 const authenticatedStatus = {
   state: 'authenticated' as const,
@@ -16,6 +16,7 @@ const authenticatedStatus = {
   runtime_instance_id: 'runtime-1',
   epoch: 3,
   valid_until: 42,
+  cloud_state: 'active' as const,
   validation_state: 'online' as const,
   validation_reason: null,
   last_validated_at: '2026-08-24T12:00:00+00:00',
@@ -37,6 +38,16 @@ const traceCredential = {
 }
 
 const traceCredentialNow = Date.parse('2099-08-23T14:00:00Z')
+
+test('connection scope equality requires the exact connection, runtime, and epoch tuple', () => {
+  const value = { connection_id: 'local', epoch: 7, runtime_instance_id: 'runtime-a' }
+
+  assert.equal(sameConnectionScope(value, { ...value }), true)
+  assert.equal(sameConnectionScope(value, { ...value, connection_id: 'remote' }), false)
+  assert.equal(sameConnectionScope(value, { ...value, runtime_instance_id: 'runtime-b' }), false)
+  assert.equal(sameConnectionScope(value, { ...value, epoch: 8 }), false)
+  assert.equal(sameConnectionScope(value, null), false)
+})
 
 class FakeChild extends EventEmitter {
   readonly stdin = new PassThrough()
@@ -111,15 +122,41 @@ test('status carries native context and accepts degraded health without secrets'
     result: {
       ...authenticatedStatus,
       valid_until: 253_402_300_799,
+      cloud_state: 'unreachable',
       validation_state: 'degraded',
       validation_reason: 'server_unavailable'
     }
   })
 
   const status = await pending
+  assert.equal(status.cloud_state, 'unreachable')
   assert.equal(status.validation_state, 'degraded')
   assert.equal(status.valid_until, 253_402_300_799)
   assert.equal(JSON.stringify(status).includes('session_token'), false)
+  bridge.close()
+})
+
+test('status accepts authenticated local continuity while cloud reauth is required', async () => {
+  const { bridge, child } = bridgeFixture()
+  const pending = bridge.status()
+  const request = await readRequest(child)
+
+  respond(child, {
+    version: 2,
+    id: request.id,
+    result: {
+      ...authenticatedStatus,
+      valid_until: 0,
+      cloud_state: 'reauth_required',
+      validation_state: 'degraded',
+      validation_reason: 'session_expired',
+      reason: 'session_expired'
+    }
+  })
+
+  const status = await pending
+  assert.equal(status.state, 'authenticated')
+  assert.equal(status.cloud_state, 'reauth_required')
   bridge.close()
 })
 
@@ -135,6 +172,7 @@ test.each(['account_disabled', 'account_revoked', 'session_revoked'])(
       state: 'locked',
       username: null,
       valid_until: 0,
+      cloud_state: null,
       validation_state: 'degraded',
       validation_reason: reason,
       reason
@@ -179,6 +217,19 @@ test('status frames with secret or extra fields fail closed', async () => {
       !error.message.includes('secret-sentinel')
   )
   assert.equal(diagnostics.join('\n').includes('secret-sentinel'), false)
+})
+
+test.each([
+  ['missing', ({ cloud_state: _cloudState, ...status }) => status],
+  ['unknown', status => ({ ...status, cloud_state: 'maybe' })]
+] as const)('status frames with %s cloud_state fail closed', async (_name, mutate) => {
+  const { bridge, child } = bridgeFixture()
+  const pending = bridge.status()
+  const request = await readRequest(child)
+
+  respond(child, { version: 2, id: request.id, result: mutate(authenticatedStatus) })
+
+  await assert.rejects(pending, error => error instanceof AuthBridgeError && error.code === 'runtime_unavailable')
 })
 
 afterEach(() => {
@@ -236,7 +287,17 @@ test('uses monotonically increasing bounded request ids', async () => {
   respond(child, {
     version: 2,
     id: secondRequest.id,
-    result: { ...authenticatedStatus, state: 'signed_out', username: null, epoch: 4, reason: 'signed_out' }
+    result: {
+      ...authenticatedStatus,
+      state: 'signed_out',
+      username: null,
+      epoch: 4,
+      valid_until: 0,
+      cloud_state: null,
+      validation_state: 'unknown',
+      last_validated_at: null,
+      reason: 'signed_out'
+    }
   })
   await second
 
@@ -479,7 +540,16 @@ test('logout recovery has room to clear the local session after owner restart', 
   respond(child, {
     version: 2,
     id: request.id,
-    result: { ...authenticatedStatus, state: 'signed_out', username: null, reason: 'signed_out' }
+    result: {
+      ...authenticatedStatus,
+      state: 'signed_out',
+      username: null,
+      valid_until: 0,
+      cloud_state: null,
+      validation_state: 'unknown',
+      last_validated_at: null,
+      reason: 'signed_out'
+    }
   })
   assert.equal((await pending).state, 'signed_out')
   bridge.close()

@@ -8,6 +8,7 @@ import { test } from 'vitest'
 
 import { AUTH_BRIDGE_PROTOCOL_VERSION } from './auth-bridge'
 import { type AuthRuntimeMarker, probeAuthRuntime, validateAuthRuntimeContract } from './auth-runtime-contract'
+import { DESKTOP_SCOPE_PROTOCOL_VERSION } from './auth-scope-token'
 
 const COMMIT = 'a'.repeat(40)
 const ARCHIVE_SHA = 'b'.repeat(64)
@@ -33,6 +34,11 @@ function createManagedFixture(prefix = 'hermes-auth-contract-') {
   writeFile(activeRoot, 'auth-venv/python.exe')
   writeFile(activeRoot, 'hermes_cli/main.py')
   writeFile(activeRoot, 'hermes_cli/client_auth/bridge.py')
+  writeFile(
+    activeRoot,
+    'hermes_cli/client_auth/backend_scope_protocol.py',
+    `DESKTOP_SCOPE_PROTOCOL_VERSION = ${DESKTOP_SCOPE_PROTOCOL_VERSION}\n`
+  )
   writeFile(activeRoot, 'hermes_cli/client_auth/cli.py')
   writeFile(activeRoot, 'bin/ansatz.cmd')
   writeFile(activeRoot, 'desktop_auth_runtime/uv.lock', lockContents)
@@ -201,6 +207,42 @@ test('auth contract rejects schema drift, stale package state, and pending trans
   }
 })
 
+test('auth contract reports a desktop scope protocol mismatch before runtime startup', () => {
+  const fixture = createManagedFixture()
+
+  try {
+    writeFile(
+      fixture.activeRoot,
+      'hermes_cli/client_auth/backend_scope_protocol.py',
+      'DESKTOP_SCOPE_PROTOCOL_VERSION = 1\n'
+    )
+
+    const result = validateFixture(fixture)
+    assert.equal(result.ok, false)
+    assert.equal(result.reason, 'scope_protocol_mismatch')
+  } finally {
+    fs.rmSync(fixture.tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('auth contract accepts an annotated desktop scope protocol declaration', () => {
+  const fixture = createManagedFixture()
+
+  try {
+    writeFile(
+      fixture.activeRoot,
+      'hermes_cli/client_auth/backend_scope_protocol.py',
+      `from typing import Final\nDESKTOP_SCOPE_PROTOCOL_VERSION: Final[int] = ${DESKTOP_SCOPE_PROTOCOL_VERSION}  # wire contract\n`
+    )
+
+    const result = validateFixture(fixture)
+    assert.equal(result.ok, true)
+    assert.equal(result.reason, null)
+  } finally {
+    fs.rmSync(fixture.tempRoot, { recursive: true, force: true })
+  }
+})
+
 test('auth contract rejects symlinked required artifacts', () => {
   const fixture = createManagedFixture()
 
@@ -304,6 +346,8 @@ test('auth runtime probe uses the fixed protocol snippet and sanitized source pa
     assert.deepEqual(calls[0].args.slice(0, 1), ['-c'])
     assert.match(calls[0].args[1], /hermes_cli\.client_auth\.bridge/)
     assert.match(calls[0].args[1], new RegExp(`PROTOCOL_VERSION == ${AUTH_BRIDGE_PROTOCOL_VERSION}`))
+    assert.match(calls[0].args[1], /hermes_cli\.client_auth\.backend_scope_protocol/)
+    assert.match(calls[0].args[1], new RegExp(`DESKTOP_SCOPE_PROTOCOL_VERSION == ${DESKTOP_SCOPE_PROTOCOL_VERSION}`))
     assert.equal((calls[0].options.env as NodeJS.ProcessEnv).PYTHONPATH, fixture.activeRoot)
     assert.equal('OPENAI_API_KEY' in (calls[0].options.env as NodeJS.ProcessEnv), false)
   } finally {

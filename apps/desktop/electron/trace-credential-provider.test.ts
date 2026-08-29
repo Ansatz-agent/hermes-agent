@@ -3,7 +3,12 @@ import assert from 'node:assert/strict'
 import { test } from 'vitest'
 
 import type { TraceCredential } from './auth-bridge'
-import { RefreshingTraceCredentialProvider, type TraceCredentialSource } from './trace-credential-provider'
+import {
+  RebindableTraceCredentialSource,
+  RefreshingTraceCredentialProvider,
+  type TraceCredentialSource
+} from './trace-credential-provider'
+import type { TraceOwner } from './trace-outbox-types'
 
 const installationId = '11111111-1111-4111-8111-111111111111'
 const now = Date.parse('2099-08-23T14:00:00Z')
@@ -14,6 +19,18 @@ function credential(accessToken: string, overrides: Partial<TraceCredential> = {
     expires_at: '2099-08-23T14:15:00Z',
     expires_in: 900,
     installation_id: installationId,
+    ...overrides
+  }
+}
+
+function validOwner(overrides: Partial<TraceOwner> = {}): TraceOwner {
+  const accountId = overrides.accountId ?? '11111111-1111-4111-8111-111111111111'
+
+  return {
+    accountId,
+    accountKey: `account-${accountId}`,
+    installationId,
+    sessionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     ...overrides
   }
 }
@@ -29,6 +46,56 @@ function deferred<T>() {
 
   return { promise, reject, resolve }
 }
+
+test('a same-account rebind rejects the old loader result and only caches the new binding', async () => {
+  const oldFlight = deferred<TraceCredential>()
+  const ownerA = validOwner({ sessionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' })
+  const ownerB = validOwner({ sessionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb' })
+  const source = new RebindableTraceCredentialSource()
+  source.bind(ownerA, () => oldFlight.promise)
+  const provider = new RefreshingTraceCredentialProvider(source, { clock: () => now, installationId })
+
+  const stale = provider.current()
+  source.bind(ownerB, async () => credential('new-session-token-1234567890'))
+  provider.invalidate()
+  oldFlight.resolve(credential('old-session-token-1234567890'))
+
+  await assert.rejects(stale, /trace_credential_binding_changed/)
+  assert.equal((await provider.current()).access_token, 'new-session-token-1234567890')
+  assert.deepEqual(source.owner(), ownerB)
+})
+
+test('credential source refuses cross-account rebind and keeps the active binding', async () => {
+  const source = new RebindableTraceCredentialSource()
+  const ownerA = validOwner()
+  source.bind(ownerA, async () => credential('account-a-token-1234567890'))
+
+  assert.throws(
+    () => source.bind(validOwner({ accountId: '22222222-2222-4222-8222-222222222222' }), async () => credential('x')),
+    /trace_credential_account_mismatch/
+  )
+  assert.deepEqual(source.owner(), ownerA)
+})
+
+test('credential source reports unavailable until an owner is bound', async () => {
+  const source = new RebindableTraceCredentialSource()
+
+  await assert.rejects(source.load(false), /trace_credential_binding_unavailable/)
+  assert.equal(source.owner(), null)
+})
+
+test('clearing the credential source rejects its in-flight loader and removes the owner', async () => {
+  const oldFlight = deferred<TraceCredential>()
+  const source = new RebindableTraceCredentialSource()
+  source.bind(validOwner(), () => oldFlight.promise)
+
+  const stale = source.load(false)
+  source.clear()
+  oldFlight.resolve(credential('cleared-binding-token-1234567890'))
+
+  await assert.rejects(stale, /trace_credential_binding_changed/)
+  assert.equal(source.owner(), null)
+})
 
 test('a 401 cannot coalesce forced refresh into a stale normal flight', async () => {
   const normal = deferred<TraceCredential>()

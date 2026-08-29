@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 
+import { AUTH_BRIDGE_PROTOCOL_VERSION } from '../auth-bridge'
+import { DESKTOP_SCOPE_PROTOCOL_VERSION } from '../auth-scope-token'
 import { type BootstrapProcessResult, buildBootstrapEnvironment, runBootstrapProcess } from '../bootstrap-process'
 import type { BundledAuthToolchain } from '../bootstrap-toolchain'
 import { retireExactWindowsAuthOwners } from '../windows-auth-owner'
@@ -312,7 +314,7 @@ function publishAuthContract(activeRoot: string, source: { commit: string; archi
       sourceCommit: source.commit,
       sourceArchiveSha256: source.archiveSha256,
       authLockSha256: sha256File(lockPath),
-      protocolVersion: 2
+      protocolVersion: AUTH_BRIDGE_PROTOCOL_VERSION
     })}\n`
   )
 }
@@ -437,6 +439,9 @@ export async function prepareWindowsPackagedAuthRuntime(options: PrepareOptions)
     const verification = [
       'import httpx, keyring',
       'from hermes_cli.client_auth import bridge',
+      'from hermes_cli.client_auth.backend_scope_protocol import DESKTOP_SCOPE_PROTOCOL_VERSION',
+      `assert bridge.PROTOCOL_VERSION == ${AUTH_BRIDGE_PROTOCOL_VERSION}`,
+      `assert DESKTOP_SCOPE_PROTOCOL_VERSION == ${DESKTOP_SCOPE_PROTOCOL_VERSION}`,
       'backend = keyring.get_keyring()',
       "identity = f'{backend.__class__.__module__}.{backend.__class__.__name__}'",
       "assert 'Windows' in identity, identity"

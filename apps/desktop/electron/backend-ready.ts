@@ -3,7 +3,37 @@ import fs from 'node:fs'
 // `ansatz serve` announces HERMES_BACKEND_READY; the legacy `ansatz dashboard`
 // backend announces HERMES_DASHBOARD_READY. Accept either so the desktop spawn
 // works against both the headless backend and old/dashboard runtimes.
-const _READY_RE = /^HERMES_(?:BACKEND|DASHBOARD)_READY port=(\d+)/m
+const _READY_RE = /^HERMES_(?:BACKEND|DASHBOARD)_READY port=(\d+)(?: desktop_scope_protocol=(\d+))?\r?$/
+
+export type BackendReady = {
+  port: number
+  desktopScopeProtocol: number | null
+}
+
+function validPort(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) > 0 && Number(value) <= 65_535
+}
+
+function validProtocol(value: unknown): value is number {
+  return Number.isInteger(value) && Number(value) > 0 && Number.isSafeInteger(value)
+}
+
+export function parseBackendReadyLine(line: string): BackendReady | null {
+  const match = line.match(_READY_RE)
+
+  if (!match) {
+    return null
+  }
+
+  const port = Number(match[1])
+  const protocol = match[2] === undefined ? null : Number(match[2])
+
+  if (!validPort(port) || (protocol !== null && !validProtocol(protocol))) {
+    return null
+  }
+
+  return { port, desktopScopeProtocol: protocol }
+}
 
 // The announcement clock starts the instant the backend process is spawned —
 // before uvicorn binds its socket. On a cold install the child must first
@@ -75,11 +105,11 @@ function waitForDashboardPort(child, timeoutMs = resolvePortAnnounceTimeoutMs())
       while ((nl = buf.indexOf('\n')) !== -1) {
         const line = buf.slice(0, nl)
         buf = buf.slice(nl + 1)
-        const m = line.match(_READY_RE)
+        const ready = parseBackendReadyLine(line)
 
-        if (m) {
+        if (ready) {
           cleanup()
-          resolve(parseInt(m[1], 10))
+          resolve(ready.port)
 
           return
         }
@@ -107,19 +137,29 @@ function waitForDashboardPort(child, timeoutMs = resolvePortAnnounceTimeoutMs())
   })
 }
 
-function readDashboardReadyFile(readyFile: fs.PathOrFileDescriptor) {
+export function readBackendReadyFile(readyFile: fs.PathOrFileDescriptor): BackendReady | null {
   if (!readyFile) {
     return null
   }
 
   try {
     const parsed = JSON.parse(fs.readFileSync(readyFile, 'utf8'))
-    const port = Number(parsed?.port)
+    const port = parsed?.port
+    const rawProtocol = parsed?.desktop_scope_protocol
+    const protocol = rawProtocol === undefined ? null : rawProtocol
 
-    return Number.isInteger(port) && port > 0 ? port : null
+    if (!validPort(port) || (protocol !== null && !validProtocol(protocol))) {
+      return null
+    }
+
+    return { port, desktopScopeProtocol: protocol }
   } catch {
     return null
   }
+}
+
+function readDashboardReadyFile(readyFile: fs.PathOrFileDescriptor) {
+  return readBackendReadyFile(readyFile)?.port ?? null
 }
 
 function waitForDashboardReadyFile(readyFile, child, timeoutMs = resolvePortAnnounceTimeoutMs()) {

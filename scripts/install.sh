@@ -2047,8 +2047,8 @@ install_auth_deps() {
         return 1
     fi
 
-    if ! "$auth_python" -c 'import httpx, keyring, hermes_cli.client_auth.bridge'; then
-        log_error "Authentication runtime import validation failed"
+    if ! "$auth_python" -c 'import httpx, keyring, hermes_cli.client_auth.bridge as bridge; from hermes_cli.client_auth.backend_scope_protocol import DESKTOP_SCOPE_PROTOCOL_VERSION; assert bridge.PROTOCOL_VERSION == 2; assert DESKTOP_SCOPE_PROTOCOL_VERSION == 2'; then
+        log_error "Authentication runtime protocol validation failed"
         return 1
     fi
 

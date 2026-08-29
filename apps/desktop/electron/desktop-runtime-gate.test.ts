@@ -3,7 +3,7 @@ import fs from 'node:fs'
 
 import { test } from 'vitest'
 
-import { DesktopRuntimeGate } from './desktop-runtime-gate'
+import { coordinateAuthenticatedDesktopRuntime, DesktopRuntimeGate } from './desktop-runtime-gate'
 
 const authenticated = {
   state: 'authenticated',
@@ -11,6 +11,7 @@ const authenticated = {
   runtime_instance_id: 'runtime',
   epoch: 1,
   valid_until: 60,
+  cloud_state: 'active',
   session_expires_at: null,
   reason: null
 }
@@ -23,6 +24,22 @@ test('renderer status reports installed runtime readiness across sign-in and sig
   assert.equal(gate.rendererStatus(authenticated).runtime_ready, true)
   assert.equal(gate.rendererStatus({ ...authenticated, state: 'signed_out' }).runtime_ready, true)
   assert.equal(gate.ready, true)
+})
+
+test('renderer status preserves degraded cloud state after the local runtime is ready', async () => {
+  const gate = new DesktopRuntimeGate()
+  await gate.prepare(async () => {})
+
+  const status = gate.rendererStatus({
+    ...authenticated,
+    valid_until: 0,
+    cloud_state: 'unreachable',
+    reason: 'server_unavailable'
+  })
+
+  assert.equal(status.state, 'authenticated')
+  assert.equal(status.cloud_state, 'unreachable')
+  assert.equal(status.runtime_ready, true)
 })
 
 test('runtime preparation is single-flight', async () => {
@@ -79,41 +96,41 @@ test('failed preparation remains terminal and retryable', async () => {
   assert.equal(gate.state, 'ready')
 })
 
-test('local backend startup coordinates encrypted capture but never waits for a cloud Trace credential', () => {
+test('auth status refresh does not tear down an already trusted desktop runtime', () => {
   const source = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
-
-  const primaryPreparation = source.slice(
-    source.indexOf('prepareLocalBackend: async () => {'),
-    source.indexOf('resolveRemote:', source.indexOf('prepareLocalBackend: async () => {'))
-  )
-
-  const poolPreparation = source.slice(
-    source.indexOf('async function spawnPoolBackend(profile, entry) {'),
-    source.indexOf(
-      '// Same update mutual exclusion',
-      source.indexOf('async function spawnPoolBackend(profile, entry) {')
-    )
-  )
 
   const authSubscription = source.slice(
     source.indexOf('coordinator.subscribe((status, connectionId) => {'),
     source.indexOf('\n      try {', source.indexOf('coordinator.subscribe((status, connectionId) => {'))
   )
 
-  assert.doesNotMatch(source, /await provider\.current\(\)/)
-  assert.match(source, /new TraceRuntimeStartupRecovery/)
-  assert.match(primaryPreparation, /return resolveLocalBackendWithTrace\(\{/)
-  assert.match(primaryPreparation, /startEncryptedTrace: \(\) => ensureDesktopTraceForwarder\(connectionScope, owner\)/)
-  assert.match(poolPreparation, /await prepareDesktopTraceForwarder\(connectionScope,/)
-  assert.match(source, /isConversationStreaming: isDesktopConversationStreaming/)
-  assert.match(source, /traceOwnerFromScope\(status, scope, desktopInstallationId\)/)
-  assert.match(source, /onTerminalRevocation: revocation =>[\s\S]*?applyTraceTerminalRevocation\(revocation\)/)
-  assert.match(source, /const store = await TraceOutboxStore\.open\([\s\S]*?void store\.compactIfIdle\(\)/)
-  assert.match(
-    source,
-    /activeWorkByWebContents\.set\(id, normalizeActiveWork\(payload\)\)[\s\S]*?compactDesktopTraceOutboxIfIdle\(\)/
-  )
   assert.doesNotMatch(authSubscription, /cleanupDesktopCapabilities|desktopRuntimeGate\.invalidate/)
+})
+
+test('authenticated runtime coordination rebinds Trace even while the renderer window is closed', () => {
+  const calls: string[] = []
+
+  coordinateAuthenticatedDesktopRuntime({
+    enableCapabilities: () => calls.push('enable'),
+    rendererAvailable: false,
+    startBackend: () => calls.push('backend'),
+    syncTraceOwner: () => calls.push('trace')
+  })
+
+  assert.deepEqual(calls, ['enable', 'trace'])
+})
+
+test('authenticated runtime coordination starts the backend only when a renderer is available', () => {
+  const calls: string[] = []
+
+  coordinateAuthenticatedDesktopRuntime({
+    enableCapabilities: () => calls.push('enable'),
+    rendererAvailable: true,
+    startBackend: () => calls.push('backend'),
+    syncTraceOwner: () => calls.push('trace')
+  })
+
+  assert.deepEqual(calls, ['enable', 'trace', 'backend'])
 })
 
 test('main records real auth owner transitions and migrates them in the background after backend readiness is unblocked', () => {

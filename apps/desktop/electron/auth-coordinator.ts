@@ -249,11 +249,7 @@ export class AuthCoordinator {
       try {
         return await this.applyStatus(await bridge.logout(), connectionId)
       } catch (error) {
-        if (
-          connectionId === LOCAL_CONNECTION_ID &&
-          safeReason(error) === 'runtime_unavailable' &&
-          this.recoverBridge
-        ) {
+        if (connectionId === LOCAL_CONNECTION_ID && safeReason(error) === 'runtime_unavailable' && this.recoverBridge) {
           try {
             const replacement = await this.recoverBridge(connectionId, bridge)
 
@@ -693,6 +689,7 @@ function degradedFrom(status: BridgeStatus, reason: string): BridgeStatus {
   return {
     ...status,
     state: 'authenticated',
+    cloud_state: reason === 'session_expired' || reason === 'session_rejected' ? 'reauth_required' : 'unreachable',
     validation_state: 'degraded',
     validation_reason: reason,
     reason: null
@@ -710,6 +707,7 @@ function checkingStatus(): BridgeStatus {
     runtime_instance_id: 'checking',
     epoch: 0,
     valid_until: 0,
+    cloud_state: null,
     validation_state: 'validating',
     validation_reason: null,
     last_validated_at: null,
@@ -734,6 +732,7 @@ function lockFrom(status: BridgeStatus, reason: string): BridgeStatus {
     username: null,
     epoch: status.epoch + 1,
     valid_until: 0,
+    cloud_state: null,
     validation_state: 'unknown',
     validation_reason: null,
     last_validated_at: null,

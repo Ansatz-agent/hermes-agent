@@ -13,6 +13,7 @@ pre-existing regression unrelated to dashboard-auth.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
@@ -21,8 +22,10 @@ from fastapi.testclient import TestClient
 
 from hermes_cli import web_server
 from hermes_cli.client_auth.runtime import (
+    AuthRequired,
     AuthScope,
     BackendScopeTokenRegistry,
+    RuntimeSnapshot,
 )
 from hermes_cli.dashboard_auth import clear_providers, register_provider
 from hermes_cli.dashboard_auth.ws_tickets import (
@@ -135,7 +138,7 @@ def desktop_scope_app(monkeypatch):
 
 
 def grant_claim(registry: BackendScopeTokenRegistry, bearer: str) -> dict[str, object]:
-    return registry.authorize(bearer, "test.inspect").claim()
+    return registry.ws_claim(registry.authorize(bearer, "test.inspect"))
 
 
 def _logged_in(client: TestClient) -> None:
@@ -328,7 +331,9 @@ class TestWsAuthOkDesktopScope:
         web_server.app.state.desktop_scope_tokens_required = True
         monkeypatch.setattr(web_server, "backend_scope_tokens", registry)
         self.now = now
+        self.auth = auth
         self.grant = grant
+        self.registry = registry
         yield
         web_server.app.state.desktop_scope_tokens_required = previous
 
@@ -336,11 +341,27 @@ class TestWsAuthOkDesktopScope:
         ticket = mint_ticket(
             user_id="desktop:local",
             provider="desktop-scope",
-            auth_scope=self.grant.claim(),
+            auth_scope=self.registry.ws_claim(self.grant),
         )
 
         assert web_server._ws_auth_ok(_fake_ws(query={"ticket": ticket})) is True
         assert web_server._ws_auth_ok(_fake_ws(query={"ticket": ticket})) is False
+
+    def test_ticket_minted_before_rotation_is_accepted_after_promotion(self):
+        ticket = mint_ticket(
+            user_id="desktop:local",
+            provider="desktop-scope",
+            auth_scope=self.registry.ws_claim(self.grant),
+        )
+        self.now[0] = 120.0
+        self.registry.register(
+            "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI",
+            connection_id="local",
+            expected=self.auth,
+            ttl_seconds=60,
+        )
+
+        assert web_server._ws_auth_ok(_fake_ws(query={"ticket": ticket})) is True
 
     def test_legacy_query_token_and_unbound_ticket_are_rejected(self):
         token_ws = _fake_ws(query={"token": web_server._SESSION_TOKEN})
@@ -350,11 +371,13 @@ class TestWsAuthOkDesktopScope:
         assert web_server._ws_auth_ok(_fake_ws(query={"ticket": unbound})) is False
 
     @pytest.mark.asyncio
-    async def test_expired_scope_closes_an_established_socket_before_next_message(self):
+    async def test_scope_rotation_and_bearer_expiry_do_not_interrupt_an_established_socket(
+        self,
+    ):
         ticket = mint_ticket(
             user_id="desktop:local",
             provider="desktop-scope",
-            auth_scope=self.grant.claim(),
+            auth_scope=self.registry.ws_claim(self.grant),
         )
 
         class FakeWebSocket:
@@ -372,13 +395,179 @@ class TestWsAuthOkDesktopScope:
 
         ws = FakeWebSocket()
         assert web_server._ws_auth_ok(ws) is True
+        self.now[0] = 120.0
+        self.registry.register(
+            "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI",
+            connection_id="local",
+            expected=self.auth,
+            ttl_seconds=60,
+        )
         self.now[0] = self.grant.valid_until
+
+        assert await web_server._ws_client_runtime_authorized(
+            ws,
+            "dashboard.ws.message",
+        )
+        assert ws.closed is None
+
+    @pytest.mark.asyncio
+    async def test_explicit_scope_revocation_closes_an_established_socket(self):
+        ticket = mint_ticket(
+            user_id="desktop:local",
+            provider="desktop-scope",
+            auth_scope=self.registry.ws_claim(self.grant),
+        )
+
+        class FakeWebSocket:
+            def __init__(self):
+                template = _fake_ws(query={"ticket": ticket})
+                self.app = template.app
+                self.client = template.client
+                self.query_params = template.query_params
+                self.state = template.state
+                self.url = template.url
+                self.closed = None
+
+            async def close(self, **kwargs):
+                self.closed = kwargs
+
+        ws = FakeWebSocket()
+        assert web_server._ws_auth_ok(ws) is True
+        self.registry.revoke(connection_id="local", expected=self.auth)
+
+        assert not await web_server._ws_client_runtime_authorized(
+            ws,
+            "dashboard.ws.message",
+        )
+        assert ws.closed == {"code": 4403, "reason": "Local capability changed"}
+
+    @pytest.mark.asyncio
+    async def test_owner_epoch_change_closes_as_capability_changed(self):
+        snapshots = [
+            RuntimeSnapshot.new_authenticated("alice", now=100.0, ttl=60.0)
+        ]
+
+        def authorize(boundary, *, expected):
+            return snapshots[0].require_authorized(
+                boundary,
+                expected=expected,
+                now=100.0,
+            )
+
+        registry = BackendScopeTokenRegistry(
+            clock=lambda: 100.0,
+            authorize=authorize,
+        )
+        grant = registry.register(
+            "ZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWU",
+            connection_id="local",
+            expected=snapshots[0].scope,
+            ttl_seconds=60,
+        )
+        ticket = mint_ticket(
+            user_id="desktop:local",
+            provider="desktop-scope",
+            auth_scope=registry.ws_claim(grant),
+        )
+        self._set_registry_for_test(registry)
+        ws = self._closable_ws(ticket)
+
+        assert web_server._ws_auth_ok(ws) is True
+        snapshots[0] = replace(snapshots[0], epoch=snapshots[0].epoch + 1)
+
+        assert not await web_server._ws_client_runtime_authorized(
+            ws,
+            "dashboard.ws.message",
+        )
+        assert ws.closed == {"code": 4403, "reason": "Local capability changed"}
+
+    @pytest.mark.asyncio
+    async def test_account_service_outage_never_closes_with_login_semantics(self):
+        online = [True]
+
+        def authorize(_boundary, *, expected):
+            if not online[0]:
+                raise AuthRequired("runtime_unavailable")
+            return expected
+
+        registry = BackendScopeTokenRegistry(
+            clock=lambda: 100.0,
+            authorize=authorize,
+        )
+        grant = registry.register(
+            "Y2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2M",
+            connection_id="local",
+            expected=self.auth,
+            ttl_seconds=60,
+        )
+        ticket = mint_ticket(
+            user_id="desktop:local",
+            provider="desktop-scope",
+            auth_scope=registry.ws_claim(grant),
+        )
+        online[0] = False
+        self._set_registry_for_test(registry)
+        ws = self._closable_ws(ticket)
+
+        assert not await web_server._ws_client_runtime_authorized(
+            ws,
+            "dashboard.ws.message",
+        )
+        assert ws.closed == {"code": 1012, "reason": "Local capability unavailable"}
+
+    @pytest.mark.asyncio
+    async def test_explicit_account_rejection_keeps_login_close_semantics(self):
+        authorized = [True]
+
+        def authorize(_boundary, *, expected):
+            if not authorized[0]:
+                raise AuthRequired("session_rejected")
+            return expected
+
+        registry = BackendScopeTokenRegistry(
+            clock=lambda: 100.0,
+            authorize=authorize,
+        )
+        grant = registry.register(
+            "ZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGQ",
+            connection_id="local",
+            expected=self.auth,
+            ttl_seconds=60,
+        )
+        ticket = mint_ticket(
+            user_id="desktop:local",
+            provider="desktop-scope",
+            auth_scope=registry.ws_claim(grant),
+        )
+        authorized[0] = False
+        self._set_registry_for_test(registry)
+        ws = self._closable_ws(ticket)
 
         assert not await web_server._ws_client_runtime_authorized(
             ws,
             "dashboard.ws.message",
         )
         assert ws.closed == {"code": 4401, "reason": "Ansatz login required"}
+
+    def _set_registry_for_test(self, registry):
+        web_server.backend_scope_tokens = registry
+
+    @staticmethod
+    def _closable_ws(ticket):
+        class FakeWebSocket:
+            def __init__(self):
+                template = _fake_ws(query={"ticket": ticket})
+                self.app = template.app
+                self.client = template.client
+                self.query_params = template.query_params
+                self.state = template.state
+                self.url = template.url
+                self.closed = None
+
+            async def close(self, **kwargs):
+                self.closed = kwargs
+
+        return FakeWebSocket()
 
 
 class TestWsRequestIsAllowedGated:

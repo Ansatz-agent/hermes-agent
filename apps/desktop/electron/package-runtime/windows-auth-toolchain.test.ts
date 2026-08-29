@@ -3,9 +3,12 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 import { test } from 'vitest'
 
+import { AUTH_BRIDGE_PROTOCOL_VERSION } from '../auth-bridge'
+import { DESKTOP_SCOPE_PROTOCOL_VERSION } from '../auth-scope-token'
 import type { BundledAuthToolchain } from '../bootstrap-toolchain'
 
 import {
@@ -53,6 +56,10 @@ function makeFixture() {
   fs.mkdirSync(path.join(activeRoot, 'desktop_auth_runtime'), { recursive: true })
   fs.writeFileSync(path.join(activeRoot, 'hermes_cli', 'main.py'), 'fixture\n')
   fs.writeFileSync(path.join(activeRoot, 'hermes_cli', 'client_auth', 'bridge.py'), 'fixture\n')
+  fs.writeFileSync(
+    path.join(activeRoot, 'hermes_cli', 'client_auth', 'backend_scope_protocol.py'),
+    'DESKTOP_SCOPE_PROTOCOL_VERSION = 2\n'
+  )
   fs.writeFileSync(path.join(activeRoot, 'hermes_cli', 'client_auth', 'cli.py'), 'fixture\n')
   fs.writeFileSync(path.join(activeRoot, 'desktop_auth_runtime', 'uv.lock'), 'version = 1\nrevision = 3\n')
   fs.writeFileSync(
@@ -144,6 +151,10 @@ test('Windows auth runtime uses System32 PowerShell and only bundled local packa
       install.args.some(arg => /^https?:/i.test(arg)),
       false
     )
+    const verification = calls.find(call => call.command.endsWith('python.exe'))
+    assert.ok(verification)
+    assert.match(verification.args.join(' '), /bridge\.PROTOCOL_VERSION == 2/)
+    assert.match(verification.args.join(' '), /DESKTOP_SCOPE_PROTOCOL_VERSION == 2/)
     assert.match(
       fs.readFileSync(path.join(result.runtimeRoot, 'python313._pth'), 'utf8'),
       /^python313\.zip\n\.\nLib\\site-packages\n\.\.\nimport site\n$/
@@ -273,4 +284,22 @@ test('Windows auth runtime recovers an interrupted publication before retrying',
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true })
   }
+})
+
+test('CLI installers verify bridge and desktop scope protocols before publishing auth readiness', () => {
+  const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url))
+  const shell = fs.readFileSync(path.join(repoRoot, 'scripts', 'install.sh'), 'utf8')
+  const powershell = fs.readFileSync(path.join(repoRoot, 'scripts', 'install.ps1'), 'utf8')
+
+  for (const source of [shell, powershell]) {
+    assert.match(source, new RegExp(`bridge\\.PROTOCOL_VERSION == ${AUTH_BRIDGE_PROTOCOL_VERSION}`))
+    assert.match(source, new RegExp(`DESKTOP_SCOPE_PROTOCOL_VERSION == ${DESKTOP_SCOPE_PROTOCOL_VERSION}`))
+    assert.match(source, /backend_scope_protocol/)
+  }
+
+  const markerProtocolVersions = [...powershell.matchAll(/^\s*protocolVersion\s*=\s*(\d+)\s*$/gm)].map(match =>
+    Number(match[1])
+  )
+
+  assert.deepEqual(markerProtocolVersions, [AUTH_BRIDGE_PROTOCOL_VERSION])
 })

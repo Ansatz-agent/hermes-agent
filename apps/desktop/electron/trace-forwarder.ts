@@ -35,6 +35,7 @@ export type TraceRecoveryReason =
   | 'token-ready'
   | 'token-near-expiry'
   | 'upload-401'
+  | 'owner-rebound'
 
 export type RecoveryTrigger = { trigger(reason: TraceRecoveryReason): void }
 
@@ -56,7 +57,7 @@ type TraceForwarderOptions = {
   fetchImpl?: FetchLike
   installationId: string
   maxBodyBytes?: number
-  onTerminalRevocation?: (revocation: TerminalTraceRevocation) => void
+  onTerminalRevocation?: (revocation: TerminalTraceRevocation) => boolean | Promise<boolean>
   random?: () => number
   recovery?: RecoveryTrigger
   remoteAddressForRequest?: (request: IncomingMessage) => string | undefined
@@ -76,6 +77,7 @@ export type TraceForwarderSummary = TraceOutboxStoreDiagnostics & { reason: 'sto
 
 type TraceMetadata = Omit<TraceEnvelopeInput, 'body' | 'contentType' | 'owner'>
 type DurableOwner = { kind: 'gateway'; receipt: DurableReceipt } | { batch: DurableTraceBatch; kind: 'local' }
+type UploadAuthorization = { generation: number; owner: TraceOwner }
 
 class UpstreamFailure extends Error {
   constructor(
@@ -99,7 +101,7 @@ export class TraceForwarder {
   private readonly fetchImpl: FetchLike
   private readonly installationId: string
   private readonly maxBodyBytes: number
-  private readonly onTerminalRevocation: (revocation: TerminalTraceRevocation) => void
+  private readonly onTerminalRevocation: (revocation: TerminalTraceRevocation) => boolean | Promise<boolean>
   private readonly random: () => number
   private readonly recovery: RecoveryTrigger
   private readonly remoteAddressForRequest: (request: IncomingMessage) => string | undefined
@@ -110,6 +112,7 @@ export class TraceForwarder {
   private admissionRequests = 0
   private admissionTail: Promise<void> = Promise.resolve()
   private admissionOpen = false
+  private authorizationGeneration = 0
   private generation = 0
   private localBearer = ''
   private owner: TraceOwner | null = null
@@ -125,7 +128,7 @@ export class TraceForwarder {
     this.fetchImpl = options.fetchImpl ?? fetch
     this.installationId = options.installationId
     this.maxBodyBytes = Math.min(options.maxBodyBytes ?? MAX_LOOPBACK_BODY_BYTES, MAX_LOOPBACK_BODY_BYTES)
-    this.onTerminalRevocation = options.onTerminalRevocation ?? (() => {})
+    this.onTerminalRevocation = options.onTerminalRevocation ?? (() => false)
     this.random = options.random ?? Math.random
     this.recovery = options.recovery ?? { trigger: () => {} }
     this.remoteAddressForRequest = options.remoteAddressForRequest ?? (request => request.socket.remoteAddress)
@@ -149,6 +152,7 @@ export class TraceForwarder {
 
     this.owner = validateTraceOwner(owner).owner
     this.generation += 1
+    this.authorizationGeneration += 1
     this.terminalRevoked = false
     this.localBearer = randomBytes(32).toString('base64url')
     this.admissionOpen = true
@@ -161,6 +165,7 @@ export class TraceForwarder {
       response.on('error', error => this.reportLoopbackSocketError(error))
       void this.handle(request, response)
     })
+
     this.server = server
     await new Promise<void>((resolve, reject) => {
       const onError = (error: Error) => {
@@ -187,10 +192,38 @@ export class TraceForwarder {
     return { endpoint: `http://127.0.0.1:${address.port}/v1/traces`, localBearer: this.localBearer }
   }
 
+  ingress(): { endpoint: string; localBearer: string } | null {
+    const address = this.server?.address()
+
+    return address && typeof address !== 'string' && this.localBearer
+      ? { endpoint: `http://127.0.0.1:${address.port}/v1/traces`, localBearer: this.localBearer }
+      : null
+  }
+
+  rebindOwner(owner: TraceOwner): void {
+    const next = validateTraceOwner(owner).owner
+    const current = this.owner
+
+    if (!this.admissionOpen || current === null) {
+      throw new Error('trace_forwarder_unavailable')
+    }
+
+    if (current.accountKey !== next.accountKey || current.installationId !== next.installationId) {
+      throw new Error('trace_owner_account_mismatch')
+    }
+
+    this.authorizationGeneration += 1
+    this.owner = { ...next }
+    this.credentialProvider.invalidate()
+    this.retryByBatch.clear()
+    this.recovery.trigger('owner-rebound')
+  }
+
   async stop({ flushMs: _flushMs }: { flushMs: number }): Promise<TraceForwarderSummary> {
     this.stopping = true
     this.admissionOpen = false
     this.generation += 1
+    this.authorizationGeneration += 1
     const server = this.server
     this.server = null
     const closed = server ? new Promise<void>(resolve => server.close(() => resolve())) : Promise.resolve()
@@ -207,9 +240,11 @@ export class TraceForwarder {
     }
 
     await closed
+
     if (forceCloseTimer) {
       clearTimeout(forceCloseTimer)
     }
+
     await this.admissionTail
     await this.store?.close?.()
     this.credentialProvider.clear()
@@ -347,16 +382,27 @@ export class TraceForwarder {
       const backlog = (await this.store.diagnostics()).pending > 0
       this.requireActiveOwner(input.owner, generation)
       const pending = this.store.beginEnqueue(input)
+      const authorization = this.captureUploadAuthorization()
 
       const cloud =
         directCandidate && this.uploadBarrier === null && !backlog && validateTraceOwner(this.owner).uploadable
-          ? this.sendForReceipt({ ...input, batchId: pending.batchId }, generation)
+          ? this.sendForReceipt({ ...input, batchId: pending.batchId }, generation, authorization, false)
           : null
 
       const winner = await firstDurableOwner(pending.durable, cloud)
 
       if (winner.kind === 'gateway') {
         this.requireActiveOwner(input.owner, generation)
+
+        try {
+          this.requireUploadAuthorization(authorization.owner, authorization.generation)
+        } catch {
+          await pending.durable
+          this.recovery.trigger('enqueue')
+
+          return
+        }
+
         void pending.durable.catch(() => undefined)
 
         try {
@@ -374,17 +420,27 @@ export class TraceForwarder {
         void cloud
           .then(async receipt => {
             this.requireActiveOwner(winner.batch.owner, generation)
+            this.requireUploadAuthorization(authorization.owner, authorization.generation)
             await this.store?.acknowledge(winner.batch.batchId, receipt)
           })
-          .catch(error => this.handleCloudFailure(winner.batch, error, generation))
+          .catch(error => this.handleCloudFailure(winner.batch, error, generation, authorization.generation))
       }
     }).finally(() => {
       this.admissionRequests -= 1
     })
   }
 
-  private async handleCloudFailure(batch: DurableTraceBatch, error: unknown, generation: number): Promise<void> {
+  private async handleCloudFailure(
+    batch: DurableTraceBatch,
+    error: unknown,
+    generation: number,
+    authorizationGeneration: number
+  ): Promise<void> {
     if (!(error instanceof UpstreamFailure) || this.store === null) {
+      return
+    }
+
+    if (authorizationGeneration !== this.authorizationGeneration) {
       return
     }
 
@@ -440,12 +496,19 @@ export class TraceForwarder {
         return
       }
 
+      const authorization = this.captureUploadAuthorization()
+
       try {
-        const receipt = await this.sendForReceipt(batch, generation)
+        const receipt = await this.sendForReceipt(batch, generation, authorization, true)
         this.requireActiveOwner(owner, generation)
+        this.requireUploadAuthorization(authorization.owner, authorization.generation)
         await this.store.acknowledge(batch.batchId, receipt)
         this.retryByBatch.delete(batch.batchId)
       } catch (error) {
+        if (authorization.generation !== this.authorizationGeneration) {
+          return
+        }
+
         if (!(error instanceof UpstreamFailure)) {
           this.deferRetry(batch.batchId, null)
 
@@ -490,31 +553,45 @@ export class TraceForwarder {
 
   private async sendForReceipt(
     batch: TraceEnvelopeInput & { batchId: string },
-    generation: number
+    generation: number,
+    authorization: UploadAuthorization,
+    awaitTerminalRevocation: boolean
   ): Promise<DurableReceipt> {
     try {
       this.requireActiveOwner(batch.owner, generation)
+      this.requireUploadAuthorization(authorization.owner, authorization.generation)
       await this.uploadBarrier?.()
       this.requireActiveOwner(batch.owner, generation)
+      this.requireUploadAuthorization(authorization.owner, authorization.generation)
       const initial = await this.credentialProvider.current()
       this.requireActiveOwner(batch.owner, generation)
+      this.requireUploadAuthorization(authorization.owner, authorization.generation)
       const response = await this.fetchUpstream(batch, initial)
       this.requireActiveOwner(batch.owner, generation)
+      this.requireUploadAuthorization(authorization.owner, authorization.generation)
 
       if (response.status !== 401) {
-        return await this.requireGatewayReceipt(response, batch, generation)
+        return await this.requireGatewayReceipt(
+          response,
+          batch,
+          generation,
+          authorization,
+          awaitTerminalRevocation
+        )
       }
 
       this.credentialProvider.invalidate()
       this.recovery.trigger('upload-401')
       const refreshed = await this.credentialProvider.current({ forceRefresh: true })
       this.requireActiveOwner(batch.owner, generation)
+      this.requireUploadAuthorization(authorization.owner, authorization.generation)
       this.recovery.trigger('token-ready')
 
       const retried = await this.fetchUpstream(batch, refreshed)
       this.requireActiveOwner(batch.owner, generation)
+      this.requireUploadAuthorization(authorization.owner, authorization.generation)
 
-      return await this.requireGatewayReceipt(retried, batch, generation)
+      return await this.requireGatewayReceipt(retried, batch, generation, authorization, awaitTerminalRevocation)
     } catch (error) {
       if (error instanceof UpstreamFailure) {
         throw error
@@ -527,25 +604,30 @@ export class TraceForwarder {
   private async requireGatewayReceipt(
     response: Response,
     batch: TraceEnvelopeInput & { batchId: string },
-    generation: number
+    generation: number,
+    authorization: UploadAuthorization,
+    awaitTerminalRevocation: boolean
   ): Promise<DurableReceipt> {
     if (response.status === 403) {
       const revocation = await parseTerminalRevocation(response)
       this.requireActiveOwner(batch.owner, generation)
+      this.requireUploadAuthorization(authorization.owner, authorization.generation)
 
       if (
         !this.terminalRevoked &&
         revocation !== null &&
-        revocation.accountId === batch.owner.accountId &&
-        revocation.sessionId === batch.owner.sessionId
+        revocation.accountId === authorization.owner.accountId &&
+        revocation.sessionId === authorization.owner.sessionId
       ) {
-        this.terminalRevoked = true
+        const confirmation = this.confirmTerminalRevocation(revocation, batch.owner, generation, authorization)
 
-        try {
-          this.onTerminalRevocation(revocation)
-        } catch {
-          // Upload admission is already paused. Notification is deliberately
-          // isolated from durable outbox state.
+        if (awaitTerminalRevocation) {
+          await confirmation
+        } else {
+          // Direct upload runs inside the local durability admission lock.
+          // Detaching avoids a callback -> stop() -> admissionTail cycle;
+          // the local/cloud durability race can settle before stop waits.
+          void confirmation.catch(() => {})
         }
       }
     }
@@ -553,8 +635,50 @@ export class TraceForwarder {
     return requireGatewayReceipt(response, batch.batchId, this.clock())
   }
 
+  private async confirmTerminalRevocation(
+    revocation: TerminalTraceRevocation,
+    batchOwner: TraceOwner,
+    generation: number,
+    authorization: UploadAuthorization
+  ): Promise<void> {
+    let confirmed = false
+
+    try {
+      confirmed = await this.onTerminalRevocation(revocation)
+    } catch {
+      // An unconfirmed revocation remains retryable. Durable outbox state
+      // is deliberately isolated from callback failures.
+    }
+
+    this.requireActiveOwner(batchOwner, generation)
+    this.requireUploadAuthorization(authorization.owner, authorization.generation)
+
+    if (confirmed) {
+      this.terminalRevoked = true
+      this.retryByBatch.clear()
+    }
+  }
+
   private requireActiveOwner(owner: TraceOwner, generation: number): void {
     if (!this.admissionOpen || this.generation !== generation || this.owner?.accountKey !== owner.accountKey) {
+      throw new UpstreamFailure(null)
+    }
+  }
+
+  private captureUploadAuthorization(): UploadAuthorization {
+    if (this.owner === null) {
+      throw new UpstreamFailure(null)
+    }
+
+    return { generation: this.authorizationGeneration, owner: { ...this.owner } }
+  }
+
+  private requireUploadAuthorization(owner: TraceOwner, generation: number): void {
+    if (
+      generation !== this.authorizationGeneration ||
+      this.owner?.accountKey !== owner.accountKey ||
+      this.owner?.sessionId !== owner.sessionId
+    ) {
       throw new UpstreamFailure(null)
     }
   }

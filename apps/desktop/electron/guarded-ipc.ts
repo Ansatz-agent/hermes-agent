@@ -211,6 +211,15 @@ export class IpcAuthRequiredError extends Error {
   }
 }
 
+export class IpcAuthorizationUnavailableError extends Error {
+  readonly code = 'AUTHORIZATION_UNAVAILABLE'
+
+  constructor() {
+    super('AUTHORIZATION_UNAVAILABLE')
+    this.name = 'IpcAuthorizationUnavailableError'
+  }
+}
+
 export function createGuardedIpc(ipcMain: IpcMainLike, authority: () => GuardedIpcAuthority) {
   const registered = new Set<string>()
 
@@ -226,27 +235,37 @@ export function createGuardedIpc(ipcMain: IpcMainLike, authority: () => GuardedI
 
   async function authorize(channel: string, event: any, args: any[]): Promise<void> {
     const policy = policyFor(channel)
+    let current: GuardedIpcAuthority
+    let connectionId: string | null
 
     try {
       if (NO_ARGUMENT_CHANNELS.has(channel) && args.length !== 0) {
         throw new Error('unexpected arguments')
       }
 
-      const current = authority()
+      current = authority()
 
       if (!current || !current.ownsSender(event)) {
         throw new Error('unknown sender')
       }
 
-      const connectionId = current.resolveConnectionId({ channel, policy, event, args })
+      connectionId = current.resolveConnectionId({ channel, policy, event, args })
 
       if (policy !== 'auth-free' && (!connectionId || typeof connectionId !== 'string')) {
         throw new Error('missing connection id')
       }
-
-      await current.require(policy, connectionId)
     } catch {
       throw new IpcAuthRequiredError()
+    }
+
+    try {
+      await current.require(policy, connectionId)
+    } catch (error) {
+      if (errorCode(error) === 'AUTH_REQUIRED') {
+        throw new IpcAuthRequiredError()
+      }
+
+      throw new IpcAuthorizationUnavailableError()
     }
   }
 
@@ -275,10 +294,17 @@ export function createGuardedIpc(ipcMain: IpcMainLike, authority: () => GuardedI
       void (async () => {
         try {
           await authorize(channel, event, args)
-        } catch {
+        } catch (error) {
           // send()-style IPC has no rejection channel. Keep the denial bounded
           // and machine-readable without copying bridge/keyring error text.
-          event.returnValue = { error: { code: 'AUTH_REQUIRED' } }
+          event.returnValue = {
+            error: {
+              code:
+                error instanceof IpcAuthorizationUnavailableError
+                  ? 'AUTHORIZATION_UNAVAILABLE'
+                  : 'AUTH_REQUIRED'
+            }
+          }
 
           return
         }
@@ -320,6 +346,14 @@ export function configureGuardedIpcAuthority(authority: GuardedIpcAuthority) {
 export const guardedHandle = productionGuard.handle
 export const guardedOn = productionGuard.on
 export const assertGuardedIpcCoverage = productionGuard.assertCoverage
+
+function errorCode(error: unknown): string | null {
+  if (!error || typeof error !== 'object' || !('code' in error)) {
+    return null
+  }
+
+  return typeof error.code === 'string' ? error.code : null
+}
 
 function buildPolicyMap(
   groups: ReadonlyArray<readonly [ChannelAuthPolicy, readonly string[]]>
