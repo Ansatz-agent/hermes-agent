@@ -66,11 +66,6 @@ import {
   resumeQuitAfterShutdown
 } from './backend-ownership'
 import {
-  backendExitedBeforeOwnershipError,
-  isProcessGoneError,
-  windowsProcessStartMarkerCommand
-} from './process-identity'
-import {
   canImportHermesCli,
   execProbeSync,
   PROBE_TIMEOUT_MS,
@@ -263,6 +258,11 @@ import { serializeJsonBody, setJsonRequestHeaders } from './oauth-net-request'
 import { createKeepAwake } from './power-save'
 import { FirstRunSetupResetError, runPrimaryBackendStartup } from './primary-backend-startup'
 import { rehomePrimaryConnection } from './primary-connection-rehome'
+import {
+  backendExitedBeforeOwnershipError,
+  isProcessGoneError,
+  windowsProcessStartMarkerCommand
+} from './process-identity'
 import { decideProfileDeleteAction, profileNameFromDeleteRequest, resolveRouteProfile } from './profile-delete-routing'
 import {
   fetchPrimaryProfileSessions,
@@ -795,15 +795,7 @@ function createDesktopAuthBridge() {
   // installs use the canonical venv created by the signed bootstrap flow.
   const candidate = resolveHermesBackend([], { requirePythonModule: true })
 
-  const packagedWindowsAuthReady =
-    IS_PACKAGED &&
-    IS_WINDOWS &&
-    isAuthRuntimeUsable({
-      activeRoot: ACTIVE_HERMES_ROOT,
-      bundledBootstrapRoot: BUNDLED_BOOTSTRAP_ROOT,
-      platform: process.platform,
-      requireLauncher: false
-    })
+  const packagedWindowsAuthReady = packagedWindowsAuthRuntimeReady()
 
   const pythonExecutable = resolveNoConsoleAuthPython(
     packagedWindowsAuthReady
@@ -839,6 +831,7 @@ async function recoverDesktopAuthBridge(connectionId, failedBridge) {
   }
 
   desktopAuthBridge?.close()
+  await ensurePackagedWindowsAuthRuntime()
   const replacement = createDesktopAuthBridge()
   desktopAuthBridge = replacement
 
@@ -870,6 +863,78 @@ function fullRuntimeBootstrapRequest(backendArgs = []) {
   }
 }
 
+function packagedWindowsAuthRuntimeReady() {
+  return (
+    IS_PACKAGED &&
+    IS_WINDOWS &&
+    Boolean(BUNDLED_BOOTSTRAP_ROOT) &&
+    isAuthRuntimeUsable({
+      activeRoot: ACTIVE_HERMES_ROOT,
+      bundledBootstrapRoot: BUNDLED_BOOTSTRAP_ROOT,
+      platform: process.platform,
+      requireLauncher: false
+    })
+  )
+}
+
+function authRuntimeBootstrapRequest(backendArgs = []) {
+  return {
+    kind: 'bootstrap-needed',
+    label: 'Ansatz authentication runtime installation required',
+    command: null,
+    args: backendArgs,
+    bootstrap: true,
+    env: {},
+    shell: false,
+    activeRoot: ACTIVE_HERMES_ROOT,
+    installStamp: INSTALL_STAMP,
+    isPackaged: IS_PACKAGED,
+    platform: process.platform,
+    reason: 'auth-runtime'
+  }
+}
+
+/**
+ * The Windows packaged bridge must never silently fall back to the general
+ * venv.  That venv belongs to the full runtime and may be from a previous
+ * desktop payload (its bridge schema is not guaranteed to match this app).
+ * Prepare the signed, isolated auth runtime immediately before starting the
+ * bridge so upgrades that deferred the full source refresh still get a
+ * deterministic auth migration attempt.
+ */
+async function ensurePackagedWindowsAuthRuntime() {
+  if (!IS_PACKAGED || !IS_WINDOWS || !BUNDLED_BOOTSTRAP_ROOT || packagedWindowsAuthRuntimeReady()) {
+    return
+  }
+
+  // Do not replace a user-managed Git checkout with the packaged embedded
+  // Python layout.  Such installs use the normal `venv\Scripts` contract and
+  // are intentionally left under the user's update policy; the bridge below
+  // will resolve that checkout's interpreter as it did before this repair.
+  if (fs.existsSync(path.join(ACTIVE_HERMES_ROOT, '.git'))) {
+    rememberLog('[bootstrap] skipping packaged auth-runtime repair for an existing Git checkout.')
+
+    return
+  }
+
+  rememberLog('[bootstrap] packaged Windows authentication runtime is incomplete; starting auth-only repair.')
+
+  const candidate = resolveHermesBackend([], { requirePythonModule: true })
+
+  const request =
+    candidate?.kind === 'bootstrap-needed'
+      ? candidate
+      : authRuntimeBootstrapRequest(candidate?.args || [])
+
+  await ensureRuntime(request, { scope: 'auth' })
+
+  if (!packagedWindowsAuthRuntimeReady()) {
+    throw new AuthBridgeError('runtime_unavailable', 'auth_runtime_unavailable')
+  }
+
+  rememberLog('[bootstrap] packaged Windows authentication runtime is ready.')
+}
+
 function resolveCompleteRuntimeBootstrapRequest() {
   const candidate = resolveHermesBackend([])
   const runtime = activeRuntimeState()
@@ -899,6 +964,8 @@ async function startDesktopAuthRuntime() {
       if (desktopAuthCoordinator) {
         return
       }
+
+      await ensurePackagedWindowsAuthRuntime()
 
       const bridge = createDesktopAuthBridge()
 
@@ -4904,14 +4971,20 @@ async function ensureRuntime(backend, { scope = 'runtime' }: any = {}) {
   if (backend.kind === 'bootstrap-needed') {
     rememberLog('[bootstrap] no Ansatz install found; starting first-launch bootstrap')
 
-    if (await handOffWindowsBootstrapRecovery('bootstrap-needed')) {
+    // Auth-only repair must run in-process: handing off to the setup updater
+    // would terminate this app before the isolated auth runtime is rebuilt.
+    if (scope !== 'auth' && (await handOffWindowsBootstrapRecovery('bootstrap-needed'))) {
       const handoffError: Error & { isBootstrapFailure?: boolean; bootstrapHandedOff?: boolean } = new Error(
         'Ansatz recovery was handed off to Ansatz Setup. The desktop will restart when recovery completes.'
       )
 
       handoffError.isBootstrapFailure = true
       handoffError.bootstrapHandedOff = true
-      bootstrapFailure = handoffError
+
+      if (scope === 'runtime') {
+        bootstrapFailure = handoffError
+      }
+
       throw handoffError
     }
 
@@ -4977,6 +5050,7 @@ async function ensureRuntime(backend, { scope = 'runtime' }: any = {}) {
     if (
       bootstrapResult.deferred === true &&
       backend.reason === 'bundled-refresh' &&
+      scope !== 'auth' &&
       IS_WINDOWS &&
       activeRuntimeState().shouldUseActiveRuntime
     ) {
@@ -4993,7 +5067,14 @@ async function ensureRuntime(backend, { scope = 'runtime' }: any = {}) {
       const cancelledError = new Error('Ansatz install was cancelled.') as any
       cancelledError.isBootstrapFailure = true
       cancelledError.bootstrapCancelled = true
-      bootstrapFailure = cancelledError
+
+      // Authentication-only repair is deliberately recoverable. Do not
+      // poison the full-runtime latch when the isolated auth bootstrap is
+      // cancelled; a later login/start attempt must be able to retry it.
+      if (scope === 'runtime') {
+        bootstrapFailure = cancelledError
+      }
+
       throw cancelledError
     }
 
@@ -5009,7 +5090,14 @@ async function ensureRuntime(backend, { scope = 'runtime' }: any = {}) {
       // Latch the failure so subsequent startHermes() calls return this
       // same error without re-running install.ps1.  Cleared by the
       // hermes:bootstrap:reset IPC (renderer's "Reload and retry").
-      bootstrapFailure = bootstrapError
+      // An auth-scoped repair is intentionally not a full-runtime failure:
+      // keeping it out of this latch allows the next auth attempt to retry
+      // after a transient network/process-lock problem.
+
+      if (scope === 'runtime') {
+        bootstrapFailure = bootstrapError
+      }
+
       throw bootstrapError
     }
 

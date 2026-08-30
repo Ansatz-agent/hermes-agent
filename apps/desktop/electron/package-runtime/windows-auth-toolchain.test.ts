@@ -187,6 +187,7 @@ test('Windows auth runtime never publishes a partial extraction', async () => {
         toolchain: fixture.toolchain,
         activeRoot: fixture.activeRoot,
         env: { SystemRoot: 'C:\\Windows' },
+        retireAuthOwners: async () => ({ inspected: 0, stopped: 0 }),
         runProcess: async options => {
           if (options.args.includes(EXPAND_ARCHIVE_COMMAND)) {
             const destination = options.env?.HERMES_ARCHIVE_DESTINATION
@@ -221,6 +222,7 @@ test('Windows auth runtime restores the previous published runtime when verifica
         toolchain: fixture.toolchain,
         activeRoot: fixture.activeRoot,
         env: { SystemRoot: 'C:\\Windows' },
+        retireAuthOwners: async () => ({ inspected: 0, stopped: 0 }),
         runProcess: async options => {
           if (options.args.includes(EXPAND_ARCHIVE_COMMAND)) {
             const destination = options.env?.HERMES_ARCHIVE_DESTINATION

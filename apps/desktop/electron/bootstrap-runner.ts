@@ -43,6 +43,7 @@ import { prepareBundledSource, type PreparedBundledSource, resolveBundledPayload
 import { buildBootstrapEnvironment, runBootstrapProcess } from './bootstrap-process'
 import { resolveBundledAuthToolchain } from './bootstrap-toolchain'
 import { prepareWindowsPackagedAuthRuntime } from './package-runtime/windows-auth-toolchain'
+import { retireExactWindowsAuthOwners } from './windows-auth-owner'
 import { hiddenWindowsChildOptions } from './windows-child-options'
 
 const IS_WINDOWS = process.platform === 'win32'
@@ -1073,7 +1074,8 @@ async function runBootstrap(opts) {
     abortSignal,
     writeMarker, // callback to write the bootstrap-complete marker; main.ts provides
     timeouts: timeoutOverrides = {},
-    scope: bootstrapScope = 'runtime'
+    scope: bootstrapScope = 'runtime',
+    retireWindowsOwners = retireExactWindowsAuthOwners
   } = opts
 
   if (bootstrapScope !== 'auth' && bootstrapScope !== 'runtime') {
@@ -1136,6 +1138,7 @@ async function runBootstrap(opts) {
   })
 
   let sourceTransaction: PreparedBundledSource | null = null
+  let sourceRefreshRecovered = false
 
   try {
     const existingCheckout = hasExistingGitCheckout(activeRoot)
@@ -1164,17 +1167,71 @@ async function runBootstrap(opts) {
         sourceTransaction = await prepareBundledSource({ payload, activeRoot, hermesHome })
       } catch (error) {
         if (isWindowsBundledSourceLockError(error)) {
-          emit({
-            type: 'log',
-            line:
-              `[bootstrap] bundled source refresh deferred because the existing Windows runtime is still in use: ` +
-              `${error.message || String(error)}`
-          })
+          // The old auth owner is detached from the Electron process and can
+          // outlive a previous desktop launch.  On Windows its pythonw.exe
+          // image keeps the entire managed source tree rename-locked.  Give
+          // the narrowly-scoped owner reaper one chance to release that exact
+          // Ansatz-owned process, then retry the atomic source promotion.  If
+          // inspection or retirement is unavailable, preserve the existing
+          // deferred behavior and try again on the next launch.
+          if (IS_WINDOWS) {
+            let retirement
 
-          return { ok: false, deferred: true, error: error.message || String(error) }
+            try {
+              retirement = await retireWindowsOwners({
+                activeRoot,
+                includeLegacyVenv: true
+              })
+            } catch (retirementError) {
+              emit({
+                type: 'log',
+                line:
+                  `[bootstrap] could not safely retire stale Windows auth owners; ` +
+                  `deferring source refresh: ${retirementError.message || String(retirementError)}`
+              })
+
+              return { ok: false, deferred: true, error: error.message || String(error) }
+            }
+
+            emit({
+              type: 'log',
+              line:
+                `[bootstrap] attempted to retire stale Windows auth owners before source refresh: ` +
+                `inspected=${retirement.inspected}, stopped=${retirement.stopped}`
+            })
+
+            try {
+              sourceTransaction = await prepareBundledSource({ payload, activeRoot, hermesHome })
+              sourceRefreshRecovered = true
+            } catch (retryError) {
+              if (!isWindowsBundledSourceLockError(retryError)) {
+                throw retryError
+              }
+
+              emit({
+                type: 'log',
+                line:
+                  `[bootstrap] bundled source refresh remains locked after owner retirement; ` +
+                  `deferring until the next launch: ${retryError.message || String(retryError)}`
+              })
+
+              return { ok: false, deferred: true, error: retryError.message || String(retryError) }
+            }
+          } else {
+            emit({
+              type: 'log',
+              line:
+                `[bootstrap] bundled source refresh deferred because the existing Windows runtime is still in use: ` +
+                `${error.message || String(error)}`
+            })
+
+            return { ok: false, deferred: true, error: error.message || String(error) }
+          }
         }
 
-        throw error
+        if (!sourceRefreshRecovered) {
+          throw error
+        }
       }
 
       bundledSource = sourceTransaction.kind !== 'existing-git'

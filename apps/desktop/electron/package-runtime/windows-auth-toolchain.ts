@@ -362,7 +362,11 @@ export async function prepareWindowsPackagedAuthRuntime(options: PrepareOptions)
   assertToolchain(toolchain)
   fs.mkdirSync(activeRoot, { recursive: true })
   const sourceContract = readSourceContract(activeRoot)
-  await retireAuthOwners({ activeRoot })
+  // A previous build may have launched its owner from either the packaged
+  // embedded interpreter or the standard venv Scripts layout.  Both are
+  // exact Ansatz-owned paths; retire them before replacing auth-venv so an
+  // old owner cannot reconnect to the newly published bridge contract.
+  await retireAuthOwners({ activeRoot, includeLegacyVenv: true })
   recoverWindowsAuthRuntimeTransaction(activeRoot)
 
   const stagingRoot = path.join(activeRoot, `.auth-runtime-stage-${process.pid}-${Date.now()}`)

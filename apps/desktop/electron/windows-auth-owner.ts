@@ -11,17 +11,29 @@ $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 $root = $env:HERMES_AUTH_OWNER_ROOT
 if (-not $root) { exit 2 }
-$expected = [System.IO.Path]::GetFullPath((Join-Path $root 'auth-venv\python.exe'))
+$expectedPaths = @(
+    [System.IO.Path]::GetFullPath((Join-Path $root 'auth-venv\python.exe')),
+    [System.IO.Path]::GetFullPath((Join-Path $root 'auth-venv\pythonw.exe')),
+    [System.IO.Path]::GetFullPath((Join-Path $root 'auth-venv\Scripts\python.exe')),
+    [System.IO.Path]::GetFullPath((Join-Path $root 'auth-venv\Scripts\pythonw.exe'))
+)
+if ($env:HERMES_AUTH_OWNER_INCLUDE_LEGACY -eq '1') {
+    $expectedPaths += @(
+        [System.IO.Path]::GetFullPath((Join-Path $root 'venv\Scripts\python.exe')),
+        [System.IO.Path]::GetFullPath((Join-Path $root 'venv\Scripts\pythonw.exe')),
+        [System.IO.Path]::GetFullPath((Join-Path $root 'venv\python.exe')),
+        [System.IO.Path]::GetFullPath((Join-Path $root 'venv\pythonw.exe'))
+    )
+}
 $currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $records = @()
 Get-CimInstance -ClassName Win32_Process -ErrorAction Stop |
     Where-Object {
-        $_.ExecutablePath -and
-        [string]::Equals(
-            [System.IO.Path]::GetFullPath($_.ExecutablePath),
-            $expected,
-            [System.StringComparison]::OrdinalIgnoreCase
-        )
+        if (-not $_.ExecutablePath) { return $false }
+        $actual = [System.IO.Path]::GetFullPath([string]$_.ExecutablePath)
+        return @($expectedPaths | Where-Object {
+            [string]::Equals($_, $actual, [System.StringComparison]::OrdinalIgnoreCase)
+        }).Count -gt 0
     } |
     ForEach-Object {
         $owner = Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop
@@ -53,6 +65,37 @@ function Write-NoLongerOwner {
         ConvertTo-Json -Compress
     exit 0
 }
+function Test-ExactOwnerCommand {
+    param([object]$candidate)
+
+    if (-not $candidate.ExecutablePath -or -not $candidate.CommandLine) { return $false }
+    $executable = [System.IO.Path]::GetFullPath([string]$candidate.ExecutablePath)
+    $quoted = '"' + $executable + '" -m hermes_cli.client_auth.runtime owner'
+    $plain = $executable + ' -m hermes_cli.client_auth.runtime owner'
+
+    return [string]::Equals($candidate.CommandLine, $quoted, [System.StringComparison]::OrdinalIgnoreCase) -or
+        [string]::Equals($candidate.CommandLine, $plain, [System.StringComparison]::OrdinalIgnoreCase)
+}
+function Get-OwnerSid {
+    param([object]$candidate)
+
+    $owner = Invoke-CimMethod -InputObject $candidate -MethodName GetOwnerSid -ErrorAction Stop
+    if ($owner.ReturnValue -ne 0 -or -not $owner.Sid) { return $null }
+
+    return [string]$owner.Sid
+}
+function Wait-ProcessGone {
+    param([int]$processId)
+
+    $deadline = [DateTime]::UtcNow.AddSeconds(5)
+    do {
+        $remaining = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $processId" -ErrorAction SilentlyContinue
+        if ($null -eq $remaining) { return $true }
+        Start-Sleep -Milliseconds 50
+    } while ([DateTime]::UtcNow -lt $deadline)
+
+    return $false
+}
 $excluded = @($env:HERMES_AUTH_OWNER_EXCLUDED_PIDS -split ',' | ForEach-Object {
     $value = 0
     if ([int]::TryParse($_, [ref]$value)) { $value }
@@ -60,34 +103,127 @@ $excluded = @($env:HERMES_AUTH_OWNER_EXCLUDED_PIDS -split ',' | ForEach-Object {
 if ($excluded -contains $targetPid) { exit 7 }
 $process = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $targetPid" -ErrorAction Stop
 if ($null -eq $process) { Write-NoLongerOwner }
-$expected = [System.IO.Path]::GetFullPath((Join-Path $root 'auth-venv\python.exe'))
-if (
-    -not $process.ExecutablePath -or
-    -not [string]::Equals(
-        [System.IO.Path]::GetFullPath($process.ExecutablePath),
-        $expected,
-        [System.StringComparison]::OrdinalIgnoreCase
+$expectedPaths = @(
+    [System.IO.Path]::GetFullPath((Join-Path $root 'auth-venv\python.exe')),
+    [System.IO.Path]::GetFullPath((Join-Path $root 'auth-venv\pythonw.exe')),
+    [System.IO.Path]::GetFullPath((Join-Path $root 'auth-venv\Scripts\python.exe')),
+    [System.IO.Path]::GetFullPath((Join-Path $root 'auth-venv\Scripts\pythonw.exe'))
+)
+if ($env:HERMES_AUTH_OWNER_INCLUDE_LEGACY -eq '1') {
+    $expectedPaths += @(
+        [System.IO.Path]::GetFullPath((Join-Path $root 'venv\Scripts\python.exe')),
+        [System.IO.Path]::GetFullPath((Join-Path $root 'venv\Scripts\pythonw.exe')),
+        [System.IO.Path]::GetFullPath((Join-Path $root 'venv\python.exe')),
+        [System.IO.Path]::GetFullPath((Join-Path $root 'venv\pythonw.exe'))
     )
+}
+$actualExecutable = if ($process.ExecutablePath) {
+    [System.IO.Path]::GetFullPath([string]$process.ExecutablePath)
+} else {
+    $null
+}
+if (
+    -not $actualExecutable -or
+    @($expectedPaths | Where-Object {
+        [string]::Equals($_, $actualExecutable, [System.StringComparison]::OrdinalIgnoreCase)
+    }).Count -eq 0
 ) { Write-NoLongerOwner }
+$rootExecutable = $actualExecutable
 $owner = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -ErrorAction Stop
 if ($owner.ReturnValue -ne 0 -or -not $owner.Sid) { exit 7 }
 if ($owner.Sid -ne $expectedSid) { Write-NoLongerOwner }
-$expectedQuoted = '"' + $expected + '" -m hermes_cli.client_auth.runtime owner'
-$expectedPlain = $expected + ' -m hermes_cli.client_auth.runtime owner'
+if (-not (Test-ExactOwnerCommand $process)) { Write-NoLongerOwner }
+
+# A venv\Scripts\pythonw.exe owner can be a redirector which launches a
+# second pythonw.exe from uv's base installation.  That child is the process
+# that commonly keeps the old source tree mapped.  Only consider direct
+# children that still belong to this SID, have a Python executable, and carry
+# the exact owner command line.  Unknown children are deliberately ignored;
+# the root is never terminated on their behalf.
+$childTargets = @()
+$children = @(Get-CimInstance -ClassName Win32_Process -ErrorAction Stop | Where-Object {
+    $_.ParentProcessId -eq $targetPid
+})
+if ($children.Count -gt 32) { exit 7 }
+foreach ($child in $children) {
+    if (-not $child.ExecutablePath) { continue }
+    if ($excluded -contains [int]$child.ProcessId) { exit 7 }
+    $basename = [System.IO.Path]::GetFileName([string]$child.ExecutablePath)
+    if (
+        -not [string]::Equals($basename, 'python.exe', [System.StringComparison]::OrdinalIgnoreCase) -and
+        -not [string]::Equals($basename, 'pythonw.exe', [System.StringComparison]::OrdinalIgnoreCase)
+    ) { continue }
+
+    $childSid = Get-OwnerSid $child
+    if ($null -eq $childSid) { exit 7 }
+    if ($childSid -ne $expectedSid -or -not (Test-ExactOwnerCommand $child)) { continue }
+    $childTargets += [pscustomobject]@{
+        processId = [int]$child.ProcessId
+        executablePath = [System.IO.Path]::GetFullPath([string]$child.ExecutablePath)
+    }
+}
+
+$stoppedChildren = @()
+foreach ($child in $childTargets) {
+    # Revalidate the PID immediately before termination so a reused PID can
+    # never be mistaken for the previously inventoried owner child.
+    $currentChild = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $($child.ProcessId)" -ErrorAction SilentlyContinue
+    if ($null -eq $currentChild) { continue }
+    $currentChildExecutable = if ($currentChild.ExecutablePath) {
+        [System.IO.Path]::GetFullPath([string]$currentChild.ExecutablePath)
+    } else {
+        $null
+    }
+    $childBasename = if ($currentChildExecutable) {
+        [System.IO.Path]::GetFileName($currentChildExecutable)
+    } else {
+        $null
+    }
+    if (
+        $currentChild.ParentProcessId -ne $targetPid -or
+        -not $currentChildExecutable -or
+        -not [string]::Equals($currentChildExecutable, $child.executablePath, [System.StringComparison]::OrdinalIgnoreCase) -or
+        (
+            -not [string]::Equals($childBasename, 'python.exe', [System.StringComparison]::OrdinalIgnoreCase) -and
+            -not [string]::Equals($childBasename, 'pythonw.exe', [System.StringComparison]::OrdinalIgnoreCase)
+        ) -or
+        (Get-OwnerSid $currentChild) -ne $expectedSid -or
+        -not (Test-ExactOwnerCommand $currentChild)
+    ) { continue }
+
+    $childTermination = Invoke-CimMethod -InputObject $currentChild -MethodName Terminate -ErrorAction Stop
+    if ($childTermination.ReturnValue -ne 0) { exit 5 }
+    if (-not (Wait-ProcessGone ([int]$child.ProcessId))) { exit 6 }
+    $stoppedChildren += [int]$child.ProcessId
+}
+
+# Revalidate the root after child cleanup as well as before it.  This closes
+# the PID-reuse window between the inventory and the final termination.
+$process = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $targetPid" -ErrorAction SilentlyContinue
+if ($null -eq $process) { Write-NoLongerOwner }
+$currentRootExecutable = if ($process.ExecutablePath) {
+    [System.IO.Path]::GetFullPath([string]$process.ExecutablePath)
+} else {
+    $null
+}
 if (
-    -not [string]::Equals($process.CommandLine, $expectedQuoted, [System.StringComparison]::OrdinalIgnoreCase) -and
-    -not [string]::Equals($process.CommandLine, $expectedPlain, [System.StringComparison]::OrdinalIgnoreCase)
+    (Get-OwnerSid $process) -ne $expectedSid -or
+    -not (Test-ExactOwnerCommand $process) -or
+    -not $currentRootExecutable -or
+    -not [string]::Equals($currentRootExecutable, $rootExecutable, [System.StringComparison]::OrdinalIgnoreCase) -or
+    @($expectedPaths | Where-Object {
+        [string]::Equals($_, $currentRootExecutable, [System.StringComparison]::OrdinalIgnoreCase)
+    }).Count -eq 0
 ) { Write-NoLongerOwner }
+
 $termination = Invoke-CimMethod -InputObject $process -MethodName Terminate -ErrorAction Stop
 if ($termination.ReturnValue -ne 0) { exit 5 }
-$deadline = [DateTime]::UtcNow.AddSeconds(5)
-do {
-    $remaining = Get-CimInstance -ClassName Win32_Process -Filter "ProcessId = $targetPid" -ErrorAction SilentlyContinue
-    if ($null -eq $remaining) { break }
-    Start-Sleep -Milliseconds 50
-} while ([DateTime]::UtcNow -lt $deadline)
-if ($null -ne $remaining) { exit 6 }
-[pscustomobject]@{ stopped = $true; processId = $targetPid } | ConvertTo-Json -Compress
+if (-not (Wait-ProcessGone $targetPid)) { exit 6 }
+[pscustomobject]@{
+    stopped = $true
+    processId = $targetPid
+    childProcessIds = @($stoppedChildren)
+} | ConvertTo-Json -Compress
 `
 
 export type WindowsProcessRecord = {
@@ -101,6 +237,7 @@ type IdentityOptions = {
   activeRoot: string
   currentSid: string
   excludedPids: ReadonlySet<number>
+  includeLegacyVenv?: boolean
 }
 
 type PowerShellResult = {
@@ -135,6 +272,26 @@ function canonicalWindowsPath(value: string): string | null {
   } catch {
     return null
   }
+}
+
+export function windowsAuthOwnerInterpreterPaths(activeRoot: string, includeLegacyVenv = false): string[] {
+  const paths = [
+    path.win32.join(activeRoot, 'auth-venv', 'python.exe'),
+    path.win32.join(activeRoot, 'auth-venv', 'pythonw.exe'),
+    path.win32.join(activeRoot, 'auth-venv', 'Scripts', 'python.exe'),
+    path.win32.join(activeRoot, 'auth-venv', 'Scripts', 'pythonw.exe')
+  ]
+
+  if (includeLegacyVenv) {
+    paths.push(
+      path.win32.join(activeRoot, 'venv', 'Scripts', 'python.exe'),
+      path.win32.join(activeRoot, 'venv', 'Scripts', 'pythonw.exe'),
+      path.win32.join(activeRoot, 'venv', 'python.exe'),
+      path.win32.join(activeRoot, 'venv', 'pythonw.exe')
+    )
+  }
+
+  return paths
 }
 
 function commandIdentity(commandLine: string): { executable: string; arguments: string } | null {
@@ -186,18 +343,19 @@ export function isExactWindowsAuthOwnerProcess(record: WindowsProcessRecord, opt
     return false
   }
 
-  const expectedExecutable = canonicalWindowsPath(
-    path.win32.join(options.activeRoot, 'auth-venv', 'python.exe')
-  )
-
   const actualExecutable = canonicalWindowsPath(record.executablePath)
   const command = commandIdentity(record.commandLine)
 
+  const expectedExecutables = windowsAuthOwnerInterpreterPaths(options.activeRoot, options.includeLegacyVenv).map(
+    canonicalWindowsPath
+  )
+
   return Boolean(
-    expectedExecutable &&
-    actualExecutable === expectedExecutable &&
+    actualExecutable &&
+    expectedExecutables.includes(actualExecutable) &&
     command &&
-    canonicalWindowsPath(command.executable) === expectedExecutable &&
+    expectedExecutables.includes(canonicalWindowsPath(command.executable)) &&
+    canonicalWindowsPath(command.executable) === actualExecutable &&
     command.arguments === OWNER_ARGUMENTS
   )
 }
@@ -310,11 +468,13 @@ async function checkedPowerShell(
 export async function retireExactWindowsAuthOwners({
   activeRoot,
   callerPids = [process.pid, process.ppid],
+  includeLegacyVenv = false,
   runPowerShell = defaultRunPowerShell,
   now = () => performance.now()
 }: {
   activeRoot: string
   callerPids?: number[]
+  includeLegacyVenv?: boolean
   runPowerShell?: PowerShellRunner
   now?: () => number
 }): Promise<{ inspected: number; stopped: number }> {
@@ -326,7 +486,8 @@ export async function retireExactWindowsAuthOwners({
     WINDIR: process.env.WINDIR,
     PATH: process.env.PATH,
     HERMES_AUTH_OWNER_ROOT: activeRoot,
-    HERMES_AUTH_OWNER_EXCLUDED_PIDS: [...excludedPids].join(',')
+    HERMES_AUTH_OWNER_EXCLUDED_PIDS: [...excludedPids].join(','),
+    HERMES_AUTH_OWNER_INCLUDE_LEGACY: includeLegacyVenv ? '1' : '0'
   }
 
   const inventoryResult = await checkedPowerShell(runPowerShell, INVENTORY_SCRIPT, baseEnvironment, now, deadlineAt)
@@ -341,7 +502,8 @@ export async function retireExactWindowsAuthOwners({
     isExactWindowsAuthOwnerProcess(record, {
       activeRoot,
       currentSid: inventory.currentSid,
-      excludedPids
+      excludedPids,
+      includeLegacyVenv
     })
   )
 
