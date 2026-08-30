@@ -308,6 +308,7 @@ import { TraceIngressFacade } from './trace-ingress-facade'
 import {
   migratePreviousLegacyTraceNamespace,
   previousLegacyTraceAccountKey,
+  traceLocalOnlySourceOwner,
   traceMigrationSourceOwner,
   traceOwnerFromScope
 } from './trace-legacy-owner'
@@ -764,7 +765,7 @@ async function writeBackendTraceTransport(child, root) {
   try {
     const frame = encodeTraceTransportRegistration({
       endpoint: desktopTraceIngress.endpoint,
-      installationId: desktopInstallationId,
+      installationId: desktopTraceContext.owner.installationId,
       localBearer: desktopTraceIngress.localBearer,
       pluginsToml: path.join(root, 'config', 'ansatz-voice-trace', 'plugins.toml')
     })
@@ -9075,7 +9076,7 @@ function traceContextForBackendRoot(root) {
 
   return {
     endpoint: desktopTraceIngress.endpoint,
-    installationId: desktopInstallationId,
+    installationId: desktopTraceContext.owner.installationId,
     localAuthorization: `Bearer ${desktopTraceIngress.localBearer}`,
     pluginsToml: path.join(root, 'config', 'ansatz-voice-trace', 'plugins.toml')
   }
@@ -9321,7 +9322,10 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
       keyProtector: createSafeStorageTraceKeyProtector(safeStorage),
       root: path.join(traceOutboxRoot, owner.accountKey)
     })
-    const sourceOwner = ownerValidation.uploadable ? traceMigrationSourceOwner(status, desktopInstallationId) : null
+    const sourceOwner = ownerValidation.uploadable
+      ? traceMigrationSourceOwner(status, owner.installationId) ??
+        traceLocalOnlySourceOwner(status, owner.installationId)
+      : null
     const migrationBarrier =
       sourceOwner === null
         ? null
@@ -9364,7 +9368,7 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
         }
 
         const credential = await bridge.traceToken({
-          installation_id: desktopInstallationId,
+          installation_id: owner.installationId,
           client_version: app.getVersion(),
           telemetry_schema_version: '1'
         })
@@ -9410,7 +9414,7 @@ async function ensureDesktopTraceForwarder(scope, requestedOwner: TraceOwner) {
 
     const forwarder = new TraceForwarder({
       credentialProvider: provider,
-      installationId: desktopInstallationId,
+      installationId: owner.installationId,
       onUploadEvent: (event: TraceUploadEvent) => {
         if (event.kind === 'success') {
           rememberLog(`[trace] upload success outcome=${event.outcome} status=${event.status}`)

@@ -812,14 +812,19 @@ class WindowsNamedPipeEndpoint:
         cls,
         *,
         first_instance: bool,
+        runtime_namespace: str | None = None,
     ) -> WindowsNamedPipeEndpoint:
         if os.name != "nt" or not first_instance:
             raise AuthRequired("runtime_unavailable")
         owner_sid = _windows_current_sid()
+        # Windows named pipes are global to the user's SID. Include the
+        # product/runtime namespace so an updated detached owner cannot be
+        # mistaken for (or reconnect to) a previous wire-contract version.
+        namespace_suffix = _auth_runtime_namespace_suffix(runtime_namespace)
         compact_sid = hashlib.blake2s(
             owner_sid.encode("ascii"),
             digest_size=16,
-        ).hexdigest() + _test_runtime_suffix()
+        ).hexdigest() + namespace_suffix + _test_runtime_suffix()
         return cls(
             pipe_name=rf"\\.\pipe\hermes-auth-{compact_sid}",
             owner_sid=owner_sid,
@@ -1754,17 +1759,25 @@ class _OwnerCore:
         client_version: str,
         telemetry_schema_version: str,
     ) -> TraceCredential:
-        record = self._load_record()
-        with self._lock:
-            if (
-                record is None
-                or self._record is not record
-                or self._snapshot.state is not AuthState.AUTHENTICATED
-            ):
-                raise AuthRequired("signed_out")
-            self._last_authenticated_activity = self._clock()
-        try:
-            with self._refresh_lock:
+        # Serialize the record snapshot with scheduled validation.  Validation
+        # replaces NativeCredentialRecord objects after refreshing their server
+        # timestamp; if we load the record before acquiring this lock, that
+        # replacement can happen in the gap and the final identity check below
+        # would incorrectly report ``signed_out`` for an otherwise valid
+        # session.  Holding the refresh lock while loading keeps the record and
+        # the credential request on the same generation without weakening the
+        # logout/login identity checks.
+        with self._refresh_lock:
+            record = self._load_record()
+            with self._lock:
+                if (
+                    record is None
+                    or self._record is not record
+                    or self._snapshot.state is not AuthState.AUTHENTICATED
+                ):
+                    raise AuthRequired("signed_out")
+                self._last_authenticated_activity = self._clock()
+            try:
                 if isinstance(record, NativeCredentialRecord):
                     credential = self._client.trace_token(record.credential)
                 elif isinstance(record, LegacyCredentialRecord):
@@ -1783,28 +1796,28 @@ class _OwnerCore:
                     )
                 else:
                     raise AuthRequired("signed_out")
-        except AuthServiceError as error:
-            if isinstance(error, SessionRejected):
-                with self._lock:
-                    if self._record is record:
-                        self._record = None
-                        self._record_loaded = True
-                        try:
-                            self._secret_backend.delete()
-                        except Exception:
-                            pass
-                        self._publish_locked(
-                            self._snapshot.locked(error.reason, now=self._clock())
-                        )
-                        self._next_refresh_at = None
-            raise AuthRequired(error.reason) from None
-        with self._lock:
-            if (
-                self._record is not record
-                or self._snapshot.state is not AuthState.AUTHENTICATED
-            ):
-                raise AuthRequired("signed_out")
-        return credential
+            except AuthServiceError as error:
+                if isinstance(error, SessionRejected):
+                    with self._lock:
+                        if self._record is record:
+                            self._record = None
+                            self._record_loaded = True
+                            try:
+                                self._secret_backend.delete()
+                            except Exception:
+                                pass
+                            self._publish_locked(
+                                self._snapshot.locked(error.reason, now=self._clock())
+                            )
+                            self._next_refresh_at = None
+                raise AuthRequired(error.reason) from None
+            with self._lock:
+                if (
+                    self._record is not record
+                    or self._snapshot.state is not AuthState.AUTHENTICATED
+                ):
+                    raise AuthRequired("signed_out")
+            return credential
 
     def _refresh_once(self) -> RuntimeSnapshot:
         record = self._load_record()
@@ -3773,7 +3786,10 @@ def resolve_owner(
 
 def runtime_endpoint() -> UnixEndpoint | WindowsNamedPipeEndpoint:
     if os.name == "nt":
-        return WindowsNamedPipeEndpoint.for_current_sid(first_instance=True)
+        return WindowsNamedPipeEndpoint.for_current_sid(
+            first_instance=True,
+            runtime_namespace=_auth_runtime_namespace(),
+        )
     runtime_namespace = _auth_runtime_namespace()
     return UnixEndpoint.for_current_user(
         random_name=secrets.token_hex(16),

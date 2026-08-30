@@ -12,7 +12,14 @@ const ANSATZ_PRODUCT = Object.freeze({
   posixRuntimeDirectory: '.ansatz-voice-trace-client',
   windowsRuntimeDirectory: 'AnsatzVoiceTraceClient',
   runtimeHomeOverrideEnvironmentVariable: 'ANSATZ_VOICE_TRACE_CLIENT_HOME',
-  authRuntimeNamespace: 'ansatz-voice-trace-client-auth-v1',
+  // Bump the broker namespace when the auth wire contract changes.  The
+  // detached Windows owner survives an app update, so keeping the old
+  // namespace would reconnect to a pre-native-migration owner that silently
+  // downgrades status/login requests to protocol v1.  That leaves users
+  // authenticated locally but permanently classified as legacy, which blocks
+  // standard-account Trace uploads.  The keyring service stays unchanged so
+  // the new owner can safely migrate the existing credential in place.
+  authRuntimeNamespace: 'ansatz-voice-trace-client-auth-v2',
   authKeyringService: 'cn.c2sml.ansatz.voice-trace-client.remote-auth',
   legacyAuthKeyringService: 'cn.c2sml.hermes.remote-auth',
   mediaProtocol: 'ansatz-media',

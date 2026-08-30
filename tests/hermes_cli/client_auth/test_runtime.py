@@ -754,6 +754,79 @@ def test_trace_token_waits_for_native_validation_client_call():
     assert not trace.is_alive()
 
 
+def test_trace_token_serializes_record_load_with_native_validation():
+    class NativeTraceClient(FakeAuthClient):
+        def trace_token(self, credential: NativeSessionCredential) -> TraceCredential:
+            return TraceCredential(
+                access_token="trace-token-sentinel-1234567890",
+                expires_at="2099-08-23T14:15:00+00:00",
+                expires_in=900,
+                installation_id=credential.installation_id,
+            )
+
+    client = NativeTraceClient()
+    owner = MemoryOwner(
+        client,
+        hardener=RecordingHardener(),
+        secret_backend=FakeSecretBackend(),
+        clock=FakeClock(),
+        jitter=lambda _low, _high: 0.5,
+    )
+    owner.login(
+        "alice",
+        bytearray(b"secret"),
+        installation_id=INSTALLATION_ID,
+        client_version="0.17.0",
+    )
+
+    original_load_record = owner._load_record
+    record_loaded_by_trace = threading.Event()
+    release_trace_load = threading.Event()
+
+    def delayed_load_record():
+        record = original_load_record()
+        if threading.current_thread().name == "trace-token":
+            record_loaded_by_trace.set()
+            assert release_trace_load.wait(timeout=2)
+        return record
+
+    # Reproduce the old race: trace_token had loaded the old record but had
+    # not acquired _refresh_lock yet, allowing validation to replace it.
+    owner._load_record = delayed_load_record
+    trace_results: list[TraceCredential] = []
+    trace_errors: list[BaseException] = []
+
+    def fetch_trace_token() -> None:
+        try:
+            trace_results.append(
+                owner.trace_token(
+                    installation_id=INSTALLATION_ID,
+                    client_version="0.17.0",
+                    telemetry_schema_version="1",
+                )
+            )
+        except BaseException as error:
+            trace_errors.append(error)
+
+    trace = threading.Thread(
+        name="trace-token",
+        target=fetch_trace_token,
+    )
+    trace.start()
+    assert record_loaded_by_trace.wait(timeout=1)
+
+    validation = threading.Thread(target=owner.validate_now)
+    validation.start()
+    validation.join(timeout=2)
+    assert not validation.is_alive()
+
+    release_trace_load.set()
+    trace.join(timeout=2)
+    assert not trace.is_alive()
+    assert not trace_errors
+    assert len(trace_results) == 1
+
+
 class BlockingBobWriteBackend(FakeSecretBackend):
     """Stops immediately after Bob's blob reaches the backend."""
 
@@ -3751,6 +3824,39 @@ def test_windows_runtime_endpoint_is_sid_scoped_first_instance_pipe():
     assert endpoint.first_instance is True
     assert endpoint.pipe_name.startswith(r"\\.\pipe\hermes-auth-")
     assert endpoint.owner_sid
+
+
+@pytest.mark.windows_only
+def test_windows_runtime_namespace_separates_detached_auth_owners():
+    base = WindowsNamedPipeEndpoint.for_current_sid(
+        first_instance=True,
+        runtime_namespace=None,
+    )
+    v1 = WindowsNamedPipeEndpoint.for_current_sid(
+        first_instance=True,
+        runtime_namespace="ansatz-voice-trace-client-auth-v1",
+    )
+    v2 = WindowsNamedPipeEndpoint.for_current_sid(
+        first_instance=True,
+        runtime_namespace="ansatz-voice-trace-client-auth-v2",
+    )
+
+    assert len({base.pipe_name, v1.pipe_name, v2.pipe_name}) == 3
+    assert v1.owner_sid == v2.owner_sid == base.owner_sid
+
+
+@pytest.mark.windows_only
+def test_windows_runtime_endpoint_honors_namespace_environment(monkeypatch):
+    monkeypatch.setenv(
+        "HERMES_AUTH_RUNTIME_NAMESPACE",
+        "ansatz-voice-trace-client-auth-v2",
+    )
+    namespaced = runtime_endpoint()
+
+    monkeypatch.delenv("HERMES_AUTH_RUNTIME_NAMESPACE")
+    unscoped = runtime_endpoint()
+
+    assert namespaced.pipe_name != unscoped.pipe_name
 
 
 @pytest.mark.windows_only

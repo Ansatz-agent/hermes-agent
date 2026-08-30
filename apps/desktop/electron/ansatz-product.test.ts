@@ -34,7 +34,7 @@ test('Ansatz desktop identity cannot collide with an existing Hermes installatio
   assert.equal(ANSATZ_PRODUCT.appId, 'cn.c2sml.ansatz.voice-trace-client')
   assert.equal(ANSATZ_PRODUCT.executableName, 'Ansatz')
   assert.equal(ANSATZ_PRODUCT.protocolScheme, 'ansatz-voice-trace')
-  assert.equal(ANSATZ_PRODUCT.authRuntimeNamespace, 'ansatz-voice-trace-client-auth-v1')
+  assert.equal(ANSATZ_PRODUCT.authRuntimeNamespace, 'ansatz-voice-trace-client-auth-v2')
   assert.equal(ANSATZ_PRODUCT.authKeyringService, 'cn.c2sml.ansatz.voice-trace-client.remote-auth')
   assert.equal(ANSATZ_PRODUCT.legacyAuthKeyringService, 'cn.c2sml.hermes.remote-auth')
   assert.equal(ANSATZ_PRODUCT.mediaProtocol, 'ansatz-media')
@@ -169,7 +169,7 @@ test('ansatzAuthEnvironment carries local auth identity without changing source 
     PATH: '/usr/bin',
     PROVIDER_API_KEY: 'filtered-by-auth-bridge',
     HERMES_HOME: '/Users/a/.ansatz-voice-trace-client',
-    HERMES_AUTH_RUNTIME_NAMESPACE: 'ansatz-voice-trace-client-auth-v1',
+    HERMES_AUTH_RUNTIME_NAMESPACE: 'ansatz-voice-trace-client-auth-v2',
     HERMES_AUTH_KEYRING_SERVICE: 'cn.c2sml.ansatz.voice-trace-client.remote-auth'
   })
   assert.deepEqual(source, {
