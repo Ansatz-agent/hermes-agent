@@ -493,7 +493,9 @@ def cmd_status(args) -> None:
     # canonical resolver (handles composite toolsets like hermes-cli).
     from hermes_cli.tools_config import _get_platform_tools
     cli_tools = _get_platform_tools(config, "cli", include_default_mcp_servers=False)
-    memory_tool_enabled = "memory" in cli_tools
+    memory_tool_enabled = (
+        "memory" in cli_tools and (memory_enabled or user_profile_enabled)
+    )
     tool_mark = "enabled ✓" if memory_tool_enabled else "disabled ✗"
 
     print("\nMemory status\n" + "─" * 40)

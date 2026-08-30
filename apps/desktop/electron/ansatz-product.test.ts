@@ -64,6 +64,11 @@ test('Ansatz desktop identity cannot collide with an existing Hermes installatio
   ])
 })
 
+test('desktop auth rolls to a new owner namespace without moving Keychain credentials', () => {
+  assert.equal(ANSATZ_PRODUCT.authRuntimeNamespace, 'ansatz-voice-trace-client-auth-v2')
+  assert.equal(ANSATZ_PRODUCT.authKeyringService, 'cn.c2sml.ansatz.voice-trace-client.remote-auth')
+})
+
 test('resolveAnsatzRuntimeRoot isolates macOS and Windows user data from Hermes', () => {
   assert.equal(
     resolveAnsatzRuntimeRoot('darwin', '/Users/a', ''),

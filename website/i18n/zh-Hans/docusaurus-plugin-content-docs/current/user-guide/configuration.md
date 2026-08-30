@@ -585,6 +585,29 @@ worktree: true    # 始终创建 worktree（与 ansatz -w 相同）
 node_modules/
 ```
 
+## 最终 LLM Prompt 监视器
+
+本地调试时，可以让 Hermes 保存并打印每一次真正交给主模型或辅助模型
+provider adapter 的最终请求体：
+
+```yaml
+logging:
+  prompt_monitor:
+    enabled: false
+    include_auxiliary: true
+    max_files: 100
+```
+
+运行 `ansatz config set logging.prompt_monitor.enabled true` 启用，然后在另一个
+终端运行 `ansatz prompt-monitor`。快照保存在当前 profile 的
+`logs/prompt-monitor/` 下，包含 Context View 投影后的 messages/input、
+system/instructions、工具 schema、Object Card 与检索对象回填。重试和 provider
+fallback 会各自产生一条记录。
+
+已知凭据格式会在写盘前脱敏，目录与文件也使用私有权限；不过 prompt 本身仍
+可能包含私有对话、代码、文档和工具输出。请把这些文件当作敏感数据，并在测试
+完成后关闭捕获。
+
 ## 上下文压缩
 
 Hermes 自动压缩长对话以保持在模型的上下文窗口内。压缩摘要器是一个单独的 LLM 调用 —— 您可以将其指向任何 provider 或端点。

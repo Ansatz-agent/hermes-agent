@@ -2905,7 +2905,7 @@ function Install-AuthDependencies {
         try {
             $env:PYTHONPATH = $InstallDir
             $ErrorActionPreference = "Continue"
-            & $authPython -c "import hermes_cli.client_auth.bridge as bridge; assert bridge.PROTOCOL_VERSION == 1" 2>&1 | Out-Null
+            & $authPython -c "import hermes_cli.client_auth.bridge as bridge; from hermes_cli.client_auth.backend_scope_protocol import DESKTOP_SCOPE_PROTOCOL_VERSION; assert bridge.PROTOCOL_VERSION == 2; assert DESKTOP_SCOPE_PROTOCOL_VERSION == 2" 2>&1 | Out-Null
             $probeExitCode = $LASTEXITCODE
         } finally {
             $ErrorActionPreference = $previousPreference
@@ -3380,7 +3380,7 @@ function Write-AuthBootstrapComplete {
             sourceCommit = $sourceCommit
             sourceArchiveSha256 = $sourceArchiveSha256
             authLockSha256 = (Get-FileHash -LiteralPath $authLock -Algorithm SHA256).Hash.ToLowerInvariant()
-            protocolVersion = 1
+            protocolVersion = 2
         }
         Write-AtomicAuthJson -Path (Join-Path $InstallDir ".hermes-auth-bootstrap-complete") -Value $marker
         Complete-AuthVenvTransaction

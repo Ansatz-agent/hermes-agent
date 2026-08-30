@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import base64
 import json
 from dataclasses import replace
 from types import SimpleNamespace
 
 import pytest
 
+from hermes_cli.client_auth.backend_scope_protocol import (
+    BACKEND_SCOPE_TOKEN_OVERLAP_SECONDS,
+    ScopeTokenPromotion,
+    ScopeTokenRegistration,
+)
 from hermes_cli.client_auth.runtime import (
     AuthRequired,
     BackendScopeTokenRegistry,
@@ -402,8 +408,8 @@ async def test_gateway_http_middleware_returns_401_before_handler_state():
 
     assert response.status == 401
     assert json.loads(response.text) == {
-        "error": "Ansatz login required",
-        "code": "login_required",
+        "detail": "Ansatz login required",
+        "code": "account_locked",
         "hint": "Run `ansatz login` and retry.",
     }
 
@@ -446,6 +452,67 @@ async def test_desktop_gateway_http_requires_registered_scope_header(monkeypatch
         lambda _request: pytest.fail("missing scope bearer reached handler"),
     )
     assert denied.status == 401
+    assert json.loads(denied.text) == {
+        "detail": "Local capability rejected",
+        "code": "local_capability_rejected",
+        "reason": "unknown",
+        "failure_phase": "pre_dispatch",
+        "retryable": True,
+    }
+
+    clear_runtime_consumer()
+    account_locked = await api_server.client_runtime_auth_middleware(
+        Request({"X-Hermes-Scope-Token": bearer}),
+        lambda _request: pytest.fail("account-locked request reached handler"),
+    )
+    assert account_locked.status == 401
+    assert json.loads(account_locked.text) == {
+        "detail": "Ansatz login required",
+        "code": "account_locked",
+        "hint": "Run `ansatz login` and retry.",
+    }
+
+
+@pytest.mark.asyncio
+async def test_gateway_preserves_provider_401_payload(monkeypatch):
+    from gateway.platforms import api_server
+
+    if api_server.client_runtime_auth_middleware is None:
+        pytest.skip("aiohttp optional dependency is not installed")
+
+    scope = _install_authenticated_consumer()
+    registry = BackendScopeTokenRegistry()
+    bearer = "REREREREREREREREREREREREREREREREREREREREREQ"
+    registry.register(
+        bearer,
+        connection_id="local",
+        expected=scope,
+        ttl_seconds=60,
+    )
+    monkeypatch.setenv("HERMES_DESKTOP", "1")
+    monkeypatch.setattr(api_server, "backend_scope_tokens", registry)
+    provider_response = api_server.web.json_response(
+        {
+            "error": "Provider authorization failed",
+            "code": "provider_unauthorized",
+        },
+        status=401,
+    )
+
+    async def provider_handler(_request):
+        return provider_response
+
+    response = await api_server.client_runtime_auth_middleware(
+        SimpleNamespace(headers={"X-Hermes-Scope-Token": bearer}),
+        provider_handler,
+    )
+
+    assert response is provider_response
+    assert response.status == 401
+    assert json.loads(response.text) == {
+        "error": "Provider authorization failed",
+        "code": "provider_unauthorized",
+    }
 
 
 @pytest.mark.asyncio
@@ -462,7 +529,7 @@ async def test_dashboard_api_rejects_before_downstream_handler():
     assert response.status_code == 401
     assert json.loads(response.body) == {
         "detail": "Ansatz login required",
-        "code": "login_required",
+        "code": "account_locked",
         "hint": "Run `ansatz login` and retry.",
     }
 
@@ -509,10 +576,272 @@ async def test_desktop_dashboard_api_requires_the_registered_scope_header(monkey
         lambda _request: pytest.fail("missing scope bearer reached handler"),
     )
     assert response.status_code == 401
+    assert json.loads(response.body) == {
+        "detail": "Local capability rejected",
+        "code": "local_capability_rejected",
+        "reason": "unknown",
+        "failure_phase": "pre_dispatch",
+        "retryable": True,
+    }
+
+    clear_runtime_consumer()
+    account_locked = await web_server.client_runtime_auth_middleware(
+        allowed,
+        lambda _request: pytest.fail("account-locked request reached handler"),
+    )
+    assert account_locked.status_code == 401
+    assert json.loads(account_locked.body) == {
+        "detail": "Ansatz login required",
+        "code": "account_locked",
+        "hint": "Run `ansatz login` and retry.",
+    }
 
 
 @pytest.mark.asyncio
-async def test_dashboard_websocket_closes_when_runtime_is_locked():
+async def test_desktop_dashboard_epoch_change_is_a_retryable_capability_rejection(
+    monkeypatch,
+):
+    from hermes_cli import web_server
+
+    snapshot = RuntimeSnapshot.new_authenticated(
+        "test-user",
+        now=0.0,
+        ttl=10**12,
+    )
+    install_runtime_consumer(
+        RuntimeConsumer(
+            snapshot,
+            liveness_probe=lambda: True,
+            clock=lambda: 0.0,
+        )
+    )
+    registry = BackendScopeTokenRegistry()
+    bearer = "U0NTU0NTU0NTU0NTU0NTU0NTU0NTU0NTU0NTU0NTU0M"
+    registry.register(
+        bearer,
+        connection_id="local",
+        expected=snapshot.scope,
+        ttl_seconds=60,
+    )
+    monkeypatch.setattr(web_server, "backend_scope_tokens", registry)
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(desktop_scope_tokens_required=True)
+    )
+    request = SimpleNamespace(
+        app=app,
+        headers={"X-Hermes-Session-Token": bearer},
+        method="GET",
+        state=SimpleNamespace(),
+        url=SimpleNamespace(path="/api/status"),
+    )
+
+    advanced = replace(snapshot, epoch=snapshot.epoch + 1)
+    install_runtime_consumer(
+        RuntimeConsumer(
+            advanced,
+            liveness_probe=lambda: True,
+            clock=lambda: 0.0,
+        )
+    )
+    response = await web_server.client_runtime_auth_middleware(
+        request,
+        lambda _request: pytest.fail("stale capability reached handler"),
+    )
+
+    assert response.status_code == 401
+    assert json.loads(response.body) == {
+        "detail": "Local capability rejected",
+        "code": "local_capability_rejected",
+        "reason": "scope_not_authorized",
+        "failure_phase": "pre_dispatch",
+        "retryable": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_desktop_dashboard_candidate_probe_is_side_effect_free(monkeypatch):
+    from hermes_cli import web_server
+
+    scope = _install_authenticated_consumer()
+    registry = BackendScopeTokenRegistry()
+    registration_id = "UlJSUlJSUlJSUlJSUlJSUg"
+    bearer = "Q0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0NDQ0M"
+    registry.register_candidate(
+        ScopeTokenRegistration(
+            registration_id=registration_id,
+            bearer=bearer,
+            connection_id="local",
+            runtime_instance_id=scope.runtime_instance_id,
+            epoch=scope.epoch,
+            ttl_seconds=1_800,
+        ),
+        expected=scope,
+    )
+    monkeypatch.setattr(web_server, "backend_scope_tokens", registry)
+    handler_calls = 0
+
+    async def business_handler(_request):
+        nonlocal handler_calls
+        handler_calls += 1
+        return "business-handler-ran"
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(desktop_scope_tokens_required=True)
+        ),
+        headers={"X-Hermes-Session-Token": bearer},
+        method="GET",
+        state=SimpleNamespace(),
+        url=SimpleNamespace(path="/api/auth/scope-token-probe"),
+    )
+
+    response = await web_server.client_runtime_auth_middleware(
+        request,
+        business_handler,
+    )
+    payload = json.loads(response.body)
+
+    assert response.status_code == 200
+    assert payload == {
+        "protocol_version": 2,
+        "registration_id": registration_id,
+        "connection_id": "local",
+        "runtime_instance_id": scope.runtime_instance_id,
+        "epoch": scope.epoch,
+        "state": "candidate",
+        "promoted_transition_id": None,
+    }
+    assert handler_calls == 0
+    assert bearer not in response.body.decode("utf-8")
+    assert "token_digest" not in payload
+    assert "valid_until" not in payload
+    assert "username" not in payload
+
+    request.method = "POST"
+    non_get_response = await web_server.client_runtime_auth_middleware(
+        request,
+        business_handler,
+    )
+    assert non_get_response.status_code == 401
+    assert json.loads(non_get_response.body) == {
+        "detail": "Local capability rejected",
+        "code": "local_capability_rejected",
+        "reason": "candidate_not_active",
+        "failure_phase": "pre_dispatch",
+        "retryable": True,
+    }
+    assert handler_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_model_config_requests_stay_authorized_through_scope_rotation(monkeypatch):
+    from hermes_cli import web_server
+
+    now = [100.0]
+    scope = _install_authenticated_consumer()
+    registry = BackendScopeTokenRegistry(clock=lambda: now[0])
+
+    def encoded(size, byte):
+        return base64.urlsafe_b64encode(byte * size).decode("ascii").rstrip("=")
+
+    def registration(identifier, bearer):
+        return ScopeTokenRegistration(
+            registration_id=identifier,
+            bearer=bearer,
+            connection_id="local",
+            runtime_instance_id=scope.runtime_instance_id,
+            epoch=scope.epoch,
+            ttl_seconds=1_800,
+        )
+
+    first = registration(encoded(16, b"A"), encoded(32, b"a"))
+    second = registration(encoded(16, b"B"), encoded(32, b"b"))
+    registry.register_candidate(first, expected=scope)
+    registry.promote(
+        ScopeTokenPromotion(
+            transition_id=encoded(16, b"1"),
+            registration_id=first.registration_id,
+            previous_registration_id=None,
+            connection_id="local",
+            runtime_instance_id=scope.runtime_instance_id,
+            epoch=scope.epoch,
+            overlap_seconds=BACKEND_SCOPE_TOKEN_OVERLAP_SECONDS,
+        ),
+        expected=scope,
+    )
+    registry.register_candidate(second, expected=scope)
+    monkeypatch.setattr(web_server, "backend_scope_tokens", registry)
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(desktop_scope_tokens_required=True)
+    )
+    handled = []
+
+    async def handler(request):
+        handled.append((request.method, request.url.path))
+        return "allowed"
+
+    async def request(bearer, method, path):
+        value = SimpleNamespace(
+            app=app,
+            headers={"X-Hermes-Session-Token": bearer},
+            method=method,
+            state=SimpleNamespace(),
+            url=SimpleNamespace(path=path),
+        )
+        return await web_server.client_runtime_auth_middleware(value, handler)
+
+    # A save and its parallel refreshes keep using the old active bearer while
+    # the replacement is only a candidate.
+    assert await request(first.bearer, "PUT", "/api/config") == "allowed"
+    assert await request(first.bearer, "GET", "/api/config") == "allowed"
+    assert await request(first.bearer, "GET", "/api/model/options") == "allowed"
+
+    candidate_denial = await request(second.bearer, "PUT", "/api/config")
+    assert candidate_denial.status_code == 401
+    candidate_payload = json.loads(candidate_denial.body)
+    assert candidate_payload["code"] == "local_capability_rejected"
+    assert "login" not in candidate_payload["detail"].lower()
+
+    registry.promote(
+        ScopeTokenPromotion(
+            transition_id=encoded(16, b"2"),
+            registration_id=second.registration_id,
+            previous_registration_id=first.registration_id,
+            connection_id="local",
+            runtime_instance_id=scope.runtime_instance_id,
+            epoch=scope.epoch,
+            overlap_seconds=BACKEND_SCOPE_TOKEN_OVERLAP_SECONDS,
+        ),
+        expected=scope,
+    )
+
+    # In-flight old-bearer traffic survives the bounded overlap; new traffic
+    # immediately uses the promoted bearer.
+    assert await request(first.bearer, "PUT", "/api/config") == "allowed"
+    assert await request(second.bearer, "GET", "/api/model/options") == "allowed"
+
+    now[0] += BACKEND_SCOPE_TOKEN_OVERLAP_SECONDS
+    expired_old = await request(first.bearer, "GET", "/api/config")
+    assert expired_old.status_code == 401
+    expired_payload = json.loads(expired_old.body)
+    assert expired_payload["code"] == "local_capability_rejected"
+    assert expired_payload["retryable"] is True
+    assert "login" not in expired_payload["detail"].lower()
+    assert await request(second.bearer, "PUT", "/api/config") == "allowed"
+    assert handled == [
+        ("PUT", "/api/config"),
+        ("GET", "/api/config"),
+        ("GET", "/api/model/options"),
+        ("PUT", "/api/config"),
+        ("GET", "/api/model/options"),
+        ("PUT", "/api/config"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_websocket_uses_retryable_close_when_runtime_is_unavailable():
     from hermes_cli.web_server import _ws_client_runtime_authorized
 
     class FakeWebSocket:
@@ -526,7 +855,7 @@ async def test_dashboard_websocket_closes_when_runtime_is_locked():
     ws = FakeWebSocket()
 
     assert not await _ws_client_runtime_authorized(ws, "dashboard.ws.test")
-    assert ws.closed == {"code": 4401, "reason": "Ansatz login required"}
+    assert ws.closed == {"code": 1012, "reason": "Local capability unavailable"}
 
 
 @pytest.mark.asyncio
@@ -576,7 +905,7 @@ async def test_owner_eof_closes_connected_tui_websocket(monkeypatch):
     ws = FakeWebSocket()
     await ws_module.handle_ws(ws)
 
-    assert {"code": 4401, "reason": "Ansatz login required"} in ws.close_calls
+    assert {"code": 1012, "reason": "Local capability unavailable"} in ws.close_calls
 
 
 def test_agent_forwarder_rejects_before_reading_agent_or_creating_turn():

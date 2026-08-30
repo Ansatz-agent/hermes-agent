@@ -1,4 +1,5 @@
 import { type TraceCredential, traceCredentialExpiresAt } from './auth-bridge'
+import { type TraceOwner, validateTraceOwner } from './trace-outbox-types'
 
 const EXPIRY_SKEW_MS = 60_000
 
@@ -11,6 +12,58 @@ export type TraceCredentialProvider = {
   invalidate(): void
   clear(): void
   expiresAt(): number | null
+}
+
+type BoundTraceCredentialLoader = (forceRefresh: boolean) => Promise<TraceCredential>
+
+type TraceCredentialBinding = {
+  generation: number
+  loader: BoundTraceCredentialLoader
+  owner: TraceOwner
+}
+
+export class RebindableTraceCredentialSource implements TraceCredentialSource {
+  private binding: TraceCredentialBinding | null = null
+  private generation = 0
+
+  bind(owner: TraceOwner, loader: BoundTraceCredentialLoader): number {
+    const next = validateTraceOwner(owner).owner
+    const current = this.binding?.owner
+
+    if (current && (current.accountKey !== next.accountKey || current.installationId !== next.installationId)) {
+      throw new Error('trace_credential_account_mismatch')
+    }
+
+    this.generation += 1
+    this.binding = { generation: this.generation, loader, owner: { ...next } }
+
+    return this.generation
+  }
+
+  clear(): void {
+    this.generation += 1
+    this.binding = null
+  }
+
+  owner(): TraceOwner | null {
+    return this.binding ? { ...this.binding.owner } : null
+  }
+
+  async load(forceRefresh: boolean): Promise<TraceCredential> {
+    const binding = this.binding
+
+    if (binding === null) {
+      throw new Error('trace_credential_binding_unavailable')
+    }
+
+    const credential = await binding.loader(forceRefresh)
+
+    if (this.binding !== binding || binding.generation !== this.generation) {
+      throw new Error('trace_credential_binding_changed')
+    }
+
+    return credential
+  }
 }
 
 type RefreshingTraceCredentialProviderOptions = {

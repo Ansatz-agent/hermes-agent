@@ -490,7 +490,7 @@ class TestCoalesceFieldContract:
             set(db._TOKEN_DELTA_SUM_FIELDS)
             | set(db._TOKEN_DELTA_COST_FIELDS)
             | set(db._TOKEN_DELTA_ROUTE_FIELDS)
-            | {"absolute"}  # control flag: absolute deltas never merge
+            | set(db._TOKEN_DELTA_CONTROL_FIELDS)
         )
 
         unclassified = params - classified
@@ -501,7 +501,7 @@ class TestCoalesceFieldContract:
             f"control-flag set in this test) — unclassified kwargs are "
             f"silently dropped from merged deltas."
         )
-        phantom = classified - params - {"absolute"}
+        phantom = classified - params
         assert not phantom, (
             f"coalescing field lists reference kwargs update_token_counts "
             f"no longer accepts: {sorted(phantom)}"

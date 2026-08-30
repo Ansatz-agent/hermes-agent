@@ -1,4 +1,5 @@
 """Tests for CLI /status command behavior."""
+import json
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -102,8 +103,130 @@ def test_profile_command_reports_custom_root_profile(monkeypatch, tmp_path, caps
     monkeypatch.setenv("HERMES_HOME", str(profile_home))
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "unrelated-home")
 
-    cli_obj._handle_profile_command()
+    cli_obj._handle_profile_command("/profile runtime")
 
     out = capsys.readouterr().out
     assert "Profile: coder" in out
     assert f"Home:    {profile_home}" in out
+
+
+def test_process_command_passes_profile_category_to_handler():
+    cli_obj = _make_cli()
+
+    with patch.object(cli_obj, "_handle_profile_command") as mock_profile:
+        assert cli_obj.process_command("/profile latex") is True
+
+    mock_profile.assert_called_once_with("/profile latex")
+
+
+def test_profile_command_lists_directory_without_expanding_items(capsys):
+    cli_obj = _make_cli()
+
+    class FakeMemoryManager:
+        def __init__(self):
+            self.calls = []
+
+        @staticmethod
+        def has_tool(name):
+            return name == "profile_browse"
+
+        def handle_tool_call(self, name, args):
+            self.calls.append((name, args))
+            return json.dumps(
+                {
+                    "resolved_scope": "profile://",
+                    "scope_found": True,
+                    "categories": [
+                        {
+                            "uri": "profile://preferences",
+                            "depth": 0,
+                            "active_items": 0,
+                            "candidate_items": 0,
+                        },
+                        {
+                            "uri": "profile://preferences/workflow",
+                            "depth": 1,
+                            "active_items": 0,
+                            "candidate_items": 0,
+                        },
+                        {
+                            "uri": "profile://preferences/workflow/artifacts/latex",
+                            "depth": 3,
+                            "active_items": 1,
+                            "candidate_items": 0,
+                        },
+                    ],
+                    "items": [
+                        {
+                            "item_id": "a" * 32,
+                            "rule": "Use equation for displayed equations.",
+                        }
+                    ],
+                    "truncated": False,
+                }
+            )
+
+    manager = FakeMemoryManager()
+    cli_obj.agent = SimpleNamespace(_memory_manager=manager)
+    cli_obj._handle_profile_command("/profile")
+
+    out = capsys.readouterr().out
+    assert "User preference profile" in out
+    assert "profile://" in out
+    assert "└── latex/  [1 active]" in out
+    assert "Use equation for displayed equations." not in out
+    assert manager.calls == [("profile_browse", {})]
+
+
+def test_profile_command_expands_a_short_category_name(capsys):
+    cli_obj = _make_cli()
+
+    class FakeMemoryManager:
+        @staticmethod
+        def has_tool(name):
+            return name == "profile_browse"
+
+        @staticmethod
+        def handle_tool_call(name, args):
+            assert name == "profile_browse"
+            assert args == {"scope": "latex"}
+            return json.dumps(
+                {
+                    "requested_scope": "latex",
+                    "resolved_scope": (
+                        "profile://preferences/workflow/artifacts/latex"
+                    ),
+                    "scope_found": True,
+                    "categories": [
+                        {
+                            "uri": "profile://preferences/workflow/artifacts/latex",
+                            "depth": 3,
+                            "active_items": 1,
+                            "candidate_items": 0,
+                        }
+                    ],
+                    "items": [
+                        {
+                            "item_id": "b" * 32,
+                            "kind": "workflow_preference",
+                            "category": (
+                                "profile://preferences/workflow/artifacts/latex"
+                            ),
+                            "status": "active",
+                            "applies_when": "writing LaTeX",
+                            "rule": "Do not insert arbitrary source line breaks.",
+                            "confidence": 1.0,
+                        }
+                    ],
+                    "truncated": False,
+                }
+            )
+
+    cli_obj.agent = SimpleNamespace(_memory_manager=FakeMemoryManager())
+    cli_obj._handle_profile_command("/profile latex")
+
+    out = capsys.readouterr().out
+    assert "User preferences · profile://preferences/workflow/artifacts/latex" in out
+    assert f"[active] {'b' * 32}" in out
+    assert "Applies when: writing LaTeX" in out
+    assert "Rule: Do not insert arbitrary source line breaks." in out

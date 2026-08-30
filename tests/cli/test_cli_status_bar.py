@@ -31,7 +31,15 @@ def _attach_agent(
     context_tokens: int,
     context_length: int,
     compressions: int = 0,
+    v1_metrics: dict | None = None,
 ):
+    compressor = SimpleNamespace(
+        last_prompt_tokens=context_tokens,
+        context_length=context_length,
+        compression_count=compressions,
+    )
+    if v1_metrics is not None:
+        compressor.get_status_bar_metrics = lambda: dict(v1_metrics)
     cli_obj.agent = SimpleNamespace(
         model=cli_obj.model,
         provider="anthropic" if cli_obj.model.startswith("anthropic/") else None,
@@ -45,11 +53,7 @@ def _attach_agent(
         session_total_tokens=total_tokens,
         session_api_calls=api_calls,
         get_rate_limit_state=lambda: None,
-        context_compressor=SimpleNamespace(
-            last_prompt_tokens=context_tokens,
-            context_length=context_length,
-            compression_count=compressions,
-        ),
+        context_compressor=compressor,
     )
     return cli_obj
 
@@ -150,6 +154,95 @@ class TestCLIStatusBar:
         text = cli_obj._build_status_bar_text(width=120)
 
         assert "🗜️ 3" in text
+
+    def test_snapshot_reads_only_lightweight_v1_status_bar_metrics(self):
+        cli_obj = _attach_agent(
+            _make_cli(),
+            prompt_tokens=10_230,
+            completion_tokens=2_220,
+            total_tokens=12_450,
+            api_calls=7,
+            context_tokens=12_450,
+            context_length=200_000,
+        )
+        metrics = MagicMock(return_value={
+            "object_context_active": True,
+            "last_tokens_saved": 80_047,
+            "last_reduction_percent": 59.7,
+            "session_tokens_saved": 720_423,
+            "request_projection_count": 29,
+        })
+        cli_obj.agent.context_compressor.get_status_bar_metrics = metrics
+        cli_obj.agent.context_compressor.get_status = MagicMock(
+            side_effect=AssertionError("detailed status must not run on repaint")
+        )
+
+        snapshot = cli_obj._get_status_bar_snapshot()
+
+        assert snapshot["v1_savings_active"] is True
+        assert snapshot["v1_last_tokens_saved"] == 80_047
+        assert snapshot["v1_last_reduction_percent"] == 59.7
+        assert snapshot["v1_session_tokens_saved"] == 720_423
+        assert snapshot["v1_request_projection_count"] == 29
+        metrics.assert_called_once_with()
+        cli_obj.agent.context_compressor.get_status.assert_not_called()
+
+    def test_v1_savings_are_width_aware_in_plain_status_bar(self):
+        cli_obj = _attach_agent(
+            _make_cli(),
+            prompt_tokens=10_230,
+            completion_tokens=2_220,
+            total_tokens=12_450,
+            api_calls=7,
+            context_tokens=12_450,
+            context_length=200_000,
+            v1_metrics={
+                "object_context_active": True,
+                "last_tokens_saved": 80_047,
+                "last_reduction_percent": 59.7,
+                "session_tokens_saved": 720_423,
+                "request_projection_count": 29,
+            },
+        )
+
+        narrow = cli_obj._build_status_bar_text(width=75)
+        medium = cli_obj._build_status_bar_text(width=90)
+        wide = cli_obj._build_status_bar_text(width=140)
+
+        assert "V1" not in narrow
+        assert "V1↓80K" in medium
+        assert "V1↓80K 60%" not in medium
+        assert "Σ↓" not in medium
+        assert "V1↓80K 60%" in wide
+        assert "Σ↓720K" in wide
+
+    def test_v1_status_bar_keeps_cumulative_savings_when_latest_is_zero(self):
+        labels = HermesCLI._status_bar_v1_savings_labels(
+            {
+                "v1_savings_active": True,
+                "v1_last_tokens_saved": 0,
+                "v1_session_tokens_saved": 720_423,
+                "v1_request_projection_count": 29,
+            },
+            90,
+        )
+
+        assert labels == ["V1Σ↓720K"]
+
+    def test_v1_status_bar_stays_visible_when_active_savings_are_zero(self):
+        active = {
+            "v1_savings_active": True,
+            "v1_last_tokens_saved": 0,
+            "v1_session_tokens_saved": 0,
+            "v1_request_projection_count": 10,
+        }
+
+        assert HermesCLI._status_bar_v1_savings_labels(active, 75) == []
+        assert HermesCLI._status_bar_v1_savings_labels(active, 76) == ["V1↓0"]
+        assert HermesCLI._status_bar_v1_savings_labels(active, 140) == ["V1↓0"]
+        assert HermesCLI._status_bar_v1_savings_labels(
+            {**active, "v1_savings_active": False}, 140
+        ) == []
 
 
 
@@ -313,6 +406,30 @@ class TestStatusBarWidthSource:
         assert text.endswith(" weekly-digest ")
         assert cli_obj._status_bar_display_width(text) == 100
 
+    def test_styled_fragments_include_v1_latest_and_cumulative_savings(self):
+        cli_obj = self._make_wide_cli()
+        cli_obj.agent.context_compressor.get_status_bar_metrics = lambda: {
+            "object_context_active": True,
+            "last_tokens_saved": 80_047,
+            "last_reduction_percent": 59.7,
+            "session_tokens_saved": 720_423,
+            "request_projection_count": 29,
+        }
+        mock_app = MagicMock()
+        mock_app.output.get_size.return_value = MagicMock(columns=160)
+
+        with patch("prompt_toolkit.application.get_app", return_value=mock_app):
+            frags = cli_obj._get_status_bar_fragments()
+
+        text = "".join(value for _, value in frags)
+        assert "V1↓80K 60%" in text
+        assert "Σ↓720K" in text
+        assert any(
+            style == "class:status-bar-good" and "V1↓" in value
+            for style, value in frags
+        )
+        assert cli_obj._status_bar_display_width(text) <= 160
+
     def test_fragments_use_pt_width_over_shutil(self):
         """When prompt_toolkit reports a width, shutil.get_terminal_size must not be used."""
         from unittest.mock import MagicMock, patch
@@ -368,5 +485,3 @@ class TestIdleSinceLastTurn:
         cli_obj._prompt_duration = 5.0
         snapshot = cli_obj._get_status_bar_snapshot()
         assert snapshot["idle_since"].startswith("✓ ")
-
-

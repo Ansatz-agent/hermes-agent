@@ -33,6 +33,7 @@ def public_status(**overrides: object) -> dict[str, object]:
         "runtime_instance_id": "runtime-1",
         "epoch": 2,
         "valid_until": 60.0,
+        "cloud_state": "active",
         "validation_state": "online",
         "validation_reason": None,
         "last_validated_at": "2026-08-24T12:00:00+00:00",
@@ -140,6 +141,11 @@ def test_public_bridge_status_rejects_extra_or_secret_fields():
         _validated_public_result({**public_status(), "session_token": "secret-sentinel"})
 
 
+def test_public_bridge_status_rejects_unknown_cloud_state():
+    with pytest.raises(RuntimeError):
+        _validated_public_result(public_status(cloud_state="maybe"))
+
+
 @pytest.mark.parametrize("nonfinite", [float("nan"), float("inf"), float("-inf")])
 def test_public_bridge_status_rejects_nonfinite_valid_until(nonfinite):
     with pytest.raises(RuntimeError):
@@ -184,10 +190,11 @@ def test_status_dispatches_explicit_terminal_snapshot_with_matching_identity(
             state="locked",
             username=None,
             valid_until=0.0,
+            cloud_state=None,
             validation_state="degraded",
             validation_reason=reason,
             reason=reason,
-        )
+        ),
     )
     monkeypatch.setattr("hermes_cli.client_auth.bridge.account_status", lambda **_context: terminal)
 
@@ -288,8 +295,13 @@ def test_request_id_and_schema_are_bounded():
 
 
 def test_bridge_starts_detached_owner_before_serving_stream(monkeypatch):
-    remote = object()
     events: list[str] = []
+
+    class Remote:
+        def enable_desktop_local_continuity(self):
+            events.append("enable-local-continuity")
+
+    remote = Remote()
 
     monkeypatch.setattr(
         "hermes_cli.client_auth.bridge.connect_runtime_owner",
@@ -316,7 +328,60 @@ def test_bridge_starts_detached_owner_before_serving_stream(monkeypatch):
     )
 
     assert main() == 0
-    assert events == ["detached-owner", "install", "stream", "clear"]
+    assert events == [
+        "detached-owner",
+        "enable-local-continuity",
+        "install",
+        "stream",
+        "clear",
+    ]
+
+
+def test_bridge_replaces_owner_that_cannot_enable_desktop_local_continuity(monkeypatch):
+    events: list[str] = []
+
+    class OldRemote:
+        def enable_desktop_local_continuity(self):
+            events.append("old-enable")
+            raise AuthRequired("runtime_unavailable")
+
+    class CurrentRemote:
+        def enable_desktop_local_continuity(self):
+            events.append("current-enable")
+
+    old = OldRemote()
+    current = CurrentRemote()
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.bridge.connect_runtime_owner",
+        lambda **_kwargs: events.append("connect") or old,
+    )
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.bridge.start_runtime_owner",
+        lambda **_kwargs: events.append("start-current") or current,
+    )
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.bridge.install_entrypoint_owner",
+        lambda owner: events.append("install-current") if owner is current else None,
+    )
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.bridge.clear_entrypoint_owner",
+        lambda: events.append("clear"),
+    )
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.bridge.run_stream",
+        lambda _source, _target: events.append("stream"),
+    )
+
+    assert main() == 0
+    assert events == [
+        "connect",
+        "old-enable",
+        "start-current",
+        "current-enable",
+        "install-current",
+        "stream",
+        "clear",
+    ]
 
 
 def test_trace_token_bridge_uses_exact_request_and_never_exposes_session_cookies(monkeypatch):
@@ -394,6 +459,7 @@ def test_non_terminal_locked_status_maps_to_auth_required_not_internal_error(mon
         public_dict=lambda: public_status(
             state="locked",
             reason=reason,
+            cloud_state=None,
             validation_state="degraded",
             validation_reason=reason,
         ),
@@ -421,6 +487,7 @@ def test_internal_auth_response_failure_is_reported_as_invalid_response(monkeypa
             installation_id=None,
             principal_key=None,
             valid_until=0.0,
+            cloud_state=None,
             validation_state="degraded",
             validation_reason=reason,
             legacy=False,

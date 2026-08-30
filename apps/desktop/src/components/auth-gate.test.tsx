@@ -16,6 +16,7 @@ const signedOut: DesktopAccountStatus = {
   runtime_instance_id: 'runtime-1',
   epoch: 1,
   valid_until: 0,
+  cloud_state: null,
   validation_state: 'unknown',
   validation_reason: null,
   last_validated_at: null,
@@ -33,6 +34,7 @@ const authenticated: DesktopAccountStatus = {
   principal_key: 'account:alice',
   epoch: 2,
   valid_until: 60,
+  cloud_state: 'active',
   reason: null,
   runtime_ready: true
 }
@@ -402,7 +404,7 @@ describe('AuthGate', () => {
 
     expect(screen.getByRole('button', { name: 'Protected Hermes application 1' })).not.toBeNull()
     expect(screen.queryByRole('heading', { name: 'Sign in to Ansatz' })).toBeNull()
-    expect(screen.getByRole('status').textContent).toBe('The account server is unavailable. Try again.')
+    expect(screen.queryByRole('status')).toBeNull()
 
     act(() =>
       emit({ ...localAuthorization, runtime_ready: false, validation_state: 'online', validation_reason: null })
@@ -410,6 +412,31 @@ describe('AuthGate', () => {
 
     expect(screen.getByRole('button', { name: 'Protected Hermes application 1' })).not.toBeNull()
     expect(onMount).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the protected tree mounted while cloud auth is unreachable', async () => {
+    const mounted = vi.fn()
+    const { emit } = renderGate(
+      { status: vi.fn(async () => authenticated) },
+      null,
+      <ProtectedMountProbe onMount={mounted} />
+    )
+
+    expect(await screen.findByText('Protected Hermes application')).not.toBeNull()
+    act(() =>
+      emit({
+        ...authenticated,
+        cloud_state: 'unreachable',
+        validation_state: 'degraded',
+        validation_reason: 'server_unavailable',
+        reason: 'server_unavailable',
+        valid_until: 0
+      })
+    )
+
+    expect(screen.getByText('Protected Hermes application')).not.toBeNull()
+    expect(screen.queryByRole('heading', { name: 'Sign in to Ansatz' })).toBeNull()
+    expect(mounted).toHaveBeenCalledTimes(1)
   })
 
   it('keeps the protected conversation mounted when validation times out', async () => {
@@ -447,7 +474,7 @@ describe('AuthGate', () => {
       const { emit } = renderGate({ status: vi.fn(async () => authenticated) })
       expect(await screen.findByText('Protected Hermes application')).not.toBeNull()
 
-      act(() => emit({ ...authenticated, state: 'locked', reason, epoch: 3 }))
+      act(() => emit({ ...authenticated, state: 'locked', cloud_state: null, reason, epoch: 3 }))
 
       expect(screen.queryByText('Protected Hermes application')).toBeNull()
       expect(await screen.findByRole('heading', { name: 'Sign in to Ansatz' })).not.toBeNull()
@@ -460,7 +487,9 @@ describe('AuthGate', () => {
       const { emit } = renderGate({ status: vi.fn(async () => authenticated) })
       expect(await screen.findByText('Protected Hermes application')).not.toBeNull()
 
-      act(() => emit({ ...authenticated, state: 'locked', reason, session_id: 'old-session', epoch: 3 }))
+      act(() =>
+        emit({ ...authenticated, state: 'locked', cloud_state: null, reason, session_id: 'old-session', epoch: 3 })
+      )
 
       expect(screen.queryByText('Protected Hermes application')).toBeNull()
       expect(await screen.findByRole('heading', { name: 'Sign in to Ansatz' })).not.toBeNull()
@@ -472,7 +501,14 @@ describe('AuthGate', () => {
     expect(await screen.findByText('Protected Hermes application')).not.toBeNull()
 
     act(() =>
-      emit({ ...authenticated, state: 'locked', reason: 'session_revoked', session_id: 'old-session', epoch: 3 })
+      emit({
+        ...authenticated,
+        state: 'locked',
+        cloud_state: null,
+        reason: 'session_revoked',
+        session_id: 'old-session',
+        epoch: 3
+      })
     )
 
     expect(screen.getByText('Protected Hermes application')).not.toBeNull()

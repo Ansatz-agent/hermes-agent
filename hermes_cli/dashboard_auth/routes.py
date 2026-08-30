@@ -944,6 +944,7 @@ async def api_auth_ws_ticket(request: Request):
     """
     sess = getattr(request.state, "session", None)
     desktop_grant = getattr(request.state, "desktop_scope_grant", None)
+    desktop_claim = getattr(request.state, "desktop_scope_claim", None)
     if sess is None and desktop_grant is None:
         # Middleware should already have rejected, but check defensively.
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -953,12 +954,14 @@ async def api_auth_ws_ticket(request: Request):
     from hermes_cli.dashboard_auth.ws_tickets import TTL_SECONDS, mint_ticket
 
     if desktop_grant is not None:
+        if not isinstance(desktop_claim, dict):
+            raise HTTPException(status_code=401, detail="Unauthorized")
         user_id = f"desktop:{desktop_grant.connection_id}"
         provider = "desktop-scope"
         ticket = mint_ticket(
             user_id=user_id,
             provider=provider,
-            auth_scope=desktop_grant.claim(),
+            auth_scope=desktop_claim,
         )
     else:
         user_id = sess.user_id

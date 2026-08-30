@@ -5,20 +5,35 @@ import { test } from 'vitest'
 import { shouldLatchBackendStartFailure, shouldLatchRemoteReauthFailure } from './backend-start-failure'
 
 test('latches a LOCAL backend failure so the install-retry loop is broken', () => {
-  assert.equal(shouldLatchBackendStartFailure({ attemptedRemote: false }), true)
+  assert.equal(
+    shouldLatchBackendStartFailure({ attemptedRemote: false, traceDurabilityStartup: false }),
+    true
+  )
+})
+
+test('does not latch a LOCAL Trace durability startup failure so a later attempt can recover', () => {
+  assert.equal(
+    shouldLatchBackendStartFailure({ attemptedRemote: false, traceDurabilityStartup: true }),
+    false
+  )
 })
 
 test('never latches a REMOTE failure so recovery stays retryable without a restart', () => {
   // A lapsed OAuth session / mint timeout / host briefly unreachable across a
   // laptop sleep must not wedge the app: the next connect has to re-attempt and
   // re-mint against the refreshed session.
-  assert.equal(shouldLatchBackendStartFailure({ attemptedRemote: true }), false)
+  assert.equal(
+    shouldLatchBackendStartFailure({ attemptedRemote: true, traceDurabilityStartup: false }),
+    false
+  )
 })
 
-test('the two branches are mutually exclusive (a failure either latches or stays retryable)', () => {
+test('only an ordinary LOCAL backend failure latches', () => {
   for (const attemptedRemote of [true, false]) {
-    const latched = shouldLatchBackendStartFailure({ attemptedRemote })
-    assert.equal(latched, !attemptedRemote)
+    for (const traceDurabilityStartup of [true, false]) {
+      const latched = shouldLatchBackendStartFailure({ attemptedRemote, traceDurabilityStartup })
+      assert.equal(latched, !attemptedRemote && !traceDurabilityStartup)
+    }
   }
 })
 
@@ -44,9 +59,14 @@ test('the two latches never fire for the same failure', () => {
   // backendStartFailure, confirmed remote reauth latches via its own flag.
   for (const attemptedRemote of [true, false]) {
     for (const isReauth of [true, false]) {
-      const start = shouldLatchBackendStartFailure({ attemptedRemote })
-      const reauth = shouldLatchRemoteReauthFailure({ attemptedRemote, isReauth })
-      assert.ok(!(start && reauth), `both latched for remote=${attemptedRemote} reauth=${isReauth}`)
+      for (const traceDurabilityStartup of [true, false]) {
+        const start = shouldLatchBackendStartFailure({ attemptedRemote, traceDurabilityStartup })
+        const reauth = shouldLatchRemoteReauthFailure({ attemptedRemote, isReauth })
+        assert.ok(
+          !(start && reauth),
+          `both latched for remote=${attemptedRemote} reauth=${isReauth} trace=${traceDurabilityStartup}`
+        )
+      }
     }
   }
 })

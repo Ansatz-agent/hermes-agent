@@ -42,6 +42,7 @@ _PUBLIC_KEYS = frozenset(
         "runtime_instance_id",
         "epoch",
         "valid_until",
+        "cloud_state",
         "validation_state",
         "validation_reason",
         "last_validated_at",
@@ -51,6 +52,7 @@ _PUBLIC_KEYS = frozenset(
 )
 _PUBLIC_STATES = frozenset({"checking", "authenticated", "signed_out", "locked"})
 _VALIDATION_STATES = frozenset({"unknown", "validating", "online", "degraded"})
+_CLOUD_STATES = frozenset({"active", "unreachable", "reauth_required"})
 _SAFE_REASONS = frozenset(
     {
         "interactive_login_required",
@@ -297,6 +299,7 @@ def _validated_public_result(value: object) -> dict[str, object]:
     runtime_instance_id = value.get("runtime_instance_id")
     epoch = value.get("epoch")
     valid_until = value.get("valid_until")
+    cloud_state = value.get("cloud_state")
     validation_state = value.get("validation_state")
     validation_reason = value.get("validation_reason")
     last_validated_at = value.get("last_validated_at")
@@ -337,6 +340,12 @@ def _validated_public_result(value: object) -> dict[str, object]:
     ):
         raise RuntimeError("invalid public result")
     if validation_state not in _VALIDATION_STATES:
+        raise RuntimeError("invalid public result")
+    if cloud_state is not None and cloud_state not in _CLOUD_STATES:
+        raise RuntimeError("invalid public result")
+    if (state == "authenticated") != (cloud_state is not None):
+        raise RuntimeError("invalid public result")
+    if validation_state == "online" and cloud_state != "active":
         raise RuntimeError("invalid public result")
     if validation_reason is not None and validation_reason not in _VALIDATION_REASONS:
         raise RuntimeError("invalid public result")
@@ -478,6 +487,11 @@ def main() -> int:
         owner = connect_runtime_owner(timeout=2.0)
     except AuthRequired:
         owner = start_runtime_owner(timeout=4.0, probe_first=False)
+    try:
+        owner.enable_desktop_local_continuity()
+    except AuthRequired:
+        owner = start_runtime_owner(timeout=4.0, probe_first=False)
+        owner.enable_desktop_local_continuity()
     install_entrypoint_owner(owner)
     try:
         run_stream(sys.stdin.buffer, sys.stdout.buffer)

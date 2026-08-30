@@ -32,6 +32,30 @@ Plugin engines are **never auto-activated** — the user must explicitly set `co
 
 Configure via `ansatz plugins` → Provider Plugins → Context Engine, or edit `config.yaml` directly.
 
+The bundled `object_context` V1 engine composes with the default summarizer
+rather than replacing its role. It projects only structured objects in the
+currently verbatim conversation region into stable Cards. Provider requests
+and later whole-history summarizer inputs see that rendered Card view; the
+durable raw trace remains an audit/restart source and is not automatically
+rehydrated into summarizer prompts. Thus object virtualization and semantic
+multi-turn compaction retain independent triggers and state.
+
+To inspect the exact Context View that reaches the model, enable the local
+prompt monitor and run its viewer in a second terminal:
+
+```bash
+ansatz config set logging.prompt_monitor.enabled true
+ansatz prompt-monitor
+```
+
+The main-agent snapshot is captured after Object Context projection, so an
+eligible cold object appears as its full Card. A turn-scoped
+`retrieve_object` result appears in the next provider request exactly where it
+was reinserted. Auxiliary snapshots separately expose whole-history
+summarization and Object Card description prompts; this makes it possible to
+verify that the two compression layers remain independent. Disable capture
+after testing because the retained prompt snapshots contain private context.
+
 For building a context engine plugin, see [Context Engine Plugins](/developer-guide/context-engine-plugin).
 
 ## Dual Compression System

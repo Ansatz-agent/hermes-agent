@@ -91,6 +91,7 @@ interface SafeBootstrapState {
 interface InstalledAccountStatus {
   state: 'checking' | 'authenticated' | 'signed_out' | 'locked'
   username: string | null
+  cloud_state: 'active' | 'unreachable' | 'reauth_required' | null
   validation_state: 'unknown' | 'validating' | 'online' | 'degraded'
   validation_reason: string | null
   runtime_ready: boolean
@@ -224,6 +225,18 @@ print("1" if value is not None else "0")
   return output === '1'
 }
 
+function installedRuntimeProtocols(pythonPath: string, activeRoot: string): string {
+  return execFileSync(
+    pythonPath,
+    [
+      '-I',
+      '-c',
+      'import hermes_cli.client_auth.bridge as bridge; from hermes_cli.client_auth.backend_scope_protocol import DESKTOP_SCOPE_PROTOCOL_VERSION; print(f"{bridge.PROTOCOL_VERSION}:{DESKTOP_SCOPE_PROTOCOL_VERSION}")'
+    ],
+    { cwd: activeRoot, encoding: 'utf8' }
+  ).trim()
+}
+
 interface BackendOwnershipEntry {
   command: string
   pid: number
@@ -299,7 +312,8 @@ function assertInstalledPayloadBoundary(activeRoot: string): void {
     'desktop_auth_runtime/uv.lock',
     'desktop_auth_runtime/uv.toml',
     'hermes_cli/client_auth/cli.py',
-    'hermes_cli/client_auth/bridge.py'
+    'hermes_cli/client_auth/bridge.py',
+    'hermes_cli/client_auth/backend_scope_protocol.py'
   ]) {
     expect(fs.existsSync(path.join(activeRoot, ...required.split('/'))), `missing installed ${required}`).toBe(true)
   }
@@ -566,8 +580,9 @@ test('installed Windows Hermes enforces the complete account lifecycle', async (
       sourceCommit: sourceMarker.commit,
       sourceArchiveSha256: sourceMarker.archiveSha256,
       authLockSha256: createHash('sha256').update(fs.readFileSync(authLockPath)).digest('hex'),
-      protocolVersion: 1
+      protocolVersion: 2
     })
+    expect(installedRuntimeProtocols(authVenvPython, activeRoot)).toBe('2:2')
     expect(fs.existsSync(authTransactionPath)).toBe(false)
     expect(fs.existsSync(rollbackSentinel)).toBe(false)
     expectFullRuntimeAbsent(activeRoot)
@@ -872,6 +887,7 @@ test('installed Windows Hermes enforces the complete account lifecycle', async (
       )
       .toBe(true)
     await waitForInstalledFullRuntime(page, activeRoot, venvPython, 31 * 60_000)
+    expect(installedRuntimeProtocols(venvPython, activeRoot)).toBe('2:2')
     await expectAuthenticated(page, server.username, true)
     await expectProtectedRendererChunk(protectedRendererChunkRequested)
     await expect(page.locator('[data-slot="statusbar"]')).toBeVisible({ timeout: 30_000 })
@@ -980,6 +996,7 @@ test('installed Windows Hermes enforces the complete account lifecycle', async (
     expect(keyringRecordExists(authVenvPython)).toBe(true)
 
     const sessionValidBeforeRestart = server.events().filter(event => event.name === 'session_valid').length
+    server.setMode('500')
     await closeDesktopApp(app, { timeoutMs: 10_000 })
     app = null
     page = null
@@ -989,9 +1006,6 @@ test('installed Windows Hermes enforces the complete account lifecycle', async (
     app = launched.app
     page = launched.page
     await expectAuthenticated(page, server.username, true)
-    await expect
-      .poll(() => server!.events().filter(event => event.name === 'session_valid').length, { timeout: 30_000 })
-      .toBeGreaterThan(sessionValidBeforeRestart)
     await expect(page.locator('input[name="username"]')).toHaveCount(0)
     await expect(page.locator('[data-slot="statusbar"]')).toBeVisible({ timeout: 30_000 })
     const restoredRootPid = app.process().pid
@@ -1007,7 +1021,7 @@ test('installed Windows Hermes enforces the complete account lifecycle', async (
     const restoredBackendPids = backendDescendants(restoredRootPid!)
       .map(row => row.pid)
       .sort((left, right) => left - right)
-    server.setMode('500')
+
     await expect
       .poll(
         async () => {
@@ -1015,6 +1029,7 @@ test('installed Windows Hermes enforces the complete account lifecycle', async (
 
           return {
             state: status.state,
+            cloud_state: status.cloud_state,
             validation_state: status.validation_state,
             validation_reason: status.validation_reason,
             runtime_ready: status.runtime_ready
@@ -1028,6 +1043,7 @@ test('installed Windows Hermes enforces the complete account lifecycle', async (
       )
       .toEqual({
         state: 'authenticated',
+        cloud_state: 'unreachable',
         validation_state: 'degraded',
         validation_reason: 'server_unavailable',
         runtime_ready: true
@@ -1042,12 +1058,22 @@ test('installed Windows Hermes enforces the complete account lifecycle', async (
 
     server.setMode('online')
     await expect
-      .poll(async () => (await installedAccountStatus(page!)).validation_state, {
-        timeout: 2 * 60_000,
-        intervals: [500, 1_000, 2_000],
-        message: 'installed cached authorization did not silently revalidate after auth recovery'
-      })
-      .toBe('online')
+      .poll(
+        async () => {
+          const status = await installedAccountStatus(page!)
+
+          return { cloud_state: status.cloud_state, validation_state: status.validation_state }
+        },
+        {
+          timeout: 2 * 60_000,
+          intervals: [500, 1_000, 2_000],
+          message: 'installed cached authorization did not silently revalidate after auth recovery'
+        }
+      )
+      .toEqual({ cloud_state: 'active', validation_state: 'online' })
+    await expect
+      .poll(() => server!.events().filter(event => event.name === 'session_valid').length, { timeout: 30_000 })
+      .toBeGreaterThan(sessionValidBeforeRestart)
     expect(
       backendDescendants(restoredRootPid!)
         .map(row => row.pid)
@@ -1081,6 +1107,20 @@ test('installed Windows Hermes enforces the complete account lifecycle', async (
 
     expect(keyringRecordExists(authVenvPython)).toBe(false)
     expect(server.events().some(event => event.name === 'logout')).toBe(true)
+
+    await closeDesktopApp(app, { timeoutMs: 10_000 })
+    app = null
+    page = null
+    await stopNewAuthOwnerProcesses(initialOwnerPids)
+    launched = await launchInstalledWindowsApp({ executablePath, sandbox })
+    app = launched.app
+    page = launched.page
+    await expect(page.locator('input[name="username"]')).toBeVisible({ timeout: 30_000 })
+    expect((await installedAccountStatus(page)).state).toBe('signed_out')
+    const signedOutRootPid = app.process().pid
+    expect(signedOutRootPid).toBeDefined()
+    expect(backendDescendants(signedOutRootPid!)).toHaveLength(0)
+    expect(keyringRecordExists(authVenvPython)).toBe(false)
 
     for (const [index, value] of server.sensitiveValues().entries()) {
       generatedSensitiveValues.push({ category: `auth-contract-${index}`, value })

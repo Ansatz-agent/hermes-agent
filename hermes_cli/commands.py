@@ -226,8 +226,8 @@ COMMAND_REGISTRY: list[CommandDef] = [
                aliases=("ctx",), args_hint="[all]", subcommands=("all",),
                busy_policy="dispatch"),
     CommandDef("whoami", "Show your slash command access (admin / user)", "Info"),
-    CommandDef("profile", "Show active profile name and home directory", "Info",
-               busy_policy="dispatch", execute="profile"),
+    CommandDef("profile", "Browse user preferences or show the runtime profile", "Info",
+               args_hint="[category | runtime]", busy_policy="dispatch", execute="profile"),
     CommandDef("sethome", "Set this chat as the home channel", "Session",
                gateway_only=True, aliases=("set-home",)),
     CommandDef("resume", "Resume a previously-named session", "Session",
@@ -246,6 +246,27 @@ COMMAND_REGISTRY: list[CommandDef] = [
                "Configuration", aliases=("codex_runtime",),
                args_hint="[auto|codex_app_server]",
                busy_policy="reject", busy_handler="codex-runtime"),
+    CommandDef(
+        "object_context",
+        "Inspect or configure Object Context V1",
+        "Configuration",
+        aliases=("object-context", "oc"),
+        args_hint=(
+            "[status|stats|monitor|on|off|set <key> <value>|"
+            "reset [key|all]|help]"
+        ),
+        subcommands=(
+            "status",
+            "stats",
+            "monitor",
+            "on",
+            "off",
+            "set",
+            "reset",
+            "help",
+        ),
+        cli_only=True,
+    ),
 
     CommandDef("personality", "Set a predefined personality", "Configuration",
                args_hint="[name]"),

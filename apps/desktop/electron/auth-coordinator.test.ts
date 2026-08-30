@@ -15,6 +15,7 @@ const signedOut: BridgeStatus = {
   runtime_instance_id: 'runtime-1',
   epoch: 1,
   valid_until: 0,
+  cloud_state: null,
   validation_state: 'unknown',
   validation_reason: null,
   last_validated_at: null,
@@ -32,6 +33,7 @@ const authenticated: BridgeStatus = {
   session_id: '33333333-3333-4333-8333-333333333333',
   installation_id: '11111111-1111-4111-8111-111111111111',
   principal_key: 'account:22222222-2222-4222-8222-222222222222',
+  cloud_state: 'active',
   validation_state: 'online',
   last_validated_at: '2026-08-24T12:00:00+00:00',
   reason: null
@@ -75,14 +77,13 @@ function fixedBridge(status: BridgeStatus) {
   return {
     status: vi.fn(async () => status),
     login: vi.fn(async () => status),
-    logout: vi.fn(
-      async (): Promise<BridgeStatus> => ({
-        ...status,
-        state: 'signed_out',
-        username: null,
-        valid_until: 0
-      })
-    )
+    logout: vi.fn(async (): Promise<BridgeStatus> => ({
+      ...status,
+      state: 'signed_out',
+      username: null,
+      valid_until: 0,
+      cloud_state: null
+    }))
   }
 }
 
@@ -92,6 +93,7 @@ function terminalStatus(reason: 'account_disabled' | 'account_revoked' | 'sessio
     state: 'locked',
     username: null,
     valid_until: 0,
+    cloud_state: null,
     validation_state: 'degraded',
     validation_reason: reason,
     reason
@@ -140,6 +142,7 @@ test('retains local scope for a finite degraded cached native status', async () 
   const cachedNative = {
     ...authenticated,
     valid_until: 253_402_300_799,
+    cloud_state: 'unreachable' as const,
     validation_state: 'degraded' as const,
     validation_reason: 'server_unavailable' as const
   }
@@ -260,7 +263,14 @@ test('an owner epoch change locks the old scope before protected work', async ()
   await coordinator.start()
   const oldScope = coordinator.scope('local')
 
-  setStatus({ ...authenticated, state: 'signed_out', username: null, epoch: 3, reason: 'session_expired' })
+  setStatus({
+    ...authenticated,
+    state: 'signed_out',
+    username: null,
+    epoch: 3,
+    cloud_state: null,
+    reason: 'session_expired'
+  })
   await coordinator.refresh()
 
   assert.equal(coordinator.scope('local'), null)
@@ -286,9 +296,51 @@ test.each([
   assert.deepEqual(coordinator.scope('local'), before)
   assert.equal(result.state, 'authenticated')
   assert.equal(result.validation_state, 'degraded')
+  assert.equal(result.cloud_state, 'unreachable')
   assert.equal(result.validation_reason, reason)
   assert.equal(cleanup.mock.calls.length, 0)
   await assert.doesNotReject(coordinator.require('local', 'local'))
+})
+
+test.each(['session_expired', 'session_rejected'])(
+  'preserves local scope while cloud reauth is required for %s',
+  async reason => {
+    const { bridge, cleanup, coordinator } = fixture(authenticated)
+    await coordinator.start()
+    const before = coordinator.scope('local')
+
+    bridge.status.mockRejectedValueOnce(new AuthBridgeError(reason, reason))
+    const result = await coordinator.refresh('local')
+
+    assert.equal(result.cloud_state, 'reauth_required')
+    assert.deepEqual(coordinator.scope('local'), before)
+    assert.equal(cleanup.mock.calls.length, 0)
+    await assert.doesNotReject(coordinator.require('local', null))
+  }
+)
+
+test.each([
+  ['unreachable', 'server_unavailable'],
+  ['reauth_required', 'session_expired']
+] as const)('keeps the exact local scope for authenticated cloud state %s', async (cloudState, reason) => {
+  const { cleanup, coordinator, setStatus } = fixture(authenticated)
+  await coordinator.start()
+  const before = coordinator.scope('local')
+
+  setStatus({
+    ...authenticated,
+    cloud_state: cloudState,
+    valid_until: 0,
+    validation_state: 'degraded',
+    validation_reason: reason,
+    reason
+  })
+  const result = await coordinator.refresh('local')
+
+  assert.equal(result.cloud_state, cloudState)
+  assert.deepEqual(coordinator.scope('local'), before)
+  assert.equal(cleanup.mock.calls.length, 0)
+  await assert.doesNotReject(coordinator.require('local', null))
 })
 
 test('redacts an unknown bridge failure while preserving local authorization', async () => {

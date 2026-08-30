@@ -792,6 +792,37 @@ You can also list gitignored files to copy into worktrees via `.worktreeinclude`
 node_modules/
 ```
 
+## Final LLM Prompt Monitor
+
+For local debugging, Hermes can persist and print the finalized request body
+handed to every main or auxiliary LLM provider adapter:
+
+```yaml
+logging:
+  prompt_monitor:
+    enabled: false            # default
+    include_auxiliary: true   # summarizer, Object Card summaries, title, vision, ...
+    max_files: 100            # count-based retention
+```
+
+Enable it with `ansatz config set logging.prompt_monitor.enabled true`, then
+run `ansatz prompt-monitor` in a second terminal. Keeping the viewer separate
+prevents prompt text from corrupting TUI, gateway, ACP, or other structured
+stdout transports.
+
+Snapshots are written under the active profile's
+`logs/prompt-monitor/` directory with private permissions. Each contains the
+complete redacted provider-adapter payload after Context View projection,
+provider decoration, preflight, and middleware, including messages/input,
+system/instructions, tools, Object Cards, and retrieved-object reinsertion.
+Retries and provider fallbacks appear as separate attempts.
+
+:::warning Sensitive local diagnostic data
+Known credential shapes are redacted before a snapshot is written, but prompt
+content still contains private messages, documents, code, and tool output.
+Treat the directory as sensitive and disable capture when testing is complete.
+:::
+
 ## Context Compression
 
 Hermes automatically compresses long conversations to stay within your model's context window. The compression summarizer is a separate LLM call — you can point it at any provider or endpoint.
@@ -993,6 +1024,34 @@ To use a plugin engine (e.g., LCM for lossless context management):
 context:
   engine: "lcm"          # must match the plugin's name
 ```
+
+The bundled `object_context` engine implements Context Compression Strategy
+V1. It losslessly externalizes large structured objects from recent verbatim
+user/assistant/tool Deltas into stable in-place Cards, while keeping the normal
+whole-history summarizer as an independent safety net:
+
+```yaml
+context:
+  engine: object_context
+  object_context:
+    hot_tail_max_deltas: 8
+    hot_tail_token_budget_ratio: 0.25
+    context_soft_limit_ratio: 0.75
+    object_prefilter_min_tokens: 256
+    min_absolute_saving_tokens: 128
+    min_relative_saving_ratio: 0.25
+    summary_max_tokens: 64
+    wm_grace_deltas: 20
+    recent_retrieval_active_deltas: 20
+    retrieval_max_tokens_ratio: 0.50
+```
+
+The model receives exact content only after calling
+`retrieve_object(object_ref, reason)`. Exact retrieval is full-object,
+SHA-256-verified, and limited to the current real user turn; it is never a
+semantic search or a partial/range read. See the bundled
+`plugins/context_engine/object_context/README.md` for lifecycle, storage,
+failure, and metric details.
 
 Plugin engines are **never auto-activated** — you must explicitly set `context.engine` to the plugin name. Available engines can be browsed and selected via `ansatz plugins` → Provider Plugins → Context Engine.
 

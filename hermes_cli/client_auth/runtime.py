@@ -42,6 +42,16 @@ from hermes_cli.client_auth.client import (
     SessionStatus,
     TraceCredential,
 )
+from hermes_cli.client_auth.backend_scope_protocol import (
+    BACKEND_SCOPE_CONTROL_FRAME_LIMIT,
+    BACKEND_SCOPE_TOKEN_OVERLAP_SECONDS,
+    DESKTOP_SCOPE_PROTOCOL_VERSION,
+    DESKTOP_SCOPE_TOKEN_TTL_SECONDS,
+    ScopeTokenPromotion,
+    ScopeTokenRegistration,
+    encode_control_ack,
+    parse_control_frame,
+)
 
 AUTH_EXIT_CODE = 20
 LEASE_SECONDS = 60.0
@@ -52,7 +62,7 @@ DURABLE_AUTHORIZATION_VALID_UNTIL = 253_402_300_799.0
 LOGIN_ATTEMPT_LIMIT = 5
 LOGIN_ATTEMPT_WINDOW_SECONDS = 60.0
 OWNER_IDLE_SECONDS = 15.0 * 60.0
-BACKEND_SCOPE_TOKEN_TTL_SECONDS = 60.0
+_LEGACY_BACKEND_SCOPE_TOKEN_TTL_SECONDS = 60.0
 _BACKEND_SCOPE_TOKEN_BYTES = 32
 _RUNTIME_REQUEST_TIMEOUT_SECONDS = 15.0
 _RUNTIME_LOGIN_TIMEOUT_SECONDS = 70.0
@@ -76,10 +86,6 @@ _DEFAULT_AUTH_KEYRING_SERVICE = "cn.c2sml.hermes.remote-auth"
 _EXPLICIT_TERMINAL_REASONS = frozenset(
     {"account_disabled", "account_revoked", "session_revoked"}
 )
-_EXTERNAL_AUTH_ENV = "ANSATZ_EXTERNAL_AUTH"
-_EXTERNAL_AUTH_INSTANCE_ENV = "ANSATZ_EXTERNAL_AUTH_RUNTIME_INSTANCE_ID"
-_EXTERNAL_AUTH_EPOCH_ENV = "ANSATZ_EXTERNAL_AUTH_EPOCH"
-_TRUE_ENV_VALUES = frozenset({"1", "true", "yes", "on"})
 
 
 def _test_runtime_suffix() -> str:
@@ -152,6 +158,14 @@ class ValidationState(StrEnum):
     DEGRADED = "degraded"
 
 
+class CloudState(StrEnum):
+    """Cloud reachability without weakening the local account identity."""
+
+    ACTIVE = "active"
+    UNREACHABLE = "unreachable"
+    REAUTH_REQUIRED = "reauth_required"
+
+
 class LockedWaitingResult(StrEnum):
     AUTHENTICATED = "authenticated"
     OWNER_STOPPED = "owner_stopped"
@@ -179,6 +193,11 @@ class RevocationTombstone:
 
 
 @dataclass(frozen=True)
+class SignedOutTombstone:
+    reason: str = "signed_out"
+
+
+@dataclass(frozen=True)
 class AuthScope:
     runtime_instance_id: str
     epoch: int
@@ -199,24 +218,8 @@ class AuthRequired(RuntimeError):
         self.reason = reason
 
 
-def external_auth_enabled() -> bool:
-    """Return whether an embedding desktop owns authentication for this process."""
-
-    return os.environ.get(_EXTERNAL_AUTH_ENV, "").strip().lower() in _TRUE_ENV_VALUES
-
-
-def external_auth_scope() -> AuthScope:
-    """Build the desktop-owned scope used by the local backend guard."""
-
-    instance = os.environ.get(_EXTERNAL_AUTH_INSTANCE_ENV, "0" * 32)
-    epoch_text = os.environ.get(_EXTERNAL_AUTH_EPOCH_ENV, "0")
-    try:
-        epoch = int(epoch_text, 10)
-    except (TypeError, ValueError):
-        raise AuthRequired("runtime_unavailable") from None
-    scope = AuthScope(instance, epoch)
-    _validate_auth_scope(scope)
-    return scope
+class AuthScopeChanged(AuthRequired):
+    """The caller's exact account scope no longer matches the owner."""
 
 
 @dataclass(frozen=True)
@@ -237,13 +240,91 @@ class TraceTransportRegistration:
 
 
 @dataclass(frozen=True)
+class BackendScopeWsClaim:
+    connection_id: str
+    runtime_instance_id: str
+    epoch: int
+    backend_generation: str
+
+
+class BackendScopeTokenRejected(AuthRequired):
+    code = "local_capability_rejected"
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.failure_phase = "pre_dispatch"
+
+
+def local_capability_rejection_payload(
+    error: BackendScopeTokenRejected,
+) -> dict[str, object]:
+    reason = "unknown" if error.reason == "unknown_token" else error.reason
+    return {
+        "detail": "Local capability rejected",
+        "code": error.code,
+        "reason": reason,
+        "failure_phase": error.failure_phase,
+        "retryable": True,
+    }
+
+
+def account_locked_payload() -> dict[str, object]:
+    return {
+        "detail": "Ansatz login required",
+        "code": "account_locked",
+        "hint": "Run `ansatz login` and retry.",
+    }
+
+
+_RECOVERABLE_LOCAL_AUTH_REASONS = frozenset(
+    {
+        "invalid_response",
+        "rate_limited",
+        "runtime_unavailable",
+        "server_unavailable",
+        "vault_unavailable",
+    }
+)
+
+
+def is_local_auth_unavailable(error: AuthRequired) -> bool:
+    """Return whether an auth denial is retryable without interactive login."""
+    return not isinstance(error, AuthScopeChanged) and (
+        isinstance(error, BackendScopeTokenRejected)
+        or error.reason in _RECOVERABLE_LOCAL_AUTH_REASONS
+    )
+
+
+_RECOVERABLE_BACKEND_SCOPE_CONTROL_REJECTIONS = frozenset(
+    {
+        "candidate_not_available",
+        "expired",
+        "previous_registration_mismatch",
+        "registration_conflict",
+        "scope_mismatch",
+        "transition_conflict",
+    }
+)
+
+
+class BackendScopeGrantState(StrEnum):
+    CANDIDATE = "candidate"
+    ACTIVE = "active"
+    OVERLAP = "overlap"
+
+
+@dataclass(frozen=True)
 class BackendScopeGrant:
+    registration_id: str
     connection_id: str
     auth: AuthScope
+    state: BackendScopeGrantState
     valid_until: float
     token_digest: str
+    promoted_transition_id: str | None = None
 
     def claim(self) -> dict[str, object]:
+        """Return the schema-v1 bearer-bound claim for compatibility tests."""
         return {
             "connection_id": self.connection_id,
             "runtime_instance_id": self.auth.runtime_instance_id,
@@ -251,6 +332,21 @@ class BackendScopeGrant:
             "valid_until": self.valid_until,
             "token_digest": self.token_digest,
         }
+
+
+@dataclass(frozen=True)
+class _BackendScopeTransition:
+    promotion: ScopeTokenPromotion
+    grant: BackendScopeGrant
+
+
+@dataclass(frozen=True)
+class _BackendScopeRegistrationRecord:
+    registration_id: str
+    connection_id: str
+    auth: AuthScope
+    ttl_seconds: float
+    token_digest: str
 
 
 class BackendScopeTokenRegistry:
@@ -271,6 +367,158 @@ class BackendScopeTokenRegistry:
         )
         self._lock = threading.RLock()
         self._records: dict[bytes, BackendScopeGrant] = {}
+        self._registrations: dict[str, BackendScopeGrant] = {}
+        self._registration_records: dict[
+            str, _BackendScopeRegistrationRecord
+        ] = {}
+        self._transitions: dict[str, _BackendScopeTransition] = {}
+        self._generation_scopes: set[ConnectionScope] = set()
+        self._active_registration_id: str | None = None
+        self._backend_generation = secrets.token_hex(16)
+
+    @property
+    def backend_generation(self) -> str:
+        with self._lock:
+            return self._backend_generation
+
+    def register_candidate(
+        self,
+        registration: ScopeTokenRegistration,
+        *,
+        expected: AuthScope,
+    ) -> BackendScopeGrant:
+        registration = _validated_scope_token_registration(registration)
+        scope = AuthScope(registration.runtime_instance_id, registration.epoch)
+        if scope != expected:
+            raise BackendScopeTokenRejected("scope_mismatch")
+        self._require_scope_authorized(
+            "backend.scope_token.register",
+            expected=expected,
+        )
+        now = self._clock()
+        digest = hashlib.sha256(registration.bearer.encode("ascii")).digest()
+        registration_record = _BackendScopeRegistrationRecord(
+            registration_id=registration.registration_id,
+            connection_id=registration.connection_id,
+            auth=scope,
+            ttl_seconds=registration.ttl_seconds,
+            token_digest=digest.hex(),
+        )
+        with self._lock:
+            self._prune_locked(now)
+            existing_record = self._registration_records.get(
+                registration.registration_id
+            )
+            if existing_record is not None:
+                if existing_record != registration_record:
+                    raise BackendScopeTokenRejected("registration_conflict")
+                existing = self._registrations.get(registration.registration_id)
+                if existing is None:
+                    raise BackendScopeTokenRejected("expired")
+                return existing
+            if digest in self._records:
+                raise BackendScopeTokenRejected("registration_conflict")
+            for grant in tuple(self._registrations.values()):
+                if (
+                    grant.state is BackendScopeGrantState.CANDIDATE
+                    and grant.connection_id == registration.connection_id
+                    and grant.auth == scope
+                ):
+                    self._remove_grant_locked(grant)
+            grant = BackendScopeGrant(
+                registration_id=registration.registration_id,
+                connection_id=registration.connection_id,
+                auth=scope,
+                state=BackendScopeGrantState.CANDIDATE,
+                valid_until=now + registration.ttl_seconds,
+                token_digest=digest.hex(),
+            )
+            self._records[digest] = grant
+            self._registrations[grant.registration_id] = grant
+            self._registration_records[grant.registration_id] = registration_record
+            self._generation_scopes.add(
+                ConnectionScope(registration.connection_id, scope)
+            )
+            return grant
+
+    def promote(
+        self,
+        promotion: ScopeTokenPromotion,
+        *,
+        expected: AuthScope,
+    ) -> BackendScopeGrant:
+        promotion = _validated_scope_token_promotion(promotion)
+        scope = AuthScope(promotion.runtime_instance_id, promotion.epoch)
+        if scope != expected:
+            raise BackendScopeTokenRejected("scope_mismatch")
+        self._require_scope_authorized(
+            "backend.scope_token.promote",
+            expected=expected,
+        )
+        now = self._clock()
+        with self._lock:
+            self._prune_locked(now)
+            completed = self._transitions.get(promotion.transition_id)
+            if completed is not None:
+                if completed.promotion != promotion:
+                    raise BackendScopeTokenRejected("transition_conflict")
+                return completed.grant
+
+            candidate = self._registrations.get(promotion.registration_id)
+            if candidate is None or candidate.state is not BackendScopeGrantState.CANDIDATE:
+                raise BackendScopeTokenRejected("candidate_not_available")
+            if (
+                candidate.connection_id != promotion.connection_id
+                or candidate.auth != scope
+            ):
+                raise BackendScopeTokenRejected("scope_mismatch")
+            if promotion.previous_registration_id != self._active_registration_id:
+                raise BackendScopeTokenRejected("previous_registration_mismatch")
+
+            previous: BackendScopeGrant | None = None
+            if promotion.previous_registration_id is not None:
+                previous = self._registrations.get(
+                    promotion.previous_registration_id
+                )
+                if (
+                    previous is None
+                    or previous.state is not BackendScopeGrantState.ACTIVE
+                    or previous.connection_id != promotion.connection_id
+                    or previous.auth != scope
+                ):
+                    raise BackendScopeTokenRejected("previous_registration_mismatch")
+
+            if previous is not None:
+                overlap = replace(
+                    previous,
+                    state=BackendScopeGrantState.OVERLAP,
+                    valid_until=min(
+                        previous.valid_until,
+                        now + promotion.overlap_seconds,
+                    ),
+                )
+                self._store_grant_locked(overlap)
+
+            active = replace(
+                candidate,
+                state=BackendScopeGrantState.ACTIVE,
+                promoted_transition_id=promotion.transition_id,
+            )
+            self._store_grant_locked(active)
+            self._active_registration_id = active.registration_id
+            self._transitions[promotion.transition_id] = _BackendScopeTransition(
+                promotion=promotion,
+                grant=active,
+            )
+            return active
+
+    def probe(self, bearer: str) -> BackendScopeGrant:
+        grant = self._lookup_bearer(bearer)
+        self._require_scope_authorized(
+            "backend.scope_token.probe",
+            expected=grant.auth,
+        )
+        return grant
 
     def register(
         self,
@@ -280,28 +528,28 @@ class BackendScopeTokenRegistry:
         expected: AuthScope,
         ttl_seconds: float,
     ) -> BackendScopeGrant:
-        _validate_backend_scope_bearer(bearer)
-        _validate_connection_id(connection_id)
-        _validate_auth_scope(expected)
-        if (
-            isinstance(ttl_seconds, bool)
-            or not isinstance(ttl_seconds, (int, float))
-            or not 0 < float(ttl_seconds) <= BACKEND_SCOPE_TOKEN_TTL_SECONDS
-        ):
-            raise AuthRequired("runtime_unavailable")
-        self._authorize("backend.scope_token.register", expected=expected)
-        now = self._clock()
-        digest = hashlib.sha256(bearer.encode("ascii")).digest()
-        grant = BackendScopeGrant(
+        """Compatibility helper for tests and callers migrated in later tasks."""
+        registration = ScopeTokenRegistration(
+            registration_id=secrets.token_urlsafe(16),
+            bearer=bearer,
             connection_id=connection_id,
-            auth=expected,
-            valid_until=now + float(ttl_seconds),
-            token_digest=digest.hex(),
+            runtime_instance_id=expected.runtime_instance_id,
+            epoch=expected.epoch,
+            ttl_seconds=float(ttl_seconds),
         )
-        with self._lock:
-            self._prune_locked(now)
-            self._records[digest] = grant
-        return grant
+        self.register_candidate(registration, expected=expected)
+        return self.promote(
+            ScopeTokenPromotion(
+                transition_id=secrets.token_urlsafe(16),
+                registration_id=registration.registration_id,
+                previous_registration_id=self._active_registration_id,
+                connection_id=connection_id,
+                runtime_instance_id=expected.runtime_instance_id,
+                epoch=expected.epoch,
+                overlap_seconds=BACKEND_SCOPE_TOKEN_OVERLAP_SECONDS,
+            ),
+            expected=expected,
+        )
 
     def authorize(
         self,
@@ -310,14 +558,9 @@ class BackendScopeTokenRegistry:
         *,
         connection_id: str | None = None,
     ) -> BackendScopeGrant:
-        _validate_backend_scope_bearer(bearer)
-        digest = hashlib.sha256(bearer.encode("ascii")).digest()
-        with self._lock:
-            grant = self._records.get(digest)
-        if grant is None:
-            raise AuthRequired("runtime_unavailable")
+        grant = self._lookup_bearer(bearer)
         if connection_id is not None and grant.connection_id != connection_id:
-            raise AuthRequired("runtime_unavailable")
+            raise BackendScopeTokenRejected("connection_mismatch")
         return self._authorize_grant(grant, boundary)
 
     def authorize_claim(
@@ -325,34 +568,127 @@ class BackendScopeTokenRegistry:
         claim: object,
         boundary: str,
     ) -> BackendScopeGrant:
-        grant = _grant_from_claim(claim)
+        legacy_claim = _grant_from_claim(claim)
         try:
-            digest = bytes.fromhex(grant.token_digest)
+            digest = bytes.fromhex(legacy_claim.token_digest)
         except ValueError:
-            raise AuthRequired("runtime_unavailable") from None
+            raise BackendScopeTokenRejected("invalid_ws_claim") from None
         if len(digest) != hashlib.sha256().digest_size:
-            raise AuthRequired("runtime_unavailable")
+            raise BackendScopeTokenRejected("invalid_ws_claim")
         with self._lock:
             current = self._records.get(digest)
-        if current != grant:
-            raise AuthRequired("runtime_unavailable")
+        if (
+            current is None
+            or current.connection_id != legacy_claim.connection_id
+            or current.auth != legacy_claim.auth
+            or current.valid_until != legacy_claim.valid_until
+            or current.token_digest != legacy_claim.token_digest
+        ):
+            raise BackendScopeTokenRejected("invalid_ws_claim")
         return self._authorize_grant(current, boundary)
+
+    def ws_claim(self, grant: BackendScopeGrant) -> dict[str, object]:
+        now = self._clock()
+        digest = bytes.fromhex(grant.token_digest)
+        with self._lock:
+            current = self._records.get(digest)
+            if current is None or current.registration_id != grant.registration_id:
+                raise BackendScopeTokenRejected("unknown_token")
+            if now >= current.valid_until:
+                self._remove_grant_locked(current)
+                raise BackendScopeTokenRejected("expired")
+            if current.state is BackendScopeGrantState.CANDIDATE:
+                raise BackendScopeTokenRejected("candidate_not_active")
+            generation = self._backend_generation
+        self._require_scope_authorized(
+            "backend.scope_token.ws_claim",
+            expected=current.auth,
+        )
+        return {
+            "connection_id": current.connection_id,
+            "runtime_instance_id": current.auth.runtime_instance_id,
+            "epoch": current.auth.epoch,
+            "backend_generation": generation,
+        }
+
+    def authorize_ws_claim(
+        self,
+        claim: object,
+        boundary: str,
+    ) -> AuthScope:
+        if not isinstance(claim, dict) or set(claim) != {
+            "connection_id",
+            "runtime_instance_id",
+            "epoch",
+            "backend_generation",
+        }:
+            raise BackendScopeTokenRejected("invalid_ws_claim")
+        connection_id = claim.get("connection_id")
+        generation = claim.get("backend_generation")
+        scope = AuthScope(
+            claim.get("runtime_instance_id"),  # type: ignore[arg-type]
+            claim.get("epoch"),  # type: ignore[arg-type]
+        )
+        try:
+            _validate_connection_id(connection_id)  # type: ignore[arg-type]
+            _validate_auth_scope(scope)
+        except AuthRequired:
+            raise BackendScopeTokenRejected("invalid_ws_claim") from None
+        if (
+            not isinstance(generation, str)
+            or re.fullmatch(r"[0-9a-f]{32}", generation) is None
+        ):
+            raise BackendScopeTokenRejected("invalid_ws_claim")
+        with self._lock:
+            if generation != self._backend_generation:
+                raise BackendScopeTokenRejected("backend_generation_changed")
+            if ConnectionScope(connection_id, scope) not in self._generation_scopes:
+                raise BackendScopeTokenRejected("invalid_ws_claim")
+        self._require_scope_authorized(boundary, expected=scope)
+        return scope
 
     def revoke(self, *, connection_id: str, expected: AuthScope) -> None:
         _validate_connection_id(connection_id)
         _validate_auth_scope(expected)
         with self._lock:
+            connection_scope = ConnectionScope(connection_id, expected)
             doomed = [
-                digest
-                for digest, grant in self._records.items()
+                grant
+                for grant in self._registrations.values()
                 if grant.connection_id == connection_id and grant.auth == expected
             ]
-            for digest in doomed:
-                self._records.pop(digest, None)
+            for grant in doomed:
+                self._remove_grant_locked(grant)
+            self._registration_records = {
+                registration_id: record
+                for registration_id, record in self._registration_records.items()
+                if ConnectionScope(record.connection_id, record.auth) != connection_scope
+            }
+            self._transitions = {
+                transition_id: transition
+                for transition_id, transition in self._transitions.items()
+                if ConnectionScope(
+                    transition.promotion.connection_id,
+                    AuthScope(
+                        transition.promotion.runtime_instance_id,
+                        transition.promotion.epoch,
+                    ),
+                )
+                != connection_scope
+            }
+            if connection_scope in self._generation_scopes:
+                self._generation_scopes.remove(connection_scope)
+                self._backend_generation = secrets.token_hex(16)
 
     def clear(self) -> None:
         with self._lock:
             self._records.clear()
+            self._registrations.clear()
+            self._registration_records.clear()
+            self._transitions.clear()
+            self._generation_scopes.clear()
+            self._active_registration_id = None
+            self._backend_generation = secrets.token_hex(16)
 
     def _authorize_grant(
         self,
@@ -362,19 +698,116 @@ class BackendScopeTokenRegistry:
         now = self._clock()
         if now >= grant.valid_until:
             with self._lock:
-                self._records.pop(bytes.fromhex(grant.token_digest), None)
-            raise AuthRequired("session_expired")
-        self._authorize(boundary, expected=grant.auth)
+                self._remove_grant_locked(grant)
+            raise BackendScopeTokenRejected("expired")
+        if grant.state is BackendScopeGrantState.CANDIDATE:
+            raise BackendScopeTokenRejected("candidate_not_active")
+        self._require_scope_authorized(boundary, expected=grant.auth)
         return grant
 
     def _prune_locked(self, now: float) -> None:
         expired = [
-            digest
-            for digest, grant in self._records.items()
+            grant
+            for grant in self._registrations.values()
             if now >= grant.valid_until
         ]
-        for digest in expired:
-            self._records.pop(digest, None)
+        for grant in expired:
+            self._remove_grant_locked(grant)
+
+    def _lookup_bearer(self, bearer: str) -> BackendScopeGrant:
+        try:
+            _validate_backend_scope_bearer(bearer)
+        except AuthRequired:
+            raise BackendScopeTokenRejected("unknown_token") from None
+        digest = hashlib.sha256(bearer.encode("ascii")).digest()
+        now = self._clock()
+        with self._lock:
+            grant = self._records.get(digest)
+            if grant is None:
+                raise BackendScopeTokenRejected("unknown_token")
+            if now >= grant.valid_until:
+                self._remove_grant_locked(grant)
+                raise BackendScopeTokenRejected("expired")
+            return grant
+
+    def _require_scope_authorized(
+        self,
+        boundary: str,
+        *,
+        expected: AuthScope,
+    ) -> AuthScope:
+        try:
+            authorized = self._authorize(boundary, expected=expected)
+        except AuthRequired as error:
+            if isinstance(error, AuthScopeChanged):
+                raise BackendScopeTokenRejected("scope_not_authorized") from None
+            raise
+        if authorized != expected:
+            raise BackendScopeTokenRejected("scope_not_authorized")
+        return authorized
+
+    def _store_grant_locked(self, grant: BackendScopeGrant) -> None:
+        digest = bytes.fromhex(grant.token_digest)
+        self._records[digest] = grant
+        self._registrations[grant.registration_id] = grant
+
+    def _remove_grant_locked(self, grant: BackendScopeGrant) -> None:
+        digest = bytes.fromhex(grant.token_digest)
+        self._records.pop(digest, None)
+        self._registrations.pop(grant.registration_id, None)
+        if self._active_registration_id == grant.registration_id:
+            self._active_registration_id = None
+
+
+def _validated_scope_token_registration(
+    registration: ScopeTokenRegistration,
+) -> ScopeTokenRegistration:
+    if not isinstance(registration, ScopeTokenRegistration):
+        raise BackendScopeTokenRejected("invalid_registration")
+    try:
+        parsed = parse_control_frame(
+            {
+                "version": DESKTOP_SCOPE_PROTOCOL_VERSION,
+                "operation": "register_scope_token",
+                "registration_id": registration.registration_id,
+                "bearer": registration.bearer,
+                "connection_id": registration.connection_id,
+                "runtime_instance_id": registration.runtime_instance_id,
+                "epoch": registration.epoch,
+                "ttl_seconds": registration.ttl_seconds,
+            }
+        )
+    except (UnicodeError, ValueError):
+        raise BackendScopeTokenRejected("invalid_registration") from None
+    if not isinstance(parsed, ScopeTokenRegistration):
+        raise BackendScopeTokenRejected("invalid_registration")
+    return parsed
+
+
+def _validated_scope_token_promotion(
+    promotion: ScopeTokenPromotion,
+) -> ScopeTokenPromotion:
+    if not isinstance(promotion, ScopeTokenPromotion):
+        raise BackendScopeTokenRejected("invalid_promotion")
+    try:
+        parsed = parse_control_frame(
+            {
+                "version": DESKTOP_SCOPE_PROTOCOL_VERSION,
+                "operation": "promote_scope_token",
+                "transition_id": promotion.transition_id,
+                "registration_id": promotion.registration_id,
+                "previous_registration_id": promotion.previous_registration_id,
+                "connection_id": promotion.connection_id,
+                "runtime_instance_id": promotion.runtime_instance_id,
+                "epoch": promotion.epoch,
+                "overlap_seconds": promotion.overlap_seconds,
+            }
+        )
+    except (UnicodeError, ValueError):
+        raise BackendScopeTokenRejected("invalid_promotion") from None
+    if not isinstance(parsed, ScopeTokenPromotion):
+        raise BackendScopeTokenRejected("invalid_promotion")
+    return parsed
 
 
 def parse_backend_scope_token_registration(
@@ -407,7 +840,7 @@ def parse_backend_scope_token_registration(
     if (
         isinstance(ttl_seconds, bool)
         or not isinstance(ttl_seconds, (int, float))
-        or not 0 < float(ttl_seconds) <= BACKEND_SCOPE_TOKEN_TTL_SECONDS
+        or not 0 < float(ttl_seconds) <= _LEGACY_BACKEND_SCOPE_TOKEN_TTL_SECONDS
     ):
         raise AuthRequired("runtime_unavailable")
     return BackendScopeTokenRegistration(
@@ -517,12 +950,20 @@ def _validate_auth_scope(scope: AuthScope) -> None:
         or any(character not in "0123456789abcdef" for character in scope.runtime_instance_id)
         or not isinstance(scope.epoch, int)
         or isinstance(scope.epoch, bool)
-        or scope.epoch < 0
+        or not 0 <= scope.epoch <= 2**53 - 1
     ):
         raise AuthRequired("runtime_unavailable")
 
 
-def _grant_from_claim(value: object) -> BackendScopeGrant:
+@dataclass(frozen=True)
+class _LegacyBackendScopeClaim:
+    connection_id: str
+    auth: AuthScope
+    valid_until: float
+    token_digest: str
+
+
+def _grant_from_claim(value: object) -> _LegacyBackendScopeClaim:
     expected_keys = {
         "connection_id",
         "runtime_instance_id",
@@ -550,7 +991,7 @@ def _grant_from_claim(value: object) -> BackendScopeGrant:
         or len(token_digest) != 64
     ):
         raise AuthRequired("runtime_unavailable")
-    return BackendScopeGrant(
+    return _LegacyBackendScopeClaim(
         connection_id=connection_id,
         auth=auth,
         valid_until=float(valid_until),
@@ -568,6 +1009,7 @@ class RuntimeSnapshot:
     username: str | None
     session_expires_at: str | None
     reason: str | None
+    cloud_state: CloudState | None = None
     account_id: str | None = None
     session_id: str | None = None
     installation_id: str | None = None
@@ -597,6 +1039,7 @@ class RuntimeSnapshot:
             username=username,
             session_expires_at=None,
             reason=None,
+            cloud_state=CloudState.ACTIVE,
         )
 
     @classmethod
@@ -619,6 +1062,7 @@ class RuntimeSnapshot:
             username=status.username,
             session_expires_at=status.session_expires_at,
             reason=None,
+            cloud_state=CloudState.ACTIVE,
             principal_key=principal_key,
             legacy=_is_legacy_principal_key(principal_key),
         )
@@ -640,6 +1084,7 @@ class RuntimeSnapshot:
             username=None,
             session_expires_at=None,
             reason=reason,
+            cloud_state=None,
         )
 
     @classmethod
@@ -660,6 +1105,7 @@ class RuntimeSnapshot:
             username=credential.username,
             session_expires_at=None,
             reason=None,
+            cloud_state=CloudState.UNREACHABLE,
             account_id=credential.account_id,
             session_id=credential.session_id,
             installation_id=credential.installation_id,
@@ -686,6 +1132,7 @@ class RuntimeSnapshot:
             username=record.cookie_record.username,
             session_expires_at=record.cookie_record.session_expires_at,
             reason=None,
+            cloud_state=CloudState.UNREACHABLE,
             principal_key=record.principal_key,
             validation_state=ValidationState.UNKNOWN,
             legacy=True,
@@ -715,6 +1162,7 @@ class RuntimeSnapshot:
             valid_until=_lease_deadline(status, now=now, absolute_cap=absolute_cap),
             session_expires_at=absolute_text,
             reason=None,
+            cloud_state=CloudState.ACTIVE,
         )
 
     def locked(self, reason: str, *, now: float) -> RuntimeSnapshot:
@@ -729,6 +1177,7 @@ class RuntimeSnapshot:
                 else secrets.token_hex(16)
             ),
             reason=reason,
+            cloud_state=None,
             validation_state=ValidationState.DEGRADED,
             validation_reason=reason,
         )
@@ -737,11 +1186,22 @@ class RuntimeSnapshot:
         return replace(self, validation_state=ValidationState.VALIDATING, validation_reason=None)
 
     def degraded(self, reason: str) -> RuntimeSnapshot:
-        return replace(self, validation_state=ValidationState.DEGRADED, validation_reason=reason)
+        cloud_state = (
+            CloudState.REAUTH_REQUIRED
+            if reason in {"session_expired", "session_rejected"}
+            else CloudState.UNREACHABLE
+        )
+        return replace(
+            self,
+            cloud_state=cloud_state,
+            validation_state=ValidationState.DEGRADED,
+            validation_reason=reason,
+        )
 
     def online(self, *, last_validated_at: str) -> RuntimeSnapshot:
         return replace(
             self,
+            cloud_state=CloudState.ACTIVE,
             validation_state=ValidationState.ONLINE,
             validation_reason=None,
             last_validated_at=last_validated_at,
@@ -753,15 +1213,26 @@ class RuntimeSnapshot:
         *,
         expected: AuthScope,
         now: float,
+        allow_local_continuity: bool = False,
     ) -> AuthScope:
         if not boundary:
             raise AuthRequired("runtime_unavailable")
         if self.state is not AuthState.AUTHENTICATED:
             raise AuthRequired(self.reason or "signed_out")
-        if (self.principal_key is None and now >= self.valid_until) or _read_boot_id() != self.boot_id:
+        if _read_boot_id() != self.boot_id:
+            raise AuthRequired("session_expired")
+        if self.cloud_state is not CloudState.ACTIVE:
+            if not allow_local_continuity:
+                fallback = (
+                    "session_expired"
+                    if self.cloud_state is CloudState.REAUTH_REQUIRED
+                    else "server_unavailable"
+                )
+                raise AuthRequired(self.validation_reason or fallback)
+        elif self.principal_key is None and now >= self.valid_until:
             raise AuthRequired("session_expired")
         if expected != self.scope:
-            raise AuthRequired("runtime_unavailable")
+            raise AuthScopeChanged("runtime_unavailable")
         return self.scope
 
     def public_dict_v1(self) -> dict[str, object]:
@@ -785,6 +1256,9 @@ class RuntimeSnapshot:
             "valid_until": self.valid_until,
             "session_expires_at": self.session_expires_at,
             "reason": self.reason,
+            "cloud_state": (
+                self.cloud_state.value if self.cloud_state is not None else None
+            ),
             "account_id": self.account_id,
             "session_id": self.session_id,
             "installation_id": self.installation_id,
@@ -795,6 +1269,12 @@ class RuntimeSnapshot:
             "last_validated_at": self.last_validated_at,
             "legacy": self.legacy,
         }
+
+    def public_dict_v2(self) -> dict[str, object]:
+        """Protocol-v2 continuity shape, before cloud availability was added."""
+        value = self.public_dict()
+        value.pop("cloud_state")
+        return value
 
 
 _unix_lock_registry_guard = threading.Lock()
@@ -817,9 +1297,9 @@ class WindowsNamedPipeEndpoint:
         if os.name != "nt" or not first_instance:
             raise AuthRequired("runtime_unavailable")
         owner_sid = _windows_current_sid()
-        # Windows named pipes are global to the user's SID. Include the
-        # product/runtime namespace so an updated detached owner cannot be
-        # mistaken for (or reconnect to) a previous wire-contract version.
+        # Named pipes are global to the user's SID. Include the product/auth
+        # namespace so an updated detached owner cannot be mistaken for a
+        # previous wire-contract owner that may still be running.
         namespace_suffix = _auth_runtime_namespace_suffix(runtime_namespace)
         compact_sid = hashlib.blake2s(
             owner_sid.encode("ascii"),
@@ -1297,11 +1777,13 @@ class RuntimeConsumer:
         liveness_probe: Callable[[], bool],
         clock: Callable[[], float] = time.monotonic,
         on_authorized: Callable[[], None] | None = None,
+        allow_local_continuity: bool = False,
     ) -> None:
         self._snapshot = snapshot
         self._liveness_probe = liveness_probe
         self._clock = clock
         self._on_authorized = on_authorized or (lambda: None)
+        self._allow_local_continuity = allow_local_continuity
         self._lock = threading.RLock()
 
     def snapshot(self) -> RuntimeSnapshot:
@@ -1341,6 +1823,7 @@ class RuntimeConsumer:
             boundary,
             expected=expected or snapshot.scope,
             now=checked_at,
+            allow_local_continuity=self._allow_local_continuity,
         )
         self._on_authorized()
         return scope
@@ -1579,9 +2062,10 @@ class _OwnerCore:
         self._jitter = jitter
         self._snapshot = RuntimeSnapshot.signed_out()
         self._on_transition = on_transition
-        self._record: CookieRecord | NativeCredentialRecord | LegacyCredentialRecord | RevocationTombstone | None = None
+        self._record: CookieRecord | NativeCredentialRecord | LegacyCredentialRecord | RevocationTombstone | SignedOutTombstone | None = None
         self._record_loaded = False
         self._consumers: list[RuntimeConsumer] = []
+        self._local_continuity_enabled = False
         self._alive = True
         self._lock = threading.RLock()
         self._refresh_lock = threading.Lock()
@@ -1601,7 +2085,17 @@ class _OwnerCore:
         with self._lock:
             return self._snapshot
 
-    def connect_consumer(self, *, profile: str | None = None) -> RuntimeConsumer:
+    def enable_desktop_local_continuity(self) -> RuntimeSnapshot:
+        with self._lock:
+            self._local_continuity_enabled = True
+            return self._snapshot
+
+    def connect_consumer(
+        self,
+        *,
+        profile: str | None = None,
+        allow_local_continuity: bool = False,
+    ) -> RuntimeConsumer:
         del profile
         with self._lock:
             consumer = RuntimeConsumer(
@@ -1609,6 +2103,9 @@ class _OwnerCore:
                 liveness_probe=lambda: self._alive,
                 clock=self._clock,
                 on_authorized=self._record_authenticated_activity,
+                allow_local_continuity=(
+                    self._local_continuity_enabled and allow_local_continuity
+                ),
             )
             self._consumers.append(consumer)
             return consumer
@@ -1759,14 +2256,10 @@ class _OwnerCore:
         client_version: str,
         telemetry_schema_version: str,
     ) -> TraceCredential:
-        # Serialize the record snapshot with scheduled validation.  Validation
-        # replaces NativeCredentialRecord objects after refreshing their server
-        # timestamp; if we load the record before acquiring this lock, that
-        # replacement can happen in the gap and the final identity check below
-        # would incorrectly report ``signed_out`` for an otherwise valid
-        # session.  Holding the refresh lock while loading keeps the record and
-        # the credential request on the same generation without weakening the
-        # logout/login identity checks.
+        # Keep record loading and the credential request in the same refresh
+        # generation.  Validation replaces NativeCredentialRecord instances;
+        # loading before acquiring this lock creates a race where a valid
+        # trace request observes the old object and fails the identity check.
         with self._refresh_lock:
             record = self._load_record()
             with self._lock:
@@ -1776,8 +2269,38 @@ class _OwnerCore:
                     or self._snapshot.state is not AuthState.AUTHENTICATED
                 ):
                     raise AuthRequired("signed_out")
+                if self._snapshot.cloud_state is not CloudState.ACTIVE:
+                    fallback = (
+                        "session_expired"
+                        if self._snapshot.cloud_state is CloudState.REAUTH_REQUIRED
+                        else "server_unavailable"
+                    )
+                    raise AuthRequired(self._snapshot.validation_reason or fallback)
                 self._last_authenticated_activity = self._clock()
+
             try:
+                with self._lock:
+                    current_record = self._record
+                    if (
+                        isinstance(record, NativeCredentialRecord)
+                        and isinstance(current_record, NativeCredentialRecord)
+                        and current_record.credential == record.credential
+                    ):
+                        record = current_record
+                    elif current_record is not record:
+                        raise AuthRequired("signed_out")
+                    if self._snapshot.state is not AuthState.AUTHENTICATED:
+                        raise AuthRequired("signed_out")
+                    if self._snapshot.cloud_state is not CloudState.ACTIVE:
+                        fallback = (
+                            "session_expired"
+                            if self._snapshot.cloud_state
+                            is CloudState.REAUTH_REQUIRED
+                            else "server_unavailable"
+                        )
+                        raise AuthRequired(
+                            self._snapshot.validation_reason or fallback
+                        )
                 if isinstance(record, NativeCredentialRecord):
                     credential = self._client.trace_token(record.credential)
                 elif isinstance(record, LegacyCredentialRecord):
@@ -1800,12 +2323,10 @@ class _OwnerCore:
                 if isinstance(error, SessionRejected):
                     with self._lock:
                         if self._record is record:
-                            self._record = None
+                            tombstone = SignedOutTombstone(error.reason)
+                            self._persist_signed_out_tombstone_locked(tombstone)
+                            self._record = tombstone
                             self._record_loaded = True
-                            try:
-                                self._secret_backend.delete()
-                            except Exception:
-                                pass
                             self._publish_locked(
                                 self._snapshot.locked(error.reason, now=self._clock())
                             )
@@ -1823,7 +2344,15 @@ class _OwnerCore:
         record = self._load_record()
         if record is None:
             return self.snapshot()
-        if isinstance(record, (NativeCredentialRecord, LegacyCredentialRecord, RevocationTombstone)):
+        if isinstance(
+            record,
+            (
+                NativeCredentialRecord,
+                LegacyCredentialRecord,
+                RevocationTombstone,
+                SignedOutTombstone,
+            ),
+        ):
             return self.snapshot()
         try:
             status = self._client.status(record.cookies)
@@ -1832,12 +2361,18 @@ class _OwnerCore:
                 if self._record is not record:
                     return self._snapshot
                 if isinstance(error, SessionRejected):
-                    self._record = None
+                    tombstone = SignedOutTombstone(error.reason)
+                    self._persist_signed_out_tombstone_locked(tombstone)
+                    self._record = tombstone
                     self._record_loaded = True
-                    try:
-                        self._secret_backend.delete()
-                    except Exception:
-                        pass
+                elif (
+                    self._local_continuity_enabled
+                    and self._snapshot.state is AuthState.AUTHENTICATED
+                ):
+                    self._validation_failures += 1
+                    self._publish_locked(self._snapshot.degraded(error.reason))
+                    self._schedule_validation_locked(self._clock())
+                    return self._snapshot
                 now = self._clock()
                 locked = self._snapshot.locked(error.reason, now=now)
                 self._publish_locked(locked)
@@ -1891,20 +2426,17 @@ class _OwnerCore:
             current = self._snapshot
             signed_out = RuntimeSnapshot.signed_out(
                 epoch=current.epoch + 1,
+                reason="signed_out",
             )
-            self._record = None
+            tombstone = SignedOutTombstone()
+            persisted = self._persist_signed_out_tombstone_locked(tombstone)
+            self._record = tombstone
             self._record_loaded = True
             self._next_refresh_at = None
             self._publish_locked(signed_out)
-            try:
-                self._secret_backend.delete()
-            except Exception:
-                delete_failed = True
-            else:
-                delete_failed = False
         if record is not None:
             self._best_effort_remote_logout(record)
-        if delete_failed:
+        if not persisted:
             reason = "vault_unavailable" if self._vault_required else "runtime_unavailable"
             raise AuthRequired(reason)
         return signed_out
@@ -1976,7 +2508,7 @@ class _OwnerCore:
 
     def _load_record(
         self,
-    ) -> CookieRecord | NativeCredentialRecord | LegacyCredentialRecord | RevocationTombstone | None:
+    ) -> CookieRecord | NativeCredentialRecord | LegacyCredentialRecord | RevocationTombstone | SignedOutTombstone | None:
         needs_migration = False
         with self._lock:
             if self._record_loaded:
@@ -2054,6 +2586,16 @@ class _OwnerCore:
                 self._schedule_validation_locked(self._clock())
             elif isinstance(record, RevocationTombstone):
                 self._publish_locked(self._snapshot.locked(record.reason, now=self._clock()))
+                self._next_refresh_at = None
+            elif isinstance(record, SignedOutTombstone):
+                if record.reason == "signed_out":
+                    self._publish_locked(
+                        RuntimeSnapshot.signed_out(reason="signed_out")
+                    )
+                else:
+                    self._publish_locked(
+                        self._snapshot.locked(record.reason, now=self._clock())
+                    )
                 self._next_refresh_at = None
             return record
 
@@ -2190,11 +2732,13 @@ class _OwnerCore:
             )
             try:
                 self._secret_backend.write(_encode_tombstone_blob(tombstone))
+                if _decode_credential_blob(self._secret_backend.read() or "") != tombstone:
+                    raise AuthRequired("runtime_unavailable")
             except Exception:
-                self._validation_failures += 1
-                self._publish_locked(current.degraded("vault_unavailable"))
-                self._schedule_validation_locked(self._clock())
-                return self._snapshot
+                try:
+                    self._secret_backend.delete()
+                except Exception:
+                    pass
             self._record = tombstone
             self._record_loaded = True
             self._next_refresh_at = None
@@ -2220,6 +2764,23 @@ class _OwnerCore:
                 except Exception:
                     pass
             raise AuthServiceError("vault_unavailable") from None
+
+    def _persist_signed_out_tombstone_locked(
+        self,
+        tombstone: SignedOutTombstone,
+    ) -> bool:
+        """Commit logout denial, falling back to removing the old credential."""
+        try:
+            self._secret_backend.write(_encode_signed_out_tombstone_blob(tombstone))
+            if _decode_credential_blob(self._secret_backend.read() or "") != tombstone:
+                raise AuthRequired("runtime_unavailable")
+            return True
+        except Exception:
+            try:
+                self._secret_backend.delete()
+            except Exception:
+                return False
+            return True
 
     def _schedule_validation_locked(self, now: float) -> None:
         # Clamp the exponent before exponentiation: a long outage would
@@ -2261,7 +2822,7 @@ class _OwnerCore:
 
     def _best_effort_remote_logout(
         self,
-        record: CookieRecord | NativeCredentialRecord | LegacyCredentialRecord | RevocationTombstone,
+        record: CookieRecord | NativeCredentialRecord | LegacyCredentialRecord | RevocationTombstone | SignedOutTombstone,
     ) -> None:
         try:
             if isinstance(record, NativeCredentialRecord):
@@ -2345,12 +2906,19 @@ class _EntryPointOwner(Protocol):
 
     def snapshot(self) -> RuntimeSnapshot: ...
 
-    def connect_consumer(self, *, profile: str | None = None) -> RuntimeConsumer: ...
+    def enable_desktop_local_continuity(self) -> RuntimeSnapshot: ...
+
+    def connect_consumer(
+        self,
+        *,
+        profile: str | None = None,
+        allow_local_continuity: bool = False,
+    ) -> RuntimeConsumer: ...
 
 
 _RUNTIME_FRAME_LIMIT = 65_536
-_RUNTIME_PROTOCOL_VERSION = 2
-_RUNTIME_SUPPORTED_PROTOCOL_VERSIONS = (1, 2)
+_RUNTIME_PROTOCOL_VERSION = 3
+_RUNTIME_SUPPORTED_PROTOCOL_VERSIONS = (1, 2, 3)
 _TRACE_INSTALLATION_ID = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
     re.IGNORECASE,
@@ -2362,9 +2930,12 @@ class RemoteRuntimeConsumer:
         self,
         owner: RemoteRuntimeOwner,
         snapshot: RuntimeSnapshot,
+        *,
+        allow_local_continuity: bool = False,
     ) -> None:
         self._owner = owner
         self._snapshot = snapshot
+        self._allow_local_continuity = allow_local_continuity
         self._lock = threading.RLock()
 
     def snapshot(self) -> RuntimeSnapshot:
@@ -2385,7 +2956,11 @@ class RemoteRuntimeConsumer:
         del now
         current = self.snapshot()
         required = expected or current.scope
-        snapshot = self._owner.authorize(boundary, expected=required)
+        snapshot = self._owner.authorize(
+            boundary,
+            expected=required,
+            allow_local_continuity=self._allow_local_continuity,
+        )
         self.publish(snapshot)
         return snapshot.scope
 
@@ -2426,11 +3001,12 @@ class RemoteRuntimeOwner:
                 )
             return request
 
-        try:
-            return self._exchange(self._encode_request(params()), timeout=timeout)
-        except _OwnerProtocolRejected:
-            self._protocol_version = 1
-            return self._exchange(self._encode_request(params()), timeout=timeout)
+        while True:
+            try:
+                return self._exchange(self._encode_request(params()), timeout=timeout)
+            except _OwnerProtocolRejected:
+                if not self._downgrade_protocol():
+                    raise AuthRequired("runtime_unavailable") from None
 
     def snapshot(self) -> RuntimeSnapshot:
         with self._lock:
@@ -2456,42 +3032,39 @@ class RemoteRuntimeOwner:
             password_text = password.decode("utf-8")
         except (AttributeError, UnicodeDecodeError):
             raise AuthRequired("invalid_credentials") from None
+        request: dict[str, object] = {
+            "operation": "login",
+            "username": username,
+            "password": password_text,
+        }
+        if installation_id is not None and client_version is not None:
+            request.update(
+                installation_id=installation_id,
+                client_version=client_version,
+            )
+        password_text = ""
         try:
-            request: dict[str, object] = {
-                "operation": "login",
-                "username": username,
-                "password": password_text,
-            }
-            if installation_id is not None and client_version is not None:
-                request.update(
-                    installation_id=installation_id,
-                    client_version=client_version,
-                )
-            encoded = self._encode_request(request)
-        finally:
-            password_text = ""
-        try:
-            try:
-                return self._exchange(
-                    encoded,
-                    timeout=_RUNTIME_LOGIN_TIMEOUT_SECONDS,
-                )
-            except _OwnerProtocolRejected:
-                self._protocol_version = 1
-                retry = self._encode_request(request)
+            while True:
+                encoded = self._encode_request(request)
                 try:
-                    return self._exchange(
-                        retry,
-                        timeout=_RUNTIME_LOGIN_TIMEOUT_SECONDS,
-                    )
+                    try:
+                        return self._exchange(
+                            encoded,
+                            timeout=_RUNTIME_LOGIN_TIMEOUT_SECONDS,
+                        )
+                    except _OwnerProtocolRejected:
+                        if not self._downgrade_protocol():
+                            raise AuthRequired("runtime_unavailable") from None
                 finally:
-                    retry[:] = b"\0" * len(retry)
+                    encoded[:] = b"\0" * len(encoded)
         finally:
-            encoded[:] = b"\0" * len(encoded)
             request["password"] = ""
 
     def logout(self) -> RuntimeSnapshot:
         return self._request({"operation": "logout"})
+
+    def enable_desktop_local_continuity(self) -> RuntimeSnapshot:
+        return self._request({"operation": "enable_desktop_local_continuity"})
 
     def trace_token(
         self,
@@ -2506,17 +3079,16 @@ class RemoteRuntimeOwner:
             "client_version": client_version,
             "telemetry_schema_version": telemetry_schema_version,
         }
-        try:
-            response = self._exchange_response(
-                self._encode_request(request),
-                timeout=_RUNTIME_REQUEST_TIMEOUT_SECONDS,
-            )
-        except _OwnerProtocolRejected:
-            self._protocol_version = 1
-            response = self._exchange_response(
-                self._encode_request(request),
-                timeout=_RUNTIME_REQUEST_TIMEOUT_SECONDS,
-            )
+        while True:
+            try:
+                response = self._exchange_response(
+                    self._encode_request(request),
+                    timeout=_RUNTIME_REQUEST_TIMEOUT_SECONDS,
+                )
+                break
+            except _OwnerProtocolRejected:
+                if not self._downgrade_protocol():
+                    raise AuthRequired("runtime_unavailable") from None
         if set(response) != {"version", "ok", "credential"}:
             raise AuthRequired("runtime_unavailable")
         return _trace_credential_from_wire(
@@ -2528,15 +3100,21 @@ class RemoteRuntimeOwner:
         self,
         *,
         profile: str | None = None,
+        allow_local_continuity: bool = False,
     ) -> RemoteRuntimeConsumer:
         del profile
-        return RemoteRuntimeConsumer(self, self.snapshot())
+        return RemoteRuntimeConsumer(
+            self,
+            self.snapshot(),
+            allow_local_continuity=allow_local_continuity,
+        )
 
     def authorize(
         self,
         boundary: str,
         *,
         expected: AuthScope,
+        allow_local_continuity: bool = False,
     ) -> RuntimeSnapshot:
         return self._request(
             {
@@ -2546,6 +3124,7 @@ class RemoteRuntimeOwner:
                     "runtime_instance_id": expected.runtime_instance_id,
                     "epoch": expected.epoch,
                 },
+                "allow_local_continuity": allow_local_continuity,
             }
         )
 
@@ -2555,11 +3134,19 @@ class RemoteRuntimeOwner:
         *,
         timeout: float = _RUNTIME_REQUEST_TIMEOUT_SECONDS,
     ) -> RuntimeSnapshot:
-        try:
-            return self._exchange(self._encode_request(params), timeout=timeout)
-        except _OwnerProtocolRejected:
-            self._protocol_version = 1
-            return self._exchange(self._encode_request(params), timeout=timeout)
+        while True:
+            try:
+                return self._exchange(self._encode_request(params), timeout=timeout)
+            except _OwnerProtocolRejected:
+                if not self._downgrade_protocol():
+                    raise AuthRequired("runtime_unavailable") from None
+
+    def _downgrade_protocol(self) -> bool:
+        with self._lock:
+            if self._protocol_version <= 1:
+                return False
+            self._protocol_version -= 1
+            return True
 
     def _encode_request(self, params: dict[str, object]) -> bytearray:
         request = {
@@ -2644,6 +3231,8 @@ class RemoteRuntimeOwner:
                 and reason == "runtime_unavailable"
             ):
                 raise _OwnerProtocolRejected()
+            if reason == "scope_changed":
+                raise AuthScopeChanged("runtime_unavailable")
             raise AuthRequired(reason)
         return response
 
@@ -2891,6 +3480,11 @@ class OwnerBroker:
                 )
             elif operation == "logout" and set(request) == {"version", "operation"}:
                 snapshot = self._owner.logout()  # type: ignore[attr-defined]
+            elif version >= 3 and operation == "enable_desktop_local_continuity" and set(request) == {
+                "version",
+                "operation",
+            }:
+                snapshot = self._owner.enable_desktop_local_continuity()
             elif operation == "login" and set(request) in (
                 {"version", "operation", "username", "password"},
                 {
@@ -2933,7 +3527,28 @@ class OwnerBroker:
                     )
                 finally:
                     password[:] = b"\0" * len(password)
-            elif operation == "authorize" and set(request) == {
+            elif version >= 3 and operation == "authorize" and set(request) == {
+                "version",
+                "operation",
+                "boundary",
+                "expected",
+                "allow_local_continuity",
+            }:
+                boundary = request.get("boundary")
+                expected = _scope_from_wire(request.get("expected"))
+                allow_local_continuity = request.get("allow_local_continuity")
+                if (
+                    not isinstance(boundary, str)
+                    or not 0 < len(boundary) <= 256
+                    or not isinstance(allow_local_continuity, bool)
+                ):
+                    raise AuthRequired("runtime_unavailable")
+                snapshot = self._owner.snapshot()
+                consumer = self._owner.connect_consumer(
+                    allow_local_continuity=allow_local_continuity
+                )
+                consumer.require_authorized(boundary, expected=expected)
+            elif version <= 2 and operation == "authorize" and set(request) == {
                 "version",
                 "operation",
                 "boundary",
@@ -2977,6 +3592,8 @@ class OwnerBroker:
                 }
             else:
                 raise AuthRequired("runtime_unavailable")
+        except AuthScopeChanged:
+            return _runtime_error("scope_changed", version=version)
         except AuthRequired as error:
             return _runtime_error(error.reason or error.code, version=version)
         except Exception:
@@ -2987,7 +3604,15 @@ class OwnerBroker:
         return {
             "version": version,
             "ok": True,
-            "snapshot": snapshot.public_dict() if version >= 2 else snapshot.public_dict_v1(),
+            "snapshot": (
+                snapshot.public_dict()
+                if version >= 3
+                else (
+                    snapshot.public_dict_v2()
+                    if version == 2
+                    else snapshot.public_dict_v1()
+                )
+            ),
         }
 
 
@@ -3076,19 +3701,20 @@ def _runtime_owner_executable(
 ) -> str:
     """Use the GUI Python sibling for the detached Windows auth owner.
 
-    A Windows venv ``python.exe`` is a launcher shim. ``DETACHED_PROCESS``
-    detaches that first process, but the shim can then re-exec the base console
-    interpreter and surface a persistent conhost. The auth owner has no
-    terminal children and discards all stdio, so ``pythonw.exe`` preserves the
-    process-isolation contract without creating a user-visible console.
+    A Windows venv ``python.exe`` is a launcher shim.  Even with
+    ``DETACHED_PROCESS`` the shim can re-exec a console interpreter and leave
+    a visible cmd window behind.  The auth owner has no terminal UI, so the
+    sibling ``pythonw.exe`` keeps the broker detached without a console.
     """
 
     windows = os.name == "nt" if is_windows is None else is_windows
     if not windows:
         return executable
+
     name = ntpath.basename(executable).casefold()
     if name == "pythonw.exe" or name != "python.exe":
         return executable
+
     candidate = ntpath.join(ntpath.dirname(executable), "pythonw.exe")
     return candidate if is_file(candidate) else executable
 
@@ -3262,7 +3888,13 @@ def _snapshot_from_public(value: object) -> RuntimeSnapshot:
         "last_validated_at",
         "legacy",
     }
-    if not isinstance(value, dict) or (set(value) != legacy_keys and set(value) != continuity_keys):
+    cloud_keys = continuity_keys | {"cloud_state"}
+    value_keys = frozenset(value) if isinstance(value, dict) else frozenset()
+    if not isinstance(value, dict) or value_keys not in {
+        frozenset(legacy_keys),
+        frozenset(continuity_keys),
+        frozenset(cloud_keys),
+    }:
         raise AuthRequired("runtime_unavailable")
     try:
         state = AuthState(value["state"])
@@ -3292,7 +3924,7 @@ def _snapshot_from_public(value: object) -> RuntimeSnapshot:
         raise AuthRequired("runtime_unavailable")
     if reason is not None and not isinstance(reason, str):
         raise AuthRequired("runtime_unavailable")
-    if set(value) == legacy_keys:
+    if value_keys == legacy_keys:
         return RuntimeSnapshot(
             state=state,
             epoch=epoch,
@@ -3302,6 +3934,9 @@ def _snapshot_from_public(value: object) -> RuntimeSnapshot:
             username=username,
             session_expires_at=expires,
             reason=reason,
+            cloud_state=(
+                CloudState.ACTIVE if state is AuthState.AUTHENTICATED else None
+            ),
         )
     account_id = value["account_id"]
     session_id = value["session_id"]
@@ -3327,6 +3962,32 @@ def _snapshot_from_public(value: object) -> RuntimeSnapshot:
         validation_state = ValidationState(value["validation_state"])
     except (TypeError, ValueError):
         raise AuthRequired("runtime_unavailable") from None
+    if value_keys == cloud_keys:
+        cloud_value = value["cloud_state"]
+        try:
+            cloud_state = (
+                CloudState(cloud_value) if cloud_value is not None else None
+            )
+        except (TypeError, ValueError):
+            raise AuthRequired("runtime_unavailable") from None
+    else:
+        cloud_state = (
+            CloudState.ACTIVE
+            if state is AuthState.AUTHENTICATED
+            and validation_state is ValidationState.ONLINE
+            else (
+                CloudState.UNREACHABLE
+                if state is AuthState.AUTHENTICATED
+                else None
+            )
+        )
+    if (state is AuthState.AUTHENTICATED) != (cloud_state is not None):
+        raise AuthRequired("runtime_unavailable")
+    if (
+        validation_state is ValidationState.ONLINE
+        and cloud_state is not CloudState.ACTIVE
+    ):
+        raise AuthRequired("runtime_unavailable")
     if all(item is None for item in (account_id, session_id, installation_id, principal_key)):
         if legacy:
             raise AuthRequired("runtime_unavailable")
@@ -3352,6 +4013,7 @@ def _snapshot_from_public(value: object) -> RuntimeSnapshot:
         username=username,
         session_expires_at=expires,
         reason=reason,
+        cloud_state=cloud_state,
         account_id=account_id,
         session_id=session_id,
         installation_id=installation_id,
@@ -3489,9 +4151,6 @@ def _recover_entrypoint_owner(
 
 
 def authorize_entrypoint(boundary: str, *, interactive: bool) -> AuthScope:
-    if external_auth_enabled():
-        return external_auth_scope()
-
     with _entrypoint_owner_lock:
         owner = _entrypoint_owner
     if owner is None:
@@ -3548,7 +4207,10 @@ def authorize_entrypoint(boundary: str, *, interactive: bool) -> AuthScope:
         finally:
             password[:] = b"\0" * len(password)
 
-    consumer = owner.connect_consumer()
+    if os.environ.get("HERMES_DESKTOP") == "1":
+        consumer = owner.connect_consumer(allow_local_continuity=True)
+    else:
+        consumer = owner.connect_consumer()
     scope = consumer.require_authorized(
         boundary,
         expected=snapshot.scope,
@@ -3864,7 +4526,7 @@ def _is_legacy_principal_key(value: object) -> bool:
 
 
 def _proven_legacy_predecessor(
-    previous: CookieRecord | NativeCredentialRecord | LegacyCredentialRecord | RevocationTombstone | None,
+    previous: CookieRecord | NativeCredentialRecord | LegacyCredentialRecord | RevocationTombstone | SignedOutTombstone | None,
     bootstrap: CookieRecord,
     *,
     expected_installation_id: str,
@@ -3929,9 +4591,21 @@ def _encode_tombstone_blob(tombstone: RevocationTombstone) -> str:
     )
 
 
+def _encode_signed_out_tombstone_blob(tombstone: SignedOutTombstone) -> str:
+    return json.dumps(
+        {
+            "version": 3,
+            "kind": "signed_out",
+            "reason": tombstone.reason,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def _decode_credential_blob(
     raw: str,
-) -> CookieRecord | NativeCredentialRecord | RevocationTombstone:
+) -> CookieRecord | NativeCredentialRecord | RevocationTombstone | SignedOutTombstone:
     if not isinstance(raw, str) or not raw or len(raw) > 16_384:
         raise AuthRequired("runtime_unavailable")
     try:
@@ -3944,6 +4618,15 @@ def _decode_credential_blob(
         return _decode_cookie_blob(raw)
     if payload.get("version") not in {2, 3} or not isinstance(payload.get("kind"), str):
         raise AuthRequired("runtime_unavailable")
+    if payload["kind"] == "signed_out":
+        if set(payload) != {"version", "kind", "reason"} or payload.get(
+            "version"
+        ) != 3:
+            raise AuthRequired("runtime_unavailable")
+        reason = payload["reason"]
+        if reason not in {"signed_out", "session_rejected", "session_expired"}:
+            raise AuthRequired("runtime_unavailable")
+        return SignedOutTombstone(reason)
     if payload["kind"] == "revoked":
         if set(payload) != {
             "version", "kind", "account_id", "session_id", "reason", "revoked_at"
@@ -4014,7 +4697,6 @@ def _validate_uuid4(value: str) -> None:
 
 _consumer_lock = threading.RLock()
 _consumer: RuntimeConsumer | None = None
-_BACKEND_SCOPE_CONTROL_FRAME_LIMIT = 4_096
 _backend_scope_control_lock = threading.Lock()
 _backend_scope_control_thread: threading.Thread | None = None
 
@@ -4036,11 +4718,6 @@ def require_authorized(
     *,
     expected: AuthScope | None = None,
 ) -> AuthScope:
-    if external_auth_enabled():
-        # Ansatz owns the account login. Keep the desktop's scoped bearer
-        # registry, but do not start or query Hermes's separate account owner.
-        return expected or external_auth_scope()
-
     with _consumer_lock:
         consumer = _consumer
     if consumer is None:
@@ -4104,7 +4781,10 @@ def wait_until_authorized(
             )
         on_state(snapshot)
         if snapshot.state is AuthState.AUTHENTICATED and owner is not None:
-            consumer = owner.connect_consumer()
+            if os.environ.get("HERMES_DESKTOP") == "1":
+                consumer = owner.connect_consumer(allow_local_continuity=True)
+            else:
+                consumer = owner.connect_consumer()
             consumer.require_authorized(boundary, expected=snapshot.scope)
             install_runtime_consumer(consumer)  # type: ignore[arg-type]
             return LockedWaitingResult.AUTHENTICATED
@@ -4116,12 +4796,16 @@ backend_scope_tokens = BackendScopeTokenRegistry()
 
 
 def register_backend_scope_token(value: object) -> BackendScopeGrant:
-    registration = parse_backend_scope_token_registration(value)
-    return backend_scope_tokens.register(
-        registration.bearer,
-        connection_id=registration.connection_id,
-        expected=registration.auth,
-        ttl_seconds=registration.ttl_seconds,
+    registration = parse_control_frame(value)
+    if not isinstance(registration, ScopeTokenRegistration):
+        raise BackendScopeTokenRejected("invalid_registration")
+    expected = AuthScope(
+        registration.runtime_instance_id,
+        registration.epoch,
+    )
+    return backend_scope_tokens.register_candidate(
+        registration,
+        expected=expected,
     )
 
 
@@ -4138,16 +4822,16 @@ def register_backend_trace_transport(value: object) -> None:
     )
 
 
-def _run_backend_scope_token_control(stream: Any) -> None:
+def _run_backend_scope_token_control(source: Any, target: Any) -> None:
     try:
         while True:
             try:
-                raw = stream.readline(_BACKEND_SCOPE_CONTROL_FRAME_LIMIT + 1)
+                raw = source.readline(BACKEND_SCOPE_CONTROL_FRAME_LIMIT + 1)
             except (OSError, ValueError):
                 break
             if not raw:
                 break
-            if len(raw) > _BACKEND_SCOPE_CONTROL_FRAME_LIMIT or not raw.endswith(b"\n"):
+            if len(raw) > BACKEND_SCOPE_CONTROL_FRAME_LIMIT or not raw.endswith(b"\n"):
                 break
             try:
                 value = json.loads(raw)
@@ -4164,8 +4848,56 @@ def _run_backend_scope_token_control(stream: Any) -> None:
                     continue
             else:
                 try:
-                    register_backend_scope_token(value)
-                except (AuthRequired, UnicodeError, ValueError):
+                    frame = parse_control_frame(value)
+                    expected = AuthScope(
+                        frame.runtime_instance_id,
+                        frame.epoch,
+                    )
+                    if isinstance(frame, ScopeTokenRegistration):
+                        backend_scope_tokens.register_candidate(
+                            frame,
+                            expected=expected,
+                        )
+                        ack = {
+                            "version": DESKTOP_SCOPE_PROTOCOL_VERSION,
+                            "operation": "scope_token_registered",
+                            "registration_id": frame.registration_id,
+                            "connection_id": frame.connection_id,
+                            "runtime_instance_id": frame.runtime_instance_id,
+                            "epoch": frame.epoch,
+                            "ttl_seconds": frame.ttl_seconds,
+                        }
+                    elif isinstance(frame, ScopeTokenPromotion):
+                        backend_scope_tokens.promote(
+                            frame,
+                            expected=expected,
+                        )
+                        ack = {
+                            "version": DESKTOP_SCOPE_PROTOCOL_VERSION,
+                            "operation": "scope_token_promoted",
+                            "transition_id": frame.transition_id,
+                            "registration_id": frame.registration_id,
+                            "previous_registration_id": frame.previous_registration_id,
+                            "connection_id": frame.connection_id,
+                            "runtime_instance_id": frame.runtime_instance_id,
+                            "epoch": frame.epoch,
+                            "overlap_seconds": frame.overlap_seconds,
+                        }
+                    else:  # pragma: no cover - closed union defensive guard
+                        raise BackendScopeTokenRejected("invalid_control_frame")
+                    target.write(encode_control_ack(ack))
+                    target.flush()
+                except BackendScopeTokenRejected as error:
+                    if (
+                        error.reason
+                        in _RECOVERABLE_BACKEND_SCOPE_CONTROL_REJECTIONS
+                    ):
+                        # A rejected candidate/promotion receives no ACK. The
+                        # parent times out and retries while the existing
+                        # active grant and this control reader remain usable.
+                        continue
+                    break
+                except (AuthRequired, OSError, UnicodeError, ValueError):
                     break
     finally:
         backend_scope_tokens.clear()
@@ -4173,6 +4905,7 @@ def _run_backend_scope_token_control(stream: Any) -> None:
 
 def start_backend_scope_token_control(
     stream: Any | None = None,
+    target: Any | None = None,
 ) -> threading.Thread:
     """Read the Desktop-only token protocol from inherited stdin.
 
@@ -4181,14 +4914,15 @@ def start_backend_scope_token_control(
     malformed input revokes every grant for this backend process.
     """
     global _backend_scope_control_thread
-    selected = stream if stream is not None else sys.stdin.buffer
+    selected_source = stream if stream is not None else sys.stdin.buffer
+    selected_target = target if target is not None else sys.stdout.buffer
     with _backend_scope_control_lock:
         running = _backend_scope_control_thread
         if running is not None and running.is_alive():
             return running
         thread = threading.Thread(
             target=_run_backend_scope_token_control,
-            args=(selected,),
+            args=(selected_source, selected_target),
             daemon=True,
             name="hermes-backend-scope-control",
         )

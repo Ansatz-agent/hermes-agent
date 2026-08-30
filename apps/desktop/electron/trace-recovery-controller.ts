@@ -10,7 +10,8 @@ export const ALL_TRACE_RECOVERY_REASONS: readonly TraceRecoveryReason[] = [
   'focus',
   'token-ready',
   'token-near-expiry',
-  'upload-401'
+  'upload-401',
+  'owner-rebound'
 ]
 
 type TraceRecoveryControllerOptions = {

@@ -28,16 +28,22 @@ export interface BackendStartFailureContext {
    * cloud) primary backend rather than spawning a local child.
    */
   attemptedRemote: boolean
+  /**
+   * True when local backend startup was stopped because durable Trace
+   * admission could not be established. The failed attempt stays blocked, but
+   * the next attempt must retry storage, Safe Storage, and listener startup.
+   */
+  traceDurabilityStartup: boolean
 }
 
 /**
  * Whether a startHermes() failure should latch into `backendStartFailure`.
- * Latch local failures (prevent install-restart loops); never latch remote
- * failures (they are transient and must stay retryable so recovery paths work
- * without an app restart).
+ * Latch ordinary local failures (prevent install-restart loops); never latch
+ * remote or Trace-durability startup failures because their recovery paths
+ * must be able to retry without an app restart.
  */
 export function shouldLatchBackendStartFailure(context: BackendStartFailureContext): boolean {
-  return !context.attemptedRemote
+  return !context.attemptedRemote && !context.traceDurabilityStartup
 }
 
 export interface RemoteReauthFailureContext {

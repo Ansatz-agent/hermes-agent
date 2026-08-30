@@ -5,6 +5,7 @@ import threading
 import time
 
 from hermes_cli import mcp_startup
+from hermes_cli.client_auth.runtime import AuthRequired
 from tui_gateway import server
 from tui_gateway import ws as ws_mod
 
@@ -153,6 +154,70 @@ def test_ws_starts_mcp_discovery_before_ready(monkeypatch):
     assert events == ["accept", "ready_after_0"]
 
 
+def test_ws_connect_uses_retryable_close_for_local_auth_outage(monkeypatch):
+    close_calls = []
+    accepted = []
+
+    def unavailable(_boundary):
+        raise AuthRequired("runtime_unavailable")
+
+    monkeypatch.setattr(ws_mod, "require_authorized", unavailable)
+
+    class FakeWS:
+        async def accept(self):
+            accepted.append(True)
+
+        async def close(self, **kwargs):
+            close_calls.append(kwargs)
+
+    asyncio.run(ws_mod.handle_ws(FakeWS()))
+
+    assert accepted == []
+    assert close_calls[0] == {
+        "code": 1012,
+        "reason": "Local capability unavailable",
+    }
+    assert all(call.get("code") != 4401 for call in close_calls)
+
+
+def test_ws_request_uses_retryable_close_when_local_auth_becomes_unavailable(
+    monkeypatch,
+):
+    authorization_calls = []
+    close_calls = []
+
+    def authorize(_boundary):
+        authorization_calls.append(True)
+        if len(authorization_calls) > 1:
+            raise AuthRequired("server_unavailable")
+
+    monkeypatch.setattr(ws_mod, "require_authorized", authorize)
+    monkeypatch.setattr(server, "resolve_skin", lambda: {})
+    monkeypatch.setattr(server, "_ensure_skin_watcher", lambda: None)
+
+    class FakeWS:
+        async def accept(self):
+            pass
+
+        async def send_text(self, _line):
+            pass
+
+        async def receive_text(self):
+            return '{"jsonrpc":"2.0","id":"r1","method":"session.list"}'
+
+        async def close(self, **kwargs):
+            close_calls.append(kwargs)
+
+    asyncio.run(ws_mod.handle_ws(FakeWS()))
+
+    assert len(authorization_calls) == 2
+    assert close_calls[0] == {
+        "code": 1012,
+        "reason": "Local capability unavailable",
+    }
+    assert all(call.get("code") != 4401 for call in close_calls)
+
+
 def test_ws_transport_serializes_concurrent_sends():
     active_sends = 0
     max_active_sends = 0
@@ -226,5 +291,3 @@ def test_ws_transport_preserves_cross_batch_order():
         assert entered == ["A1", "A2", "B1", "B2"]
 
     asyncio.run(scenario())
-
-

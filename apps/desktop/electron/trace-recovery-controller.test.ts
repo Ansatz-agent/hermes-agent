@@ -23,6 +23,10 @@ async function nextTurn() {
   await new Promise<void>(resolve => setTimeout(resolve, 0))
 }
 
+test('owner rebound is a supported recovery signal', () => {
+  assert.equal(ALL_TRACE_RECOVERY_REASONS.some(reason => reason === 'owner-rebound'), true)
+})
+
 test('coalesces same-turn recovery signals into one account pump', async () => {
   const gate = deferred()
   let active = 0

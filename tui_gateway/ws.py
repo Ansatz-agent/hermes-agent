@@ -32,7 +32,11 @@ import threading
 from typing import Any
 
 from tui_gateway import server
-from hermes_cli.client_auth.runtime import AuthRequired, require_authorized
+from hermes_cli.client_auth.runtime import (
+    AuthRequired,
+    is_local_auth_unavailable,
+    require_authorized,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -297,9 +301,13 @@ async def handle_ws(ws: Any) -> None:
     try:
         try:
             require_authorized("tui.ws.connect")
-        except AuthRequired:
-            disconnect_reason = "hermes_login_required"
-            await ws.close(code=4401, reason="Ansatz login required")
+        except AuthRequired as error:
+            if is_local_auth_unavailable(error):
+                disconnect_reason = "local_capability_unavailable"
+                await ws.close(code=1012, reason="Local capability unavailable")
+            else:
+                disconnect_reason = "hermes_login_required"
+                await ws.close(code=4401, reason="Ansatz login required")
             return
         await ws.accept()
         disconnect_reason = "connected"
@@ -402,9 +410,13 @@ async def handle_ws(ws: Any) -> None:
                 # leaving it alive to submit more work.
                 require_authorized("tui.ws.request")
                 resp = await asyncio.to_thread(server.dispatch, req, transport)
-            except AuthRequired:
-                disconnect_reason = "hermes_login_required"
-                await ws.close(code=4401, reason="Ansatz login required")
+            except AuthRequired as error:
+                if is_local_auth_unavailable(error):
+                    disconnect_reason = "local_capability_unavailable"
+                    await ws.close(code=1012, reason="Local capability unavailable")
+                else:
+                    disconnect_reason = "hermes_login_required"
+                    await ws.close(code=4401, reason="Ansatz login required")
                 break
             except Exception:
                 dispatch_crashes += 1
