@@ -348,6 +348,8 @@ test('auth runtime probe uses the fixed protocol snippet and sanitized source pa
       calls[0].args[1],
       /windows_modules = \('ntsecuritycon', 'pywintypes', 'win32api', 'win32con', 'win32file', 'win32pipe', 'win32security'\)/
     )
+    assert.match(calls[0].args[1], /external_auth_enabled, external_auth_scope/)
+    assert.match(calls[0].args[1], /guard\.enforce_raw_argv\(\['doctor'\]\)/)
     assert.match(calls[0].args[1], /hermes_cli\.client_auth\.bridge/)
     assert.match(calls[0].args[1], new RegExp(`PROTOCOL_VERSION == ${AUTH_BRIDGE_PROTOCOL_VERSION}`))
     assert.match(calls[0].args[1], /hermes_cli\.client_auth\.backend_scope_protocol/)

@@ -10872,6 +10872,11 @@ async function spawnPoolBackend(profile, entry) {
         // Marks this dashboard backend as desktop-spawned so it runs the cron
         // scheduler tick loop (the gateway isn't running under the app).
         HERMES_DESKTOP: '1',
+        // Ansatz owns the account login. The local backend still receives the
+        // scoped bearer over stdin, but must not require `hermes login`.
+        ANSATZ_EXTERNAL_AUTH: '1',
+        ANSATZ_EXTERNAL_AUTH_RUNTIME_INSTANCE_ID: connectionScope.runtime_instance_id,
+        ANSATZ_EXTERNAL_AUTH_EPOCH: String(connectionScope.epoch),
         // Exact parent identity lets the backend self-exit after an unclean
         // Desktop death without mistaking a reused PID for its owner.
         HERMES_PARENT_PID: String(process.pid),
@@ -11237,6 +11242,12 @@ async function startHermes() {
           // Marks this dashboard backend as desktop-spawned so it runs the cron
           // scheduler tick loop (the gateway isn't running under the app).
           HERMES_DESKTOP: '1',
+          // Authentication is owned by Ansatz's account service/UI. Keep the
+          // desktop scope-token boundary, but bypass Hermes's own account gate
+          // in this local child only.
+          ANSATZ_EXTERNAL_AUTH: '1',
+          ANSATZ_EXTERNAL_AUTH_RUNTIME_INSTANCE_ID: connectionScope.runtime_instance_id,
+          ANSATZ_EXTERNAL_AUTH_EPOCH: String(connectionScope.epoch),
           // Exact parent identity lets the backend self-exit after an unclean
           // Desktop death without mistaking a reused PID for its owner.
           HERMES_PARENT_PID: String(process.pid),

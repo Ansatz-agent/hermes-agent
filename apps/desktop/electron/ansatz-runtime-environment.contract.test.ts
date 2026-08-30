@@ -44,3 +44,15 @@ test('both desktop SSH connection paths keep control sockets under the selected 
   assert.match(authConnection, expected)
   assert.match(backendConnection, expected)
 })
+
+test('local desktop backends receive the Ansatz-owned authentication scope', () => {
+  // Keep this contract close to the spawn sites: the Python guard and runtime
+  // API must be deployed together with the scoped environment that activates
+  // the external-auth path. Count both the primary and profile-pool launches.
+  assert.equal((mainSource.match(/ANSATZ_EXTERNAL_AUTH: '1'/g) || []).length, 2)
+  assert.equal(
+    (mainSource.match(/ANSATZ_EXTERNAL_AUTH_RUNTIME_INSTANCE_ID: connectionScope\.runtime_instance_id/g) || []).length,
+    2
+  )
+  assert.equal((mainSource.match(/ANSATZ_EXTERNAL_AUTH_EPOCH: String\(connectionScope\.epoch\)/g) || []).length, 2)
+})
