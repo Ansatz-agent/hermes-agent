@@ -456,10 +456,13 @@ export async function prepareWindowsPackagedAuthRuntime(options: PrepareOptions)
 
     const verification = [
       'import httpx, keyring',
+      'import ntsecuritycon, pywintypes, win32api, win32con, win32file, win32pipe, win32security',
       'from hermes_cli.client_auth import bridge',
       'from hermes_cli.client_auth.backend_scope_protocol import DESKTOP_SCOPE_PROTOCOL_VERSION',
+      'from hermes_cli.client_auth.runtime import runtime_endpoint',
       `assert bridge.PROTOCOL_VERSION == ${AUTH_BRIDGE_PROTOCOL_VERSION}`,
       `assert DESKTOP_SCOPE_PROTOCOL_VERSION == ${DESKTOP_SCOPE_PROTOCOL_VERSION}`,
+      "endpoint = runtime_endpoint(); assert endpoint.owner_sid.startswith('S-1-')",
       'backend = keyring.get_keyring()',
       "identity = f'{backend.__class__.__module__}.{backend.__class__.__name__}'",
       "assert 'Windows' in identity, identity"

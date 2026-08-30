@@ -46,7 +46,8 @@ function fixtureCommands({ corruptUv = false, wrongWheel = false } = {}) {
       fs.writeFileSync(
         output,
         `httpx==0.28.1 ; python_version >= '3.13' --hash=sha256:${'a'.repeat(64)}\n` +
-          `keyring==25.7.0 --hash=sha256:${'b'.repeat(64)}\n`
+          `keyring==25.7.0 --hash=sha256:${'b'.repeat(64)}\n` +
+          `pywin32==311 ; sys_platform == 'win32' --hash=sha256:${'c'.repeat(64)}\n`
       )
       return ''
     }
@@ -66,6 +67,7 @@ function fixtureCommands({ corruptUv = false, wrongWheel = false } = {}) {
           ),
           'locked keyring wheel'
         )
+        fs.writeFileSync(path.join(destination, 'pywin32-311-cp313-cp313-win_amd64.whl'), 'locked pywin32 wheel')
       }
       return ''
     }
@@ -160,7 +162,8 @@ test('prepareWindowsAuthToolchainInputs exports CPython 3.13 win_amd64 wheels an
     assert.equal(lockedDownload.args[lockedDownload.args.indexOf('--platform') + 1], 'win_amd64')
     assert.deepEqual(fs.readdirSync(result.wheelhousePath).sort(), [
       'httpx-0.28.1-py3-none-any.whl',
-      'keyring-25.7.0-py3-none-any.whl'
+      'keyring-25.7.0-py3-none-any.whl',
+      'pywin32-311-cp313-cp313-win_amd64.whl'
     ])
   } finally {
     fs.rmSync(fixture.root, { recursive: true, force: true })

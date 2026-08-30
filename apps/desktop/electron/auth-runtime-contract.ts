@@ -297,10 +297,16 @@ export function authRuntimeProbeSnippet(
   scopeProtocolVersion = DESKTOP_SCOPE_PROTOCOL_VERSION
 ): string {
   return [
+    'import os',
     'import hermes_cli.client_auth.bridge as bridge',
     'from hermes_cli.client_auth.backend_scope_protocol import DESKTOP_SCOPE_PROTOCOL_VERSION',
+    'from hermes_cli.client_auth.runtime import runtime_endpoint',
     `assert bridge.PROTOCOL_VERSION == ${protocolVersion}`,
-    `assert DESKTOP_SCOPE_PROTOCOL_VERSION == ${scopeProtocolVersion}`
+    `assert DESKTOP_SCOPE_PROTOCOL_VERSION == ${scopeProtocolVersion}`,
+    "windows_modules = ('ntsecuritycon', 'pywintypes', 'win32api', 'win32con', 'win32file', 'win32pipe', 'win32security')",
+    "assert os.name != 'nt' or all(__import__(module) for module in windows_modules)",
+    "endpoint = runtime_endpoint() if os.name == 'nt' else None",
+    "assert os.name != 'nt' or endpoint.owner_sid.startswith('S-1-')"
   ].join('; ')
 }
 
