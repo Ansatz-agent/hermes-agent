@@ -102,6 +102,7 @@ test('Windows auth runtime uses System32 PowerShell and only bundled local packa
   const fixture = makeFixture()
   const calls: any[] = []
   const retiredRoots: string[] = []
+  let verificationPathContents = ''
 
   try {
     const result = await prepareWindowsPackagedAuthRuntime({
@@ -121,6 +122,13 @@ test('Windows auth runtime uses System32 PowerShell and only bundled local packa
           fs.mkdirSync(destination, { recursive: true })
           writePeX64(path.join(destination, 'python.exe'))
           fs.writeFileSync(path.join(destination, 'python313.zip'), 'stdlib')
+        }
+
+        if (options.command.endsWith('python.exe')) {
+          verificationPathContents = fs.readFileSync(
+            path.join(path.dirname(options.command), 'python313._pth'),
+            'utf8'
+          )
         }
 
         return { code: 0, killed: false, signal: null, stderr: '', stdout: '', termination: null }
@@ -158,6 +166,10 @@ test('Windows auth runtime uses System32 PowerShell and only bundled local packa
     assert.match(
       fs.readFileSync(path.join(result.runtimeRoot, 'python313._pth'), 'utf8'),
       /^python313\.zip\n\.\nLib\\site-packages\n\.\.\nimport site\n$/
+    )
+    assert.match(
+      verificationPathContents,
+      /^python313\.zip\n\.\nLib\\site-packages\n\.\.\\\.\.\nimport site\n$/
     )
     assert.ok(fs.statSync(path.join(result.runtimeRoot, 'python.exe')).isFile())
     assert.ok(fs.statSync(result.managedUvPath).isFile())
