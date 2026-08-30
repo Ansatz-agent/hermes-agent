@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from hermes_cli.client_auth.guard import classify_raw_argv, enforce_direct_entrypoint
+from hermes_cli.client_auth.guard import classify_raw_argv, enforce_direct_entrypoint, enforce_raw_argv
 from hermes_cli.client_auth.runtime import AuthRequired
 
 
@@ -44,6 +44,16 @@ def test_exact_unauthenticated_shapes(argv):
 )
 def test_every_shape_variant_is_protected(argv):
     assert classify_raw_argv(argv).auth_free is False
+
+
+def test_ansatz_external_auth_bypasses_only_the_child_process_guard(monkeypatch):
+    monkeypatch.setenv("ANSATZ_EXTERNAL_AUTH", "1")
+    monkeypatch.setattr(
+        "hermes_cli.client_auth.runtime.authorize_entrypoint",
+        lambda **_kwargs: pytest.fail("Hermes auth owner must not be queried"),
+    )
+
+    enforce_raw_argv(["doctor"])
 
 
 def test_guard_and_package_imports_are_stdlib_only():

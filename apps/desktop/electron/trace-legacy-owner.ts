@@ -46,6 +46,36 @@ export function traceMigrationSourceOwner(status: TraceAuthorizationStatus, inst
   }
 }
 
+/**
+ * Recover batches written while a valid native account was temporarily
+ * classified as local-only (for example, after the desktop installation id
+ * was regenerated during cache repair). The local-only account key is a
+ * deterministic digest of the authenticated principal, so it can be mapped
+ * back without trusting a username or arbitrary directory name.
+ */
+export function traceLocalOnlySourceOwner(status: TraceAuthorizationStatus, installationId: string): TraceOwner | null {
+  const nativePrincipal =
+    typeof status.principal_key === 'string' ? ACCOUNT_PRINCIPAL_KEY.exec(status.principal_key) : null
+
+  if (
+    status.state !== 'authenticated' ||
+    status.legacy ||
+    !isCanonicalUuidV4(status.installation_id) ||
+    !isCanonicalUuidV4(status.account_id) ||
+    !isCanonicalUuidV4(status.session_id) ||
+    nativePrincipal === null ||
+    status.principal_key !== `account:${status.account_id}`
+  ) {
+    return null
+  }
+
+  try {
+    return localOnlyTraceOwnerForPrincipal(status.principal_key, installationId)
+  } catch {
+    return null
+  }
+}
+
 export function legacyTraceOwnerForPrincipal(principalKey: string, installationId: string): TraceOwner {
   const match = LEGACY_PRINCIPAL_KEY.exec(principalKey)
 
@@ -79,12 +109,19 @@ export function traceOwnerFromScope(
 ): TraceOwner {
   const nativePrincipal =
     typeof status.principal_key === 'string' ? ACCOUNT_PRINCIPAL_KEY.exec(status.principal_key) : null
+  // The native auth runtime is the authority for the installation binding used
+  // by trace_token. The desktop installation id can be regenerated when the
+  // app cache is repaired/reinstalled, while the encrypted native credential
+  // legitimately remains bound to its original id. Preserve that server-issued
+  // binding instead of silently downgrading an otherwise authenticated account
+  // to a local-only outbox.
+  const nativeInstallationId = isCanonicalUuidV4(status.installation_id) ? status.installation_id : null
   const exactNative =
     status.state === 'authenticated' &&
     status.legacy === false &&
     status.runtime_instance_id === scope.runtime_instance_id &&
     status.epoch === scope.epoch &&
-    status.installation_id === installationId &&
+    nativeInstallationId !== null &&
     isCanonicalUuidV4(status.account_id) &&
     isCanonicalUuidV4(status.session_id) &&
     nativePrincipal !== null &&
@@ -94,7 +131,7 @@ export function traceOwnerFromScope(
     return {
       accountId: status.account_id,
       accountKey: `account-${status.account_id}`,
-      installationId,
+      installationId: nativeInstallationId,
       sessionId: status.session_id
     }
   }

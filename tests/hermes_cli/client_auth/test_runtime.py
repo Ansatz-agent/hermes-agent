@@ -68,6 +68,7 @@ from hermes_cli.client_auth.runtime import (
     start_runtime_owner,
     wait_until_authorized,
     _read_runtime_frame,
+    _runtime_owner_executable,
     _test_runtime_suffix,
 )
 
@@ -1084,6 +1085,74 @@ def test_trace_token_rechecks_cloud_state_after_waiting_for_failed_validation():
 
     assert [error.reason for error in trace_failures] == ["server_unavailable"]
     assert client.trace_calls == 0
+
+
+def test_trace_token_serializes_record_load_with_native_validation():
+    class NativeTraceClient(FakeAuthClient):
+        def trace_token(self, credential: NativeSessionCredential) -> TraceCredential:
+            return TraceCredential(
+                access_token="trace-token-sentinel-1234567890",
+                expires_at="2099-08-23T14:15:00+00:00",
+                expires_in=900,
+                installation_id=credential.installation_id,
+            )
+
+    client = NativeTraceClient()
+    owner = MemoryOwner(
+        client,
+        hardener=RecordingHardener(),
+        secret_backend=FakeSecretBackend(),
+        clock=FakeClock(),
+        jitter=lambda _low, _high: 0.5,
+    )
+    owner.login(
+        "alice",
+        bytearray(b"secret"),
+        installation_id=INSTALLATION_ID,
+        client_version="0.17.0",
+    )
+
+    original_load_record = owner._load_record
+    record_loaded_by_trace = threading.Event()
+    release_trace_load = threading.Event()
+
+    def delayed_load_record():
+        record = original_load_record()
+        if threading.current_thread().name == "trace-token":
+            record_loaded_by_trace.set()
+            assert release_trace_load.wait(timeout=2)
+        return record
+
+    owner._load_record = delayed_load_record
+    trace_results: list[TraceCredential] = []
+    trace_errors: list[BaseException] = []
+
+    def fetch_trace_token() -> None:
+        try:
+            trace_results.append(
+                owner.trace_token(
+                    installation_id=INSTALLATION_ID,
+                    client_version="0.17.0",
+                    telemetry_schema_version="1",
+                )
+            )
+        except BaseException as error:
+            trace_errors.append(error)
+
+    trace = threading.Thread(name="trace-token", target=fetch_trace_token)
+    trace.start()
+    assert record_loaded_by_trace.wait(timeout=1)
+
+    validation = threading.Thread(target=owner.validate_now)
+    validation.start()
+    validation.join(timeout=2)
+    assert not validation.is_alive()
+
+    release_trace_load.set()
+    trace.join(timeout=2)
+    assert not trace.is_alive()
+    assert not trace_errors
+    assert len(trace_results) == 1
 
 
 class BlockingBobWriteBackend(FakeSecretBackend):
@@ -3819,7 +3888,7 @@ def test_owner_starter_detaches_without_forwarding_secret_environment(monkeypatc
 
     assert start_runtime_owner(timeout=1.0) is remote
     assert captured["argv"] == [
-        sys.executable,
+        _runtime_owner_executable(sys.executable),
         "-m",
         "hermes_cli.client_auth.runtime",
         "owner",
@@ -3832,6 +3901,43 @@ def test_owner_starter_detaches_without_forwarding_secret_environment(monkeypatc
     assert "HERMES_ACCOUNT_TOKEN" not in captured["env"]
     assert len(connect_timeouts) == 2
     assert all(0 < timeout <= 1.0 for timeout in connect_timeouts)
+
+
+def test_runtime_owner_executable_prefers_windows_gui_sibling():
+    checked: list[str] = []
+
+    def is_file(candidate: str) -> bool:
+        checked.append(candidate)
+        return candidate == r"C:\Hermes\venv\Scripts\pythonw.exe"
+
+    assert (
+        _runtime_owner_executable(
+            r"C:\Hermes\venv\Scripts\python.exe",
+            is_windows=True,
+            is_file=is_file,
+        )
+        == r"C:\Hermes\venv\Scripts\pythonw.exe"
+    )
+    assert checked == [r"C:\Hermes\venv\Scripts\pythonw.exe"]
+
+
+def test_runtime_owner_executable_preserves_non_windows_and_missing_siblings():
+    assert (
+        _runtime_owner_executable(
+            "/opt/hermes/venv/bin/python",
+            is_windows=False,
+            is_file=lambda _candidate: pytest.fail("must not probe off Windows"),
+        )
+        == "/opt/hermes/venv/bin/python"
+    )
+    assert (
+        _runtime_owner_executable(
+            r"C:\Hermes\venv\Scripts\python.exe",
+            is_windows=True,
+            is_file=lambda _candidate: False,
+        )
+        == r"C:\Hermes\venv\Scripts\python.exe"
+    )
 
 
 def test_live_owner_is_reused_before_new_mode_election():
@@ -4339,6 +4445,39 @@ def test_windows_runtime_endpoint_is_sid_scoped_first_instance_pipe():
     assert endpoint.first_instance is True
     assert endpoint.pipe_name.startswith(r"\\.\pipe\hermes-auth-")
     assert endpoint.owner_sid
+
+
+@pytest.mark.windows_only
+def test_windows_runtime_namespace_separates_detached_auth_owners():
+    base = WindowsNamedPipeEndpoint.for_current_sid(
+        first_instance=True,
+        runtime_namespace=None,
+    )
+    v1 = WindowsNamedPipeEndpoint.for_current_sid(
+        first_instance=True,
+        runtime_namespace="ansatz-voice-trace-client-auth-v1",
+    )
+    v2 = WindowsNamedPipeEndpoint.for_current_sid(
+        first_instance=True,
+        runtime_namespace="ansatz-voice-trace-client-auth-v2",
+    )
+
+    assert len({base.pipe_name, v1.pipe_name, v2.pipe_name}) == 3
+    assert v1.owner_sid == v2.owner_sid == base.owner_sid
+
+
+@pytest.mark.windows_only
+def test_windows_runtime_endpoint_honors_namespace_environment(monkeypatch):
+    monkeypatch.setenv(
+        "HERMES_AUTH_RUNTIME_NAMESPACE",
+        "ansatz-voice-trace-client-auth-v2",
+    )
+    namespaced = runtime_endpoint()
+
+    monkeypatch.delenv("HERMES_AUTH_RUNTIME_NAMESPACE")
+    unscoped = runtime_endpoint()
+
+    assert namespaced.pipe_name != unscoped.pipe_name
 
 
 @pytest.mark.windows_only

@@ -14,6 +14,7 @@ import {
   installedAgentInstallScript,
   installRefForStamp,
   isPinnedCommit,
+  isWindowsBundledSourceLockError,
   progressHeartbeatMsForStage,
   resolveInstallScript,
   resolveMarkerPinnedCommit,
@@ -50,6 +51,28 @@ test('runBootstrap bails immediately when the signal is already aborted', async 
   assert.ok(
     events.some(ev => ev.type === 'failed' && /cancelled/i.test(ev.error)),
     'should emit a cancelled failure event'
+  )
+})
+
+test('Windows bundled-source lock errors are deferrable but unrelated failures are not', () => {
+  assert.equal(
+    isWindowsBundledSourceLockError(
+      {
+        code: 'EBUSY',
+        message:
+          "EBUSY: resource busy or locked, rename 'C:\\Users\\tester\\AppData\\Local\\AnsatzVoiceTraceClient\\hermes-agent' -> 'C:\\Users\\tester\\AppData\\Local\\AnsatzVoiceTraceClient\\.hermes-agent-bundled-backup'"
+      },
+      'win32'
+    ),
+    true
+  )
+  assert.equal(isWindowsBundledSourceLockError({ code: 'ENOENT', message: 'missing archive' }, 'win32'), false)
+  assert.equal(
+    isWindowsBundledSourceLockError(
+      { code: 'EBUSY', message: "rename 'C:\\Users\\tester\\other' -> 'C:\\Users\\tester\\other.bak'" },
+      'win32'
+    ),
+    false
   )
 })
 
@@ -117,6 +140,7 @@ test('Windows bundled runtime args keep the verified source and Git runtime loca
       activeRoot: 'C:\\Users\\tester\\AppData\\Local\\hermes\\hermes-agent',
       hermesHome: 'C:\\Users\\tester\\AppData\\Local\\hermes',
       bundledSource: true,
+      bundledToolchainRoot: 'C:\\Program Files\\Ansatz Voice Trace Client\\resources\\bootstrap\\auth-toolchain',
       bootstrapScope: 'runtime'
     }),
     [
@@ -131,7 +155,9 @@ test('Windows bundled runtime args keep the verified source and Git runtime loca
       '-Branch',
       'main',
       '-BundledSource',
-      '-SkipComputerUse'
+      '-SkipComputerUse',
+      '-BundledToolchain',
+      'C:\\Program Files\\Ansatz Voice Trace Client\\resources\\bootstrap\\auth-toolchain'
     ]
   )
 })

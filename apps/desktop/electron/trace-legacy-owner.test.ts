@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { join } from 'node:path'
 
 import { test } from 'vitest'
 
@@ -7,6 +8,7 @@ import {
   localOnlyTraceOwnerForPrincipal,
   migratePreviousLegacyTraceNamespace,
   previousLegacyTraceAccountKey,
+  traceLocalOnlySourceOwner,
   traceMigrationSourceOwner,
   traceOwnerFromScope
 } from './trace-legacy-owner'
@@ -31,7 +33,7 @@ test('legacy Trace ownership rejects usernames, installation-only values, and ma
   }
 })
 
-test('native auth principals keep a stable local-only outbox seam until trusted Task 19 mapping', () => {
+test('native auth principals keep a stable deterministic local-only outbox seam', () => {
   const accountPrincipal = 'account:22222222-2222-4222-8222-222222222222'
   const first = localOnlyTraceOwnerForPrincipal(accountPrincipal, installationId)
   const restarted = localOnlyTraceOwnerForPrincipal(accountPrincipal, installationId)
@@ -41,6 +43,28 @@ test('native auth principals keep a stable local-only outbox seam until trusted 
   assert.notEqual(other.accountKey, first.accountKey)
   assert.equal(first.accountId, null)
   assert.equal(first.sessionId, null)
+})
+
+test('authenticated native status maps the deterministic local-only owner for recovery', () => {
+  const accountId = '22222222-2222-4222-8222-222222222222'
+  const nativeInstallationId = '44444444-4444-4444-8444-444444444444'
+  const status = {
+    account_id: accountId,
+    epoch: 7,
+    installation_id: nativeInstallationId,
+    legacy: false,
+    principal_key: `account:${accountId}`,
+    runtime_instance_id: 'runtime-native',
+    session_id: '33333333-3333-4333-8333-333333333333',
+    state: 'authenticated' as const
+  }
+
+  assert.deepEqual(traceLocalOnlySourceOwner(status, nativeInstallationId), {
+    accountId: null,
+    accountKey: localOnlyTraceOwnerForPrincipal(status.principal_key, nativeInstallationId).accountKey,
+    installationId: nativeInstallationId,
+    sessionId: null
+  })
 })
 
 test('exact native cached authorization produces a trusted uploadable owner without username inference', () => {
@@ -67,7 +91,7 @@ test('exact native cached authorization produces a trusted uploadable owner with
   })
 })
 
-test('legacy, missing, or inconsistent cached identity remains stable local-only', () => {
+test('legacy, missing, or malformed cached identity remains stable local-only', () => {
   const scope = { connection_id: 'local', epoch: 7, runtime_instance_id: 'runtime-native' }
   const accountId = '22222222-2222-4222-8222-222222222222'
   const base = {
@@ -85,7 +109,7 @@ test('legacy, missing, or inconsistent cached identity remains stable local-only
   for (const status of [
     { ...base, legacy: true },
     { ...base, session_id: null },
-    { ...base, installation_id: '44444444-4444-4444-8444-444444444444' },
+    { ...base, installation_id: 'not-a-uuid' },
     { ...base, principal_key: `account:55555555-5555-4555-8555-555555555555` }
   ]) {
     const owner = traceOwnerFromScope(status, scope, installationId)
@@ -97,6 +121,36 @@ test('legacy, missing, or inconsistent cached identity remains stable local-only
   const missingA = traceOwnerFromScope({ ...base, principal_key: null }, scope, installationId)
   const missingB = traceOwnerFromScope({ ...base, principal_key: null, username: 'bob' }, scope, installationId)
   assert.deepEqual(missingB, missingA)
+})
+
+test('native auth keeps the server-issued installation binding after desktop id regeneration', () => {
+  const accountId = '22222222-2222-4222-8222-222222222222'
+  const nativeInstallationId = '44444444-4444-4444-8444-444444444444'
+  const desktopInstallationId = installationId
+  const sessionId = '33333333-3333-4333-8333-333333333333'
+  const scope = { connection_id: 'local', epoch: 7, runtime_instance_id: 'runtime-native' }
+  const owner = traceOwnerFromScope(
+    {
+      account_id: accountId,
+      epoch: scope.epoch,
+      installation_id: nativeInstallationId,
+      legacy: false,
+      principal_key: `account:${accountId}`,
+      runtime_instance_id: scope.runtime_instance_id,
+      session_id: sessionId,
+      state: 'authenticated',
+      username: 'alice'
+    },
+    scope,
+    desktopInstallationId
+  )
+
+  assert.deepEqual(owner, {
+    accountId,
+    accountKey: `account-${accountId}`,
+    installationId: nativeInstallationId,
+    sessionId
+  })
 })
 
 test('the exact previous scope namespace is atomically retained under the stable principal owner', async () => {
@@ -118,7 +172,7 @@ test('the exact previous scope namespace is atomically retained under the stable
     root: '/encrypted-trace-outbox'
   })
 
-  assert.deepEqual(renamed, [[`/encrypted-trace-outbox/${previous}`, `/encrypted-trace-outbox/${current}`]])
+  assert.deepEqual(renamed, [[join('/encrypted-trace-outbox', previous), join('/encrypted-trace-outbox', current)]])
 })
 
 test('restarted native authorization discovers the durable legacy predecessor without in-memory transition state', () => {

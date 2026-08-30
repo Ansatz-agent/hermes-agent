@@ -127,6 +127,7 @@ def _valid_loopback_endpoint(raw: str) -> bool:
         and parsed.hostname == "127.0.0.1"
         and port is not None
         and 1 <= port <= 65535
+        and parsed.port != 1
         and parsed.path == PRODUCT_TRACE_PATH
         and not parsed.username
         and not parsed.password
@@ -187,7 +188,7 @@ def ansatz_product_trace_requested() -> bool:
     with _TRANSPORT_LOCK:
         if _REGISTERED_PRODUCT_TRANSPORT is not None:
             return True
-    return any(
+    if any(
         os.environ.get(name, "").strip()
         for name in (
             "ANSATZ_TRACE_LOCAL_ENDPOINT",
@@ -195,7 +196,16 @@ def ansatz_product_trace_requested() -> bool:
             "ANSATZ_TRACE_INSTALLATION_ID",
             "ANSATZ_TRACE_ENTRYPOINT",
         )
-    )
+    ):
+        return True
+
+    # A sealed Ansatz product config must never fall through to ordinary
+    # Relay config handling. Without this guard, a missing dynamic transport
+    # leaves the placeholder endpoint active and the SDK repeatedly reports a
+    # generic network error instead of failing closed until Desktop repairs
+    # the transport.
+    path = _product_config_path()
+    return path is not None and _load_sealed_product_config(path) is not None
 
 
 def ansatz_product_trace_enabled() -> bool:

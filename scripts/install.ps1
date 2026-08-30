@@ -14,6 +14,9 @@ param(
     [switch]$SkipSetup,
     [switch]$SkipComputerUse,
     [switch]$BundledSource,
+    # Packaged Desktop passes the hash-verified authentication toolchain here
+    # so runtime stages can adopt its local uv.exe without network access.
+    [string]$BundledToolchain = "",
     [string]$Branch = "main",
     # -Commit and -Tag are higher-precedence variants of -Branch for users
     # who need reproducible installs (desktop installer pinning, CI, release
@@ -345,6 +348,9 @@ if ($PSBoundParameters.ContainsKey('InstallDir')) {
         if ($env:HERMES_HOME) { "$env:HERMES_HOME\hermes-agent" } else { "$env:LOCALAPPDATA\hermes\hermes-agent" }
     )
 }
+if ($PSBoundParameters.ContainsKey('BundledToolchain') -and $BundledToolchain) {
+    $BundledToolchain = ConvertTo-LongPath $BundledToolchain
+}
 if ($script:NormalizedProfilePaths) {
     # Which paths the install actually settled on. Absent from every report of
     # this bug class, and the whole question once a short alias is in play.
@@ -379,7 +385,7 @@ $PythonVersion = "3.11"
 # interpreters, so this list also matches a pre-existing system Python.  Single
 # source of truth shared by Test-Python's fallback and Resolve-AvailablePythonVersion.
 $PythonFallbackVersions = @("3.12", "3.13", "3.10")
-$NodeVersion = "22"
+$NodeVersion = "26"
 # The npm range the root package.json pins in `engines.npm`.  A constant rather
 # than a manifest read like the POSIX side does: Test-Node runs BEFORE the repo
 # is cloned, so there is usually no package.json on disk yet (and none at all
@@ -399,6 +405,11 @@ $script:PlaywrightPrimaryMirror = "https://registry.npmmirror.com/-/binary/playw
 $script:PlaywrightSecondaryMirror = "https://npmmirror.com/mirrors/playwright/"
 $script:DesktopElectronPrimaryMirror = "https://npmmirror.com/mirrors/electron/"
 $script:DesktopElectronSecondaryMirror = "https://registry.npmmirror.com/-/binary/electron/"
+# WinGet resolves package metadata through a named source, not through the
+# npm/Python mirror URLs above.  Keep the source name in one place so a
+# machine-provisioned WinGet mirror (or enterprise source) can be used without
+# pretending that an unrelated binary mirror serves these packages.
+$script:WingetSourceName = "winget"
 
 @(
     "UV_INDEX", "UV_INDEX_URL", "UV_EXTRA_INDEX_URL", "UV_CONFIG_FILE", "UV_PYTHON",
@@ -786,13 +797,39 @@ function Install-Uv {
     Write-Info "Preparing managed uv in $HermesHome\bin ..."
     New-Item -ItemType Directory -Path (Join-Path $HermesHome "bin") -Force | Out-Null
 
-    # Packaged Desktop supplies a hash-verified uv.exe. A source install may
-    # adopt an existing local executable, but never executes downloaded code.
+    # Packaged Desktop supplies a hash-verified uv.exe through the bundled
+    # authentication toolchain. Prefer that exact file and never fall back to
+    # a network installer on a bundled-source run.
     try {
+        if ($BundledToolchain) {
+            $bundledUv = Join-Path $BundledToolchain "uv.exe"
+            $bundledUvItem = Get-Item -LiteralPath $bundledUv -ErrorAction Stop
+            if (($bundledUvItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw "bundled uv.exe must be a regular non-link file"
+            }
+
+            # Keep the executable suffix on the transactional copy. Windows
+            # PowerShell refuses to launch a PE file whose temporary path does
+            # not end in .exe, even when invoked with the call operator.
+            $pending = "$managedUv.pending.exe"
+            Copy-Item -LiteralPath $bundledUv -Destination $pending -Force
+            $null = & $pending --version
+            if ($LASTEXITCODE -ne 0) {
+                throw "bundled uv.exe failed its version check (exit $LASTEXITCODE)"
+            }
+            Move-Item -LiteralPath $pending -Destination $managedUv -Force
+            $script:UvCmd = $managedUv
+            $version = & $managedUv --version
+            Write-Success "Managed uv adopted from the bundled toolchain ($version)"
+            return $true
+        }
+
+        # A source install may adopt an existing local executable, but never
+        # executes downloaded code.
         $uvOnPath = Get-Command uv -CommandType Application -ErrorAction SilentlyContinue |
             Select-Object -First 1
         if ($uvOnPath -and $uvOnPath.Source -and (Test-Path $uvOnPath.Source)) {
-            $pending = "$managedUv.pending"
+            $pending = "$managedUv.pending.exe"
             Copy-Item $uvOnPath.Source $pending -Force
             $null = & $pending --version
             Move-Item $pending $managedUv -Force
@@ -805,7 +842,7 @@ function Install-Uv {
         Write-Info "Use the packaged Desktop installer or ask an administrator to place a reviewed uv.exe at $managedUv."
         return $false
     } catch {
-        Remove-Item "$managedUv.pending" -Force -ErrorAction SilentlyContinue
+        Remove-Item "$managedUv.pending.exe" -Force -ErrorAction SilentlyContinue
         Write-Err "Could not adopt the local uv executable: $_"
         return $false
     }
@@ -1556,11 +1593,10 @@ function Set-GitBashEnvVar {
     Write-Info "If needed, set HERMES_GIT_BASH_PATH manually to your bash.exe path."
 }
 
-# The dependency tree's real Node floor is >=22.22.0, set by react-router 8.3.0
-# (`engines.node`). Keep this in sync with the root package.json: looser lets an
-# install reach a `npm ci` that dies with EBADENGINE, stricter replaces a working
-# user toolchain for nothing. Returns $true when a `node --version` string
-# clears that floor.
+# The desktop toolchain is pinned to the Node 26 major (`.node-version`). The
+# repository's dependency floor is lower, but the packaged renderer/Electron
+# build is tested only with this major. Use the mirror's latest-v26.x index so
+# a stale Node 22 install can never be accepted by the bootstrap.
 function Test-NodeVersionOk {
     param([string]$Version)
     try {
@@ -1568,8 +1604,7 @@ function Test-NodeVersionOk {
     } catch {
         return $false
     }
-    if ($v.Major -eq 22) { return ($v.Minor -ge 22) }
-    return ($v.Major -gt 22)
+    return ($v.Major -ge 26)
 }
 
 function Test-Node {
@@ -1746,42 +1781,46 @@ function Test-Node {
     # install triggers a UAC prompt that frequently appears minimized in
     # the taskbar -- looks like a hang to users on stock Windows).
     # Kept for environments where the portable download fails (proxy,
-    # locked firewall, etc.) but the user is willing to consent to UAC.
+    # locked firewall, etc.).  The source refresh and package install are both
+    # bounded and non-interactive so an App Installer/UAC prompt cannot strand
+    # the bootstrap runner.
     if (Get-Command winget -ErrorAction SilentlyContinue) {
-        Write-Info "Falling back to winget (may prompt UAC -- check your taskbar for a flashing icon)..."
-        # Capture EAP outside the try block so the catch's restore call always
-        # has a meaningful value (see Install-Uv for the full rationale).
-        $prevEAP = $ErrorActionPreference
+        Write-Info "Falling back to winget (using the configured $($script:WingetSourceName) source)..."
         try {
-            # Relax EAP=Stop so stderr lines from winget don't get wrapped
-            # as ErrorRecords and short-circuit the 2>&1 pipe before we can
-            # check the post-condition.  See the long comment in Install-Uv
-            # for the same pattern.
-            $ErrorActionPreference = "Continue"
+            $nodeTimeoutSec = Get-OptionalPackageTimeoutSec
+            $sourceLog = "$env:TEMP\hermes-winget-node-source-$(Get-Random).log"
+            $sourceResult = Update-WingetSource -LogPath $sourceLog -TimeoutSec $nodeTimeoutSec
+            if ($sourceResult.ExitCode -ne 0) {
+                Write-Warn "WinGet source refresh did not complete; trying the cached source. Details: $sourceLog"
+            }
             # On ARM64, force winget to fetch the ARM64 installer.  Without
             # the explicit override, winget on WoW64 sometimes still resolves
             # to x64 manifests, leaving us with an emulated Node toolchain
             # even after a "successful" install.  The OpenJS manifest does
             # publish an arm64 installer, so this is safe.
             $wingetArgs = @(
-                'install','OpenJS.NodeJS','--silent',
+                'install','--exact','--id','OpenJS.NodeJS',
+                '--source',$script:WingetSourceName,'--silent',
+                '--disable-interactivity',
                 '--accept-package-agreements','--accept-source-agreements'
             )
             if ((Get-WindowsArch) -eq 'arm64') {
                 $wingetArgs += @('--architecture','arm64')
             }
-            winget @wingetArgs 2>&1 | Out-Null
-            $ErrorActionPreference = $prevEAP
+            $nodeLog = "$env:TEMP\hermes-winget-node-$(Get-Random).log"
+            $nodeResult = Invoke-OptionalPackageManager -Manager 'winget' `
+                -Arguments $wingetArgs -LogPath $nodeLog -TimeoutSec $nodeTimeoutSec
             # Refresh PATH
-            $env:Path = [Environment]::GetEnvironmentVariable("Path", "User") + ";" + [Environment]::GetEnvironmentVariable("Path", "Machine")
+            Update-ProcessPathForPackages
             if (Get-Command node -ErrorAction SilentlyContinue) {
                 $version = node --version
                 Write-Success "Node.js $version installed via winget"
                 $script:HasNode = $true
                 return $true
             }
+            Write-Warn "winget did not provide Node.js; details: $nodeLog"
         } catch {
-            if ($prevEAP) { $ErrorActionPreference = $prevEAP }
+            Write-Warn "winget Node.js fallback failed: $_"
         }
     }
 
@@ -1825,6 +1864,157 @@ function Update-ProcessPathForPackages {
         }
     }
     $env:Path = [string]::Join(';', $ordered)
+}
+
+# Run an optional package-manager command without allowing a stalled installer
+# to look like a dead bootstrap.  winget can block while App Installer creates
+# its source cache, a corporate proxy negotiates, or an implicit UAC prompt is
+# waiting in another desktop.  The desktop runner has a shorter idle watchdog
+# than this command's wall-clock budget, so drain both output streams and emit
+# a heartbeat while the process is still alive.  A timeout is deliberately
+# non-fatal: ripgrep and ffmpeg are optional capabilities and the callers below
+# already have findstr/TTS fallbacks when either binary remains unavailable.
+function Invoke-OptionalPackageManager {
+    param(
+        [Parameter(Mandatory = $true)][string]$Manager,
+        [Parameter(Mandatory = $true)][string[]]$Arguments,
+        [Parameter(Mandatory = $true)][string]$LogPath,
+        [int]$TimeoutSec = 120,
+        [int]$HeartbeatSec = 10
+    )
+
+    $command = Get-Command $Manager -ErrorAction SilentlyContinue
+    if (-not $command) {
+        return [pscustomobject]@{
+            ExitCode = 127
+            TimedOut = $false
+            LogPath = $LogPath
+        }
+    }
+
+    $stdoutPath = "$LogPath.stdout"
+    $stderrPath = "$LogPath.stderr"
+    Remove-Item -LiteralPath $LogPath, $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+
+    # Start-Process can launch native executables directly.  Chocolatey and
+    # Scoop may instead resolve to a .cmd/.ps1 shim, so route those through
+    # their real host while retaining the same timeout and capture behavior.
+    $resolved = if ($command.Source) { $command.Source } elseif ($command.Definition) { $command.Definition } else { $command.Name }
+    $launcher = $resolved
+    $argLine = ($Arguments -join ' ')
+    if ($resolved -match '(?i)\.(cmd|bat)$') {
+        $launcher = if ($env:ComSpec) { $env:ComSpec } elseif ($env:SystemRoot) { Join-Path $env:SystemRoot 'System32\cmd.exe' } else { 'cmd.exe' }
+        $argLine = "/d /s /c `"`"$resolved`" $argLine`""
+    } elseif ($resolved -match '(?i)\.ps1$' -or $command.CommandType -eq 'ExternalScript') {
+        $powershell = Get-Command powershell.exe -ErrorAction SilentlyContinue
+        if (-not $powershell) {
+            Write-Warn "$Manager is a PowerShell shim but powershell.exe is unavailable; skipping."
+            return [pscustomobject]@{
+                ExitCode = 127
+                TimedOut = $false
+                LogPath = $LogPath
+            }
+        }
+        $launcher = if ($powershell.Source) { $powershell.Source } else { 'powershell.exe' }
+        $argLine = "-NoProfile -ExecutionPolicy Bypass -File `"$resolved`" $argLine"
+    }
+
+    try {
+        $proc = Start-Process -FilePath $launcher -ArgumentList $argLine `
+            -RedirectStandardOutput $stdoutPath -RedirectStandardError $stderrPath `
+            -NoNewWindow -PassThru
+    } catch {
+        $_ | Out-File -FilePath $LogPath -Encoding utf8 -Append
+        return [pscustomobject]@{
+            ExitCode = 1
+            TimedOut = $false
+            LogPath = $LogPath
+        }
+    }
+
+    $deadline = [DateTime]::UtcNow.AddSeconds([Math]::Max(1, $TimeoutSec))
+    $nextHeartbeat = [DateTime]::UtcNow.AddSeconds([Math]::Max(1, $HeartbeatSec))
+    $shown = @{ $stdoutPath = 0; $stderrPath = 0 }
+
+    function Drain-OptionalPackageOutput([string]$Path, [string]$Stream) {
+        $lines = @(Get-Content -LiteralPath $Path -ErrorAction SilentlyContinue)
+        $start = [int]$shown[$Path]
+        if ($lines.Count -gt $start) {
+            $lines[$start..($lines.Count - 1)] | ForEach-Object {
+                Write-Host "    [$Manager/$Stream] $_" -ForegroundColor DarkGray
+            }
+            $shown[$Path] = $lines.Count
+        }
+    }
+
+    $timedOut = $false
+    while (-not $proc.WaitForExit(750)) {
+        $now = [DateTime]::UtcNow
+        Drain-OptionalPackageOutput $stdoutPath 'stdout'
+        Drain-OptionalPackageOutput $stderrPath 'stderr'
+        if ($now -ge $nextHeartbeat) {
+            Write-Info "$Manager package installation still running..."
+            $nextHeartbeat = $now.AddSeconds([Math]::Max(1, $HeartbeatSec))
+        }
+        if ($now -ge $deadline) {
+            $timedOut = $true
+            Write-Warn "$Manager package installation timed out after $TimeoutSec seconds; continuing without optional packages."
+            try {
+                & taskkill /T /F /PID $proc.Id 2>&1 | Out-Null
+            } catch {
+                try { $proc.Kill() } catch { }
+            }
+            $proc.WaitForExit()
+            break
+        }
+    }
+
+    $proc.WaitForExit()
+    $proc.Refresh()
+    Drain-OptionalPackageOutput $stdoutPath 'stdout'
+    Drain-OptionalPackageOutput $stderrPath 'stderr'
+    try {
+        foreach ($path in @($stdoutPath, $stderrPath)) {
+            if (Test-Path -LiteralPath $path) {
+                Get-Content -LiteralPath $path -ErrorAction SilentlyContinue | Out-File -FilePath $LogPath -Encoding utf8 -Append
+            }
+        }
+        "package manager exit: $([int]$proc.ExitCode)" | Out-File -FilePath $LogPath -Encoding utf8 -Append
+    } catch {
+        # Diagnostics must never turn an optional dependency into a hard error.
+    }
+    Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+
+    return [pscustomobject]@{
+        ExitCode = if ($timedOut) { 124 } else { [int]$proc.ExitCode }
+        TimedOut = $timedOut
+        LogPath = $LogPath
+    }
+}
+
+function Get-OptionalPackageTimeoutSec {
+    $timeout = 120
+    if ($env:HERMES_SYSTEM_PACKAGE_TIMEOUT -match '^\d+$') {
+        $timeout = [int]$env:HERMES_SYSTEM_PACKAGE_TIMEOUT
+    }
+    return [Math]::Max(1, $timeout)
+}
+
+function Update-WingetSource {
+    param(
+        [Parameter(Mandatory = $true)][string]$LogPath,
+        [int]$TimeoutSec = 120
+    )
+
+    # WinGet's source name is resolved by App Installer.  Refreshing it lets a
+    # machine or enterprise image use its configured mirror, while the fixed
+    # --source argument below prevents an unrelated msstore source from being
+    # selected.  A source refresh is advisory: optional packages must not make
+    # the runtime bootstrap fail when the source is unavailable.
+    return Invoke-OptionalPackageManager -Manager 'winget' -Arguments @(
+        'source','update','--name',$script:WingetSourceName,'--disable-interactivity',
+        '--accept-source-agreements'
+    ) -LogPath $LogPath -TimeoutSec $TimeoutSec
 }
 
 function Install-SystemPackages {
@@ -1875,9 +2065,20 @@ function Install-SystemPackages {
     $hasWinget = Get-Command winget -ErrorAction SilentlyContinue
     $hasChoco = Get-Command choco -ErrorAction SilentlyContinue
     $hasScoop = Get-Command scoop -ErrorAction SilentlyContinue
+    $packageTimeoutSec = Get-OptionalPackageTimeoutSec
 
     # Try winget first (most common on modern Windows)
     if ($hasWinget) {
+        Write-Info "Refreshing the configured $($script:WingetSourceName) source..."
+        $sourceLog = "$env:TEMP\hermes-winget-source-$(Get-Random).log"
+        try {
+            $sourceResult = Update-WingetSource -LogPath $sourceLog -TimeoutSec $packageTimeoutSec
+            if ($sourceResult.ExitCode -ne 0) {
+                Write-Warn "WinGet source refresh did not complete; continuing with the cached source. Details: $sourceLog"
+            }
+        } catch {
+            Write-Warn "WinGet source refresh failed; continuing with the cached source: $_"
+        }
         Write-Info "Installing $description via winget..."
         # Per-package log paths -- key the lookup by package id so we can
         # decide AFTER the post-install Get-Command check whether to keep
@@ -1894,11 +2095,12 @@ function Install-SystemPackages {
             # install -- and it exits 0, so the surrounding try/catch never fires.
             # We don't ship anything from msstore, so pinning is safe.
             try {
-                $output = winget install --exact --id $pkg --source winget --silent `
-                    --accept-package-agreements --accept-source-agreements 2>&1
-                $code = $LASTEXITCODE
-                $output | Out-File -FilePath $log -Encoding utf8
-                "winget exit: $code" | Out-File -FilePath $log -Encoding utf8 -Append
+                $result = Invoke-OptionalPackageManager -Manager 'winget' -Arguments @(
+                    'install','--exact','--id',$pkg,'--source',$script:WingetSourceName,'--silent',
+                    '--disable-interactivity',
+                    '--accept-package-agreements','--accept-source-agreements'
+                ) -LogPath $log -TimeoutSec $packageTimeoutSec
+                $code = $result.ExitCode
                 # 0x8A15002B (-1978335189) = APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE.
                 # winget treats `install` on a package it already has registered as
                 # an *upgrade*, finds no newer version, and bails with this code --
@@ -1907,12 +2109,14 @@ function Install-SystemPackages {
                 # command was missing (that's why we're here), so a plain install
                 # dead-ends forever. Force a reinstall to repair the registration so
                 # the shim reappears.
-                if ($code -eq -1978335189) {
+                if (-not $result.TimedOut -and $code -eq -1978335189) {
                     "-> already-installed/no-upgrade; retrying with --force" | Out-File -FilePath $log -Encoding utf8 -Append
-                    $output = winget install --exact --id $pkg --source winget --silent --force `
-                        --accept-package-agreements --accept-source-agreements 2>&1
-                    $output | Out-File -FilePath $log -Encoding utf8 -Append
-                    "winget exit (force): $LASTEXITCODE" | Out-File -FilePath $log -Encoding utf8 -Append
+                    $forceResult = Invoke-OptionalPackageManager -Manager 'winget' -Arguments @(
+                        'install','--exact','--id',$pkg,'--source',$script:WingetSourceName,'--silent','--force',
+                        '--disable-interactivity',
+                        '--accept-package-agreements','--accept-source-agreements'
+                    ) -LogPath $log -TimeoutSec $packageTimeoutSec
+                    "winget exit (force): $($forceResult.ExitCode)" | Out-File -FilePath $log -Encoding utf8 -Append
                 }
             } catch {
                 $_ | Out-File -FilePath $log -Encoding utf8 -Append
@@ -1946,7 +2150,11 @@ function Install-SystemPackages {
     if ($hasChoco -and ($needRipgrep -or $needFfmpeg)) {
         Write-Info "Trying Chocolatey..."
         foreach ($pkg in $chocoPkgs) {
-            try { choco install $pkg -y 2>&1 | Out-Null } catch { }
+            $log = "$env:TEMP\hermes-choco-$($pkg -replace '[^A-Za-z0-9]','_')-$(Get-Random).log"
+            try {
+                Invoke-OptionalPackageManager -Manager 'choco' -Arguments @('install', $pkg, '-y') `
+                    -LogPath $log -TimeoutSec $packageTimeoutSec | Out-Null
+            } catch { }
         }
         Update-ProcessPathForPackages
         if ($needRipgrep -and (Get-Command rg -ErrorAction SilentlyContinue)) {
@@ -1965,7 +2173,11 @@ function Install-SystemPackages {
     if ($hasScoop -and ($needRipgrep -or $needFfmpeg)) {
         Write-Info "Trying Scoop..."
         foreach ($pkg in $scoopPkgs) {
-            try { scoop install $pkg 2>&1 | Out-Null } catch { }
+            $log = "$env:TEMP\hermes-scoop-$($pkg -replace '[^A-Za-z0-9]','_')-$(Get-Random).log"
+            try {
+                Invoke-OptionalPackageManager -Manager 'scoop' -Arguments @('install', $pkg) `
+                    -LogPath $log -TimeoutSec $packageTimeoutSec | Out-Null
+            } catch { }
         }
         Update-ProcessPathForPackages
         if ($needRipgrep -and (Get-Command rg -ErrorAction SilentlyContinue)) {
@@ -2859,6 +3071,53 @@ except Exception:
         throw "Failed to install hermes-agent package even with no extras. Inspect the uv pip install output above."
     }
 
+    # Windows x64 product trace path imports the native NeMo Relay module
+    # in-process. uv's marker evaluation has historically normalized
+    # Windows x64 as either AMD64 or x86_64 depending on the bundled uv
+    # build; the project dependency marker can therefore be skipped while
+    # `uv pip install -e .[all]` still exits successfully. Install the
+    # pinned wheel explicitly on the supported Windows target and verify
+    # the import below, so a green installer can never leave the backend
+    # in the unusable "Ansatz product requires the NeMo Relay runtime"
+    # state again.
+    $isWindowsX64 = $false
+    # Windows PowerShell 5.1 does not define the PowerShell 7 `$IsWindows`
+    # automatic variable.  The bootstrap child also runs with a deliberately
+    # reduced environment, so retain the stable Windows markers as a fallback
+    # instead of silently skipping the native Relay dependency.
+    $isWindows = [bool]($IsWindows -or $env:OS -eq "Windows_NT" -or $env:SystemRoot -or $env:WINDIR)
+    if ($isWindows) {
+        $isWindowsX64 = ($env:PROCESSOR_ARCHITECTURE -eq "AMD64" -or $env:PROCESSOR_ARCHITEW6432 -eq "AMD64")
+    }
+    if ($isWindowsX64 -and -not $NoVenv) {
+        $nemoSpec = "nemo-relay==0.7.1"
+        Write-Info "Ensuring Windows NeMo Relay runtime ($nemoSpec) ..."
+        $env:UV_PROJECT_ENVIRONMENT = "$InstallDir\venv"
+        # Keep the same mirror policy as the rest of the installer, but make
+        # the explicit repair resilient when the primary mirror has not yet
+        # mirrored this platform-specific wheel.  Do not silently fall back to
+        # an arbitrary index: both URLs are installer-owned constants above.
+        $nemoInstallExitCode = 1
+        foreach ($nemoIndex in @($script:PythonPrimaryMirror, $script:PythonSecondaryMirror)) {
+            Write-Info "Installing NeMo Relay from $nemoIndex ..."
+            $env:UV_INDEX = $nemoIndex
+            $env:UV_DEFAULT_INDEX = $nemoIndex
+            Invoke-NativeWithRelaxedErrorAction { & $UvCmd pip install --reinstall --index $nemoIndex $nemoSpec }
+            $nemoInstallExitCode = $LASTEXITCODE
+            if ($nemoInstallExitCode -eq 0) {
+                break
+            }
+            Write-Warn "NeMo Relay install failed from $nemoIndex (exit $nemoInstallExitCode); trying the configured fallback mirror..."
+        }
+        # Restore the primary mirror for subsequent optional/runtime installs.
+        $env:UV_INDEX = $script:PythonPrimaryMirror
+        $env:UV_DEFAULT_INDEX = $script:PythonPrimaryMirror
+        if ($nemoInstallExitCode -ne 0) {
+            throw "NeMo Relay runtime installation failed ($nemoSpec). Verify the configured Python mirror contains the win_amd64 wheel and rerun the installer."
+        }
+        Write-Success "NeMo Relay runtime installed"
+    }
+
     # Baseline-import gate. Even if a tier reported success above, the
     # actual deps may have landed somewhere other than $InstallDir\venv\
     # (e.g. uv 0.5+ syncing into a sibling .venv\ when UV_PROJECT_ENVIRONMENT
@@ -2879,7 +3138,11 @@ except Exception:
         # regardless of what was written to stderr).
         $prevEAP = $ErrorActionPreference
         $ErrorActionPreference = "Continue"
-        & $venvPython -c "import dotenv, openai, rich, prompt_toolkit" 2>&1 | Out-Null
+        $requiredImports = "import dotenv, openai, rich, prompt_toolkit"
+        if ($isWindowsX64) {
+            $requiredImports += "; import nemo_relay"
+        }
+        & $venvPython -c $requiredImports 2>&1 | Out-Null
         $importExitCode = $LASTEXITCODE
         $ErrorActionPreference = $prevEAP
         if ($importExitCode -ne 0) {
@@ -2889,7 +3152,8 @@ except Exception:
             } else {
                 "Recover with: cd '$InstallDir'; `$env:UV_PROJECT_ENVIRONMENT='$InstallDir\venv'; uv sync --extra all --locked"
             }
-            throw "Baseline imports failed in $InstallDir\venv (dotenv/openai/rich/prompt_toolkit). The install completed but dependencies are not in the venv. $hint"
+            $importLabel = if ($isWindowsX64) { "dotenv/openai/rich/prompt_toolkit/nemo_relay" } else { "dotenv/openai/rich/prompt_toolkit" }
+            throw "Baseline imports failed in $InstallDir\venv ($importLabel). The install completed but dependencies are not in the venv. $hint"
         }
         Write-Success "Baseline imports verified in venv"
     }
@@ -3352,7 +3616,7 @@ function Install-NodeDeps {
         Write-Info "Open a new PowerShell window and re-run 'hermes setup tools' later."
         return
     }
-    $npmExe = $npmCmd.Source
+    $npmExe = if ($npmCmd.Source) { $npmCmd.Source } elseif ($npmCmd.Definition) { $npmCmd.Definition } else { $npmCmd.Name }
     if ($npmExe -like "*.ps1") {
         $npmCmdSibling = Join-Path (Split-Path $npmExe -Parent) "npm.cmd"
         if (Test-Path $npmCmdSibling) {
@@ -3393,12 +3657,26 @@ function Install-NodeDeps {
     # swallow live output, and Stop-Job leaves the npm child running.
     # taskkill /T kills the real process tree.  Works on Windows PowerShell
     # 5.1 -- no pwsh-only primitives.
+    function _Resolve-ComSpec {
+        $candidate = $env:ComSpec
+        if (-not $candidate) {
+            $candidate = [Environment]::GetEnvironmentVariable('ComSpec')
+        }
+        if (-not $candidate -and $env:SystemRoot) {
+            $candidate = Join-Path $env:SystemRoot 'System32\cmd.exe'
+        }
+        if (-not $candidate) {
+            $candidate = 'cmd.exe'
+        }
+        return $candidate
+    }
+
     function _Invoke-NativeWithTimeout(
         [string]$exePath, [string]$argLine, [string]$workDir,
         [string]$logPath, [int]$timeoutSec
     ) {
         $cmdLine = "/d /s /c "" ""$exePath"" $argLine > ""$logPath"" 2>&1 """
-        $proc = Start-Process -FilePath $env:ComSpec -ArgumentList $cmdLine `
+        $proc = Start-Process -FilePath (_Resolve-ComSpec) -ArgumentList $cmdLine `
             -WorkingDirectory $workDir -NoNewWindow -PassThru
         $deadline = [DateTime]::UtcNow.AddSeconds($timeoutSec)
         $nextHeartbeat = [DateTime]::UtcNow.AddSeconds(30)

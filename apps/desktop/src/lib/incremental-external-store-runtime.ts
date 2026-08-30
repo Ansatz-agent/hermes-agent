@@ -33,7 +33,36 @@ const shallowEqual = (a: object, b: object): boolean => {
   return true
 }
 
-const getThreadListAdapter = (store: ExternalStoreAdapter) => store.adapters?.threadList ?? {}
+// Keep the fallback adapter referentially stable.  assistant-ui treats an
+// adapter identity change as a store update; allocating `{}` here on every
+// render can therefore publish a fresh snapshot even when the transcript did
+// not change and trip React's getSnapshot loop guard.
+const EMPTY_THREAD_LIST_ADAPTER = {}
+const getThreadListAdapter = (store: ExternalStoreAdapter) =>
+  store.adapters?.threadList ?? EMPTY_THREAD_LIST_ADAPTER
+
+type StatefulRuntime = { getState: () => object }
+
+function withStableState<T extends StatefulRuntime>(source: T): T {
+  let cachedState: object | undefined
+  const wrapped = Object.create(source) as T
+
+  Object.defineProperty(wrapped, 'getState', {
+    configurable: true,
+    value: () => {
+      const nextState = (source as { getState: () => object }).getState()
+
+      if (cachedState && shallowEqual(cachedState, nextState)) {
+        return cachedState
+      }
+
+      cachedState = nextState
+      return nextState
+    }
+  })
+
+  return wrapped
+}
 
 /**
  * Write only the items whose (message, parentId) pair actually moved.
@@ -261,5 +290,85 @@ export function useIncrementalExternalStoreRuntime<T extends ThreadMessage>(
     return runtime.registerModelContextProvider(modelContext)
   }, [modelContext, runtime])
 
-  return useMemo(() => new AssistantRuntimeImpl(runtime), [runtime])
+  const assistantRuntime = useMemo(() => new AssistantRuntimeImpl(runtime), [runtime])
+
+  // ThreadListRuntimeImpl intentionally uses a lazy snapshot subject. Before
+  // its subscription effect is connected, getState() may construct an equal
+  // object on each read. React/tap treats that as a changed external-store
+  // snapshot and can enter its maximum-update-depth guard while the workspace
+  // resources are committing. Add a stable identity boundary at the app edge;
+  // shallow comparison still lets real list changes through.
+  return useMemo(() => {
+    const sourceThreads = assistantRuntime.threads
+    const sourceThread = sourceThreads.main
+    const stableThreadState = withStableState(sourceThread)
+    const stableThreadsState = withStableState(sourceThreads)
+    const stableMainItem = withStableState(sourceThreads.mainItem)
+    const stableComposer = withStableState(sourceThread.composer)
+    const stableThread = Object.create(sourceThread) as typeof sourceThread
+    const messageCache = new Map<string, object>()
+
+    const stableMessage = (key: string, sourceMessage: object | undefined) => {
+      if (!sourceMessage) return sourceMessage
+
+      const previous = messageCache.get(key)
+      if (previous) {
+        return previous
+      }
+
+      const wrappedMessage = Object.create(sourceMessage) as typeof sourceMessage
+      const messageComposer = withStableState(
+        (sourceMessage as { composer: StatefulRuntime }).composer
+      )
+      const messageState = withStableState(sourceMessage as StatefulRuntime)
+
+      Object.defineProperties(wrappedMessage, {
+        composer: { configurable: true, value: messageComposer },
+        getState: { configurable: true, value: messageState.getState }
+      })
+      // ThreadRuntimeImpl creates a new MessageRuntime wrapper for every
+      // getMessageById/getMessageByIndex call. Its binding is still live, so
+      // cache by lookup key rather than by that transient wrapper identity.
+      messageCache.set(key, wrappedMessage)
+      return wrappedMessage
+    }
+
+    Object.defineProperties(stableThread, {
+      composer: { configurable: true, value: stableComposer },
+      getState: {
+        configurable: true,
+        value: stableThreadState.getState
+      },
+      getMessageById: {
+        configurable: true,
+        value: (messageId: string) => stableMessage(`id:${messageId}`, sourceThread.getMessageById(messageId))
+      },
+      getMessageByIndex: {
+        configurable: true,
+        value: (index: number) => stableMessage(`index:${index}`, sourceThread.getMessageByIndex(index))
+      }
+    })
+
+    const stableThreads = Object.create(sourceThreads) as typeof sourceThreads
+    Object.defineProperties(stableThreads, {
+      getState: {
+        configurable: true,
+        value: stableThreadsState.getState
+      },
+      main: { configurable: true, value: stableThread },
+      mainItem: { configurable: true, value: stableMainItem }
+    })
+
+    const stableRuntime = Object.create(assistantRuntime) as AssistantRuntime
+    Object.defineProperties(stableRuntime, {
+      threads: { configurable: true, value: stableThreads },
+      thread: { configurable: true, value: stableThread },
+      registerModelContextProvider: {
+        configurable: true,
+        value: assistantRuntime.registerModelContextProvider.bind(assistantRuntime)
+      }
+    })
+
+    return stableRuntime
+  }, [assistantRuntime])
 }

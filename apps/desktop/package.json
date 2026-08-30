@@ -213,6 +213,10 @@
       {
         "from": "assets/icon.ico",
         "to": "icon.ico"
+      },
+      {
+        "from": "assets/ansatz-install-marker.json",
+        "to": "ansatz-install-marker.json"
       }
     ],
     "asar": true,
@@ -327,6 +331,7 @@
       "perMachine": false,
       "shortcutName": "Ansatz",
       "uninstallDisplayName": "Ansatz",
+      "include": "installer/legacy-cleanup.nsh",
       "warningsAsErrors": false
     }
   }

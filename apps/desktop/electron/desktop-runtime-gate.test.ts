@@ -136,7 +136,8 @@ test('authenticated runtime coordination starts the backend only when a renderer
 test('main records real auth owner transitions and migrates them in the background after backend readiness is unblocked', () => {
   const source = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
 
-  assert.match(source, /traceMigrationSourceOwner\(status, desktopInstallationId\)/)
+  assert.match(source, /traceMigrationSourceOwner\(status, owner\.installationId\)/)
+  assert.match(source, /traceLocalOnlySourceOwner\(status, owner\.installationId\)/)
   assert.match(source, /const migrationBarrier =[\s\S]*?store\.migrateTrustedSource\(/)
   assert.match(source, /void migrationBarrier\.catch\(/)
   assert.match(source, /uploadBarrier: migrationBarrier === null \? undefined : \(\) => migrationBarrier/)

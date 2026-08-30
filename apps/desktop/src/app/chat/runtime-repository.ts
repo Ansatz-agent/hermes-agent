@@ -10,6 +10,18 @@ import { coalesceToolOnlyAssistants, createToolMergeCache, toRuntimeMessage } fr
 // already the final ThreadMessage the runtime consumes.
 const FALLBACK_STATUS = getAutoStatus(false, false, false, false, undefined)
 
+function sameMessageArrayByIdentity(a: readonly ChatMessage[], b: readonly ChatMessage[]): boolean {
+  if (a === b) {
+    return true
+  }
+
+  if (a.length !== b.length) {
+    return false
+  }
+
+  return a.every((message, index) => message === b[index])
+}
+
 /**
  * ChatMessage[] -> assistant-ui message repository, with a WeakMap identity
  * cache so unchanged messages convert once (and a tool-merge cache that folds
@@ -26,6 +38,23 @@ const FALLBACK_STATUS = getAutoStatus(false, false, false, false, undefined)
 export function useRuntimeMessageRepository(messages: ChatMessage[]): ExportedMessageRepository {
   const cacheRef = useRef(new WeakMap<ChatMessage, ThreadMessage>())
   const toolMergeCacheRef = useRef(createToolMergeCache())
+  const previousMessagesRef = useRef<ChatMessage[] | null>(null)
+
+  // Nanostores and transcript-windowing can hand us a new array wrapper even
+  // when every message object is unchanged.  Reuse the previous wrapper in
+  // that case so the repository (and assistant-ui adapter) keeps its identity.
+  // Streaming still advances normally because the changed tail has a new
+  // message object or the array length changes.
+  const stableMessages = useMemo(() => {
+    const previous = previousMessagesRef.current
+
+    if (previous && sameMessageArrayByIdentity(previous, messages)) {
+      return previous
+    }
+
+    previousMessagesRef.current = messages
+    return messages
+  }, [messages])
 
   return useMemo(() => {
     const items: { message: ThreadMessage; parentId: string | null }[] = []
@@ -34,7 +63,7 @@ export function useRuntimeMessageRepository(messages: ChatMessage[]): ExportedMe
     let visibleParentId: string | null = null
     let headId: string | null = null
 
-    for (const message of coalesceToolOnlyAssistants(messages, toolMergeCacheRef.current)) {
+    for (const message of coalesceToolOnlyAssistants(stableMessages, toolMergeCacheRef.current)) {
       // A repeated id is a transcript bug upstream, but it must not reach the
       // repository: MessageRepository throws on the second link ("A message
       // with the same id already exists in the parent tree") and takes the
@@ -74,5 +103,5 @@ export function useRuntimeMessageRepository(messages: ChatMessage[]): ExportedMe
     }
 
     return { headId, messages: items }
-  }, [messages])
+  }, [stableMessages])
 }

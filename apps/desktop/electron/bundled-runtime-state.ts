@@ -22,7 +22,9 @@ export function resolveBundledBootstrapRoot({
   platform: NodeJS.Platform
   resourcesPath: string
 }): string | null {
-  return packaged && platform === 'darwin' ? path.join(resourcesPath, 'bootstrap') : null
+  const supportsBundledBootstrap = platform === 'darwin' || platform === 'win32'
+
+  return packaged && supportsBundledBootstrap ? path.join(resourcesPath, 'bootstrap') : null
 }
 
 function isRealCommit(value: string | null | undefined): value is string {

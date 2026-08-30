@@ -46,6 +46,7 @@ import {
   type TraceCredential
 } from './auth-bridge'
 import { AuthCoordinator } from './auth-coordinator'
+import { resolveNoConsoleAuthPython } from './auth-python'
 import { isAuthRuntimeUsable } from './auth-runtime-contract'
 import {
   encodeTraceTransportRegistration,
@@ -64,6 +65,11 @@ import {
   createBackendShutdownCoordinator,
   resumeQuitAfterShutdown
 } from './backend-ownership'
+import {
+  backendExitedBeforeOwnershipError,
+  isProcessGoneError,
+  windowsProcessStartMarkerCommand
+} from './process-identity'
 import {
   canImportHermesCli,
   execProbeSync,
@@ -312,11 +318,12 @@ import {
   type TraceDurabilitySession,
   TraceDurabilityStartupError
 } from './trace-durability-runtime'
-import { RefreshingTraceCredentialProvider, TraceForwarder } from './trace-forwarder'
+import { RefreshingTraceCredentialProvider, TraceForwarder, type TraceUploadEvent } from './trace-forwarder'
 import { TraceIngressFacade } from './trace-ingress-facade'
 import {
   migratePreviousLegacyTraceNamespace,
   previousLegacyTraceAccountKey,
+  traceLocalOnlySourceOwner,
   traceMigrationSourceOwner,
   traceOwnerFromScope
 } from './trace-legacy-owner'
@@ -747,9 +754,11 @@ const desktopLocalCapabilities = new LocalBackendCapabilityLifecycle(
 )
 
 async function writeBackendTraceTransport(child, root) {
+  const trace = desktopTraceRuntime.current()
+
   if (
     !desktopTraceFacadeReady ||
-    !desktopTraceRuntime.current() ||
+    !trace ||
     !desktopTraceIngress ||
     !child?.stdin ||
     child.stdin.destroyed ||
@@ -761,7 +770,7 @@ async function writeBackendTraceTransport(child, root) {
   try {
     const frame = encodeTraceTransportRegistration({
       endpoint: desktopTraceIngress.endpoint,
-      installationId: desktopInstallationId,
+      installationId: trace.owner.installationId,
       localBearer: desktopTraceIngress.localBearer,
       pluginsToml: path.join(root, 'config', 'ansatz-voice-trace', 'plugins.toml')
     })
@@ -796,11 +805,14 @@ function createDesktopAuthBridge() {
       requireLauncher: false
     })
 
-  const pythonExecutable = packagedWindowsAuthReady
-    ? path.join(AUTH_VENV_ROOT, 'python.exe')
-    : candidate?.kind === 'python' && candidate.command
-      ? candidate.command
-      : getVenvPython(VENV_ROOT)
+  const pythonExecutable = resolveNoConsoleAuthPython(
+    packagedWindowsAuthReady
+      ? path.join(AUTH_VENV_ROOT, 'python.exe')
+      : candidate?.kind === 'python' && candidate.command
+        ? candidate.command
+        : getVenvPython(VENV_ROOT),
+    IS_WINDOWS
+  )
 
   const candidateRoot =
     candidate && 'root' in candidate && candidate.root && directoryExists(candidate.root) ? candidate.root : null
@@ -3375,7 +3387,7 @@ async function processStartMarker(pid) {
       '-NoProfile',
       '-NonInteractive',
       '-Command',
-      `$p = Get-Process -Id ${pid} -ErrorAction Stop; $p.StartTime.ToUniversalTime().Ticks`
+      windowsProcessStartMarkerCommand(pid)
     ])
 
     if (!/^\d+$/.test(ticks)) {
@@ -3417,7 +3429,7 @@ async function processIdentityMatches(identity) {
   try {
     return (await processStartMarker(identity.pid)) === identity.startMarker
   } catch (error) {
-    return error?.code === 'ENOENT' || error?.code === 'ESRCH' ? false : undefined
+    return isProcessGoneError(error) ? false : undefined
   }
 }
 
@@ -3519,6 +3531,11 @@ async function claimBackendChild(child, command, profile, nonce) {
   } catch (error) {
     stopBackendChild(child)
     await waitForBackendExit(child)
+
+    if (isProcessGoneError(error)) {
+      throw backendExitedBeforeOwnershipError(child?.pid, error)
+    }
+
     throw new Error(`Could not persist ownership for the Hermes backend: ${error.message}`)
   }
 }
@@ -4641,6 +4658,7 @@ function createActiveBackend(backendArgs) {
 
 function resolveHermesBackend(backendArgs, options: any = {}) {
   const probeEnv = buildDesktopBackendEnv({ hermesHome: HERMES_HOME })
+  const skipBundledRefresh = options.skipBundledRefresh === true
 
   // 1. Explicit override -- HERMES_DESKTOP_HERMES_ROOT points at a developer
   //    checkout. Honour it as-is (no bootstrap; the user is driving).
@@ -4677,7 +4695,7 @@ function resolveHermesBackend(backendArgs, options: any = {}) {
   const activeRuntime = activeRuntimeState()
   const bundledRuntimeDecision = classifyPackagedBundledRuntime(activeRuntime.shouldUseActiveRuntime)
 
-  if (bundledRuntimeDecision === 'refresh' && !bootstrapRepairRequested) {
+  if (bundledRuntimeDecision === 'refresh' && !bootstrapRepairRequested && !skipBundledRefresh) {
     rememberLog(
       '[bootstrap] Packaged backend commit differs from the active desktop-bundle runtime; starting local payload refresh.'
     )
@@ -4951,6 +4969,25 @@ async function ensureRuntime(backend, { scope = 'runtime' }: any = {}) {
     })
 
     bootstrapAbortController = null
+
+    // Windows cannot rename a managed runtime tree while the previous
+    // build's Python backend still has an executable mapped from it. Keep the
+    // already-usable runtime online and defer the bundled payload refresh to
+    // a later launch, after normal backend teardown has released the handle.
+    if (
+      bootstrapResult.deferred === true &&
+      backend.reason === 'bundled-refresh' &&
+      IS_WINDOWS &&
+      activeRuntimeState().shouldUseActiveRuntime
+    ) {
+      rememberLog(
+        '[bootstrap] bundled source refresh deferred because the active Windows runtime is locked; continuing with the existing runtime.'
+      )
+      bootstrapFailure = null
+      broadcastBootstrapEvent({ type: 'dismissed' })
+
+      return ensureRuntime(resolveHermesBackend(backend.args, { skipBundledRefresh: true }), { scope })
+    }
 
     if (bootstrapResult.cancelled) {
       const cancelledError = new Error('Ansatz install was cancelled.') as any
@@ -8898,16 +8935,48 @@ const desktopTraceBackends = new TraceBackendRegistry<any>()
 const desktopTraceRuntime = new TraceDurabilityRuntime(event => rememberLog(`[trace] ${JSON.stringify(event)}`))
 
 function traceContextForBackendRoot(root) {
-  if (!desktopTraceFacadeReady || !desktopTraceRuntime.current() || !desktopTraceIngress) {
+  const trace = desktopTraceRuntime.current()
+
+  if (!desktopTraceFacadeReady || !trace || !desktopTraceIngress || !root) {
     return null
   }
 
   return {
     endpoint: desktopTraceIngress.endpoint,
-    installationId: desktopInstallationId,
+    installationId: trace.owner.installationId,
     localAuthorization: `Bearer ${desktopTraceIngress.localBearer}`,
     pluginsToml: path.join(root, 'config', 'ansatz-voice-trace', 'plugins.toml')
   }
+}
+
+// The backend resolver can run before TraceDurabilityRuntime finishes
+// activating the current owner. Refresh the child environment immediately
+// before spawn so Relay never starts with a stale/placeholder endpoint or
+// installation identity; the stdin registration below remains the rotation
+// path for already-running children.
+function applyDesktopTraceEnvironment(environment, root) {
+  const result = { ...environment }
+  const trace = traceContextForBackendRoot(root)
+
+  for (const key of [
+    'HERMES_NEMO_RELAY_PLUGINS_TOML',
+    'ANSATZ_TRACE_LOCAL_ENDPOINT',
+    'ANSATZ_TRACE_LOCAL_AUTHORIZATION',
+    'ANSATZ_TRACE_INSTALLATION_ID',
+    'ANSATZ_TRACE_ENTRYPOINT'
+  ]) {
+    delete result[key]
+  }
+
+  if (trace) {
+    result.HERMES_NEMO_RELAY_PLUGINS_TOML = trace.pluginsToml
+    result.ANSATZ_TRACE_LOCAL_ENDPOINT = trace.endpoint
+    result.ANSATZ_TRACE_LOCAL_AUTHORIZATION = trace.localAuthorization
+    result.ANSATZ_TRACE_INSTALLATION_ID = trace.installationId
+    result.ANSATZ_TRACE_ENTRYPOINT = 'desktop'
+  }
+
+  return result
 }
 
 async function attachDesktopTraceTransportToRunningBackends() {
@@ -9056,7 +9125,7 @@ async function loadCurrentDesktopTraceCredential(
   }
 
   const credential = await bridge.traceToken({
-    installation_id: desktopInstallationId,
+    installation_id: expectedOwner.installationId,
     client_version: app.getVersion(),
     telemetry_schema_version: '1'
   })
@@ -9134,7 +9203,10 @@ async function createDesktopTraceSession(
 
   const observedStore = traceDiagnostics.observeStore(store)
 
-  const sourceOwner = ownerValidation.uploadable ? traceMigrationSourceOwner(status, desktopInstallationId) : null
+  const sourceOwner = ownerValidation.uploadable
+    ? traceMigrationSourceOwner(status, owner.installationId) ??
+      traceLocalOnlySourceOwner(status, owner.installationId)
+    : null
 
   const migrationBarrier =
     sourceOwner === null
@@ -9167,7 +9239,7 @@ async function createDesktopTraceSession(
   credentialSource.bind(owner, async () => loadCurrentDesktopTraceCredential(owner, scope))
 
   const provider = new RefreshingTraceCredentialProvider(credentialSource, {
-    installationId: desktopInstallationId
+    installationId: owner.installationId
   })
 
   let lifecycle: TraceRecoveryLifecycle | undefined
@@ -9190,7 +9262,17 @@ async function createDesktopTraceSession(
 
   const forwarder = new TraceForwarder({
     credentialProvider: provider,
-    installationId: desktopInstallationId,
+    installationId: owner.installationId,
+    onUploadEvent: (event: TraceUploadEvent) => {
+      if (event.kind === 'success') {
+        rememberLog(`[trace] upload success outcome=${event.outcome} status=${event.status}`)
+      } else {
+        rememberLog(
+          `[trace] upload failure status=${event.status === null ? 'network' : event.status}; ` +
+            'durable retry/quarantine policy applied'
+        )
+      }
+    },
     onTerminalRevocation: revocation => {
       const coordinator = desktopAuthCoordinator
 
@@ -10691,7 +10773,10 @@ async function spawnPoolBackend(profile, entry) {
     hiddenWindowsChildOptions({
       cwd: hermesCwd,
       env: {
-        ...sanitizeAnsatzAuthChildEnvironment({ ...process.env, ...backend.env }, HERMES_HOME),
+        ...sanitizeAnsatzAuthChildEnvironment(
+          applyDesktopTraceEnvironment({ ...process.env, ...backend.env }, backend.root),
+          HERMES_HOME
+        ),
         // Pin the gateway's tool/terminal cwd to the same directory we chose for
         // the child process. Inherited TERMINAL_CWD (or a stale config bridge)
         // can still point at the install dir even when spawn cwd is home.
@@ -10707,7 +10792,10 @@ async function spawnPoolBackend(profile, entry) {
         HERMES_WEB_DIST: webDist,
         ...(readyFile ? { HERMES_DESKTOP_READY_FILE: readyFile } : {})
       },
-      shell: backend.shell,
+      // A shell-backed Windows launch creates a visible cmd.exe whose lifetime
+      // controls the backend. Spawn the real executable directly so closing a
+      // console cannot tear down the authenticated session.
+      shell: IS_WINDOWS ? false : backend.shell,
       stdio: ['pipe', 'pipe', 'pipe']
     })
   )
@@ -10725,6 +10813,10 @@ async function spawnPoolBackend(profile, entry) {
   void capabilityPreparation.catch(() => undefined)
 
   entry.process = child
+  // Capture import/interpreter failures before the ownership probe; a fast
+  // child exit otherwise loses the useful stderr and looks like a PID race.
+  child.stdout.on('data', rememberLog)
+  child.stderr.on('data', rememberLog)
   await claimBackendChild(child, `${backend.command} ${backend.args.join(' ')}`, profile, backendNonce)
   const traceBackendGeneration = backendNonce
 
@@ -10735,8 +10827,6 @@ async function spawnPoolBackend(profile, entry) {
       scheduleDesktopTraceTransportAttachRetry()
     })
   }
-
-  child.stderr.on('data', rememberLog)
 
   let ready = false
   let rejectStart = null
@@ -11043,7 +11133,10 @@ async function startHermes() {
       hiddenWindowsChildOptions({
         cwd: hermesCwd,
         env: {
-          ...sanitizeAnsatzAuthChildEnvironment({ ...process.env, ...backend.env }, HERMES_HOME),
+          ...sanitizeAnsatzAuthChildEnvironment(
+            applyDesktopTraceEnvironment({ ...process.env, ...backend.env }, backend.root),
+            HERMES_HOME
+          ),
           // Explicitly pin HERMES_HOME for the child so Python's get_hermes_home()
           // resolves to the SAME location our resolveHermesHome() picked. Without
           // this pin, Python falls back to ~/.hermes on every platform — fine on
@@ -11064,7 +11157,9 @@ async function startHermes() {
           HERMES_WEB_DIST: webDist,
           ...(readyFile ? { HERMES_DESKTOP_READY_FILE: readyFile } : {})
         },
-        shell: backend.shell,
+        // The backend is a real executable on Windows; avoid a shell-backed
+        // cmd.exe whose visible lifetime can kill the authenticated session.
+        shell: IS_WINDOWS ? false : backend.shell,
         stdio: ['pipe', 'pipe', 'pipe']
       })
     )
@@ -11081,6 +11176,10 @@ async function startHermes() {
 
     void capabilityPreparation.catch(() => undefined)
 
+    // Keep early startup diagnostics: import/interpreter failures can happen
+    // before the ownership marker is persisted.
+    hermesProcess.stdout.on('data', rememberLog)
+    hermesProcess.stderr.on('data', rememberLog)
     await claimBackendChild(hermesProcess, `${backend.command} ${backend.args.join(' ')}`, profile, backendNonce)
 
     const processOwner = backendConnectionState.attachProcess(connectionAttempt, hermesProcess)
@@ -11102,7 +11201,6 @@ async function startHermes() {
       })
     }
 
-    hermesProcess.stderr.on('data', rememberLog)
     let backendReady = false
     let rejectBackendStart = null
 

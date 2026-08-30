@@ -91,11 +91,13 @@ function fallbackTimeoutGateway(): OnboardingContext['requestGateway'] {
 describe('refreshOnboarding', () => {
   beforeEach(() => {
     window.localStorage.clear()
+    notifications.clearNotifications()
     $desktopOnboarding.set(baseState())
   })
 
   afterEach(() => {
     window.localStorage.clear()
+    notifications.clearNotifications()
     $desktopOnboarding.set(baseState())
     vi.restoreAllMocks()
   })
@@ -194,6 +196,27 @@ describe('refreshOnboarding', () => {
       })
     )
     expect($desktopOnboarding.get().configured).toBe(true)
+  })
+
+  it('dismisses the fallback notification after an authoritative runtime recovery', async () => {
+    installApiMock(vi.fn())
+    $desktopOnboarding.set(
+      baseState({
+        configured: true,
+        providers: [provider('cached')],
+        reason: null,
+        requested: false
+      })
+    )
+
+    await refreshOnboarding(onboardingContext(fallbackTimeoutGateway()))
+
+    expect(notifications.$notifications.get().map(notification => notification.id)).toContain('runtime-not-ready')
+
+    const ready = await refreshOnboarding(onboardingContext(keylessCustomGateway()))
+
+    expect(ready).toBe(true)
+    expect(notifications.$notifications.get().map(notification => notification.id)).not.toContain('runtime-not-ready')
   })
 
   it('enters setup when the selected OpenRouter credential is genuinely empty', async () => {

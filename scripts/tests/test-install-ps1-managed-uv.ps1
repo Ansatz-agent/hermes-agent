@@ -19,6 +19,9 @@ $installUv = $installer.Substring($start, $end - $start)
 
 $required = @(
     '$managedUv = Join-Path $HermesHome "bin\uv.exe"',
+    '$BundledToolchain',
+    '$bundledUv = Join-Path $BundledToolchain "uv.exe"',
+    'Managed uv adopted from the bundled toolchain',
     "Get-Command uv -CommandType Application",
     "Managed uv adopted from the local installation",
     "A verified uv payload is unavailable"

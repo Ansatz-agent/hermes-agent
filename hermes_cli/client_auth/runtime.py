@@ -5,6 +5,7 @@ import errno
 import hashlib
 import json
 import math
+import ntpath
 import os
 import re
 import secrets
@@ -1291,14 +1292,19 @@ class WindowsNamedPipeEndpoint:
         cls,
         *,
         first_instance: bool,
+        runtime_namespace: str | None = None,
     ) -> WindowsNamedPipeEndpoint:
         if os.name != "nt" or not first_instance:
             raise AuthRequired("runtime_unavailable")
         owner_sid = _windows_current_sid()
+        # Named pipes are global to the user's SID. Include the product/auth
+        # namespace so an updated detached owner cannot be mistaken for a
+        # previous wire-contract owner that may still be running.
+        namespace_suffix = _auth_runtime_namespace_suffix(runtime_namespace)
         compact_sid = hashlib.blake2s(
             owner_sid.encode("ascii"),
             digest_size=16,
-        ).hexdigest() + _test_runtime_suffix()
+        ).hexdigest() + namespace_suffix + _test_runtime_suffix()
         return cls(
             pipe_name=rf"\\.\pipe\hermes-auth-{compact_sid}",
             owner_sid=owner_sid,
@@ -2250,24 +2256,29 @@ class _OwnerCore:
         client_version: str,
         telemetry_schema_version: str,
     ) -> TraceCredential:
-        record = self._load_record()
-        with self._lock:
-            if (
-                record is None
-                or self._record is not record
-                or self._snapshot.state is not AuthState.AUTHENTICATED
-            ):
-                raise AuthRequired("signed_out")
-            if self._snapshot.cloud_state is not CloudState.ACTIVE:
-                fallback = (
-                    "session_expired"
-                    if self._snapshot.cloud_state is CloudState.REAUTH_REQUIRED
-                    else "server_unavailable"
-                )
-                raise AuthRequired(self._snapshot.validation_reason or fallback)
-            self._last_authenticated_activity = self._clock()
-        try:
-            with self._refresh_lock:
+        # Keep record loading and the credential request in the same refresh
+        # generation.  Validation replaces NativeCredentialRecord instances;
+        # loading before acquiring this lock creates a race where a valid
+        # trace request observes the old object and fails the identity check.
+        with self._refresh_lock:
+            record = self._load_record()
+            with self._lock:
+                if (
+                    record is None
+                    or self._record is not record
+                    or self._snapshot.state is not AuthState.AUTHENTICATED
+                ):
+                    raise AuthRequired("signed_out")
+                if self._snapshot.cloud_state is not CloudState.ACTIVE:
+                    fallback = (
+                        "session_expired"
+                        if self._snapshot.cloud_state is CloudState.REAUTH_REQUIRED
+                        else "server_unavailable"
+                    )
+                    raise AuthRequired(self._snapshot.validation_reason or fallback)
+                self._last_authenticated_activity = self._clock()
+
+            try:
                 with self._lock:
                     current_record = self._record
                     if (
@@ -2308,26 +2319,26 @@ class _OwnerCore:
                     )
                 else:
                     raise AuthRequired("signed_out")
-        except AuthServiceError as error:
-            if isinstance(error, SessionRejected):
-                with self._lock:
-                    if self._record is record:
-                        tombstone = SignedOutTombstone(error.reason)
-                        self._persist_signed_out_tombstone_locked(tombstone)
-                        self._record = tombstone
-                        self._record_loaded = True
-                        self._publish_locked(
-                            self._snapshot.locked(error.reason, now=self._clock())
-                        )
-                        self._next_refresh_at = None
-            raise AuthRequired(error.reason) from None
-        with self._lock:
-            if (
-                self._record is not record
-                or self._snapshot.state is not AuthState.AUTHENTICATED
-            ):
-                raise AuthRequired("signed_out")
-        return credential
+            except AuthServiceError as error:
+                if isinstance(error, SessionRejected):
+                    with self._lock:
+                        if self._record is record:
+                            tombstone = SignedOutTombstone(error.reason)
+                            self._persist_signed_out_tombstone_locked(tombstone)
+                            self._record = tombstone
+                            self._record_loaded = True
+                            self._publish_locked(
+                                self._snapshot.locked(error.reason, now=self._clock())
+                            )
+                            self._next_refresh_at = None
+                raise AuthRequired(error.reason) from None
+            with self._lock:
+                if (
+                    self._record is not record
+                    or self._snapshot.state is not AuthState.AUTHENTICATED
+                ):
+                    raise AuthRequired("signed_out")
+            return credential
 
     def _refresh_once(self) -> RuntimeSnapshot:
         record = self._load_record()
@@ -3640,6 +3651,7 @@ def start_runtime_owner(
     if time.monotonic() >= deadline:
         raise AuthRequired("runtime_unavailable")
     environment = _owner_process_environment()
+    owner_executable = _runtime_owner_executable(sys.executable)
     kwargs: dict[str, object] = {
         "stdin": subprocess.DEVNULL,
         "stdout": subprocess.DEVNULL,
@@ -3657,7 +3669,7 @@ def start_runtime_owner(
     try:
         subprocess.Popen(
             [
-                sys.executable,
+                owner_executable,
                 "-m",
                 "hermes_cli.client_auth.runtime",
                 "owner",
@@ -3679,6 +3691,32 @@ def start_runtime_owner(
         except AuthRequired:
             time.sleep(min(0.05, max(0.0, deadline - time.monotonic())))
     raise AuthRequired("runtime_unavailable")
+
+
+def _runtime_owner_executable(
+    executable: str,
+    *,
+    is_windows: bool | None = None,
+    is_file: Callable[[str], bool] = os.path.isfile,
+) -> str:
+    """Use the GUI Python sibling for the detached Windows auth owner.
+
+    A Windows venv ``python.exe`` is a launcher shim.  Even with
+    ``DETACHED_PROCESS`` the shim can re-exec a console interpreter and leave
+    a visible cmd window behind.  The auth owner has no terminal UI, so the
+    sibling ``pythonw.exe`` keeps the broker detached without a console.
+    """
+
+    windows = os.name == "nt" if is_windows is None else is_windows
+    if not windows:
+        return executable
+
+    name = ntpath.basename(executable).casefold()
+    if name == "pythonw.exe" or name != "python.exe":
+        return executable
+
+    candidate = ntpath.join(ntpath.dirname(executable), "pythonw.exe")
+    return candidate if is_file(candidate) else executable
 
 
 def _owner_process_environment() -> dict[str, str]:
@@ -4410,7 +4448,10 @@ def resolve_owner(
 
 def runtime_endpoint() -> UnixEndpoint | WindowsNamedPipeEndpoint:
     if os.name == "nt":
-        return WindowsNamedPipeEndpoint.for_current_sid(first_instance=True)
+        return WindowsNamedPipeEndpoint.for_current_sid(
+            first_instance=True,
+            runtime_namespace=_auth_runtime_namespace(),
+        )
     runtime_namespace = _auth_runtime_namespace()
     return UnixEndpoint.for_current_user(
         random_name=secrets.token_hex(16),

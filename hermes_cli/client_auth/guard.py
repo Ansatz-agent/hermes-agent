@@ -48,7 +48,10 @@ def enforce_raw_argv(argv: Sequence[str]) -> None:
     decision = classify_raw_argv(argv)
     if decision.auth_free:
         return
-    from hermes_cli.client_auth.runtime import AuthRequired, authorize_entrypoint
+    from hermes_cli.client_auth.runtime import AuthRequired, authorize_entrypoint, external_auth_enabled
+
+    if external_auth_enabled():
+        return
 
     try:
         authorize_entrypoint("cli.start", interactive=decision.interactive)
@@ -62,7 +65,11 @@ def enforce_direct_entrypoint(boundary: str) -> None:
         AUTH_EXIT_CODE,
         AuthRequired,
         authorize_entrypoint,
+        external_auth_enabled,
     )
+
+    if external_auth_enabled():
+        return
 
     try:
         authorize_entrypoint(boundary, interactive=False)

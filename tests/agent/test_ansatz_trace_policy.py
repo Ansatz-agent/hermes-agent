@@ -48,6 +48,28 @@ def test_product_trace_requires_hash_verified_marker_and_loopback_forwarder(
     )
     assert not ansatz_product_trace_enabled()
 
+    _product_env(
+        monkeypatch,
+        ANSATZ_TRACE_LOCAL_ENDPOINT="http://127.0.0.1:1/v1/traces",
+    )
+    assert not ansatz_product_trace_enabled()
+
+
+def test_sealed_product_config_cannot_fall_back_to_placeholder_export(monkeypatch):
+    from agent.ansatz_trace_policy import ansatz_product_trace_enabled, ansatz_product_trace_requested
+
+    for name in (
+        "ANSATZ_TRACE_LOCAL_ENDPOINT",
+        "ANSATZ_TRACE_LOCAL_AUTHORIZATION",
+        "ANSATZ_TRACE_INSTALLATION_ID",
+        "ANSATZ_TRACE_ENTRYPOINT",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("HERMES_NEMO_RELAY_PLUGINS_TOML", str(PRODUCT_CONFIG))
+
+    assert ansatz_product_trace_requested()
+    assert not ansatz_product_trace_enabled()
+
 
 def test_main_control_can_register_product_transport_after_backend_start(monkeypatch):
     from agent import ansatz_trace_policy

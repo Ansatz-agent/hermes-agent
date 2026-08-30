@@ -52,6 +52,18 @@ describe('useRuntimeMessageRepository', () => {
     expect(feedToRepository(result.current).map(item => item.id)).toEqual(['user-1', 'assistant-stream-1', 'user-2'])
   })
 
+  it('keeps the repository identity when only the array wrapper changes', () => {
+    const first = [text('user-1', 'user', 'hi'), text('assistant-1', 'assistant', 'hello')]
+    const { result, rerender } = renderHook(({ messages }) => useRuntimeMessageRepository(messages), {
+      initialProps: { messages: first }
+    })
+    const repository = result.current
+
+    rerender({ messages: [...first] })
+
+    expect(result.current).toBe(repository)
+  })
+
   it('anchors a branch group to its fork point, and a windowed cut keeps it', () => {
     // Branch groups record their fork parent the first time they are seen. A
     // window that started mid-group would anchor the survivors to whatever
