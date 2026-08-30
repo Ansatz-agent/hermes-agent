@@ -31,12 +31,13 @@ class PackagingHermesWindowsInstallerSkillTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.skill_text = SKILL_MD.read_text(encoding="utf-8") if SKILL_MD.exists() else ""
 
-    def test_skill_declares_macos_packaging_capability(self) -> None:
+    def test_skill_declares_host_agnostic_windows_setup_capability(self) -> None:
         self.assertTrue(SKILL_MD.exists(), f"missing skill: {SKILL_MD}")
         text = self.skill_text
         self.assertTrue(text.startswith("---\n"))
         self.assertRegex(text, r"(?m)^name: packaging-hermes-windows-installer$")
-        self.assertRegex(text, r"(?m)^platforms: \[macos\]$")
+        self.assertRegex(text, r"(?m)^platforms: \[linux, macos, windows\]$")
+        self.assertIn("Windows Setup installer", text)
 
         description_match = re.search(r"(?m)^description: (.+)$", text)
         self.assertIsNotNone(description_match)
@@ -54,7 +55,7 @@ class PackagingHermesWindowsInstallerSkillTests(unittest.TestCase):
             "isolated worktree",
             "git status --short",
             "git rev-parse HEAD",
-            "expected 40-character commit",
+            "full 40-character commit",
         ):
             self.assertIn(contract, self.skill_text)
 
@@ -68,17 +69,37 @@ class PackagingHermesWindowsInstallerSkillTests(unittest.TestCase):
             "payload-manifest.json",
             "git-bash-runtime.tar.xz",
             "hermes-backend.tar.gz",
+            "get-windows-win32-x64.tar.gz",
+            "auth-toolchain/uv.exe",
+            "auth-toolchain/python-embed.zip",
         ):
             self.assertIn(contract, self.skill_text)
 
-    def test_skill_documents_the_verified_macos_cross_build_route(self) -> None:
+    def test_skill_documents_host_agnostic_build_route(self) -> None:
         for contract in (
-            "@mapbox/node-pre-gyp/bin/node-pre-gyp",
+            "npm run prepare:package:win --workspace apps/desktop",
+            "npm run build:setup:windows",
+            "Windows VM",
+            "host-appropriate invocation",
+            "fixed host-specific",
+        ):
+            self.assertIn(contract, self.skill_text)
+        for host_specific_instruction in (
             "--target_platform=win32",
-            "napi-9-win32-unknown-x64",
-            "npm run build --workspace apps/desktop",
+            "node-pre-gyp install",
             "node_modules/electron-builder/out/cli/cli.js",
-            "--win nsis --x64 --publish never",
+        ):
+            self.assertNotIn(host_specific_instruction, self.skill_text)
+
+    def test_skill_documents_bundled_source_and_first_run_lifecycle(self) -> None:
+        for contract in (
+            "hermes-backend.tar.gz",
+            "payload-manifest.json",
+            "BundledSource",
+            "first-run Desktop stage",
+            "without fetching the source from GitHub",
+            "app.asar",
+            "Ansatz.exe",
         ):
             self.assertIn(contract, self.skill_text)
 
@@ -88,9 +109,9 @@ class PackagingHermesWindowsInstallerSkillTests(unittest.TestCase):
             "test:desktop:windows-contract",
             "windows-auth-toolchain.integration.test.mjs",
             "typecheck --workspace apps/desktop",
-            "bsdtar -tf",
-            "shasum -a 256",
-            "unsigned",
+            "archive",
+            "SHA-256",
+            "Unsigned output",
             "Windows-native",
         ):
             self.assertIn(contract, self.skill_text)

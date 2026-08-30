@@ -1,15 +1,33 @@
 ---
-name: packaging-hermes-windows-installer
-description: Build and verify Windows Setup installers from any host.
-version: 0.2.0
-author: yuxiaoy, Hermes Agent
-license: MIT
-platforms: [linux, macos, windows]
-metadata:
-  hermes:
-    tags: [desktop, packaging, windows, nsis, release-engineering]
-    related_skills: [hermes-agent-skill-authoring, systematic-debugging]
+title: "Packaging Hermes Windows Installer — Build and verify Windows Setup installers from any host"
+sidebar_label: "Packaging Hermes Windows Installer"
+description: "Build and verify Windows Setup installers from any host"
 ---
+
+{/* This page is auto-generated from the skill's SKILL.md by website/scripts/generate-skill-docs.py. Edit the source SKILL.md, not this page. */}
+
+# Packaging Hermes Windows Installer
+
+Build and verify Windows Setup installers from any host.
+
+## Skill metadata
+
+| | |
+|---|---|
+| Source | Bundled (installed by default) |
+| Path | `skills/software-development/packaging-hermes-windows-installer` |
+| Version | `0.2.0` |
+| Author | yuxiaoy, Hermes Agent |
+| License | MIT |
+| Platforms | linux, macos, windows |
+| Tags | `desktop`, `packaging`, `windows`, `nsis`, `release-engineering` |
+| Related skills | [`hermes-agent-skill-authoring`](/docs/user-guide/skills/bundled/software-development/software-development-hermes-agent-skill-authoring), [`systematic-debugging`](/docs/user-guide/skills/bundled/software-development/software-development-systematic-debugging) |
+
+## Reference: full SKILL.md
+
+:::info
+The following is the complete skill definition that Hermes loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
+:::
 
 # Packaging Hermes Windows Installer Skill
 
