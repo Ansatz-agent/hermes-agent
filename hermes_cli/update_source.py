@@ -51,6 +51,7 @@ _REQUIRED_SOURCE_FILES = (
     "uv.lock",
     "hermes_cli/main.py",
     "scripts/install.ps1",
+    "scripts/install.sh",
     "apps/desktop/package.json",
     "desktop_auth_runtime/uv.lock",
 )
@@ -411,8 +412,10 @@ def stage_desktop_payload_inputs(
             existing_manifest = candidate
     except (OSError, json.JSONDecodeError):
         pass
+    installer_name = "install.ps1" if os.name == "nt" else "install.sh"
+    installer_path = bootstrap / installer_name
     shutil.copy2(archive_path, bootstrap / "hermes-backend.tar.gz")
-    shutil.copy2(extracted_root / "scripts" / "install.ps1", bootstrap / "install.ps1")
+    shutil.copy2(extracted_root / "scripts" / installer_name, installer_path)
     manifest = {
         "schemaVersion": 1,
         "commit": release.commit,
@@ -424,13 +427,14 @@ def stage_desktop_payload_inputs(
             "sha256": release.archive.sha256,
         },
         "installer": {
-            "file": "install.ps1",
-            "size": (bootstrap / "install.ps1").stat().st_size,
-            "sha256": hashlib.sha256((bootstrap / "install.ps1").read_bytes()).hexdigest(),
+            "file": installer_name,
+            "size": installer_path.stat().st_size,
+            "sha256": hashlib.sha256(installer_path.read_bytes()).hexdigest(),
         },
         **(
             {"gitBashRuntime": existing_manifest["gitBashRuntime"]}
-            if isinstance(existing_manifest.get("gitBashRuntime"), dict)
+            if installer_name == "install.ps1"
+            and isinstance(existing_manifest.get("gitBashRuntime"), dict)
             else {}
         ),
     }

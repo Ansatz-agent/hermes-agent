@@ -117,7 +117,11 @@ test('verified payload resolves and stages a complete managed source transaction
   const fixture = makePayloadFixture()
 
   try {
-    const payload = await resolveBundledPayload({ bootstrapRoot: fixture.bootstrapRoot, installStamp: { commit: COMMIT } })
+    const payload = await resolveBundledPayload({
+      bootstrapRoot: fixture.bootstrapRoot,
+      installStamp: { commit: COMMIT },
+      targetPlatform: 'darwin'
+    })
     const hermesHome = path.join(fixture.tempRoot, 'home')
     const activeRoot = path.join(hermesHome, 'hermes-agent')
     const prepared = await prepareBundledSource({ payload, activeRoot, hermesHome })
@@ -138,7 +142,11 @@ test('payload checksum tampering fails before extraction', async () => {
   try {
     fs.appendFileSync(fixture.installerPath, '# tampered\n')
     await assert.rejects(
-      resolveBundledPayload({ bootstrapRoot: fixture.bootstrapRoot, installStamp: { commit: COMMIT } }),
+      resolveBundledPayload({
+        bootstrapRoot: fixture.bootstrapRoot,
+        installStamp: { commit: COMMIT },
+        targetPlatform: 'darwin'
+      }),
       /size mismatch|checksum mismatch/
     )
   } finally {
@@ -151,7 +159,11 @@ test('payload archives containing symbolic links are rejected', async () => {
 
   try {
     await assert.rejects(
-      resolveBundledPayload({ bootstrapRoot: fixture.bootstrapRoot, installStamp: { commit: COMMIT } }),
+      resolveBundledPayload({
+        bootstrapRoot: fixture.bootstrapRoot,
+        installStamp: { commit: COMMIT },
+        targetPlatform: 'darwin'
+      }),
       /unsupported link or entry type/
     )
   } finally {
@@ -164,7 +176,11 @@ test('payload archives containing the Android-only installer are rejected on Des
 
   try {
     await assert.rejects(
-      resolveBundledPayload({ bootstrapRoot: fixture.bootstrapRoot, installStamp: { commit: COMMIT } }),
+      resolveBundledPayload({
+        bootstrapRoot: fixture.bootstrapRoot,
+        installStamp: { commit: COMMIT },
+        targetPlatform: 'darwin'
+      }),
       /unsafe entry.*install_psutil_android\.py/
     )
   } finally {
@@ -177,7 +193,11 @@ test('payload archives containing GitHub metadata are rejected on Desktop', asyn
 
   try {
     await assert.rejects(
-      resolveBundledPayload({ bootstrapRoot: fixture.bootstrapRoot, installStamp: { commit: COMMIT } }),
+      resolveBundledPayload({
+        bootstrapRoot: fixture.bootstrapRoot,
+        installStamp: { commit: COMMIT },
+        targetPlatform: 'darwin'
+      }),
       /unsafe entry.*\.github\//
     )
   } finally {

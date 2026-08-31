@@ -99,9 +99,13 @@ test('Windows backend payload ships the committed PowerShell installer', () => {
       repoRoot: fixture.repoRoot,
       stampPath: fixture.stampPath,
       outputDir: fixture.outputDir,
-      payloadPaths: ['payload.txt'],
+      payloadPaths: ['payload.txt', 'scripts/install.ps1', 'scripts/install.sh'],
       payloadExcludes: [],
-      requiredEntries: ['hermes-agent/payload.txt'],
+      requiredEntries: [
+        'hermes-agent/payload.txt',
+        'hermes-agent/scripts/install.ps1',
+        'hermes-agent/scripts/install.sh'
+      ],
       platform: 'win32',
       gitRuntimePath,
       gitRuntimeProvenancePath,
@@ -111,6 +115,8 @@ test('Windows backend payload ships the committed PowerShell installer', () => {
     assert.equal(result.manifest.installer.file, 'install.ps1')
     assert.equal(fs.readFileSync(path.join(fixture.outputDir, 'install.ps1'), 'utf8'), 'exit 0\r\n')
     assert.equal(fs.existsSync(path.join(fixture.outputDir, 'install.sh')), false)
+    assert.equal(result.entries.includes('hermes-agent/scripts/install.ps1'), true)
+    assert.equal(result.entries.includes('hermes-agent/scripts/install.sh'), true)
     assert.equal(result.manifest.gitBashRuntime.sha256, sha256(gitRuntimePath))
   } finally {
     fs.rmSync(fixture.repoRoot, { recursive: true, force: true })
@@ -150,6 +156,13 @@ test('install stamp validation requires a real clean commit', () => {
 
 test('macOS backend payload excludes the Android-only psutil installer', () => {
   assert.equal(RUNTIME_SCRIPT_FILES.includes('install_psutil_android.py'), false)
+})
+
+test('source archive includes both platform installers for server delivery', () => {
+  assert.equal(RUNTIME_SCRIPT_FILES.includes('install.ps1'), true)
+  assert.equal(RUNTIME_SCRIPT_FILES.includes('install.sh'), true)
+  assert.equal(REQUIRED_ARCHIVE_ENTRIES.includes('hermes-agent/scripts/install.ps1'), true)
+  assert.equal(REQUIRED_ARCHIVE_ENTRIES.includes('hermes-agent/scripts/install.sh'), true)
 })
 
 test('backend payload hash-manifest covers the sealed Ansatz Relay config', () => {

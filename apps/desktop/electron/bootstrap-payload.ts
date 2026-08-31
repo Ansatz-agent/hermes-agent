@@ -19,6 +19,7 @@ const RUNTIME_SCRIPT_FILES = [
   'discord-voice-doctor.py',
   'hermes-gateway',
   'install.cmd',
+  'install.sh',
   'install.ps1',
   'keystroke_diagnostic.py'
 ]

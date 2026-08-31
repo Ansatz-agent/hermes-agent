@@ -44,7 +44,9 @@ const REQUIRED_ARCHIVE_ENTRIES = Object.freeze([
   'hermes-agent/ui-tui/package.json',
   'hermes-agent/apps/shared/package.json',
   'hermes-agent/apps/desktop/package.json',
-  'hermes-agent/apps/bootstrap-installer/package.json'
+  'hermes-agent/apps/bootstrap-installer/package.json',
+  'hermes-agent/scripts/install.ps1',
+  'hermes-agent/scripts/install.sh'
 ])
 
 function sha256File(filePath) {

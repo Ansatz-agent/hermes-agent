@@ -58,6 +58,7 @@ export const RUNTIME_SCRIPT_FILES = Object.freeze([
   "discord-voice-doctor.py",
   "hermes-gateway",
   "install.cmd",
+  "install.sh",
   "install.ps1",
   "keystroke_diagnostic.py"
 ])
@@ -136,7 +137,6 @@ export const PAYLOAD_PATHS = Object.freeze([
 ])
 
 export const PAYLOAD_EXCLUDES = Object.freeze([
-  ":(exclude)scripts/install.sh",
   ":(glob,exclude)**/tests/**",
   ":(glob,exclude)**/test/**",
   ":(glob,exclude)**/__tests__/**",
@@ -177,7 +177,9 @@ export const REQUIRED_ARCHIVE_ENTRIES = Object.freeze([
   "hermes-agent/ui-tui/package.json",
   "hermes-agent/apps/shared/package.json",
   "hermes-agent/apps/desktop/package.json",
-  "hermes-agent/apps/bootstrap-installer/package.json"
+  "hermes-agent/apps/bootstrap-installer/package.json",
+  "hermes-agent/scripts/install.ps1",
+  "hermes-agent/scripts/install.sh"
 ])
 
 const FORBIDDEN_PREFIXES = Object.freeze([
@@ -285,7 +287,6 @@ function entryIsCiOnly(entry) {
 
 function sourcePathIsExcluded(sourcePath) {
   return (
-    sourcePath === "scripts/install.sh" ||
     TEST_SOURCE_RE.test(sourcePath) ||
     DECLARATION_TEST_RE.test(sourcePath) ||
     (NESTED_DOCS_RE.test(sourcePath) && sourcePath !== "docs/security/hermes-managed-download-origins.json") ||
@@ -329,10 +330,6 @@ export function buildBackendPayload({
   gitRuntimeAudit = auditGitRuntimeArchive
 } = {}) {
   const installerFile = installerFileForPlatform(platform)
-  const effectiveExcludes = Array.from(new Set([
-    ...payloadExcludes,
-    `:(exclude)scripts/${installerFile}`
-  ]))
   const stamp = validateInstallStamp(readJson(stampPath, "install stamp"))
   const head = runGit(repoRoot, ["rev-parse", "HEAD"]).trim()
   if (head !== stamp.commit) {
@@ -393,7 +390,7 @@ export function buildBackendPayload({
       `--output=${archiveTempPath}`,
       stamp.commit,
       ...payloadPaths,
-      ...effectiveExcludes
+      ...payloadExcludes
     ])
 
     const entries = archiveEntries(archiveTempPath)

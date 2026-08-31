@@ -30,6 +30,7 @@ def _source_archive(path: Path, *, extra: tuple[str, bytes, str] | None = None) 
         "uv.lock": b"version = 1\n",
         "hermes_cli/main.py": b"pass\n",
         "scripts/install.ps1": b"# installer\n",
+        "scripts/install.sh": b"#!/bin/sh\n",
         "apps/desktop/package.json": b"{}\n",
         "desktop_auth_runtime/uv.lock": b"version = 1\n",
     }
