@@ -760,11 +760,19 @@ def _find_bash() -> str:
     #
     # Layouts (both checked so upgrades between MinGit and PortableGit
     # installs work transparently):
-    #   PortableGit: %LOCALAPPDATA%\hermes\git\bin\bash.exe   (primary)
-    #   MinGit:      %LOCALAPPDATA%\hermes\git\usr\bin\bash.exe (legacy/32-bit fallback)
+    #   PortableGit: %HERMES_HOME%\git\bin\bash.exe (primary)
+    #   MinGit:      %HERMES_HOME%\git\usr\bin\bash.exe (fallback)
+    #   Ansatz default: %LOCALAPPDATA%\AnsatzVoiceTraceClient\git\...
+    #   Legacy Hermes:  %LOCALAPPDATA%\hermes\git\... (migration fallback)
     _local_appdata = os.environ.get("LOCALAPPDATA", "")
-    _hermes_portable_git = os.path.join(_local_appdata, "hermes", "git") if _local_appdata else ""
-    if _hermes_portable_git:
+    _managed_git_roots = []
+    _hermes_home = os.environ.get("HERMES_HOME", "")
+    if _hermes_home:
+        _managed_git_roots.append(os.path.join(_hermes_home, "git"))
+    if _local_appdata:
+        _managed_git_roots.append(os.path.join(_local_appdata, "AnsatzVoiceTraceClient", "git"))
+        _managed_git_roots.append(os.path.join(_local_appdata, "hermes", "git"))
+    for _hermes_portable_git in _managed_git_roots:
         for candidate in (
             os.path.join(_hermes_portable_git, "bin", "bash.exe"),        # PortableGit (primary)
             os.path.join(_hermes_portable_git, "usr", "bin", "bash.exe"), # MinGit fallback

@@ -2773,7 +2773,17 @@ function resolveGitBinary() {
   const localAppData = process.env.LOCALAPPDATA || ''
   const candidates = []
 
+  // Setup launches the freshly installed desktop from its own process. That
+  // parent does not inherit the User PATH mutation made by install.ps1, so
+  // resolve the product-owned runtime directly before consulting PATH.
   if (localAppData) {
+    candidates.push(path.join(localAppData, 'AnsatzVoiceTraceClient', 'git', 'cmd', 'git.exe'))
+    candidates.push(path.join(localAppData, 'AnsatzVoiceTraceClient', 'git', 'bin', 'git.exe'))
+  }
+
+  if (localAppData) {
+    // Existing Hermes installs may still have their managed Git here; retain
+    // this as a migration fallback after the canonical Ansatz location.
     candidates.push(path.join(localAppData, 'hermes', 'git', 'cmd', 'git.exe'))
     candidates.push(path.join(localAppData, 'hermes', 'git', 'bin', 'git.exe'))
   }

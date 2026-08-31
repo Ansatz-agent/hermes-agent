@@ -31,6 +31,21 @@ test('HERMES_GIT_BASH_PATH invalid path falls through to candidates', () => {
   assert.equal(result, 'C:\\Program Files\\Git\\bin\\bash.exe')
 })
 
+test('active HERMES_HOME Git Bash is preferred over legacy Hermes paths', () => {
+  const env = {
+    HERMES_HOME: 'C:\\Users\\test\\AppData\\Local\\AnsatzVoiceTraceClient',
+    LOCALAPPDATA: 'C:\\Users\\test\\AppData\\Local',
+    ProgramFiles: 'C:\\Program Files',
+    'ProgramFiles(x86)': 'C:\\Program Files (x86)'
+  }
+  const fileExists = (p: string) => p.endsWith('AnsatzVoiceTraceClient\\git\\bin\\bash.exe')
+
+  assert.equal(
+    findGitBash({ isWindows: true, env, fileExists, findOnPath: () => null }),
+    'C:\\Users\\test\\AppData\\Local\\AnsatzVoiceTraceClient\\git\\bin\\bash.exe'
+  )
+})
+
 test('HERMES_GIT_BASH_PATH empty string is ignored', () => {
   const result = findGitBash({
     isWindows: true,

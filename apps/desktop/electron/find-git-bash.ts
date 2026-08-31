@@ -11,10 +11,12 @@ export interface GitBashOptions {
  * Locate bash.exe on Windows.
  * Resolution order (first match wins):
  *   1. HERMES_GIT_BASH_PATH env var override
- *   2. PortableGit under %LOCALAPPDATA%\AnsatzVoiceTraceClient\git\ (install.ps1)
- *   3. Standard Git for Windows install locations
- *   4. %LOCALAPPDATA%\Programs\Git\ (user-scoped)
- *   5. bash on PATH
+ *   2. PortableGit under the active HERMES_HOME (install.ps1)
+ *   3. PortableGit under the canonical Ansatz runtime root
+ *   4. Legacy Hermes PortableGit root (for existing installs)
+ *   5. Standard Git for Windows install locations
+ *   6. %LOCALAPPDATA%\Programs\Git\ (user-scoped)
+ *   7. bash on PATH
  */
 export function findGitBash(opts: GitBashOptions): string | null {
   const { isWindows, env, fileExists, findOnPath } = opts
@@ -37,9 +39,17 @@ export function findGitBash(opts: GitBashOptions): string | null {
   // on POSIX CI hosts too), so join with win32 semantics explicitly.
   const joinWin = path.win32.join
 
-  if (localAppData) {
-    candidates.push(joinWin(localAppData, 'hermes', 'git', 'bin', 'bash.exe'))
-    candidates.push(joinWin(localAppData, 'hermes', 'git', 'usr', 'bin', 'bash.exe'))
+  const managedGitRoots = [
+    env.HERMES_HOME ? joinWin(env.HERMES_HOME, 'git') : '',
+    localAppData ? joinWin(localAppData, 'AnsatzVoiceTraceClient', 'git') : '',
+    // Keep older Hermes-managed installs usable while they migrate to the
+    // product-owned runtime root.
+    localAppData ? joinWin(localAppData, 'hermes', 'git') : ''
+  ].filter(Boolean)
+
+  for (const gitRoot of managedGitRoots) {
+    candidates.push(joinWin(gitRoot, 'bin', 'bash.exe'))
+    candidates.push(joinWin(gitRoot, 'usr', 'bin', 'bash.exe'))
   }
 
   candidates.push(joinWin(env['ProgramFiles'] || 'C:\\Program Files', 'Git', 'bin', 'bash.exe'))

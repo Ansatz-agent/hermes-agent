@@ -98,9 +98,22 @@ function buildDesktopBackendPath({
   const delimiter = delimiterForPlatform(platform)
   const hermesNodeDirs = hermesManagedNodePathEntries(hermesHome, { platform, pathModule })
   const venvBin = venvRoot ? pathModule.join(venvRoot, platform === 'win32' ? 'Scripts' : 'bin') : null
+  // install.ps1 keeps the bundled Git Bash runtime inside HERMES_HOME. The
+  // desktop process may have been launched by Setup before that installer
+  // refreshed the user's PATH, so make the managed Git directories explicit in
+  // every backend environment instead of relying on Explorer/PowerShell to
+  // broadcast a new process environment.
+  const hermesGitDirs =
+    platform === 'win32' && hermesHome
+      ? [
+          pathModule.join(hermesHome, 'git', 'cmd'),
+          pathModule.join(hermesHome, 'git', 'bin'),
+          pathModule.join(hermesHome, 'git', 'usr', 'bin')
+        ]
+      : []
   const saneEntries = platform === 'win32' ? [] : POSIX_SANE_PATH_ENTRIES
 
-  return appendUniquePathEntries([hermesNodeDirs, venvBin, currentPath, saneEntries], { delimiter })
+  return appendUniquePathEntries([hermesNodeDirs, hermesGitDirs, venvBin, currentPath, saneEntries], { delimiter })
 }
 
 function normalizeHermesHomeRoot(hermesHome, { pathModule = pathModuleForPlatform(process.platform) }: any = {}) {
