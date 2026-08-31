@@ -2230,7 +2230,7 @@ function directoryExists(filePath) {
 // relaunches the desktop mid-update — because the window vanished with no
 // progress and looks crashed — a fresh instance must NOT spawn its own local
 // backend: that backend re-locks the venv shim, the updater's straggler cleanup
-// (`force_kill_other_hermes`, taskkill /IM hermes.exe) kills it, the launch
+// (the Setup's path-scoped process shutdown) kills it, the launch
 // fails with the 45s "backend didn't come up" error, and the relaunch/kill
 // cycle loops. Instead the fresh instance parks until the update finishes, then
 // brings the backend up itself (it is the surviving instance — the updater's
@@ -3003,6 +3003,15 @@ async function checkUpdates() {
   const gitDir = path.join(updateRoot, '.git')
 
   if (!directoryExists(gitDir)) {
+    if (readActiveInstallMethod() === 'desktop-bundle') {
+      return {
+        supported: false,
+        reason: 'bundled-installer-update',
+        message: 'This installation is managed by Hermes Setup. Download and launch a newer Setup installer to update it.',
+        hermesRoot: updateRoot,
+        branch
+      }
+    }
     return {
       supported: false,
       reason: 'not-a-git-checkout',
@@ -3234,14 +3243,15 @@ let isQuittingForHandoff = false
 let quitPromptOpen = false
 let quitConfirmedWithActiveWork = false
 
-// Resolve the staged updater binary the desktop may hand an update to. On
-// Windows that binary owns ALL repo mutation — running `ansatz update` +
-// rebuilding the desktop — so the desktop never touches its own bits while
-// running. macOS/Linux stage the same binary but deliberately do not use it;
-// see resolveStagedUpdaterBinary for the policy and for #74836. Returns null
-// whenever no hand-off applies; callers degrade gracefully.
+// Resolve the staged updater binary the desktop may hand an update to.
+// Managed bundled installs hand all source mutation to the Tauri Setup binary;
+// source-checkout installs retain the existing platform-specific hand-offs.
 function resolveUpdaterBinary() {
-  return resolveStagedUpdaterBinary(HERMES_HOME, { fileExists, isWindows: IS_WINDOWS })
+  return resolveStagedUpdaterBinary(HERMES_HOME, {
+    fileExists,
+    isWindows: IS_WINDOWS,
+    isManagedBundle: readActiveInstallMethod() === 'desktop-bundle'
+  })
 }
 
 function repairMacUpdaterHelper(updater) {
@@ -3760,9 +3770,19 @@ async function applyUpdates(opts = {}) {
     repairMacUpdaterHelper(updater)
 
     const updateRoot = resolveUpdateRoot()
+    const managedBundle = readActiveInstallMethod() === 'desktop-bundle'
     const { branch: configuredBranch } = readDesktopUpdateConfig()
-    const branch = await resolveHealedBranch(updateRoot, configuredBranch || DEFAULT_UPDATE_BRANCH)
-    const updaterArgs = ['--update', '--branch', branch]
+    // A managed bundle has no .git checkout: the Setup binary carries the
+    // commit/archive pin in its own resources. Do not run the source-install
+    // branch healer here (it would invoke git in the bundled tree), and do not
+    // pass a branch that could make the updater look for a remote ref.
+    const branch = managedBundle
+      ? null
+      : await resolveHealedBranch(updateRoot, configuredBranch || DEFAULT_UPDATE_BRANCH)
+    const updaterArgs = ['--update']
+    if (branch) {
+      updaterArgs.push('--branch', branch)
+    }
     const targetApp = IS_MAC ? runningAppBundle() : null
 
     if (targetApp) {
@@ -3834,15 +3854,11 @@ async function applyUpdates(opts = {}) {
     // Detached so the updater outlives this process — it needs us GONE before
     // `ansatz update` will run (the venv shim is locked while we live).
     //
-    // Prefer the repo-owned hand-off script over the staged Tauri binary.
-    // The staged binary is frozen (no self-update path) and historically runs
-    // months-stale updater logic — pre-#67369 cache resolver, pre-#74782
-    // marker adoption — producing failures that were fixed on main long ago
-    // (2026-08-09 incident). scripts/desktop-update/windows.ps1 ships WITH the
-    // checkout, so each `ansatz update` refreshes the code that drives the
-    // next one. Checkouts that predate the script fall back to the binary
-    // path unchanged.
-    const scriptHandoff = resolveUpdateScriptHandoff(updateRoot)
+    // For source checkouts the repo-owned hand-off script is preferred because
+    // it is refreshed with each source update. Managed bundles deliberately
+    // skip that script and use the staged Setup binary, whose embedded
+    // snapshot is the only authoritative update input.
+    const scriptHandoff = managedBundle ? null : resolveUpdateScriptHandoff(updateRoot)
     let child
 
     if (scriptHandoff) {
@@ -3857,7 +3873,7 @@ async function applyUpdates(opts = {}) {
         '-InstallRoot',
         updateRoot,
         '-Branch',
-        branch,
+        branch || DEFAULT_UPDATE_BRANCH,
         '-DesktopPid',
         String(process.pid),
         '-RelaunchExe',
@@ -10784,6 +10800,11 @@ async function spawnPoolBackend(profile, entry) {
         // Marks this dashboard backend as desktop-spawned so it runs the cron
         // scheduler tick loop (the gateway isn't running under the app).
         HERMES_DESKTOP: '1',
+        // Ansatz owns the account login. The local backend still receives the
+        // scoped bearer over stdin, but must not require `hermes login`.
+        ANSATZ_EXTERNAL_AUTH: '1',
+        ANSATZ_EXTERNAL_AUTH_RUNTIME_INSTANCE_ID: connectionScope.runtime_instance_id,
+        ANSATZ_EXTERNAL_AUTH_EPOCH: String(connectionScope.epoch),
         // Exact parent identity lets the backend self-exit after an unclean
         // Desktop death without mistaking a reused PID for its owner.
         HERMES_PARENT_PID: String(process.pid),
@@ -11149,6 +11170,12 @@ async function startHermes() {
           // Marks this dashboard backend as desktop-spawned so it runs the cron
           // scheduler tick loop (the gateway isn't running under the app).
           HERMES_DESKTOP: '1',
+          // Authentication is owned by Ansatz's account service/UI. Keep the
+          // desktop scope-token boundary, but bypass Hermes's own account gate
+          // in this local child only.
+          ANSATZ_EXTERNAL_AUTH: '1',
+          ANSATZ_EXTERNAL_AUTH_RUNTIME_INSTANCE_ID: connectionScope.runtime_instance_id,
+          ANSATZ_EXTERNAL_AUTH_EPOCH: String(connectionScope.epoch),
           // Exact parent identity lets the backend self-exit after an unclean
           // Desktop death without mistaking a reused PID for its owner.
           HERMES_PARENT_PID: String(process.pid),

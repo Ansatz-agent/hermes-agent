@@ -1,8 +1,8 @@
 {
   "name": "@hermes/bootstrap-installer",
   "private": true,
-  "version": "0.0.1",
-  "description": "Hermes Setup — signed installer that drives scripts/install.ps1 with a polished native UI.",
+  "version": "0.17.0",
+  "description": "Ansatz Setup — signed installer that drives scripts/install.ps1 with a polished native UI.",
   "type": "module",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5175",
@@ -12,6 +12,9 @@
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
     "tauri:build:debug": "tauri build --debug",
+    "prepare:resources": "node scripts/prepare-resources.mjs",
+    "prepare:resources:mac": "node scripts/prepare-resources.mjs --platform darwin",
+    "prepare:resources:win": "node scripts/prepare-resources.mjs --platform win32",
     "typecheck": "tsc -p . --noEmit",
     "check": "npm run typecheck && npm run lint",
     "lint": "eslint src/",

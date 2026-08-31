@@ -1260,8 +1260,16 @@ $script:PortableGitReleaseSha256 = "ab00566336b5472120f9a52d34f2e79c5406535792ac
 function Resolve-BundledGitRuntimeArchive {
     if (-not $BundledSource) { return $null }
 
-    $archivePath = Join-Path $PSScriptRoot $script:BundledGitRuntimeFile
-    $manifestPath = Join-Path $PSScriptRoot "payload-manifest.json"
+    # Tauri invokes a bundled script through an extended-length path on some
+    # Windows installs (`\\?\\C:\\...`). PowerShell's FileSystem provider
+    # cannot pass that spelling to Join-Path/Test-Path, so normalize just the
+    # script directory before resolving sibling payload files.
+    $scriptRoot = $PSScriptRoot
+    if ($scriptRoot.StartsWith('\\?\', [StringComparison]::OrdinalIgnoreCase)) {
+        $scriptRoot = $scriptRoot.Substring(4)
+    }
+    $archivePath = Join-Path $scriptRoot $script:BundledGitRuntimeFile
+    $manifestPath = Join-Path $scriptRoot "payload-manifest.json"
     if (-not (Test-Path -LiteralPath $archivePath -PathType Leaf)) {
         throw "Bundled Git Bash runtime archive is missing at $archivePath"
     }
@@ -4168,6 +4176,41 @@ function Install-Desktop {
         return
     }
 
+    # The source archive is intentionally produced from the committed tree, so
+    # generated package inputs under apps/desktop/build are not part of it.
+    # A bundled Setup run already carries those exact, hash-verified inputs in
+    # the sibling auth-toolchain/Git payload. Rehydrate the same build layout
+    # before npm run pack so electron-builder's before-pack hook can validate
+    # and package the updater/bootstrap resources on the user's machine.
+    if ($BundledSource -and $BundledToolchain) {
+        $bundledPayloadRoot = Split-Path -Parent $BundledToolchain
+        $bundledBootstrap = Join-Path $bundledPayloadRoot ""
+        $desktopBuildRoot = Join-Path $desktopDir "build"
+        $desktopBootstrap = Join-Path $desktopBuildRoot "bootstrap"
+        New-Item -ItemType Directory -Force -Path $desktopBootstrap | Out-Null
+        foreach ($name in @("install.ps1", "hermes-backend.tar.gz", "payload-manifest.json", "get-windows-win32-x64.tar.gz")) {
+            $source = Join-Path $bundledBootstrap $name
+            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+                throw "Bundled Desktop input is missing: $source"
+            }
+            Copy-Item -LiteralPath $source -Destination (Join-Path $desktopBootstrap $name) -Force
+        }
+        $sourceAuth = Join-Path $bundledBootstrap "auth-toolchain"
+        if (-not (Test-Path -LiteralPath (Join-Path $sourceAuth "manifest.json") -PathType Leaf)) {
+            throw "Bundled Desktop authentication toolchain is missing: $sourceAuth"
+        }
+        Copy-Item -LiteralPath $sourceAuth -Destination $desktopBootstrap -Recurse -Force
+
+        $sourceGit = Join-Path $bundledPayloadRoot "git-bash-runtime.tar.xz"
+        if (-not (Test-Path -LiteralPath $sourceGit -PathType Leaf)) {
+            throw "Bundled Desktop Git runtime is missing: $sourceGit"
+        }
+        $windowsPrereqs = Join-Path $desktopBuildRoot "windows-prereqs"
+        New-Item -ItemType Directory -Force -Path $windowsPrereqs | Out-Null
+        Copy-Item -LiteralPath $sourceGit -Destination (Join-Path $windowsPrereqs "git-bash-runtime.tar.xz") -Force
+        Write-Info "Restored bundled Desktop build inputs from the Setup payload"
+    }
+
     $npmCmd = Get-Command npm -ErrorAction SilentlyContinue
     if (-not $npmCmd) {
         Write-Warn "Skipping desktop build (npm not on PATH)"
@@ -4245,6 +4288,31 @@ function Install-Desktop {
         throw
     }
     Pop-Location
+
+    if ($BundledSource -and $BundledToolchain) {
+        $sourceGetWindows = Join-Path $bundledBootstrap "get-windows-win32-x64.tar.gz"
+        if (-not (Test-Path -LiteralPath $sourceGetWindows -PathType Leaf)) {
+            throw "Bundled Desktop get-windows payload is missing: $sourceGetWindows"
+        }
+        # npm treats get-windows as an optional dependency and removes it when
+        # its GitHub-hosted native asset cannot be downloaded. Keep the
+        # workspace install deterministic by restoring our pinned package and
+        # win32-x64 binding after npm ci, before npm run pack stages it.
+        $getWindowsRoot = Join-Path $InstallDir "node_modules\get-windows"
+        if (Test-Path -LiteralPath $getWindowsRoot) {
+            Remove-Item -LiteralPath $getWindowsRoot -Recurse -Force
+        }
+        New-Item -ItemType Directory -Force -Path $getWindowsRoot | Out-Null
+        $windowsTar = Join-Path $env:SystemRoot "System32\tar.exe"
+        if (-not (Test-Path -LiteralPath $windowsTar -PathType Leaf)) {
+            throw "Windows tar.exe is unavailable; cannot extract bundled get-windows payload"
+        }
+        & $windowsTar -xzf $sourceGetWindows -C $getWindowsRoot
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath (Join-Path $getWindowsRoot "lib\binding") -PathType Container)) {
+            throw "Bundled Desktop get-windows payload could not be extracted"
+        }
+        Write-Info "Restored bundled get-windows binding from the Setup payload"
+    }
 
     # 2. Build apps/desktop. `npm run pack` runs:
     #      assert-root-install + write-build-stamp + stage-native-deps +
@@ -4381,6 +4449,8 @@ function Install-Desktop {
     # 3. Sanity-check the produced binary. Probe both arches so this works
     # on x64 and arm64 build machines.
     $exeCandidates = @(
+        "$desktopDir\release\win-unpacked\Ansatz.exe",
+        "$desktopDir\release\win-arm64-unpacked\Ansatz.exe",
         "$desktopDir\release\win-unpacked\Hermes.exe",
         "$desktopDir\release\win-arm64-unpacked\Hermes.exe"
     )
@@ -4395,7 +4465,7 @@ function Install-Desktop {
         }
     }
     if (-not $found) {
-        throw "Desktop build completed but no Hermes.exe was found under $desktopDir\release\*-unpacked\"
+        throw "Desktop build completed but no Ansatz.exe/Hermes.exe was found under $desktopDir\release\*-unpacked\"
     }
 
     # 3b. The Hermes icon + identity are stamped onto Hermes.exe by the
@@ -4841,10 +4911,13 @@ function Write-Completion {
 $RuntimeStageDefinitions = @(
     @{ Name = "uv";               Title = "Installing uv package manager";        Category = "prereqs";      NeedsUserInput = $false; Worker = "Stage-Uv" }
     @{ Name = "python";           Title = "Verifying Python $PythonVersion";      Category = "prereqs";      NeedsUserInput = $false; Worker = "Stage-Python" }
-    @{ Name = "git";              Title = "Installing Git";                       Category = "prereqs";      NeedsUserInput = $false; Worker = "Stage-Git" }
+    # On Windows this stage provisions Git Bash/MSYS, which is the terminal
+    # runtime used by Hermes. It is independent of whether Hermes source
+    # itself came from Git or from the bundled archive.
+    @{ Name = "git";              Title = "Preparing terminal runtime";          Category = "prereqs";      NeedsUserInput = $false; Worker = "Stage-Git" }
     @{ Name = "node";             Title = "Detecting Node.js";                    Category = "prereqs";      NeedsUserInput = $false; Worker = "Stage-Node" }
     @{ Name = "system-packages";  Title = "Installing ripgrep and ffmpeg";        Category = "prereqs";      NeedsUserInput = $false; Worker = "Stage-SystemPackages" }
-    @{ Name = "repository";       Title = "Cloning Hermes repository";            Category = "install";      NeedsUserInput = $false; Worker = "Stage-Repository" }
+    @{ Name = "repository";       Title = "Installing Hermes source";             Category = "install";      NeedsUserInput = $false; Worker = "Stage-Repository" }
     @{ Name = "venv";             Title = "Creating Python virtual environment";  Category = "install";      NeedsUserInput = $false; Worker = "Stage-Venv" }
     @{ Name = "dependencies";     Title = "Installing Python dependencies";       Category = "install";      NeedsUserInput = $false; Worker = "Stage-Dependencies" }
     @{ Name = "node-deps";        Title = "Installing Node.js dependencies";      Category = "install";      NeedsUserInput = $false; Worker = "Stage-NodeDeps" }

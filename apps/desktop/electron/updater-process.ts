@@ -189,7 +189,10 @@ export function sandboxFallbackFromEnv(env: Record<string, string | undefined>, 
 }
 
 export interface ResolveStagedUpdaterBinaryDeps {
+  platform?: NodeJS.Platform
   isWindows?: boolean
+  /** Managed bundled installs may use the Tauri Setup on macOS as well. */
+  isManagedBundle?: boolean
   fileExists?: (candidate: string) => boolean
   stagedMtimeMs?: (candidate: string) => number | null
 }
@@ -230,16 +233,12 @@ function stagedFileMtimeMs(candidate: string): number | null {
  * `bootstrap::copy_self_to_hermes_home`), so finding that binary on macOS or
  * Linux is expected, not leftover junk.
  *
- * Handing an update to it is nonetheless a Windows-only policy. Windows needs
- * the quit -> hand-off -> rebuild dance because a venv shim file lock keeps the
- * running desktop from rewriting its own bits; macOS and Linux have no such
- * lock and update in place through applyUpdatesPosixInApp(). Off Windows the
- * hand-off therefore buys nothing and costs a great deal: a staged binary older
- * than the hand-off protocol holds the update marker, spawns `ansatz update`,
- * and that child refuses its own parent — wedging the in-app Update button for
- * good, with no route (update, re-download, reinstall) to a newer binary
- * (#74836). Returning null off Windows is what routes those platforms to the
- * in-app updater.
+ * Managed bundled installs use this binary on Windows and macOS: the Setup
+ * resources carry the replacement source snapshot, and the desktop must hand
+ * the update to that snapshot-aware updater. Source checkouts retain their
+ * existing platform-specific hand-offs. Linux and unmanaged macOS installs
+ * continue through the in-app/repo updater because they do not have a bundled
+ * Setup payload to consume.
  *
  * Null on Windows too when nothing is staged (a dev/source run, or a CLI
  * install that never went through the installer); callers degrade gracefully.
@@ -248,14 +247,16 @@ export function resolveStagedUpdaterBinary(
   hermesHome: string,
   deps: ResolveStagedUpdaterBinaryDeps = {}
 ): string | null {
-  const isWindows = deps.isWindows ?? process.platform === 'win32'
+  const platform = deps.platform ?? process.platform
+  const isWindows = deps.isWindows ?? platform === 'win32'
+  const isManagedBundle = deps.isManagedBundle ?? false
 
-  if (!isWindows) {
+  if (!isWindows && !(isManagedBundle && platform === 'darwin')) {
     return null
   }
 
   const fileExists = deps.fileExists ?? stagedFileExists
-  const candidate = path.join(hermesHome, 'hermes-setup.exe')
+  const candidate = path.join(hermesHome, isWindows ? 'hermes-setup.exe' : 'hermes-setup')
 
   return fileExists(candidate) ? candidate : null
 }

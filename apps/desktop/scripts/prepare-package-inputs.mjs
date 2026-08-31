@@ -39,14 +39,16 @@ const TARGETS = Object.freeze({
       'build/bootstrap/hermes-backend.tar.gz',
       'build/bootstrap/payload-manifest.json',
       'build/bootstrap/auth-toolchain/manifest.json',
-      'build/windows-prereqs/git-bash-runtime.tar.xz'
+      'build/windows-prereqs/git-bash-runtime.tar.xz',
+      'build/bootstrap/get-windows-win32-x64.tar.gz'
     ],
     resources: [
       { from: 'build/bootstrap/install.ps1', to: 'bootstrap/install.ps1' },
       { from: 'build/bootstrap/hermes-backend.tar.gz', to: 'bootstrap/hermes-backend.tar.gz' },
       { from: 'build/bootstrap/payload-manifest.json', to: 'bootstrap/payload-manifest.json' },
       { from: 'build/bootstrap/auth-toolchain', to: 'bootstrap/auth-toolchain' },
-      { from: 'build/windows-prereqs/git-bash-runtime.tar.xz', to: 'bootstrap/git-bash-runtime.tar.xz' }
+      { from: 'build/windows-prereqs/git-bash-runtime.tar.xz', to: 'bootstrap/git-bash-runtime.tar.xz' },
+      { from: 'build/windows-prereqs/get-windows-win32-x64.tar.gz', to: 'bootstrap/get-windows-win32-x64.tar.gz' }
     ]
   })
 })
@@ -95,6 +97,15 @@ function assertRegularFile(filePath, label) {
     throw new Error(`${label} must be a regular non-link file`)
   }
   return stats
+}
+
+function copyWindowsGetWindowsBundle({ sourcePath, destinationPath }) {
+  const stats = assertRegularFile(sourcePath, 'bundled get-windows Windows payload')
+  if (stats.size < 1024) {
+    throw new Error(`bundled get-windows Windows payload is unexpectedly small: ${sourcePath}`)
+  }
+  fs.mkdirSync(path.dirname(destinationPath), { recursive: true })
+  fs.copyFileSync(sourcePath, destinationPath)
 }
 
 function verifyPayload(outputDir, installer) {
@@ -258,6 +269,19 @@ export async function preparePackageInputs({
       await deps.prepareWindowsGit({ sourcePath, outputPath: gitRuntimePath, provenancePath: gitRuntimeProvenancePath })
       deps.verifyGit(gitRuntimePath)
       rejectUnexpectedFiles(windowsStage, new Set(['git-bash-runtime.tar.xz']))
+
+      // get-windows publishes its native Windows binding as a GitHub release
+      // asset. A user's first-run machine may be offline (and npm removes an
+      // optional dependency when that asset cannot be fetched), so carry the
+      // pinned package + x64 binding in the Setup payload alongside Git.
+      const getWindowsSourcePath = path.resolve(
+        env.HERMES_GET_WINDOWS_BUNDLE_SOURCE ||
+          path.join(buildRoot, 'package-input-cache', 'get-windows-win32-x64.tar.gz')
+      )
+      copyWindowsGetWindowsBundle({
+        sourcePath: getWindowsSourcePath,
+        destinationPath: path.join(bootstrapStage, 'get-windows-win32-x64.tar.gz')
+      })
     }
 
     await deps.buildBackend({
@@ -279,7 +303,9 @@ export async function preparePackageInputs({
     })
     deps.verifyPayload(bootstrapStage, target.installer)
     deps.verifyAuth(path.join(bootstrapStage, 'auth-toolchain'))
-    rejectUnexpectedFiles(bootstrapStage, expectedBootstrapFiles(bootstrapStage, target.installer))
+    const expected = expectedBootstrapFiles(bootstrapStage, target.installer)
+    if (platform === 'win32') expected.add('get-windows-win32-x64.tar.gz')
+    rejectUnexpectedFiles(bootstrapStage, expected)
 
     fs.mkdirSync(buildRoot, { recursive: true })
     replaceDirectory(bootstrapStage, path.join(buildRoot, 'bootstrap'))

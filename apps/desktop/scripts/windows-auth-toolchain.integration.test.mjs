@@ -50,6 +50,15 @@ function fixtureCommands({ corruptUv = false, wrongWheel = false } = {}) {
       )
       return ''
     }
+    if (args[0] === 'pip' && args[1] === 'compile') {
+      const output = args[args.indexOf('--output-file') + 1]
+      fs.writeFileSync(
+        output,
+        `httpx==0.28.1 ; python_version >= '3.13' --hash=sha256:${'a'.repeat(64)}\n` +
+          `keyring==25.7.0 --hash=sha256:${'b'.repeat(64)}\n`
+      )
+      return ''
+    }
     if (args.slice(0, 3).join(' ') === '-m pip download') {
       const destination = args[args.indexOf('--dest') + 1]
       fs.mkdirSync(destination, { recursive: true })

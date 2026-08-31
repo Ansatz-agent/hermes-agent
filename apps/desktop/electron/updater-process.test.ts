@@ -163,6 +163,19 @@ test('resolveStagedUpdaterBinary returns null off Windows even when hermes-setup
   assert.equal(probes, 0)
 })
 
+test('resolveStagedUpdaterBinary uses Setup for managed macOS bundles', () => {
+  const home = '/Users/hermes/.hermes'
+  const staged = path.join(home, 'hermes-setup')
+  const resolved = resolveStagedUpdaterBinary(home, {
+    platform: 'darwin',
+    isWindows: false,
+    isManagedBundle: true,
+    fileExists: candidate => candidate === staged
+  })
+
+  assert.equal(resolved, staged)
+})
+
 test('resolveStagedUpdaterBinary returns null on Windows when nothing is staged', () => {
   const resolved = resolveStagedUpdaterBinary('C:\\Users\\hermes\\AppData\\Local\\hermes', {
     fileExists: () => false,

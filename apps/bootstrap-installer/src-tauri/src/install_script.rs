@@ -3,10 +3,10 @@
 //! Resolution order:
 //!   1. Dev shortcut: a sibling repo checkout via $HERMES_SETUP_DEV_REPO_ROOT
 //!      env var. Lets devs iterate without re-publishing the script.
-//!   2. Bundled fallback: if the installer was bundled with a script (e.g.
-//!      tauri's `resource` mechanism), serve from there. Not used today.
-//!   3. Network: download from GitHub raw at a pinned commit or branch.
-//!      Commit pins are immutable; branch pins are HEAD-tracking.
+//!   2. Bundled payload: release Setup resources contain the install script,
+//!      source archive, and manifest. This is the normal production path.
+//!   3. Debug-only network fallback: download from GitHub raw at a pinned
+//!      commit or branch for local development compatibility.
 //!
 //! Mirrors `apps/desktop/electron/bootstrap-runner.ts`'s `resolveInstallScript`,
 //! but the dev-checkout resolution is driven by an env var rather than the
@@ -17,6 +17,7 @@ use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
 use tokio::io::AsyncWriteExt;
 
+use crate::bundled_payload::BundledPayload;
 use crate::paths;
 
 /// Identity of the install.ps1 we'll execute. Used by both the manifest
@@ -29,6 +30,11 @@ pub struct ResolvedScript {
     /// what makes the repo stage clone the exact tested SHA.
     pub commit: Option<String>,
     pub branch: Option<String>,
+    /// The verified source snapshot that belongs to this script, when the
+    /// script came from the Tauri resources. Keeping this with the resolved
+    /// script prevents a manifest/script mismatch between discovery and the
+    /// subsequent repository stage.
+    pub bundled_payload: Option<BundledPayload>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,6 +106,7 @@ pub(crate) fn cache_plan(immutable: bool, cached_exists: bool) -> CachePlan {
 pub async fn resolve(
     kind: ScriptKind,
     pin: &Pin,
+    bundled_root: Option<&Path>,
     emit_log: &impl Fn(&str),
 ) -> Result<ResolvedScript> {
     // 1. Dev shortcut.
@@ -116,11 +123,39 @@ pub async fn resolve(
                 source: ScriptSource::DevCheckout,
                 commit: pin.commit.clone(),
                 branch: pin.branch.clone(),
+                bundled_payload: None,
             });
         }
     }
 
-    // 2. (Not implemented) bundled fallback.
+    // 2. Packaged resource. Release installers must be self-contained: a
+    // missing or partial payload is an error instead of silently reviving the
+    // old raw.githubusercontent.com bootstrap path. Debug builds retain the
+    // network fallback below for local development convenience.
+    if let Some(root) = bundled_root {
+        if let Some(payload) = BundledPayload::discover(root, kind.filename(), pin.commit.as_deref())? {
+            emit_log(&format!(
+                "[bootstrap] using bundled {} for commit {}",
+                kind.filename(),
+                &payload.manifest.commit[..12]
+            ));
+            return Ok(ResolvedScript {
+                path: payload.installer_path.clone(),
+                source: ScriptSource::Bundled,
+                commit: Some(payload.manifest.commit.clone()),
+                branch: payload.manifest.branch.clone().or_else(|| pin.branch.clone()),
+                bundled_payload: Some(payload),
+            });
+        }
+        if !cfg!(debug_assertions) {
+            return Err(anyhow!(
+                "release installer is missing its bundled {} and source payload under {}",
+                kind.filename(),
+                root.display()
+            ));
+        }
+        emit_log("[bootstrap] no bundled payload found; debug build may use the network fallback");
+    }
 
     // 3. Network. Pin must be a real commit or a branch ref.
     //
@@ -159,6 +194,7 @@ pub async fn resolve(
                 source: ScriptSource::Cached,
                 commit: pin.commit.clone(),
                 branch: pin.branch.clone(),
+                bundled_payload: None,
             });
         }
         CachePlan::Fetch { stale_ok } => {
@@ -181,6 +217,7 @@ pub async fn resolve(
                         source: ScriptSource::Downloaded,
                         commit: pin.commit.clone(),
                         branch: pin.branch.clone(),
+                        bundled_payload: None,
                     })
                 }
                 Err(err) if stale_ok => {
@@ -197,6 +234,7 @@ pub async fn resolve(
                         source: ScriptSource::Cached,
                         commit: pin.commit.clone(),
                         branch: pin.branch.clone(),
+                        bundled_payload: None,
                     })
                 }
                 Err(err) => Err(err),
@@ -349,7 +387,7 @@ async fn download(kind: ScriptKind, commit_or_ref: &str, dest_path: &Path) -> Re
         .build()
         .context("building download client")?
         .get(&url)
-        .header("User-Agent", "hermes-setup/0.0.1")
+        .header("User-Agent", "ansatz-setup/0.17.0")
         .send()
         .await
         .with_context(|| format!("GET {url}"))?;

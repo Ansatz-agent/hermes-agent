@@ -8,10 +8,9 @@
  *
  * Why: if the user relaunches the desktop mid-update — the window vanished with
  * no progress and looks crashed — a fresh instance must NOT spawn its own local
- * backend. That backend re-locks the venv shim, the updater's straggler cleanup
- * (`force_kill_other_hermes`, taskkill /IM hermes.exe) kills it, the launch
- * fails with the 45s "backend didn't come up" timeout, and the user relaunches
- * into the same trap — an infinite respawn/kill loop. The desktop gates local
+ * backend. That backend re-locks the venv shim while the Setup is performing
+ * its path-scoped process handoff, making the launch race and potentially
+ * trigger the 45s "backend didn't come up" timeout. The desktop gates local
  * backend startup on this marker and parks until the update finishes.
  *
  * This module holds the PURE, side-effect-light logic (path, pid liveness,

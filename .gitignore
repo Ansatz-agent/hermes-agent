@@ -84,6 +84,7 @@ hermes_cli/web_dist/
 # Cross-process web UI build lock (flock target, always empty)
 .web_ui_build.lock
 apps/desktop/build/
+apps/bootstrap-installer/src-tauri/resources/
 apps/desktop/dist/
 
 # tsc-emitted artifacts (a stray `tsc -b` compiles into src/, and vite then

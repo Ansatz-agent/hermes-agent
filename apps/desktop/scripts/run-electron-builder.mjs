@@ -95,17 +95,22 @@ function macPackagePaths() {
   }
 }
 
+const requestedArgs = ensureMacSigningIdentity(process.argv.slice(2))
+const windowsTargetRequested = requestedArgs.some(arg =>
+  arg === '--win' || arg === '--windows' || arg.startsWith('--win=') || arg.startsWith('--windows='))
+const useHostElectronDist = process.platform === 'win32' || !windowsTargetRequested
 const dist = electronDistDir()
 const args = []
-if (dist && fs.existsSync(distBinary(dist))) {
+if (useHostElectronDist && dist && fs.existsSync(distBinary(dist))) {
   args.push(`-c.electronDist=${dist}`)
+} else if (!useHostElectronDist) {
+  console.log('[run-electron-builder] Windows cross-target requested; using target Electron artifact instead of host dist')
 } else {
   console.warn(
     "[run-electron-builder] no local electron dist; electron-builder will fetch " +
       "via @electron/get (electronVersion + ELECTRON_MIRROR)."
   )
 }
-const requestedArgs = ensureMacSigningIdentity(process.argv.slice(2))
 args.push(...requestedArgs)
 
 const macDmgRequested = isMacDmgRequest(requestedArgs)

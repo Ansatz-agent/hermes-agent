@@ -101,9 +101,30 @@ pub async fn start_bootstrap(
     let app_for_task = app.clone();
     let state_for_task = state.inner().clone();
     let args_for_task = args;
+    let preflight_install_root = args_for_task
+        .hermes_home
+        .clone()
+        .map(PathBuf::from)
+        .unwrap_or_else(crate::paths::hermes_home)
+        .join("hermes-agent");
+    let preflight_include_desktop = args_for_task.include_desktop;
     let cancel_rx = Arc::new(Mutex::new(Some(cancel_rx)));
 
     tokio::spawn(async move {
+        // A manually launched Setup is also an update when the target tree
+        // already exists.  Stop processes owned by that tree before the
+        // bundled source transaction renames it; otherwise Windows keeps DLLs
+        // and app.asar open and the first update can fail with Access Denied.
+        // The dedicated --update path performs the same handoff wait itself,
+        // so this preflight is intentionally limited to start_bootstrap.
+        if preflight_include_desktop {
+            crate::update::wait_for_install_locks_free(
+                &preflight_install_root,
+                &app_for_task,
+                "preflight",
+            )
+            .await;
+        }
         let result = run_bootstrap(app_for_task.clone(), args_for_task, cancel_rx).await;
 
         // Reflect terminal state into AppState so get_bootstrap_status()
@@ -216,6 +237,8 @@ pub(crate) fn resolve_hermes_desktop_exe(install_root: &std::path::Path) -> Opti
     let release_dir = install_root.join("apps").join("desktop").join("release");
     let candidates: &[(&str, &str)] = if cfg!(target_os = "windows") {
         &[
+            ("win-unpacked", "Ansatz.exe"),
+            ("win-arm64-unpacked", "Ansatz.exe"),
             ("win-unpacked", "Hermes.exe"),
             ("win-arm64-unpacked", "Hermes.exe"),
         ]
@@ -260,6 +283,49 @@ pub(crate) fn resolve_hermes_desktop_app(install_root: &std::path::Path) -> Opti
 pub(crate) fn hermes_is_installed(install_root: &std::path::Path) -> bool {
     install_root.join(".hermes-bootstrap-complete").exists()
         && resolve_hermes_desktop_exe(install_root).is_some()
+}
+
+/// Resolve the bundled Setup payload across Tauri's Windows resource layouts.
+///
+/// `resource_dir()` points at the executable directory for the Windows NSIS
+/// bundle, while the `resources/bootstrap` source directory is preserved
+/// below a `resources` child by the bundler.  macOS/Linux commonly expose the
+/// latter as the resource directory itself.  Accept both layouts so the
+/// release installer finds the same payload it embedded.
+pub(crate) fn bundled_resource_root(app: &AppHandle) -> Option<PathBuf> {
+    use tauri::Manager;
+
+    let base = app.path().resource_dir().ok()?;
+    let direct = base.join("bootstrap");
+    if direct.join("payload-manifest.json").is_file() {
+        return Some(direct);
+    }
+    let nested = base.join("resources").join("bootstrap");
+    if nested.join("payload-manifest.json").is_file() {
+        return Some(nested);
+    }
+    // Preserve the old direct path in the error message when the payload is
+    // absent; release builds will turn this into a clear missing-payload
+    // failure rather than falling back to GitHub.
+    Some(direct)
+}
+
+/// Return whether the Setup resources contain the same source snapshot as the
+/// active install. `None` is reserved for dev/non-bundled launches, where the
+/// old macOS launcher fast path should remain unchanged.
+pub(crate) fn bundled_payload_is_current(
+    app: &AppHandle,
+    install_root: &std::path::Path,
+) -> Result<Option<bool>> {
+    let Some(resource_root) = bundled_resource_root(app) else {
+        return Ok(None);
+    };
+    let installer_name = if cfg!(target_os = "windows") {
+        "install.ps1"
+    } else {
+        "install.sh"
+    };
+    crate::bundled_payload::matches_active_source(&resource_root, installer_name, install_root)
 }
 
 fn resolve_marker_commit(install_root: &Path, pin: &Pin) -> Option<String> {
@@ -443,14 +509,24 @@ fn desktop_launch_command_std(
 // Bootstrap implementation
 // ---------------------------------------------------------------------------
 
-async fn run_bootstrap(
+pub(crate) async fn run_bootstrap(
     app: AppHandle,
     args: StartBootstrapArgs,
     cancel_rx_holder: Arc<Mutex<Option<mpsc::Receiver<()>>>>,
 ) -> Result<String> {
     let kind = ScriptKind::for_current_os();
 
-    let pin = Pin {
+    // Resolve these paths before touching the source tree.  The bundled
+    // archive has no .git directory, so every later marker and script call
+    // must use the commit carried by its manifest.
+    let hermes_home = args
+        .hermes_home
+        .clone()
+        .unwrap_or_else(|| crate::paths::hermes_home().to_string_lossy().into_owned());
+    let hermes_home_path = PathBuf::from(&hermes_home);
+    let install_root = hermes_home_path.join("hermes-agent");
+
+    let mut pin = Pin {
         commit: args.commit.or_else(|| option_env_string("BUILD_PIN_COMMIT")),
         branch: args.branch.or_else(|| option_env_string("BUILD_PIN_BRANCH")),
     };
@@ -479,8 +555,11 @@ async fn run_bootstrap(
         tracing::info!(target: "bootstrap.log", "{line}");
     };
 
-    // 1. Resolve install.ps1
-    let script = install_script::resolve(kind, &pin, &emit_log)
+    // 1. Resolve install.ps1/install.sh.  In a release build this resolves
+    // exclusively from the Tauri resource directory; debug builds may still
+    // use the legacy network fallback for local development.
+    let bundled_root = bundled_resource_root(&app);
+    let script = install_script::resolve(kind, &pin, bundled_root.as_deref(), &emit_log)
         .await
         .map_err(|e| {
             let msg = format!("resolve install script failed: {e:#}");
@@ -506,6 +585,36 @@ async fn run_bootstrap(
         source_note
     ));
 
+    // A bundled payload is unpacked before the repository stage.  The stage
+    // then follows the existing `-BundledSource` path and only validates the
+    // already-present tree.  The transaction rolls back automatically if any
+    // later stage or marker publication fails.
+    let source_transaction = if let Some(payload) = script.bundled_payload.as_ref() {
+        // The archive manifest is authoritative for a bundled run.  This also
+        // normalizes a short/debug override to the full 40-character commit
+        // used by the completion marker and subsequent diagnostics.
+        pin.commit = Some(payload.manifest.commit.clone());
+        if pin.branch.is_none() {
+            pin.branch = payload.manifest.branch.clone();
+        }
+        match crate::bundled_payload::prepare_source(payload, &install_root, &hermes_home_path) {
+            Ok(transaction) => Some(transaction),
+            Err(err) => {
+                let msg = format!("prepare bundled source failed: {err:#}");
+                emit_event(
+                    &app,
+                    BootstrapEvent::Failed {
+                        stage: None,
+                        error: msg.clone(),
+                    },
+                );
+                return Err(anyhow!(msg));
+            }
+        }
+    } else {
+        None
+    };
+
     // 2. Fetch manifest
     //
     // -IncludeDesktop MUST be passed to the manifest call too — install.ps1
@@ -525,7 +634,7 @@ async fn run_bootstrap(
         &app,
         &script.path,
         &manifest_args_full,
-        args.hermes_home.as_deref(),
+        Some(hermes_home.as_str()),
         &mut manifest_cancel_rx,
         Some("__manifest__".to_string()),
     )
@@ -637,7 +746,7 @@ async fn run_bootstrap(
                 &app,
                 &script.path,
                 &stage_args,
-                args.hermes_home.as_deref(),
+                Some(hermes_home.as_str()),
                 &mut local_cancel_rx,
                 Some(stage.name.clone()),
             )
@@ -776,15 +885,6 @@ async fn run_bootstrap(
         }
     }
 
-    // 4. Resolve install_root. install.ps1 doesn't (yet) report this back
-    // explicitly; we infer it from $HermesHome which Stage-Repository clones
-    // the repo INTO at $HermesHome\hermes-agent. Mirrors hermes_constants.
-    let hermes_home = args
-        .hermes_home
-        .clone()
-        .unwrap_or_else(|| crate::paths::hermes_home().to_string_lossy().into_owned());
-    let install_root = PathBuf::from(&hermes_home).join("hermes-agent");
-
     // Marker publish is terminal for this run: a write failure must emit Failed
     // so the UI leaves the progress state (it does not poll get_bootstrap_status).
     let marker = match write_bootstrap_complete_marker(&install_root, &pin) {
@@ -801,6 +901,20 @@ async fn run_bootstrap(
             return Err(anyhow!(msg));
         }
     };
+
+    if let Some(transaction) = source_transaction {
+        if let Err(err) = transaction.finalize() {
+            let msg = format!("finalize bundled source failed: {err:#}");
+            emit_event(
+                &app,
+                BootstrapEvent::Failed {
+                    stage: None,
+                    error: msg.clone(),
+                },
+            );
+            return Err(anyhow!(msg));
+        }
+    }
 
     // Copy ourselves to HERMES_HOME/hermes-setup.exe so the desktop app can
     // re-invoke us with `--update` and shortcuts have a stable target. This is
@@ -925,12 +1039,47 @@ async fn run_install_script(
 
 fn build_pin_args(script: &install_script::ResolvedScript) -> Vec<String> {
     let mut out = Vec::new();
+    if script.source == ScriptSource::Bundled {
+        if cfg!(target_os = "windows") {
+            out.push("-BundledSource".to_string());
+            out.push("-SkipComputerUse".to_string());
+            if let Some(payload) = script.bundled_payload.as_ref() {
+                out.push("-BundledToolchain".to_string());
+                let toolchain = payload
+                    .root
+                    .join("auth-toolchain")
+                    .to_string_lossy()
+                    .into_owned();
+                // Tauri may return an extended-length `\\?\\C:\\...` resource
+                // path on Windows. PowerShell's FileSystem provider rejects
+                // that spelling in Join-Path; the ordinary absolute form is
+                // sufficient for the bundled toolchain argument.
+                out.push(
+                    toolchain
+                        .strip_prefix("\\\\?\\")
+                        .unwrap_or(&toolchain)
+                        .to_string(),
+                );
+            }
+        } else {
+            out.push("--bundled-source".to_string());
+            out.push("--skip-computer-use".to_string());
+        }
+    }
     if let Some(c) = &script.commit {
-        out.push("-Commit".to_string());
+        out.push(if cfg!(target_os = "windows") {
+            "-Commit".to_string()
+        } else {
+            "--commit".to_string()
+        });
         out.push(c.clone());
     }
     if let Some(b) = &script.branch {
-        out.push("-Branch".to_string());
+        out.push(if cfg!(target_os = "windows") {
+            "-Branch".to_string()
+        } else {
+            "--branch".to_string()
+        });
         out.push(b.clone());
     }
     out

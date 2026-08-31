@@ -9,6 +9,7 @@
 //! flags of the executable that consumes it.
 
 mod bootstrap;
+mod bundled_payload;
 mod events;
 mod install_script;
 mod powershell;
@@ -131,7 +132,21 @@ pub fn run() {
             // repaired by re-running setup instead of launching the bad app.
             if cfg!(target_os = "macos") && mode == AppMode::Install && !force_setup {
                 let install_root = paths::hermes_home().join("hermes-agent");
-                if bootstrap::hermes_is_installed(&install_root) {
+                // A newly downloaded Setup carries a new source payload. In
+                // that case it must enter the normal install UI and refresh
+                // the existing tree; the launcher fast path is only safe when
+                // the embedded commit/archive already matches the install.
+                let payload_current = match bootstrap::bundled_payload_is_current(
+                    app.handle(),
+                    &install_root,
+                ) {
+                    Ok(value) => value.unwrap_or(true),
+                    Err(err) => {
+                        tracing::warn!(?err, "could not inspect bundled source payload; showing setup UI");
+                        false
+                    }
+                };
+                if payload_current && bootstrap::hermes_is_installed(&install_root) {
                     match bootstrap::spawn_installed_desktop(&install_root) {
                         Ok(()) => {
                             // Brief grace so the spawned app is registered

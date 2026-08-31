@@ -3,25 +3,18 @@
 //! Driven when the installer is launched as `Hermes-Setup.exe --update` (see
 //! `AppMode` in lib.rs). The desktop app hands off to us — it exits, then we:
 //!
-//!   1. wait for the old Hermes desktop process to fully exit (so both the
-//!      venv shim and packaged app.asar are free; otherwise `hermes update`
-//!      or repair bootstrap can race locked files),
-//!   2. run `hermes update --yes --gateway` (Python/repo update; this does NOT
-//!      rebuild apps/desktop by design — see cmd_update in hermes_cli/main.py),
-//!   3. run `hermes desktop --build-only` (the rebuild step update skips),
+//!   1. wait for the old Hermes desktop process to fully exit (so the venv
+//!      shim and packaged app.asar are free),
+//!   2. verify and atomically promote the source snapshot embedded in this
+//!      Setup binary, then run the existing install stages locally,
+//!   3. replace the macOS app bundle when requested,
 //!   4. launch the freshly-built desktop (reuses bootstrap::launch logic).
 //!
 //! We reuse the `BootstrapEvent` channel + the existing progress UI by
-//! emitting a synthetic multi-stage manifest (handoff → update → rebuild, plus
-//! an install stage on macOS). To the frontend an update looks like a short
-//! bootstrap, broken into the real operations run_update performs so the user
-//! sees discrete steps (with the live log underneath) instead of one bar.
+//! emitting a small handoff manifest before bootstrap emits the real stage
+//! manifest. The old Git-based implementation remains below for source-
+//! checkout recovery and tests, but managed bundled installs never call it.
 //!
-//! Cross-platform note: `hermes update` already handles macOS/Linux (git/pip).
-//! The only OS-specific bits here are the venv shim path (resolve_hermes) and
-//! the no-window creation flag — both already cfg-gated. Keep new logic
-//! OS-agnostic so the mac/linux port stays "fill in the paths".
-
 use std::env;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -33,7 +26,9 @@ use anyhow::{anyhow, Result};
 use tauri::{AppHandle, Emitter};
 use tokio::io::BufReader;
 use tokio::process::Command;
+use tokio::sync::{mpsc, Mutex};
 
+use crate::bundled_payload::BundledPayload;
 use crate::events::{BootstrapEvent, LogStream, StageInfo, StageState};
 use crate::powershell::read_decoded_line;
 
@@ -50,9 +45,9 @@ const DESKTOP_EXIT_POLL: Duration = Duration::from_millis(500);
 /// Guards against concurrent update runs. The frontend kicks `startUpdate()`
 /// from a mount effect, which can fire more than once (React strict-mode
 /// double-invokes effects in dev; a window reload or stray re-init can do it
-/// in prod). Two `run_update` tasks racing on `git stash` corrupt the working
-/// tree — one stashes the changes the other then can't find. Exactly one task
-/// may hold this flag at a time.
+/// in prod). Two `run_update` tasks racing on a source swap or dependency
+/// install could corrupt the active runtime. Exactly one task may hold this
+/// flag at a time.
 static UPDATE_RUNNING: AtomicBool = AtomicBool::new(false);
 
 /// Frontend → Rust: kick off the update flow. Mirrors `start_bootstrap`'s
@@ -251,7 +246,167 @@ impl Drop for UpdateMarkerGuard {
     }
 }
 
+/// Select the update implementation from the Setup resources. Source-checkout
+/// development/legacy installs keep the original Git updater; a packaged
+/// Setup with a verified payload uses the local snapshot path below.
 async fn run_update(app: AppHandle) -> Result<()> {
+    let resource_root = crate::bootstrap::bundled_resource_root(&app);
+    let installer_name = if cfg!(target_os = "windows") {
+        "install.ps1"
+    } else {
+        "install.sh"
+    };
+    let has_bundled_payload = match resource_root {
+        Some(root) => BundledPayload::discover(&root, installer_name, None)?.is_some(),
+        None => false,
+    };
+    if !has_bundled_payload {
+        return run_git_update_legacy(app).await;
+    }
+    run_bundled_update(app).await
+}
+
+/// Update path for managed bundled installs.  The new Setup binary is the
+/// release artifact: it carries both the source snapshot and the install
+/// script, so the update reuses bootstrap's existing stage protocol instead of
+/// invoking Git or a second Python updater.
+async fn run_bundled_update(app: AppHandle) -> Result<()> {
+    let hermes_home = crate::paths::hermes_home();
+    let install_root = hermes_home.join("hermes-agent");
+    let _update_marker = match UpdateMarkerGuard::acquire(
+        crate::paths::update_in_progress_marker(),
+    ) {
+        Ok(guard) => guard,
+        Err(owner) => {
+            let msg = format!(
+                "Another Hermes update is already running (PID {}, started {}s ago).",
+                owner.pid, owner.age_secs
+            );
+            emit(
+                &app,
+                BootstrapEvent::Failed {
+                    stage: None,
+                    error: msg.clone(),
+                },
+            );
+            return Err(anyhow!(msg));
+        }
+    };
+
+    let target_app = if cfg!(target_os = "macos") {
+        target_app_from_args(std::env::args().skip(1))
+    } else {
+        None
+    };
+
+    // Keep the existing update progress surface. bootstrap.rs will replace
+    // this temporary manifest with the real stage manifest once the bundled
+    // script has been resolved and verified.
+    emit(
+        &app,
+        BootstrapEvent::Manifest {
+            stages: update_stages(target_app.is_some()),
+            protocol_version: None,
+        },
+    );
+
+    let started = Instant::now();
+    emit_stage(&app, "handoff", StageState::Running, None, None);
+    wait_for_install_locks_free(&install_root, &app, "handoff").await;
+    emit_stage(
+        &app,
+        "handoff",
+        StageState::Succeeded,
+        Some(started.elapsed().as_millis() as u64),
+        None,
+    );
+
+    // Keep the sender alive for the duration of bootstrap. A closed receiver
+    // is interpreted as an immediate cancellation by the process runner.
+    let (cancel_tx, cancel_rx) = mpsc::channel(1);
+    let cancel_holder = std::sync::Arc::new(Mutex::new(Some(cancel_rx)));
+    let bootstrap_args = crate::bootstrap::StartBootstrapArgs {
+        commit: None,
+        branch: None,
+        include_desktop: true,
+        hermes_home: Some(hermes_home.to_string_lossy().into_owned()),
+    };
+    let bootstrap_result = crate::bootstrap::run_bootstrap(
+        app.clone(),
+        bootstrap_args,
+        cancel_holder,
+    )
+    .await;
+    drop(cancel_tx);
+    bootstrap_result?;
+
+    let launch_target = if let Some(target_app) = target_app {
+        let started = Instant::now();
+        emit_stage(&app, "install", StageState::Running, None, None);
+        match install_macos_app_update(&app, &install_root, &target_app).await {
+            Ok(installed_app) => {
+                emit_stage(
+                    &app,
+                    "install",
+                    StageState::Succeeded,
+                    Some(started.elapsed().as_millis() as u64),
+                    None,
+                );
+                Some(installed_app)
+            }
+            Err(err) => {
+                let msg = format!("{err:#}");
+                emit_stage(
+                    &app,
+                    "install",
+                    StageState::Failed,
+                    Some(started.elapsed().as_millis() as u64),
+                    Some(msg.clone()),
+                );
+                emit(
+                    &app,
+                    BootstrapEvent::Failed {
+                        stage: Some("install".into()),
+                        error: msg.clone(),
+                    },
+                );
+                return Err(anyhow!(msg));
+            }
+        }
+    } else {
+        None
+    };
+
+    _update_marker.complete();
+    if let Some(target_app) = launch_target {
+        if let Err(err) = launch_macos_app_and_exit(&app, &target_app).await {
+            emit_log(
+                &app,
+                None,
+                LogStream::Stderr,
+                &format!("[update] could not auto-launch desktop: {err}. Launch Hermes manually."),
+            );
+        }
+    } else if let Err(err) = crate::bootstrap::launch_hermes_desktop(
+        app.clone(),
+        install_root.to_string_lossy().into_owned(),
+    )
+    .await
+    {
+        emit_log(
+            &app,
+            None,
+            LogStream::Stderr,
+            &format!("[update] could not auto-launch desktop: {err}. Launch Hermes manually."),
+        );
+    }
+    exit_after_success(&app);
+    Ok(())
+}
+
+/// Legacy Git-based implementation retained for source-checkout recovery and
+/// existing unit coverage. Managed bundled installs never call this function.
+async fn run_git_update_legacy(app: AppHandle) -> Result<()> {
     let hermes_home = crate::paths::hermes_home();
     let install_root = hermes_home.join("hermes-agent");
 
@@ -651,32 +806,41 @@ pub(crate) async fn wait_for_install_locks_free(install_root: &Path, app: &AppHa
     let lock_targets = install_lock_probe_paths(install_root);
     let deadline = Instant::now() + DESKTOP_EXIT_WAIT;
 
-    emit_log(app, Some(stage), LogStream::Stdout, "[handoff] waiting for Hermes to exit…");
+    emit_log(
+        app,
+        Some(stage),
+        LogStream::Stdout,
+        "[handoff] asking the existing Ansatz processes to exit…",
+    );
+    request_graceful_shutdown(install_root, app, stage).await;
 
     loop {
         let locked = locked_paths(&lock_targets);
-        if locked.is_empty() {
+        // A Python interpreter can keep arbitrary source files open while the
+        // venv shim itself is not locked.  Check the managed process tree as
+        // well as the sentinel files so a source-directory rename cannot race
+        // a still-running backend (the historical uninstall residue case).
+        let managed_processes = managed_processes_under_root(install_root).await;
+        if locked.is_empty() && !managed_processes {
             return;
         }
         if Instant::now() >= deadline {
-            // Last resort: a backend hermes.exe (or the desktop Hermes.exe
-            // itself) is still holding one of the update-sensitive files. The
+            // Last resort: a backend or desktop process under the managed
+            // install tree is still holding an update-sensitive file. The
             // desktop should have reaped its tree before handing off, but
-            // SIGTERM races / detached grandchildren / AV handles can leave a
-            // straggler. Rather than "proceed anyway" straight into uv's
-            // "Access is denied" or install.ps1's locked app.asar failure,
-            // force-kill every Hermes.exe except ourselves, then give the OS a
-            // beat to unload the image.
+            // detached grandchildren / AV handles can leave a straggler.
+            // Force-kill only processes whose executable path is below this
+            // install root, then give the OS a beat to unload the image.
             emit_log(
                 app,
                 Some(stage),
                 LogStream::Stdout,
                 &format!(
-                    "[handoff] Hermes still holding install files ({}); force-killing stragglers…",
+                    "[handoff] Ansatz still holding install files ({}); force-killing managed stragglers…",
                     format_locked_paths(&locked)
                 ),
             );
-            force_kill_other_hermes();
+            force_kill_processes_under_root(install_root, app, stage).await;
             tokio::time::sleep(Duration::from_millis(800)).await;
             let locked_after_kill = locked_paths(&lock_targets);
             if locked_after_kill.is_empty() {
@@ -701,6 +865,45 @@ pub(crate) async fn wait_for_install_locks_free(install_root: &Path, app: &AppHa
         }
         tokio::time::sleep(DESKTOP_EXIT_POLL).await;
     }
+}
+
+/// Return whether any process other than this Setup instance has an
+/// executable below the managed install root.  The probe intentionally uses
+/// executable paths, not image names, so unrelated Python/Ansatz processes
+/// from another installation remain untouched.
+async fn managed_processes_under_root(install_root: &Path) -> bool {
+    if !cfg!(target_os = "windows") || !install_root.exists() {
+        return false;
+    }
+
+    let script = r#"
+$root = [IO.Path]::GetFullPath([string]$env:ANSATZ_SETUP_PROCESS_ROOT).TrimEnd('\') + '\'
+$self = [int]$env:ANSATZ_SETUP_OWNER_PID
+$found = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object {
+  if ($_.ProcessId -eq $self -or [string]::IsNullOrWhiteSpace([string]$_.ExecutablePath)) { return }
+  try { $full = [IO.Path]::GetFullPath([string]$_.ExecutablePath) } catch { return }
+  if ($full.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+}
+if ($found) { Write-Output '1' }
+"#;
+
+    let output = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
+        .env("ANSATZ_SETUP_PROCESS_ROOT", install_root)
+        .env("ANSATZ_SETUP_OWNER_PID", std::process::id().to_string())
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .await;
+
+    matches!(output, Ok(value) if value.status.success() && value.stdout.iter().any(|byte| *byte == b'1'))
 }
 
 fn install_lock_probe_paths(install_root: &Path) -> Vec<PathBuf> {
@@ -734,40 +937,95 @@ fn format_locked_paths(paths: &[PathBuf]) -> String {
     paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
 }
 
-/// Force-kill any `hermes.exe` other than this process. Windows-only; a no-op
-/// elsewhere (POSIX has no mandatory-lock contention). We can't selectively
-/// target "the backend" by PID here — the desktop already exited and we never
-/// knew its children — so we kill the whole `hermes.exe` image tree via
-/// taskkill, excluding our own PID.
-///
-/// Safe w.r.t. our own update child: this runs inside the install-lock wait,
-/// which completes BEFORE we spawn `venv\Scripts\hermes.exe update`. And a
-/// desktop the user relaunches mid-update will NOT have spawned a backend —
-/// `startHermes()` in the desktop gates local-backend startup on our
-/// update-in-progress marker and parks until we finish (#50238). So the only
-/// hermes.exe images here are stragglers from the old desktop — exactly what
-/// we want gone. (`/FI PID ne <self>` also spares this Tauri process, though it
-/// isn't named hermes.exe.)
-fn force_kill_other_hermes() {
-    if !cfg!(target_os = "windows") {
+/// Ask GUI/backend processes below `install_root` to close their windows.
+/// Process matching is path-scoped rather than image-name-scoped: the
+/// packaged shell is Ansatz.exe while legacy installs may still be Hermes.exe,
+/// and a broad image-name kill could terminate an unrelated user's process.
+async fn request_graceful_shutdown(install_root: &Path, app: &AppHandle, stage: &str) {
+    run_process_control_script(install_root, false, app, stage).await;
+}
+
+/// Force-stop remaining processes below `install_root` after the bounded grace
+/// period. This is deliberately a second, path-scoped pass so the installer
+/// never kills an unrelated Hermes/Ansatz process from another installation.
+async fn force_kill_processes_under_root(install_root: &Path, app: &AppHandle, stage: &str) {
+    run_process_control_script(install_root, true, app, stage).await;
+}
+
+async fn run_process_control_script(
+    install_root: &Path,
+    force: bool,
+    app: &AppHandle,
+    stage: &str,
+) {
+    if !cfg!(target_os = "windows") || !install_root.exists() {
         return;
     }
+
+    // Keep the script literal simple enough for Windows PowerShell 5.1. The
+    // root and owner PID travel through the environment, avoiding quoting or
+    // command-injection problems when a Windows username contains spaces.
+    let script = if force {
+        r#"
+$root = [IO.Path]::GetFullPath([string]$env:ANSATZ_SETUP_PROCESS_ROOT).TrimEnd('\') + '\'
+$self = [int]$env:ANSATZ_SETUP_OWNER_PID
+$ids = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object {
+  if ($_.ProcessId -eq $self -or [string]::IsNullOrWhiteSpace([string]$_.ExecutablePath)) { return }
+  try { $full = [IO.Path]::GetFullPath([string]$_.ExecutablePath) } catch { return }
+  if ($full.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { [int]$_.ProcessId }
+})
+foreach ($id in ($ids | Sort-Object -Unique)) {
+  # Reap the complete tree: the venv launcher can re-exec a managed Python
+  # under HERMES_HOME/.hermes-runtime, outside the install-root prefix. A
+  # parent-only kill would leave that interpreter holding old DLLs open.
+  & taskkill.exe /PID $id /T /F 2>$null | Out-Null
+}
+"#
+    } else {
+        r#"
+$root = [IO.Path]::GetFullPath([string]$env:ANSATZ_SETUP_PROCESS_ROOT).TrimEnd('\') + '\'
+$self = [int]$env:ANSATZ_SETUP_OWNER_PID
+$ids = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | ForEach-Object {
+  if ($_.ProcessId -eq $self -or [string]::IsNullOrWhiteSpace([string]$_.ExecutablePath)) { return }
+  try { $full = [IO.Path]::GetFullPath([string]$_.ExecutablePath) } catch { return }
+  if ($full.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { [int]$_.ProcessId }
+})
+foreach ($id in ($ids | Sort-Object -Unique)) {
+  $process = Get-Process -Id $id -ErrorAction SilentlyContinue
+  if ($process) {
+    try { [void]$process.CloseMainWindow() } catch { }
+  }
+}
+"#
+    };
+
+    let mut command = Command::new("powershell.exe");
+    command
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
+        .env("ANSATZ_SETUP_PROCESS_ROOT", install_root)
+        .env("ANSATZ_SETUP_OWNER_PID", std::process::id().to_string())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
     #[cfg(target_os = "windows")]
     {
-        let my_pid = std::process::id();
-        // /FI excludes our own PID; /T kills the tree; /F forces.
-        let _ = std::process::Command::new("taskkill")
-            .args([
-                "/F",
-                "/T",
-                "/IM",
-                "hermes.exe",
-                "/FI",
-                &format!("PID ne {my_pid}"),
-            ])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x0800_0000);
+    }
+    if let Err(err) = command.status().await {
+        emit_log(
+            app,
+            Some(stage),
+            LogStream::Stderr,
+            &format!("[handoff] process shutdown probe failed: {err}"),
+        );
     }
 }
 
@@ -1153,8 +1411,8 @@ fn stage_info(name: &str, title: &str) -> StageInfo {
 fn update_stages(include_install: bool) -> Vec<StageInfo> {
     let mut stages = vec![
         stage_info("handoff", "Preparing to update"),
-        stage_info("update", "Downloading the latest version"),
-        stage_info("rebuild", "Rebuilding the desktop app"),
+        stage_info("update", "Installing the bundled source"),
+        stage_info("rebuild", "Installing dependencies and building desktop app"),
     ];
     if include_install {
         stages.push(stage_info("install", "Installing the update"));

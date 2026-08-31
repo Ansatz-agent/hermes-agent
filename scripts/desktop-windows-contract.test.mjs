@@ -5,6 +5,7 @@ import path from 'node:path'
 import test from 'node:test'
 
 import { exeIdentityOptions } from '../apps/desktop/scripts/exe-identity-options.mjs'
+import { packagedEntryIsForbidden } from '../apps/desktop/scripts/package-audit.mjs'
 import {
   assertX64HermesExecutable,
   findNewestWindowsNsis,
@@ -100,6 +101,16 @@ test('Windows packaging rejects Playwright-managed browser downloads', () => {
     'Downloading Chromium 145.0.0 (playwright build v1208)'
   )
   assert.equal(forbiddenBrowserDownloadLine('downloading electron-v40.10.2-win32-x64.zip'), null)
+})
+
+test('Windows payload audit allows only the committed download policy metadata', () => {
+  assert.equal(packagedEntryIsForbidden('hermes-agent/docs/'), false)
+  assert.equal(packagedEntryIsForbidden('hermes-agent/docs/security/'), false)
+  assert.equal(
+    packagedEntryIsForbidden('hermes-agent/docs/security/hermes-managed-download-origins.json'),
+    false
+  )
+  assert.equal(packagedEntryIsForbidden('hermes-agent/docs/README.md'), true)
 })
 
 test('Windows npm timeout runner waits for a stable native exit code', () => {
@@ -355,4 +366,52 @@ test('Windows executable identity stamps the Ansatz app version, not the Electro
   assert.equal(options['product-version'], '0.17.0')
   assert.equal(options['version-string'].ProductName, 'Ansatz')
   assert.equal(options['version-string'].FileDescription, 'Ansatz')
+})
+
+test('runtime, desktop, and Setup metadata stay on one product version', () => {
+  const root = path.resolve(import.meta.dirname, '..')
+  const desktop = JSON.parse(fs.readFileSync(path.join(root, 'apps', 'desktop', 'package.json'), 'utf8'))
+  const bootstrap = JSON.parse(
+    fs.readFileSync(path.join(root, 'apps', 'bootstrap-installer', 'package.json'), 'utf8')
+  )
+  const tauri = JSON.parse(
+    fs.readFileSync(path.join(root, 'apps', 'bootstrap-installer', 'src-tauri', 'tauri.conf.json'), 'utf8')
+  )
+  const cargo = fs.readFileSync(
+    path.join(root, 'apps', 'bootstrap-installer', 'src-tauri', 'Cargo.toml'),
+    'utf8'
+  )
+  const pyproject = fs.readFileSync(path.join(root, 'pyproject.toml'), 'utf8')
+  const cliInit = fs.readFileSync(path.join(root, 'hermes_cli', '__init__.py'), 'utf8')
+  const setupManifest = fs.readFileSync(
+    path.join(root, 'apps', 'bootstrap-installer', 'src-tauri', 'hermes-setup.manifest'),
+    'utf8'
+  )
+
+  assert.equal(desktop.productName, 'Ansatz')
+  assert.equal(bootstrap.version, desktop.version)
+  assert.equal(tauri.productName, desktop.productName)
+  assert.equal(tauri.version, desktop.version)
+  assert.equal(cargo.match(/^version\s*=\s*"([^"]+)"/m)?.[1], desktop.version)
+  assert.equal(pyproject.match(/^version\s*=\s*"([^"]+)"/m)?.[1], desktop.version)
+  assert.equal(cliInit.match(/__version__\s*=\s*"([^"]+)"/)?.[1], desktop.version)
+  assert.equal(
+    setupManifest.match(/\n\s*version="([^"]+)"/i)?.[1],
+    `${desktop.version}.0`
+  )
+})
+
+test('Setup preflight shuts down only processes under the managed install root', () => {
+  const update = fs.readFileSync(
+    path.resolve(import.meta.dirname, '..', 'apps', 'bootstrap-installer', 'src-tauri', 'src', 'update.rs'),
+    'utf8'
+  )
+  const bootstrap = fs.readFileSync(
+    path.resolve(import.meta.dirname, '..', 'apps', 'bootstrap-installer', 'src-tauri', 'src', 'bootstrap.rs'),
+    'utf8'
+  )
+  assert.match(update, /Get-CimInstance Win32_Process/)
+  assert.match(update, /ANSATZ_SETUP_PROCESS_ROOT/)
+  assert.doesNotMatch(update, /taskkill[\s\S]{0,120}\/IM/)
+  assert.match(bootstrap, /wait_for_install_locks_free\([\s\S]{0,220}preflight/)
 })

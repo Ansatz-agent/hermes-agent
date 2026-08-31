@@ -17,12 +17,12 @@
 -->
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
     <assemblyIdentity
-        version="0.0.1.0"
+        version="0.17.0.0"
         processorArchitecture="*"
-        name="NousResearch.Hermes.Setup"
+        name="NousResearch.Ansatz.Setup"
         type="win32"
     />
-    <description>Hermes Setup</description>
+    <description>Ansatz Setup</description>
 
     <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
         <security>

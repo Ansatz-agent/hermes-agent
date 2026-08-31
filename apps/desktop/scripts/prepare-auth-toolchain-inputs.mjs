@@ -243,6 +243,11 @@ function downloadWindowsWheels({ execute, pythonPath, requirementsPath, wheelhou
     'pip',
     'download',
     '--require-hashes',
+    // pip evaluates dependency markers using the host interpreter even when
+    // --platform is supplied. The requirements file has already been
+    // resolved for Windows below, so downloading without re-resolving its
+    // dependencies avoids pulling Linux-only keyring backends.
+    '--no-deps',
     '--only-binary=:all:',
     '--platform',
     'win_amd64',
@@ -259,6 +264,47 @@ function downloadWindowsWheels({ execute, pythonPath, requirementsPath, wheelhou
     '--disable-pip-version-check',
     '--no-input'
   ], { env: { ...buildAuthPayloadEnvironment(), UV_DEFAULT_INDEX: indexUrl, PIP_INDEX_URL: indexUrl } })
+}
+
+function exportWindowsRequirements({ execute, hostUvPath, authProject, authUvConfig, requirementsPath }) {
+  const lockExportPath = `${requirementsPath}.lock-${process.pid}`
+  try {
+    execute(hostUvPath, [
+      'export',
+      '--project',
+      authProject,
+      '--locked',
+      '--no-dev',
+      '--no-emit-project',
+      '--format',
+      'requirements-txt',
+      '--output-file',
+      lockExportPath,
+      '--config-file',
+      authUvConfig
+    ], { env: buildAuthLockEnvironment() })
+
+    execute(hostUvPath, [
+      'pip',
+      'compile',
+      path.join(authProject, 'pyproject.toml'),
+      '--python-platform',
+      'x86_64-pc-windows-msvc',
+      '--python-version',
+      '3.13',
+      '--generate-hashes',
+      '--only-binary=:all:',
+      '--no-annotate',
+      '--output-file',
+      requirementsPath,
+      '--constraints',
+      lockExportPath,
+      '--config-file',
+      authUvConfig
+    ], { env: buildAuthPayloadEnvironment() })
+  } finally {
+    fs.rmSync(lockExportPath, { force: true })
+  }
 }
 
 function normalizedDistributionName(value) {
@@ -387,20 +433,13 @@ export async function prepareWindowsAuthToolchainInputs({
       throw new Error('Windows Python archive SHA-256 mismatch')
     }
 
-    execute(hostUvPath, [
-      'export',
-      '--project',
+    exportWindowsRequirements({
+      execute,
+      hostUvPath,
       authProject,
-      '--locked',
-      '--no-dev',
-      '--no-emit-project',
-      '--format',
-      'requirements-txt',
-      '--output-file',
-      requirementsPath,
-      '--config-file',
-      authUvConfig
-    ], { env: buildAuthLockEnvironment() })
+      authUvConfig,
+      requirementsPath
+    })
     const requirements = fs.readFileSync(requirementsPath, 'utf8')
     if (!requirements.includes('--hash=sha256:')) {
       throw new Error('authentication requirements export is not hash locked')

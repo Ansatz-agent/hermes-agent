@@ -2221,6 +2221,81 @@ def update_version_files(semver: str, calver_date: str):
         )
         desktop_pkg.write_text(pkg_text, encoding="utf-8")
 
+    # Setup is the outer product users download. Keep its npm, Cargo/Tauri,
+    # and Windows resource metadata in lockstep with the runtime and desktop
+    # versions so the generated artifact, installer UI, and About panel never
+    # disagree. These files are package metadata only; no runtime code is
+    # compiled to hide the Python source.
+    bootstrap_pkg = REPO_ROOT / "apps" / "bootstrap-installer" / "package.json"
+    if bootstrap_pkg.exists():
+        pkg_text = bootstrap_pkg.read_text(encoding="utf-8")
+        pkg_text = re.sub(
+            r'("version"\s*:\s*)"[^"]+"',
+            rf'\g<1>"{semver}"',
+            pkg_text,
+            count=1,
+        )
+        bootstrap_pkg.write_text(pkg_text, encoding="utf-8")
+
+    cargo_manifest = REPO_ROOT / "apps" / "bootstrap-installer" / "src-tauri" / "Cargo.toml"
+    if cargo_manifest.exists():
+        cargo_text = cargo_manifest.read_text(encoding="utf-8")
+        cargo_text = re.sub(
+            r'^version\s*=\s*"[^"]+"',
+            f'version = "{semver}"',
+            cargo_text,
+            count=1,
+            flags=re.MULTILINE,
+        )
+        cargo_manifest.write_text(cargo_text, encoding="utf-8")
+
+    tauri_config = REPO_ROOT / "apps" / "bootstrap-installer" / "src-tauri" / "tauri.conf.json"
+    if tauri_config.exists():
+        config_text = tauri_config.read_text(encoding="utf-8")
+        config_text = re.sub(
+            r'("version"\s*:\s*)"[^"]+"',
+            rf'\g<1>"{semver}"',
+            config_text,
+            count=1,
+        )
+        tauri_config.write_text(config_text, encoding="utf-8")
+
+    setup_manifest = REPO_ROOT / "apps" / "bootstrap-installer" / "src-tauri" / "hermes-setup.manifest"
+    if setup_manifest.exists():
+        manifest_text = setup_manifest.read_text(encoding="utf-8")
+        manifest_text = re.sub(
+            r'(\s+version=")[^"]+("\s*\n\s*processorArchitecture=)',
+            rf'\g<1>{semver}.0\g<2>',
+            manifest_text,
+            count=1,
+        )
+        setup_manifest.write_text(manifest_text, encoding="utf-8")
+
+    # Keep the lock metadata aligned without invoking npm (release builds use
+    # `npm ci`, so dependency resolution must remain untouched).
+    package_lock = REPO_ROOT / "package-lock.json"
+    if package_lock.exists():
+        lock_text = package_lock.read_text(encoding="utf-8")
+        lock_text = re.sub(r'("version"\s*:\s*)"[^"]+"', rf'\g<1>"{semver}"', lock_text, count=2)
+        lock_text = re.sub(
+            r'("apps/bootstrap-installer"\s*:\s*\{\s*\n\s*"name"\s*:\s*"[^"]+",\s*\n\s*"version"\s*:\s*)"[^"]+"',
+            rf'\g<1>"{semver}"',
+            lock_text,
+            count=1,
+        )
+        package_lock.write_text(lock_text, encoding="utf-8")
+
+    uv_lock = REPO_ROOT / "uv.lock"
+    if uv_lock.exists():
+        uv_text = uv_lock.read_text(encoding="utf-8")
+        uv_text = re.sub(
+            r'(\[\[package\]\]\s*\nname = "hermes-agent"\s*\nversion = ")[^"]+("\s*\n)',
+            rf'\g<1>{semver}\g<2>',
+            uv_text,
+            count=1,
+        )
+        uv_lock.write_text(uv_text, encoding="utf-8")
+
 
 def resolve_author(name: str, email: str) -> str:
     """Resolve a git author to a GitHub @mention."""

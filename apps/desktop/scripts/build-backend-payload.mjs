@@ -1,5 +1,5 @@
 /**
- * Build the backend source payload shipped with Ansatz.
+ * Build the backend/Setup source payload shipped with Ansatz.
  *
  * The archive is produced from one committed Git tree, never from working-tree
  * files. This keeps the packaged backend aligned with install-stamp.json and
@@ -67,9 +67,19 @@ export const RUNTIME_SCRIPT_DIRECTORIES = Object.freeze(["lib", "whatsapp-bridge
 export const PAYLOAD_PATHS = Object.freeze([
   "acp_adapter",
   "agent",
+  // Setup's Stage-Desktop builds the launchable Electron app from this
+  // checkout. Keep the desktop sources in the same sealed snapshot so the
+  // standalone Tauri Setup does not need to clone the private repository.
+  "apps/desktop",
+  // npm ci resolves the root workspaces before Stage-Desktop runs; retain the
+  // Setup workspace manifest so a bundled checkout is structurally complete.
+  "apps/bootstrap-installer",
   "assets",
   "cron",
   "config/ansatz-voice-trace",
+  // Stage-Desktop bundles this allowlist into electron-main.mjs. Keep the
+  // committed source JSON beside the desktop checkout in the sealed archive.
+  "docs/security/hermes-managed-download-origins.json",
   "desktop_auth_runtime",
   "gateway",
   "hermes",
@@ -142,7 +152,9 @@ export const PAYLOAD_EXCLUDES = Object.freeze([
   ":(glob,exclude)**/*.spec.tsx",
   ":(glob,exclude)**/test_*.py",
   ":(glob,exclude)**/__pycache__/**",
-  ":(glob,exclude)**/docs/**",
+  // Keep the plugin's dashboard artwork out of the runtime payload while
+  // allowing the one top-level security JSON explicitly selected above.
+  ":(glob,exclude)plugins/hermes-achievements/docs/**",
   ":(glob,exclude)**/*.test-d.ts",
   ":(glob,exclude)**/*.spec-d.ts",
   ":(glob,exclude)**/.gitignore",
@@ -153,6 +165,7 @@ export const PAYLOAD_EXCLUDES = Object.freeze([
 export const REQUIRED_ARCHIVE_ENTRIES = Object.freeze([
   "hermes-agent/config/ansatz-voice-trace/plugins.toml",
   "hermes-agent/pyproject.toml",
+  "hermes-agent/docs/security/hermes-managed-download-origins.json",
   "hermes-agent/uv.lock",
   "hermes-agent/uv.toml",
   "hermes-agent/desktop_auth_runtime/pyproject.toml",
@@ -162,16 +175,15 @@ export const REQUIRED_ARCHIVE_ENTRIES = Object.freeze([
   "hermes-agent/tools/sensevoice_stt.py",
   "hermes-agent/web/package.json",
   "hermes-agent/ui-tui/package.json",
-  "hermes-agent/apps/shared/package.json"
+  "hermes-agent/apps/shared/package.json",
+  "hermes-agent/apps/desktop/package.json",
+  "hermes-agent/apps/bootstrap-installer/package.json"
 ])
 
 const FORBIDDEN_PREFIXES = Object.freeze([
   "hermes-agent/tests/",
   "hermes-agent/tests-js/",
-  "hermes-agent/docs/",
   "hermes-agent/website/",
-  "hermes-agent/apps/desktop/",
-  "hermes-agent/apps/bootstrap-installer/",
   "hermes-agent/.git/"
 ])
 
@@ -182,6 +194,12 @@ const TEST_SOURCE_RE =
 const DECLARATION_TEST_RE = /\.(test|spec)-d\.ts$/
 const NESTED_DOCS_RE = /(^|\/)docs(\/|$)/
 const GIT_METADATA_RE = /(^|\/)\.(gitignore|gitattributes|gitmodules)$/
+const DOWNLOAD_POLICY_DOC = "hermes-agent/docs/security/hermes-managed-download-origins.json"
+const DOWNLOAD_POLICY_DOC_DIRS = new Set([
+  "hermes-agent/docs/",
+  "hermes-agent/docs/security/",
+  DOWNLOAD_POLICY_DOC
+])
 const CI_ONLY_ENTRY_RE =
   /(^|\/)\.github\/|^hermes-agent\/scripts\/(?:desktop-dmg-|verify-desktop-dmg-)|(^|\/)(?:desktop-dmg-credential-login|verify-desktop-dmg-gatekeeper)(?:\.|\/|$)/
 
@@ -255,7 +273,7 @@ function entryIsForbidden(entry) {
     FORBIDDEN_PREFIXES.some(prefix => entry.startsWith(prefix)) ||
     TEST_ENTRY_RE.test(entry) ||
     DECLARATION_TEST_RE.test(entry) ||
-    NESTED_DOCS_RE.test(entry) ||
+    (NESTED_DOCS_RE.test(entry) && !DOWNLOAD_POLICY_DOC_DIRS.has(entry)) ||
     GIT_METADATA_RE.test(entry) ||
     !runtimeScriptEntryIsAllowed(entry)
   )
@@ -270,7 +288,7 @@ function sourcePathIsExcluded(sourcePath) {
     sourcePath === "scripts/install.sh" ||
     TEST_SOURCE_RE.test(sourcePath) ||
     DECLARATION_TEST_RE.test(sourcePath) ||
-    NESTED_DOCS_RE.test(sourcePath) ||
+    (NESTED_DOCS_RE.test(sourcePath) && sourcePath !== "docs/security/hermes-managed-download-origins.json") ||
     GIT_METADATA_RE.test(sourcePath)
   )
 }

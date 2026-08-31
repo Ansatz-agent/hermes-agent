@@ -162,6 +162,26 @@ test('backend payload hash-manifest covers the sealed Ansatz Relay config', () =
   )
 })
 
+test('Setup payload includes the Electron source needed by Stage-Desktop', () => {
+  assert.equal(PAYLOAD_PATHS.includes('apps/desktop'), true)
+  assert.equal(REQUIRED_ARCHIVE_ENTRIES.includes('hermes-agent/apps/desktop/package.json'), true)
+  assert.equal(PAYLOAD_PATHS.includes('apps/bootstrap-installer'), true)
+  assert.equal(REQUIRED_ARCHIVE_ENTRIES.includes('hermes-agent/apps/bootstrap-installer/package.json'), true)
+})
+
+test('Setup payload includes the Electron managed-download allowlist', () => {
+  assert.equal(
+    PAYLOAD_PATHS.includes('docs/security/hermes-managed-download-origins.json'),
+    true
+  )
+  assert.equal(
+    REQUIRED_ARCHIVE_ENTRIES.includes(
+      'hermes-agent/docs/security/hermes-managed-download-origins.json'
+    ),
+    true
+  )
+})
+
 test('backend payload rejects CI-only files even under an allowed runtime path', () => {
   const fixture = makeRepository({
     'apps/shared/runtime.txt': 'runtime payload\n',

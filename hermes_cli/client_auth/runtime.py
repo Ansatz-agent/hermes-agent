@@ -86,6 +86,10 @@ _DEFAULT_AUTH_KEYRING_SERVICE = "cn.c2sml.hermes.remote-auth"
 _EXPLICIT_TERMINAL_REASONS = frozenset(
     {"account_disabled", "account_revoked", "session_revoked"}
 )
+_EXTERNAL_AUTH_ENV = "ANSATZ_EXTERNAL_AUTH"
+_EXTERNAL_AUTH_INSTANCE_ENV = "ANSATZ_EXTERNAL_AUTH_RUNTIME_INSTANCE_ID"
+_EXTERNAL_AUTH_EPOCH_ENV = "ANSATZ_EXTERNAL_AUTH_EPOCH"
+_TRUE_ENV_VALUES = frozenset({"1", "true", "yes", "on"})
 
 
 def _test_runtime_suffix() -> str:
@@ -216,6 +220,26 @@ class AuthRequired(RuntimeError):
         normalized = reason or self.code
         super().__init__(normalized)
         self.reason = reason
+
+
+def external_auth_enabled() -> bool:
+    """Return whether an embedding desktop owns authentication for this process."""
+
+    return os.environ.get(_EXTERNAL_AUTH_ENV, "").strip().lower() in _TRUE_ENV_VALUES
+
+
+def external_auth_scope() -> AuthScope:
+    """Build the desktop-owned scope used by the local backend guard."""
+
+    instance = os.environ.get(_EXTERNAL_AUTH_INSTANCE_ENV, "0" * 32)
+    epoch_text = os.environ.get(_EXTERNAL_AUTH_EPOCH_ENV, "0")
+    try:
+        epoch = int(epoch_text, 10)
+    except (TypeError, ValueError):
+        raise AuthRequired("runtime_unavailable") from None
+    scope = AuthScope(instance, epoch)
+    _validate_auth_scope(scope)
+    return scope
 
 
 class AuthScopeChanged(AuthRequired):
@@ -4151,6 +4175,9 @@ def _recover_entrypoint_owner(
 
 
 def authorize_entrypoint(boundary: str, *, interactive: bool) -> AuthScope:
+    if external_auth_enabled():
+        return external_auth_scope()
+
     with _entrypoint_owner_lock:
         owner = _entrypoint_owner
     if owner is None:
@@ -4718,6 +4745,11 @@ def require_authorized(
     *,
     expected: AuthScope | None = None,
 ) -> AuthScope:
+    if external_auth_enabled():
+        # Ansatz owns the account login. Keep the desktop's scoped bearer
+        # registry, but do not start or query Hermes's separate account owner.
+        return expected or external_auth_scope()
+
     with _consumer_lock:
         consumer = _consumer
     if consumer is None:

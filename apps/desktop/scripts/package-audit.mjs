@@ -20,6 +20,14 @@ const PRODUCTION_WAKE_MODELS = new Set([
   'hermes-agent/tools/wakewords/hey_hermes.onnx',
   'hermes-agent/tools/wakewords/hey_hermes.tflite'
 ])
+// This single committed policy file is required by the packaged desktop
+// runtime.  Git archives also carry its parent directory entries, so allow
+// those two directories while continuing to reject all other documentation.
+const PRODUCTION_DOWNLOAD_POLICY_ENTRIES = new Set([
+  'hermes-agent/docs',
+  'hermes-agent/docs/security',
+  'hermes-agent/docs/security/hermes-managed-download-origins.json'
+])
 const REQUIRED_ARCHIVE_ENTRIES = Object.freeze([
   'hermes-agent/pyproject.toml',
   'hermes-agent/hermes_cli/main.py',
@@ -34,7 +42,9 @@ const REQUIRED_ARCHIVE_ENTRIES = Object.freeze([
   'hermes-agent/tools/sensevoice_stt.py',
   'hermes-agent/web/package.json',
   'hermes-agent/ui-tui/package.json',
-  'hermes-agent/apps/shared/package.json'
+  'hermes-agent/apps/shared/package.json',
+  'hermes-agent/apps/desktop/package.json',
+  'hermes-agent/apps/bootstrap-installer/package.json'
 ])
 
 function sha256File(filePath) {
@@ -74,7 +84,11 @@ function normalizeEntry(entry) {
 
 export function packagedEntryIsForbidden(rawEntry) {
   const entry = normalizeEntry(rawEntry).replace(/\/$/, '')
-  if (entry === PRODUCTION_TEST_COMMAND || PRODUCTION_WAKE_MODELS.has(entry)) return false
+  if (
+    entry === PRODUCTION_TEST_COMMAND ||
+    PRODUCTION_WAKE_MODELS.has(entry) ||
+    PRODUCTION_DOWNLOAD_POLICY_ENTRIES.has(entry)
+  ) return false
 
   const isLocalMemory = /^(?:hermes-agent\/)?memory(?:\/|$)/i.test(entry)
 
@@ -85,8 +99,6 @@ export function packagedEntryIsForbidden(rawEntry) {
     /\.(test|spec)\.(py|js|mjs|cjs|ts|tsx)$/i.test(entry) ||
     /\.(test|spec)-d\.ts$/i.test(entry) ||
     /(^|\/)\.(git|gitignore|gitattributes|gitmodules)(\/|$)/i.test(entry) ||
-    entry.startsWith('hermes-agent/apps/desktop/') ||
-    entry.startsWith('hermes-agent/apps/bootstrap-installer/') ||
     /\.(bin|gguf|onnx|safetensors|tflite|pt|pth)$/i.test(entry)
   )
 }

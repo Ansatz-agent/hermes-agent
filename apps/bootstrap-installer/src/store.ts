@@ -331,7 +331,7 @@ export async function startUpdate(): Promise<void> {
 
   // Update is driven by the desktop handing off (Hermes-Setup.exe --update);
   // there's no welcome click. Reset + jump straight to progress, then let the
-  // Rust side stream the synthetic update manifest.
+  // Rust side stream the update manifest and stage events.
   $bootstrap.set(INITIAL)
   $route.set('progress')
   await invoke('start_update')
@@ -397,8 +397,8 @@ const FAKE_INSTALL_STAGES: FakeStage[] = [
 
 const FAKE_UPDATE_STAGES: FakeStage[] = [
   { name: 'handoff', title: 'Preparing to update' },
-  { name: 'update', title: 'Downloading the latest version' },
-  { name: 'rebuild', title: 'Rebuilding the desktop app' },
+  { name: 'update', title: 'Installing the bundled source' },
+  { name: 'rebuild', title: 'Installing dependencies and building desktop app' },
   { name: 'install', title: 'Installing the update' }
 ]
 
