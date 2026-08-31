@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// set-exe-identity.mjs — stamp the Hermes icon + version metadata onto the
-// built Hermes.exe using rcedit, completely decoupled from electron-builder's
+// set-exe-identity.mjs — stamp the Ansatz icon + version metadata onto the
+// built Ansatz.exe using rcedit, completely decoupled from electron-builder's
 // signing path.
 //
 // WHY THIS EXISTS
@@ -28,21 +28,21 @@
 // shipped a stock "Electron" exe. Keeping it in afterPack closes that gap.
 //
 // Also runnable standalone for ad-hoc re-stamping:
-//   node scripts/set-exe-identity.mjs <path-to-Hermes.exe>
+//   node scripts/set-exe-identity.mjs <path-to-Ansatz.exe>
 //
 // Exits 0 on success, non-zero on failure when run as a CLI. As a hook,
-// stampExeIdentity() resolves on success and rejects on failure; the caller
-// (after-pack.mjs) swallows the rejection so a stamp failure never fails an
-// otherwise-good build (worst case: stock icon, not a broken app).
+// stampExeIdentity() resolves on success and rejects on failure. The afterPack
+// caller treats identity stamping as a Windows release contract.
 
 import { resolve, join } from 'node:path'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 
 import { rcedit } from 'rcedit'
 
+import { exeIdentityOptions } from './exe-identity-options.mjs'
 import { isMain } from './utils.mjs'
 
-// Stamp the Hermes icon + identity onto `exe`. Resolves on success, throws on
+// Stamp the Ansatz icon + identity onto `exe`. Resolves on success, throws on
 // failure. `desktopRoot` defaults to this script's package root so the icon and
 // the rcedit dependency resolve regardless of cwd.
 async function stampExeIdentity(exe, desktopRoot = resolve(import.meta.dirname, '..')) {
@@ -55,21 +55,18 @@ async function stampExeIdentity(exe, desktopRoot = resolve(import.meta.dirname, 
   if (!existsSync(icon)) {
     throw new Error(`icon not found: ${icon}`)
   }
+  const packageManifest = JSON.parse(
+    readFileSync(join(desktopRoot, 'package.json'), 'utf8')
+  )
+  const productVersion = packageManifest.version
 
   console.log(`[set-exe-identity] stamping ${exe}`)
   console.log(`[set-exe-identity] icon: ${icon}`)
+  console.log(`[set-exe-identity] version: ${productVersion}`)
 
-  await rcedit(exe, {
-    icon,
-    'version-string': {
-      ProductName: 'Ansatz',
-      FileDescription: 'Ansatz',
-      CompanyName: 'Ansatz Agent',
-      LegalCopyright: 'Copyright (c) 2026 Ansatz Agent'
-    }
-  })
+  await rcedit(exe, exeIdentityOptions({ icon, productVersion }))
 
-  console.log('[set-exe-identity] done — Ansatz icon + identity stamped')
+  console.log('[set-exe-identity] done — Ansatz icon, version, and identity stamped')
 }
 
 export { stampExeIdentity }
