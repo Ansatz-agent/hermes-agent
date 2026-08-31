@@ -4480,6 +4480,7 @@ _LAZY_COMMAND_EXPORTS = {
         "_sync_fork_with_upstream",
         "_sync_with_upstream_if_needed",
         "_update_node_dependencies",
+        "_update_via_archive",
         "_update_via_zip",
         "_upgrade_pip_before_lazy_refresh",
         "_validate_critical_files_syntax",
@@ -9523,7 +9524,6 @@ def cmd_update(args):
     """
     from hermes_cli.config import (
         detect_install_method,
-        format_desktop_bundle_update_message,
         format_docker_update_message,
         is_managed,
         managed_error,
@@ -9541,10 +9541,6 @@ def cmd_update(args):
     # repository" text.  See format_docker_update_message() for the full
     # rationale and tag-pinning / config-persistence notes.
     install_method = detect_install_method(PROJECT_ROOT)
-    if install_method == "desktop-bundle":
-        print(format_desktop_bundle_update_message())
-        sys.exit(1)
-
     if install_method == "docker":
         print(format_docker_update_message())
         sys.exit(1)

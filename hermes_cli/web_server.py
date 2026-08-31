@@ -78,7 +78,6 @@ from hermes_cli.config import (
     custom_endpoint_key_env,
     check_config_version,
     detect_install_method,
-    format_desktop_bundle_update_message,
     format_docker_update_message,
     recommended_update_command_for_method,
     redact_key,
@@ -4529,18 +4528,6 @@ async def update_hermes():
         }
 
     install_method = detect_install_method(PROJECT_ROOT)
-    if install_method == "desktop-bundle":
-        message = format_desktop_bundle_update_message()
-        _record_completed_action("hermes-update", message, exit_code=1)
-        return {
-            "ok": False,
-            "pid": None,
-            "name": "hermes-update",
-            "error": "desktop_bundle_update_unsupported",
-            "message": message,
-            "update_command": recommended_update_command_for_method(install_method),
-        }
-
     if install_method == "docker":
         message = format_docker_update_message()
         _record_completed_action("hermes-update", message, exit_code=1)
@@ -4698,13 +4685,42 @@ async def check_hermes_update(force: bool = False):
         "current_version": __version__,
         "behind": None,
         "update_available": False,
-        "can_apply": install_method == "git",
+        "can_apply": install_method in {"git", "desktop-bundle"},
         "update_command": update_command,
         "message": None,
     }
 
     if install_method == "desktop-bundle":
-        payload["message"] = format_desktop_bundle_update_message()
+        from hermes_cli.update_source import (
+            UpdateSourceError,
+            fetch_latest_release,
+            read_source_marker,
+            release_is_newer,
+        )
+
+        try:
+            release = await asyncio.to_thread(fetch_latest_release)
+            marker = read_source_marker(PROJECT_ROOT) or {}
+            available = release_is_newer(
+                release,
+                current_version=__version__,
+                current_commit=str(marker.get("commit") or "") or None,
+            )
+            payload.update(
+                {
+                    "behind": -1 if available else 0,
+                    "update_available": available,
+                    "latest_version": release.version,
+                    "latest_commit": release.commit,
+                    "message": (
+                        f"Ansatz {release.version} is available."
+                        if available
+                        else "You're on the latest version."
+                    ),
+                }
+            )
+        except UpdateSourceError as exc:
+            payload["message"] = f"Couldn't reach the update source: {exc}"
         return payload
 
     if install_method == "docker":

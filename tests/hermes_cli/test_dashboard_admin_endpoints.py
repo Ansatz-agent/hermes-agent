@@ -803,6 +803,32 @@ class TestUpdateCheckEndpoint:
         # git/pip installs can apply the update in place from the dashboard.
         assert body["can_apply"] is True
 
+    def test_desktop_bundle_checks_release_server_and_is_applyable(self, monkeypatch):
+        import hermes_cli.web_server as ws
+        import hermes_cli.update_source as source
+
+        release = source.ReleaseMetadata(
+            version="0.18.0",
+            commit="a" * 40,
+            channel="stable",
+            archive=source.ReleaseArchive(
+                url="http://10.0.2.2:9000/source.tar.gz",
+                size=123,
+                sha256="b" * 64,
+            ),
+        )
+        monkeypatch.setattr(ws, "detect_install_method", lambda *a, **k: "desktop-bundle")
+        monkeypatch.setattr(source, "fetch_latest_release", lambda: release)
+        monkeypatch.setattr(source, "read_source_marker", lambda _root: {"commit": "c" * 40})
+
+        body = self.client.get("/api/hermes/update/check").json()
+
+        assert body["install_method"] == "desktop-bundle"
+        assert body["can_apply"] is True
+        assert body["update_available"] is True
+        assert body["latest_version"] == "0.18.0"
+        assert body["latest_commit"] == "a" * 40
+
 
 
     def test_managed_runtime_dashboard_is_not_applyable(self, monkeypatch):

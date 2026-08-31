@@ -66,11 +66,6 @@ import {
   resumeQuitAfterShutdown
 } from './backend-ownership'
 import {
-  backendExitedBeforeOwnershipError,
-  isProcessGoneError,
-  windowsProcessStartMarkerCommand
-} from './process-identity'
-import {
   canImportHermesCli,
   execProbeSync,
   PROBE_TIMEOUT_MS,
@@ -263,6 +258,11 @@ import { serializeJsonBody, setJsonRequestHeaders } from './oauth-net-request'
 import { createKeepAwake } from './power-save'
 import { FirstRunSetupResetError, runPrimaryBackendStartup } from './primary-backend-startup'
 import { rehomePrimaryConnection } from './primary-connection-rehome'
+import {
+  backendExitedBeforeOwnershipError,
+  isProcessGoneError,
+  windowsProcessStartMarkerCommand
+} from './process-identity'
 import { decideProfileDeleteAction, profileNameFromDeleteRequest, resolveRouteProfile } from './profile-delete-routing'
 import {
   fetchPrimaryProfileSessions,
@@ -271,6 +271,7 @@ import {
 } from './profile-session-routing'
 import { createQuickEntryShortcut, quickEntryWindowBounds, sanitizeQuickEntrySettings } from './quick-entry'
 import { type ActiveWork, mergeActiveWork, normalizeActiveWork, quitPromptFor } from './quit-guard'
+import { fetchLatestRelease, releaseIsNewer } from './release-update-source'
 import * as remoteLifecycle from './remote-lifecycle'
 import {
   RemoteLivenessTracker,
@@ -3014,14 +3015,39 @@ async function checkUpdates() {
 
   if (!directoryExists(gitDir)) {
     if (readActiveInstallMethod() === 'desktop-bundle') {
-      return {
-        supported: false,
-        reason: 'bundled-installer-update',
-        message: 'This installation is managed by Hermes Setup. Download and launch a newer Setup installer to update it.',
-        hermesRoot: updateRoot,
-        branch
+      try {
+        const release = await fetchLatestRelease()
+        const marker = readBundledSourceMarker(updateRoot)
+        const available = releaseIsNewer(release, app.getVersion(), marker?.commit)
+
+        return {
+          supported: true,
+          branch: 'stable',
+          currentBranch: 'stable',
+          behind: available ? null : 0,
+          updateAvailable: available,
+          currentSha: marker?.commit || '',
+          targetSha: release.commit,
+          commits: [],
+          dirty: false,
+          hermesRoot: updateRoot,
+          fetchedAt: Date.now(),
+          message: available
+            ? `Ansatz ${release.version} is available from the release server.`
+            : `Ansatz ${app.getVersion()} is up to date.`
+        }
+      } catch (error) {
+        return {
+          supported: true,
+          branch: 'stable',
+          error: 'release-check-failed',
+          message: error instanceof Error ? error.message : String(error),
+          hermesRoot: updateRoot,
+          fetchedAt: Date.now()
+        }
       }
     }
+
     return {
       supported: false,
       reason: 'not-a-git-checkout',
@@ -3682,13 +3708,14 @@ async function releaseBackendLock(updateRoot, tag) {
   return { unlocked: false }
 }
 
-// applyUpdates — hand off to the installer's --update flow, then exit.
+// applyUpdates — hand off to the repo-owned update orchestrator, then exit.
 //
 // The desktop is a pure consumer: it does NOT git pull / pip install / rebuild
 // itself (the old open-coded git dance lived here and drifted from
-// `ansatz update`). Instead we spawn the staged Hermes-Setup binary with
-// --update and quit, so it can run `ansatz update` (which refuses while we
-// hold the venv shim) and rebuild the desktop with our exe already gone.
+// `ansatz update`). Instead we spawn the source-bundled hand-off script and
+// quit, so it can run `ansatz update` after the app releases the venv and
+// executable locks. Packaged installs fetch source from the release server;
+// Git checkouts retain the normal Git path.
 //
 // Detection (checkUpdates / commit changelog / "N behind") stays in the UI;
 // only this apply action changed.
@@ -3700,7 +3727,16 @@ async function applyUpdates(opts = {}) {
   updateInFlight = true
 
   try {
+    const updateRoot = resolveUpdateRoot()
+    const managedBundle = readActiveInstallMethod() === 'desktop-bundle'
     const updater = resolveUpdaterBinary()
+
+    if (managedBundle && !resolveUpdateScriptHandoff(updateRoot)) {
+      const message = 'The packaged update hand-off script is missing. Repair this installation with Ansatz Setup before updating.'
+      emitUpdateProgress({ stage: 'error', message, percent: null })
+
+      return { ok: false, error: 'update-handoff-missing', message }
+    }
 
     if (!updater && !IS_WINDOWS) {
       // macOS/Linux: hand off to the repo-owned posix script — same shape as
@@ -3723,8 +3759,6 @@ async function applyUpdates(opts = {}) {
       // PowerShell and the checkout — so fall through to the normal hand-off
       // when the script exists. Only when the checkout predates the script do
       // we surface the manual one-liner.
-      const updateRoot = resolveUpdateRoot()
-
       if (!resolveUpdateScriptHandoff(updateRoot)) {
         // They DO have a working `hermes` on PATH / in the venv, so the
         // correct path is the one-liner in their native medium. We show the
@@ -3779,20 +3813,20 @@ async function applyUpdates(opts = {}) {
     })
     repairMacUpdaterHelper(updater)
 
-    const updateRoot = resolveUpdateRoot()
-    const managedBundle = readActiveInstallMethod() === 'desktop-bundle'
     const { branch: configuredBranch } = readDesktopUpdateConfig()
-    // A managed bundle has no .git checkout: the Setup binary carries the
-    // commit/archive pin in its own resources. Do not run the source-install
-    // branch healer here (it would invoke git in the bundled tree), and do not
-    // pass a branch that could make the updater look for a remote ref.
+
+    // A managed bundle has no .git checkout. Do not run the source-install
+    // branch healer; ansatz update will use the release server's stable channel.
     const branch = managedBundle
       ? null
       : await resolveHealedBranch(updateRoot, configuredBranch || DEFAULT_UPDATE_BRANCH)
+
     const updaterArgs = ['--update']
+
     if (branch) {
       updaterArgs.push('--branch', branch)
     }
+
     const targetApp = IS_MAC ? runningAppBundle() : null
 
     if (targetApp) {
@@ -3864,11 +3898,10 @@ async function applyUpdates(opts = {}) {
     // Detached so the updater outlives this process — it needs us GONE before
     // `ansatz update` will run (the venv shim is locked while we live).
     //
-    // For source checkouts the repo-owned hand-off script is preferred because
-    // it is refreshed with each source update. Managed bundles deliberately
-    // skip that script and use the staged Setup binary, whose embedded
-    // snapshot is the only authoritative update input.
-    const scriptHandoff = managedBundle ? null : resolveUpdateScriptHandoff(updateRoot)
+    // The hand-off script is source and therefore advances with both Git and
+    // release-archive updates. The staged Setup binary remains a repair/first-
+    // install artifact; re-running its embedded old snapshot is not an update.
+    const scriptHandoff = resolveUpdateScriptHandoff(updateRoot)
     let child
 
     if (scriptHandoff) {

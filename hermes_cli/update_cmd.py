@@ -774,17 +774,255 @@ def _print_update_completion(message: str) -> None:
         print(f"=== hermes-update completed {action_id} ===")
 
 
-def _update_via_zip(args, *, had_desktop_app_before_update: bool = False):
-    """Reject unmanaged source replacement on packaged installations.
+def _preserve_archive_runtime_artifacts(extracted_root: Path) -> None:
+    """Graft generated Desktop artifacts that are intentionally not in source.
 
-    Release packages update through their signed platform installer. A runtime
-    source archive has no registered domestic origin/provenance, so Hermes does
-    not download one from an official host as an implicit fallback.
+    The release archive is a committed-source snapshot.  ``release/`` and the
+    prepared packaging inputs are generated locally, so replacing ``apps/``
+    without carrying them forward would delete the installed shell before the
+    post-update rebuild gets a chance to replace it.
     """
-    del args, had_desktop_app_before_update
-    print("✗ Automatic source-archive update is unavailable for this installation.")
-    print("  Install a reviewed release package supplied by your administrator.")
-    _m().sys.exit(1)
+    live_desktop = _m().PROJECT_ROOT / "apps" / "desktop"
+    next_desktop = extracted_root / "apps" / "desktop"
+    for relative in (Path("release"), Path("build")):
+        source = live_desktop / relative
+        destination = next_desktop / relative
+        if not source.exists() or destination.exists():
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_dir():
+            shutil.copytree(source, destination)
+        else:
+            shutil.copy2(source, destination)
+
+
+def _update_via_archive(args, *, had_desktop_app_before_update: bool = False):
+    """Update a packaged install from the operator's versioned source archive.
+
+    This is Hermes' archive fallback with the acquisition seam changed: no Git
+    checkout and no GitHub archive URL are involved.  The server supplies a
+    version/commit/size/SHA contract, then the existing two-phase top-level
+    replacement and post-update dependency/build stages apply that source.
+    """
+    import tempfile
+
+    from hermes_cli import __version__
+    from hermes_cli.update_source import (
+        UpdateSourceError,
+        download_release_archive,
+        extract_release_archive,
+        fetch_latest_release,
+        read_source_marker,
+        release_is_newer,
+        stage_desktop_payload_inputs,
+        write_source_marker,
+    )
+
+    branch = _m()._resolve_update_branch(args)
+    if branch != "main":
+        print(f"✗ --branch={branch} is not supported for packaged release archives.")
+        print("  --branch only applies to Git source checkouts; packaged installs use stable.")
+        _m().sys.exit(1)
+
+    active_tool_dependencies = _m()._capture_active_tool_dependencies()
+    marker = read_source_marker(_m().PROJECT_ROOT) or {}
+
+    print("→ Checking the Ansatz release server...")
+    try:
+        release = fetch_latest_release()
+    except UpdateSourceError as exc:
+        print(f"✗ Update check failed: {exc}")
+        _m().sys.exit(1)
+
+    if not release_is_newer(
+        release,
+        current_version=__version__,
+        current_commit=str(marker.get("commit") or "") or None,
+    ):
+        print(f"✓ Ansatz {__version__} is already up to date.")
+        return
+
+    print(f"→ Downloading Ansatz {release.version} source...")
+    tmp_dir = Path(tempfile.mkdtemp(prefix="ansatz-update-"))
+    update_count = 0
+    try:
+        archive_path = tmp_dir / "hermes-backend.tar.gz"
+        download_release_archive(release, archive_path)
+
+        print("→ Verifying and extracting source...")
+        extracted = extract_release_archive(archive_path, tmp_dir / "extracted")
+        _preserve_archive_runtime_artifacts(extracted)
+        # The rebuilt Electron shell must embed this new payload, otherwise an
+        # old shell can legitimately see a commit mismatch and restore its old
+        # bundled source on next launch.
+        stage_desktop_payload_inputs(extracted, archive_path, release)
+
+        preserve = {
+            ".env",
+            ".git",
+            ".install_method",
+            ".hermes-bundled-source.json",
+            "auth-venv",
+            "node_modules",
+            "venv",
+        }
+        entries = [entry for entry in os.listdir(extracted) if entry not in preserve]
+
+        need = sum(
+            os.path.getsize(os.path.join(dirpath, filename))
+            for entry in entries
+            for dirpath, _dirs, files in os.walk(extracted / entry)
+            for filename in files
+        ) + sum(
+            os.path.getsize(extracted / entry)
+            for entry in entries
+            if (extracted / entry).is_file()
+        )
+        required = int(need * 1.2)
+        free = shutil.disk_usage(str(_m().PROJECT_ROOT)).free
+        if free < required:
+            raise UpdateSourceError(
+                "not enough free disk space to stage the update safely "
+                f"(need ~{required // (1024 * 1024)} MB, "
+                f"have {free // (1024 * 1024)} MB)"
+            )
+
+        staged: list[tuple[str, str]] = []
+        try:
+            for entry in entries:
+                source = str(extracted / entry)
+                destination = str(_m().PROJECT_ROOT / entry)
+                staged.append((_stage_replacement(source, destination), destination))
+        except Exception:
+            _discard_staged(staged)
+            raise
+
+        try:
+            _commit_staged_replacements(staged)
+        except Exception:
+            _discard_staged(staged)
+            raise
+        update_count = len(staged)
+        write_source_marker(_m().PROJECT_ROOT, release)
+        (_m().PROJECT_ROOT / ".hermes_build_sha").write_text(
+            release.commit + "\n", encoding="utf-8"
+        )
+        print(
+            f"✓ Applied {update_count} source entries "
+            f"({release.commit[:12]}, version {release.version})"
+        )
+    except Exception as exc:
+        print(f"✗ Source archive update failed: {exc}")
+        print("  The two-phase source transaction kept the previous tree in place.")
+        print("  Re-run `ansatz update` after resolving the reported problem.")
+        _m().sys.exit(1)
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    removed = _m()._clear_bytecode_cache(_m().PROJECT_ROOT)
+    if removed:
+        print(
+            f"  ✓ Cleared {removed} stale __pycache__ "
+            f"director{'y' if removed == 1 else 'ies'}"
+        )
+    _m()._record_bytecode_fingerprint()
+
+    # Python itself is source-run and needs no compilation.  Keep Hermes'
+    # dependency refresh semantics so a changed lockfile is applied in-place.
+    _m()._abort_dependency_sync_if_self_locked()
+    print("→ Updating Python dependencies...")
+    from hermes_cli.managed_uv import ensure_uv, update_managed_uv
+
+    update_managed_uv()
+    uv_bin = ensure_uv()
+    pip_cmd = [_m().sys.executable, "-m", "pip"]
+    uv_env = None
+    if not uv_bin:
+        uv_bin = _ensure_uv_for_termux(pip_cmd)
+    if uv_bin:
+        uv_env = {**os.environ, "VIRTUAL_ENV": str(_m().PROJECT_ROOT / "venv")}
+        if _m()._is_termux_env(uv_env):
+            uv_env.pop("PYTHONPATH", None)
+            uv_env.pop("PYTHONHOME", None)
+        _m()._install_python_dependencies_with_optional_fallback(
+            [uv_bin, "pip"], env=uv_env
+        )
+    else:
+        try:
+            subprocess.run(
+                pip_cmd + ["--version"],
+                cwd=_m().PROJECT_ROOT,
+                check=True,
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError:
+            subprocess.run(
+                [_m().sys.executable, "-m", "ensurepip", "--upgrade", "--default-pip"],
+                cwd=_m().PROJECT_ROOT,
+                check=True,
+            )
+        _m()._install_python_dependencies_with_optional_fallback(pip_cmd)
+
+    install_prefix = [uv_bin, "pip"] if uv_bin else pip_cmd
+    _m()._restore_active_tool_dependencies(
+        active_tool_dependencies,
+        install_prefix,
+        env=uv_env if uv_bin else None,
+    )
+    _m()._refresh_active_memory_provider_dependencies()
+
+    import_ok, failing_module, import_error = _validate_critical_modules_import(
+        _m().PROJECT_ROOT
+    )
+    if not import_ok:
+        print("✗ Updated source cannot be imported:")
+        print(f"  {failing_module}: {import_error}")
+        print("  Re-run `ansatz update` to repair the installation.")
+        _m().sys.exit(1)
+
+    node_failures = _update_node_dependencies()
+    _m()._build_web_ui(_m().PROJECT_ROOT / "web")
+    _rebuild_desktop_after_update(
+        _m().PROJECT_ROOT / "apps" / "desktop",
+        had_desktop_app_before_update=had_desktop_app_before_update,
+    )
+
+    try:
+        from tools.skills_sync import sync_skills
+
+        print("→ Syncing bundled skills...")
+        result = sync_skills(quiet=True)
+        if result.get("copied") or result.get("updated"):
+            print("  ✓ Bundled skills refreshed")
+        else:
+            print("  ✓ Skills are up to date")
+    except Exception as exc:
+        logger.debug("Bundled skill sync after archive update failed: %s", exc)
+
+    try:
+        from hermes_cli.model_catalog import seed_cache_from_checkout
+
+        seed_cache_from_checkout(_m().PROJECT_ROOT)
+    except Exception as exc:
+        logger.debug("Model catalog seed after archive update failed: %s", exc)
+
+    print()
+    if node_failures:
+        print(
+            "⚠ Source and Python dependencies were updated, but Node.js "
+            f"dependencies for {', '.join(node_failures)} need a retry."
+        )
+    else:
+        _print_update_completion("✓ Update complete!")
+    _finish_dashboard_update_cleanup(node_failures)
+
+
+def _update_via_zip(args, *, had_desktop_app_before_update: bool = False):
+    """Compatibility name for callers that patched Hermes' former ZIP path."""
+    return _update_via_archive(
+        args,
+        had_desktop_app_before_update=had_desktop_app_before_update,
+    )
 def _stash_local_changes_if_needed(git_cmd: list[str], cwd: Path) -> Optional[str]:
     status = subprocess.run(
         git_cmd + ["status", "--porcelain"],
@@ -2047,9 +2285,8 @@ def _run_logged_subprocess(cmd, *, cwd=None, env=None):
 def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
     """Implement ``ansatz update --check``: fetch and report without installing.
 
-    ``branch`` selects which branch the check compares against. Default is
-    "main"; callers can pass another branch to ask "are there new commits
-    on origin/<branch>?" without performing the update.
+    ``branch`` selects which branch a Git checkout compares against. Packaged
+    installs instead compare their source marker with the release API.
 
     ``branch_explicit`` is True iff the caller passed --branch on the CLI.
     Installs that can't honor non-default branches (e.g. Docker) surface a
@@ -2058,10 +2295,35 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
     from hermes_cli.config import detect_install_method, recommended_update_command_for_method
     method = detect_install_method(_m().PROJECT_ROOT)
     if method == "desktop-bundle":
-        from hermes_cli.config import format_desktop_bundle_update_message
+        if branch_explicit and branch != "main":
+            print(f"✗ --branch={branch} only applies to Git source checkouts.")
+            sys.exit(1)
+        from hermes_cli import __version__
+        from hermes_cli.update_source import (
+            UpdateSourceError,
+            fetch_latest_release,
+            read_source_marker,
+            release_is_newer,
+        )
 
-        print(format_desktop_bundle_update_message())
-        sys.exit(1)
+        try:
+            release = fetch_latest_release()
+        except UpdateSourceError as exc:
+            print(f"✗ Update check failed: {exc}")
+            sys.exit(1)
+        marker = read_source_marker(_m().PROJECT_ROOT) or {}
+        if release_is_newer(
+            release,
+            current_version=__version__,
+            current_commit=str(marker.get("commit") or "") or None,
+        ):
+            print(
+                f"↑ Ansatz {release.version} is available "
+                f"({release.commit[:12]}). Run `ansatz update` to install it."
+            )
+        else:
+            print(f"✓ Ansatz {__version__} is already up to date.")
+        return
 
     if method == "docker":
         # Docker can't ``git fetch`` from within the container.  Surface the
@@ -4162,18 +4424,20 @@ def _cmd_update_impl(args, gateway_mode: bool):
     desktop_dir = _m().PROJECT_ROOT / "apps" / "desktop"
     had_desktop_app_before_update = _desktop_app_present(desktop_dir)
 
-    # Try git-based update first, fall back to ZIP download on Windows
-    # when git file I/O is broken (antivirus, NTFS filter drivers, etc.)
-    use_zip_update = False
+    # Source checkouts retain Hermes' Git update path. Packaged installs have
+    # no .git directory by design and obtain the same source snapshot from the
+    # release server instead, on every supported host platform.
     git_dir = _m().PROJECT_ROOT / ".git"
 
     if not git_dir.exists():
-        if sys.platform == "win32":
-            use_zip_update = True
-        else:
-            print("✗ Not a git repository. Please reinstall:")
-            print("  Install a reviewed release package supplied by your administrator.")
-            sys.exit(1)
+        try:
+            _update_via_archive(
+                args,
+                had_desktop_app_before_update=had_desktop_app_before_update,
+            )
+        finally:
+            _m()._resume_windows_gateways_after_update(_windows_gateway_resume)
+        return
 
     # On Windows, git can fail with "unable to write loose object file: Invalid argument"
     # due to filesystem atomicity issues. Set the recommended workaround.
@@ -4218,17 +4482,6 @@ def _cmd_update_impl(args, gateway_mode: bool):
         print("⚠ Updating from fork:")
         print(f"  {origin_url}")
         print()
-
-    if use_zip_update:
-        # ZIP-based update for Windows when git is broken
-        try:
-            _update_via_zip(
-                args,
-                had_desktop_app_before_update=had_desktop_app_before_update,
-            )
-        finally:
-            _m()._resume_windows_gateways_after_update(_windows_gateway_resume)
-        return
 
     # Fetch and pull
     try:
@@ -6088,9 +6341,9 @@ def _cmd_update_impl(args, gateway_mode: bool):
     except subprocess.CalledProcessError as e:
         if _m()._is_windows():
             print(f"⚠ Git update failed: {e}")
-            print("→ Falling back to ZIP download...")
+            print("→ Falling back to the release-server source archive...")
             print()
-            _update_via_zip(
+            _update_via_archive(
                 args,
                 had_desktop_app_before_update=had_desktop_app_before_update,
             )

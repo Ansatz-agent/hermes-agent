@@ -17,7 +17,10 @@ def build_update_parser(subparsers, *, cmd_update: Callable) -> None:
     update_parser = subparsers.add_parser(
         "update",
         help="Update Hermes Agent to the latest version",
-        description="Pull the latest changes from git and reinstall dependencies",
+        description=(
+            "Install the latest source release and refresh dependencies. "
+            "Git checkouts use their remote; packaged installs use the Ansatz release server."
+        ),
     )
     update_parser.add_argument(
         "--gateway",
@@ -55,10 +58,10 @@ def build_update_parser(subparsers, *, cmd_update: Callable) -> None:
         default=None,
         metavar="NAME",
         help=(
-            "Update against this branch instead of the default (main). "
+            "For Git source checkouts, update against this branch instead of main. "
             "If the local checkout is on a different branch, hermes will "
             "switch to the requested branch first (auto-stashing any "
-            "uncommitted changes)."
+            "uncommitted changes). Packaged release archives do not expose branches."
         ),
     )
     update_parser.add_argument(

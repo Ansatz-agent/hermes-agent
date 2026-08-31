@@ -430,8 +430,8 @@ def test_commit_failure_plus_discard_leaves_no_staging_litter(tmp_path, monkeypa
     assert litter == [], f"orphaned update litter: {litter}"
 
 
-def test_update_via_zip_wires_discard_into_the_commit_failure_path():
-    """AST wiring contract: _update_via_zip must call _discard_staged from an
+def test_update_via_archive_wires_discard_into_the_commit_failure_path():
+    """AST wiring contract: _update_via_archive must call _discard_staged from an
     exception handler around _commit_staged_replacements. The behavioral test
     above mirrors that wiring; this pins the production function itself so a
     refactor can't silently drop the cleanup."""
@@ -439,7 +439,7 @@ def test_update_via_zip_wires_discard_into_the_commit_failure_path():
     import inspect
     import textwrap
 
-    src = textwrap.dedent(inspect.getsource(update_cmd._update_via_zip))
+    src = textwrap.dedent(inspect.getsource(update_cmd._update_via_archive))
     tree = ast.parse(src)
 
     def _calls(node, name):
@@ -464,7 +464,7 @@ def test_update_via_zip_wires_discard_into_the_commit_failure_path():
             wired = True
             break
     assert wired, (
-        "_update_via_zip no longer discards staging copies when "
+        "_update_via_archive no longer discards staging copies when "
         "_commit_staged_replacements fails — commit-phase litter will make "
         "the retry's free-space check fail harder than the first attempt"
     )

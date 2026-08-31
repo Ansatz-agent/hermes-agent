@@ -237,10 +237,10 @@ def test_pre_fetch_flow_has_no_self_lock_preflight():
     assert "_m()._abort_dependency_sync_if_self_locked" in post_fetch
 
 
-def test_zip_update_guards_dependency_sync():
+def test_archive_update_guards_dependency_sync():
     import inspect
 
-    src = inspect.getsource(update_cmd._update_via_zip)
+    src = inspect.getsource(update_cmd._update_via_archive)
     swap_idx = src.index("Updating Python dependencies")
     assert "_abort_dependency_sync_if_self_locked" in src[:swap_idx]
 

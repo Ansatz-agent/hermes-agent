@@ -555,7 +555,7 @@ def stamp_install_method(method: str, project_root: Optional[Path] = None) -> No
 def recommended_update_command_for_method(method: str) -> str:
     """Return the update command or guidance for a given install method."""
     if method == "desktop-bundle":
-        return "Install a newer Hermes Setup installer"
+        return "ansatz update"
     if method in {"nix", "nixos"}:
         return _NIX_UPDATE_MSG
     if method == "docker":
@@ -625,10 +625,10 @@ def format_docker_update_message() -> str:
 
 
 _DESKTOP_BUNDLE_UPDATE_MESSAGE = """\
-Hermes Agent was installed from a backend payload bundled with Hermes Setup.
-Install a newer Hermes Setup installer (DMG, NSIS, or MSI) to update the app
-and its matching backend. The Git-based `ansatz update` command does not apply
-to this installation."""
+Ansatz was installed from a bundled source snapshot. `ansatz update` checks the
+Ansatz release server, downloads its pinned source archive, and then runs the
+same dependency, build, migration, and restart stages used by a Hermes source
+update. Set ANSATZ_UPDATE_BASE_URL to an http(s) server when testing from a VM."""
 
 
 def format_desktop_bundle_update_message() -> str:
