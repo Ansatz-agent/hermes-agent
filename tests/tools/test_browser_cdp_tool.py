@@ -418,3 +418,18 @@ def test_check_fn_false_when_browser_requirements_fail(monkeypatch):
         bt, "_get_cdp_override_raw", lambda: "ws://localhost:9222/devtools/browser/x"
     )
     assert browser_cdp_tool._browser_cdp_check() is False
+
+
+def test_check_fn_without_cdp_url_skips_browser_probe(monkeypatch):
+    """The default Desktop configuration has no CDP override.  Reject that
+    state before invoking the broader browser gate so sibling CDP tools do
+    not duplicate startup work."""
+    import tools.browser_tool as bt
+
+    monkeypatch.setattr(bt, "_get_cdp_override_raw", lambda: None)
+
+    def fail_if_called():
+        raise AssertionError("browser requirements are irrelevant without a CDP URL")
+
+    monkeypatch.setattr(bt, "check_browser_requirements", fail_if_called)
+    assert browser_cdp_tool._browser_cdp_check() is False

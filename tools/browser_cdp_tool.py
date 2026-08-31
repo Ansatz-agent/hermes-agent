@@ -659,12 +659,12 @@ def _browser_cdp_check() -> bool:
     except ImportError as exc:  # pragma: no cover — defensive
         logger.debug("browser_cdp check: browser_tool import failed: %s", exc)
         return False
-    if not check_browser_requirements():
-        return False
     # Raw (no-I/O) gate: check_fns run during tool-schema assembly at every
     # startup; resolving the endpoint over HTTP here would block launch when
     # the configured endpoint is stale/unreachable.
-    return bool(_get_cdp_override_raw())
+    if not _get_cdp_override_raw():
+        return False
+    return check_browser_requirements()
 
 
 registry.register(

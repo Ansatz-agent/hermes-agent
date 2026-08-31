@@ -73,7 +73,7 @@ def test_find_agent_browser_lazy_install_cycle_terminates(monkeypatch):
     monkeypatch.setattr(bt, "_cached_agent_browser", None)
     monkeypatch.setattr(bt, "_agent_browser_resolved", False)
     monkeypatch.setattr(shutil, "which", lambda *a, **k: None)
-    monkeypatch.setattr(bt, "_resolve_npx_bin", lambda: None)
+    monkeypatch.setattr(bt, "_resolve_npx_bin", lambda **_kw: None)
     monkeypatch.setattr(dep_ensure, "_has_system_browser", lambda: False)
     monkeypatch.setattr(dep_ensure, "_has_hermes_agent_browser", lambda: False)
     monkeypatch.setattr(dep_ensure, "_find_install_script", lambda *a, **k: (None, None))

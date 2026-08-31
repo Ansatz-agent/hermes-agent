@@ -3787,6 +3787,42 @@ function Install-NodeDeps {
         }
     }
 
+    # Resolve the Chromium executable expected by the Playwright package that
+    # was just installed in this source tree.  A zero exit code alone is not a
+    # sufficient success signal on Windows: cmd.exe / Start-Process can expose
+    # a stale zero while a failing npm child is still unwinding, and some
+    # mirrors return a successful launcher status without the requested browser
+    # archive.  The browser tools are ready only when Playwright's own expected
+    # executable exists on disk.
+    function _Get-PlaywrightChromiumExecutable([string]$workDir, [string]$npmPath) {
+        $nodeExe = Join-Path (Split-Path $npmPath -Parent) "node.exe"
+        if (-not (Test-Path -LiteralPath $nodeExe -PathType Leaf)) {
+            $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+            if (-not $nodeCmd) { return $null }
+            $nodeExe = if ($nodeCmd.Source) { $nodeCmd.Source } elseif ($nodeCmd.Definition) { $nodeCmd.Definition } else { $nodeCmd.Name }
+        }
+
+        # PowerShell 5's native-command marshalling strips embedded double
+        # quotes from an argument on Windows.  Use doubled PowerShell single
+        # quotes so Node receives JavaScript string delimiters intact.
+        $probe = 'let chromium;try{({chromium}=require(''playwright''));}catch(e){({chromium}=require(''playwright-core''));}process.stdout.write(chromium.executablePath());'
+        Push-Location $workDir
+        try {
+            $probeOutput = @(& $nodeExe -e $probe 2>$null)
+            $probeCode = $LASTEXITCODE
+        } catch {
+            return $null
+        } finally {
+            Pop-Location
+        }
+        if ($probeCode -ne 0) { return $null }
+        $candidate = $probeOutput | Where-Object { $_ -and $_.Trim() } | Select-Object -Last 1
+        if ($candidate -and (Test-Path -LiteralPath ($candidate.Trim()) -PathType Leaf)) {
+            return $candidate.Trim()
+        }
+        return $null
+    }
+
     # Browser tools
     if (Test-Path "$InstallDir\package.json") {
         Write-Info "Installing Node.js dependencies (browser tools)..."
@@ -3858,6 +3894,8 @@ function Install-NodeDeps {
                     # #39219.
                     $ErrorActionPreference = "Continue"
                     $pwCode = 1
+                    $pwInstalled = $false
+                    $chromiumExecutable = $null
                     foreach ($playwrightHost in @($script:PlaywrightPrimaryMirror, $script:PlaywrightSecondaryMirror, $null)) {
                         if ($playwrightHost) {
                             $env:PLAYWRIGHT_DOWNLOAD_HOST = $playwrightHost
@@ -3866,11 +3904,23 @@ function Install-NodeDeps {
                         }
                         $pwCode = _Invoke-NativeWithTimeout $npxExe "--yes playwright install chromium" `
                             $InstallDir $pwLog $nodeDepsTimeoutSec
-                        if ($pwCode -eq 0) { break }
+                        if ($pwCode -eq 0) {
+                            $chromiumExecutable = _Get-PlaywrightChromiumExecutable $InstallDir $npmExe
+                            if ($chromiumExecutable) {
+                                $pwInstalled = $true
+                                break
+                            }
+                            # Preserve a failing final state if every source
+                            # reports zero without producing a usable browser.
+                            $pwCode = 1
+                            Write-Warn "Playwright reported success but its Chromium executable is missing; trying the next reviewed source."
+                            continue
+                        }
                         Write-Warn "Playwright download source failed; trying the next reviewed source."
                     }
                     $ErrorActionPreference = $prevEAP
-                    if ($pwCode -eq 0) {
+                    if ($pwInstalled) {
+                        Write-Info "Verified Chromium executable: $chromiumExecutable"
                         Write-Success "Playwright Chromium installed (browser tools ready)"
                         Remove-Item -Force $pwLog -ErrorAction SilentlyContinue
                     } elseif ($pwCode -eq 124) {

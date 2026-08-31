@@ -100,3 +100,18 @@ def test_windows_install_is_domestic_first_and_never_executes_remote_installers(
     assert "@($script:NodePrimaryMirror, $script:NodeSecondaryMirror, $script:NodeOfficialMirror)" in node_body
     node_deps_body = _extract_function_body(text, "Install-NodeDeps")
     assert "@($script:PlaywrightPrimaryMirror, $script:PlaywrightSecondaryMirror, $null)" in node_deps_body
+
+
+def test_windows_playwright_success_requires_a_real_chromium_executable() -> None:
+    """A mirror failure must not become a false success merely because the
+    cmd.exe launcher surfaced a zero exit code."""
+    body = _extract_function_body(INSTALL_PS1.read_text(), "Install-NodeDeps")
+
+    assert "function _Get-PlaywrightChromiumExecutable" in body
+    assert "require(''playwright'')" in body
+    assert 'require("playwright")' not in body
+    assert "Test-Path -LiteralPath ($candidate.Trim()) -PathType Leaf" in body
+    assert "$pwInstalled = $false" in body
+    assert "$chromiumExecutable = _Get-PlaywrightChromiumExecutable $InstallDir $npmExe" in body
+    assert "if ($pwInstalled)" in body
+    assert "if ($pwCode -eq 0) {\n                        Write-Success \"Playwright Chromium installed" not in body

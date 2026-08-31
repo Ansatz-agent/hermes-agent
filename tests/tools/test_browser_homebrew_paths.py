@@ -532,6 +532,28 @@ class TestResolveNpxBinPriority:
 
         assert bt._resolve_npx_bin() == "/usr/local/bin/npx"
 
+    def test_passive_resolution_never_executes_npx(self, monkeypatch):
+        """Tool-schema assembly only needs to know whether an npx candidate
+        exists.  It must not launch a cold npm shim while the Desktop queues
+        the user's first message."""
+        import tools.browser_tool as bt
+
+        monkeypatch.setattr(bt, "_merge_browser_path", lambda _p: "/hermes/node/bin")
+        monkeypatch.setattr(
+            bt.shutil,
+            "which",
+            lambda cmd, path=None: (
+                "/hermes/node/bin/npx" if path == "/hermes/node/bin" else None
+            ),
+        )
+
+        def fail_if_executed(_path):
+            raise AssertionError("passive npx resolution must not spawn a process")
+
+        monkeypatch.setattr(bt, "node_tool_runnable", fail_if_executed)
+
+        assert bt._resolve_npx_bin(validate=False) == "/hermes/node/bin/npx"
+
     def test_returns_none_when_nothing_runnable(self, monkeypatch):
         import tools.browser_tool as bt
 
