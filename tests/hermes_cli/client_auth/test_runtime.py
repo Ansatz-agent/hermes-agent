@@ -57,6 +57,8 @@ from hermes_cli.client_auth.runtime import (
     authorize_entrypoint,
     clear_entrypoint_owner,
     connect_runtime_owner,
+    external_auth_enabled,
+    external_auth_scope,
     install_entrypoint_owner,
     install_runtime_consumer,
     is_local_auth_unavailable,
@@ -86,6 +88,30 @@ def _scope_bearer(seed: bytes = b"A") -> str:
 
 def _scope_control_id(seed: bytes) -> str:
     return base64.urlsafe_b64encode(seed * 16).decode("ascii").rstrip("=")
+
+
+def test_ansatz_external_auth_uses_desktop_scope_without_runtime_owner(monkeypatch):
+    scope = AuthScope("fedcba9876543210fedcba9876543210", 12)
+    monkeypatch.setenv("ANSATZ_EXTERNAL_AUTH", "true")
+    monkeypatch.setenv(
+        "ANSATZ_EXTERNAL_AUTH_RUNTIME_INSTANCE_ID", scope.runtime_instance_id
+    )
+    monkeypatch.setenv("ANSATZ_EXTERNAL_AUTH_EPOCH", str(scope.epoch))
+
+    assert external_auth_enabled() is True
+    assert external_auth_scope() == scope
+    assert authorize_entrypoint("cli.start", interactive=False) == scope
+    assert require_authorized("dashboard.api.request") == scope
+    assert require_authorized("backend.scope_token.register", expected=scope) == scope
+
+
+def test_external_auth_scope_rejects_malformed_desktop_scope(monkeypatch):
+    monkeypatch.setenv("ANSATZ_EXTERNAL_AUTH", "1")
+    monkeypatch.setenv("ANSATZ_EXTERNAL_AUTH_RUNTIME_INSTANCE_ID", "not-a-scope")
+    monkeypatch.setenv("ANSATZ_EXTERNAL_AUTH_EPOCH", "0")
+
+    with pytest.raises(AuthRequired, match="runtime_unavailable"):
+        external_auth_scope()
 
 
 @pytest.mark.parametrize(

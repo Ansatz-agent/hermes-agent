@@ -6,11 +6,15 @@ import { test } from 'vitest'
 import {
   isExactWindowsAuthOwnerProcess,
   retireExactWindowsAuthOwners,
+  windowsAuthOwnerInterpreterPaths,
   type WindowsProcessRecord
 } from './windows-auth-owner'
 
 const ACTIVE_ROOT = String.raw`C:\Users\张 三\AppData\Local\hermes\hermes-agent`
 const PYTHON = path.win32.join(ACTIVE_ROOT, 'auth-venv', 'python.exe')
+const PYTHONW = path.win32.join(ACTIVE_ROOT, 'auth-venv', 'pythonw.exe')
+const AUTH_SCRIPTS_PYTHONW = path.win32.join(ACTIVE_ROOT, 'auth-venv', 'Scripts', 'pythonw.exe')
+const LEGACY_PYTHONW = path.win32.join(ACTIVE_ROOT, 'venv', 'Scripts', 'pythonw.exe')
 const SID = 'S-1-5-21-100-200-300-400'
 
 function ownerRecord(overrides: Partial<WindowsProcessRecord> = {}): WindowsProcessRecord {
@@ -79,6 +83,101 @@ test('exact Windows auth owner path comparison is canonical and case-insensitive
   )
 })
 
+test('legacy venv owner is accepted only when explicitly enabled', () => {
+  const legacy = ownerRecord({
+    executablePath: LEGACY_PYTHONW,
+    commandLine: `"${LEGACY_PYTHONW}" -m hermes_cli.client_auth.runtime owner`
+  })
+
+  assert.equal(
+    isExactWindowsAuthOwnerProcess(legacy, {
+      activeRoot: ACTIVE_ROOT,
+      currentSid: SID,
+      excludedPids: new Set()
+    }),
+    false
+  )
+  assert.equal(
+    isExactWindowsAuthOwnerProcess(legacy, {
+      activeRoot: ACTIVE_ROOT,
+      currentSid: SID,
+      excludedPids: new Set(),
+      includeLegacyVenv: true
+    }),
+    true
+  )
+
+  const authPythonw = ownerRecord({
+    executablePath: PYTHONW,
+    commandLine: `"${PYTHONW}" -m hermes_cli.client_auth.runtime owner`
+  })
+
+  assert.equal(
+    isExactWindowsAuthOwnerProcess(authPythonw, {
+      activeRoot: ACTIVE_ROOT,
+      currentSid: SID,
+      excludedPids: new Set()
+    }),
+    true
+  )
+
+  const authScriptsPythonw = ownerRecord({
+    executablePath: AUTH_SCRIPTS_PYTHONW,
+    commandLine: `"${AUTH_SCRIPTS_PYTHONW}" -m hermes_cli.client_auth.runtime owner`
+  })
+
+  assert.equal(
+    isExactWindowsAuthOwnerProcess(authScriptsPythonw, {
+      activeRoot: ACTIVE_ROOT,
+      currentSid: SID,
+      excludedPids: new Set()
+    }),
+    true
+  )
+})
+
+test('owner interpreter candidates include both packaged and standard auth layouts', () => {
+  assert.deepEqual(windowsAuthOwnerInterpreterPaths(ACTIVE_ROOT), [
+    PYTHON,
+    PYTHONW,
+    path.win32.join(ACTIVE_ROOT, 'auth-venv', 'Scripts', 'python.exe'),
+    AUTH_SCRIPTS_PYTHONW
+  ])
+  assert.ok(windowsAuthOwnerInterpreterPaths(ACTIVE_ROOT, true).includes(LEGACY_PYTHONW))
+})
+
+test('legacy owner retirement opt-in is passed to the isolated PowerShell scripts', async () => {
+  const calls: Array<{ args: string[]; env: NodeJS.ProcessEnv }> = []
+
+  const result = await retireExactWindowsAuthOwners({
+    activeRoot: ACTIVE_ROOT,
+    callerPids: [99],
+    includeLegacyVenv: true,
+    runPowerShell: async (_command, args, options) => {
+      calls.push({ args, env: options.env })
+
+      return calls.length === 1
+        ? {
+            status: 0,
+            stdout: JSON.stringify({
+              currentSid: SID,
+              processes: [
+                ownerRecord({
+                  executablePath: LEGACY_PYTHONW,
+                  commandLine: `"${LEGACY_PYTHONW}" -m hermes_cli.client_auth.runtime owner`
+                })
+              ]
+            }),
+            stderr: ''
+          }
+        : { status: 0, stdout: JSON.stringify({ stopped: true, processId: 4242 }), stderr: '' }
+    }
+  })
+
+  assert.deepEqual(result, { inspected: 1, stopped: 1 })
+  assert.equal(calls[0].env.HERMES_AUTH_OWNER_INCLUDE_LEGACY, '1')
+})
+
 test('owner retirement passes install root as data and revalidates each selected PID', async () => {
   const calls: Array<{ args: string[]; env: NodeJS.ProcessEnv; timeout: number }> = []
   const inventory = JSON.stringify({ currentSid: SID, processes: [ownerRecord()] })
@@ -102,6 +201,15 @@ test('owner retirement passes install root as data and revalidates each selected
   assert.equal(calls[1].env.HERMES_AUTH_OWNER_SID, SID)
   assert.equal(calls[0].args.includes(ACTIVE_ROOT), false)
   assert.equal(calls[1].args.includes(ACTIVE_ROOT), false)
+
+  const terminationScript = Buffer.from(
+    calls[1].args[calls[1].args.indexOf('-EncodedCommand') + 1],
+    'base64'
+  ).toString('utf16le')
+
+  assert.match(terminationScript, /ParentProcessId/)
+  assert.match(terminationScript, /pythonw\.exe/)
+  assert.match(terminationScript, /childProcessIds/)
   assert.equal(
     calls.every(call => call.timeout > 0 && call.timeout <= 10_000),
     true

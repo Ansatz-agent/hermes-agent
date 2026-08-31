@@ -344,10 +344,17 @@ test('auth runtime probe uses the fixed protocol snippet and sanitized source pa
     assert.equal(calls.length, 1)
     assert.equal(calls[0].command, pythonPath)
     assert.deepEqual(calls[0].args.slice(0, 1), ['-c'])
+    assert.match(
+      calls[0].args[1],
+      /windows_modules = \('ntsecuritycon', 'pywintypes', 'win32api', 'win32con', 'win32file', 'win32pipe', 'win32security'\)/
+    )
+    assert.match(calls[0].args[1], /external_auth_enabled, external_auth_scope/)
+    assert.match(calls[0].args[1], /guard\.enforce_raw_argv\(\['doctor'\]\)/)
     assert.match(calls[0].args[1], /hermes_cli\.client_auth\.bridge/)
     assert.match(calls[0].args[1], new RegExp(`PROTOCOL_VERSION == ${AUTH_BRIDGE_PROTOCOL_VERSION}`))
     assert.match(calls[0].args[1], /hermes_cli\.client_auth\.backend_scope_protocol/)
     assert.match(calls[0].args[1], new RegExp(`DESKTOP_SCOPE_PROTOCOL_VERSION == ${DESKTOP_SCOPE_PROTOCOL_VERSION}`))
+    assert.match(calls[0].args[1], /endpoint = runtime_endpoint\(\) if os\.name == 'nt' else None/)
     assert.equal((calls[0].options.env as NodeJS.ProcessEnv).PYTHONPATH, fixture.activeRoot)
     assert.equal('OPENAI_API_KEY' in (calls[0].options.env as NodeJS.ProcessEnv), false)
   } finally {

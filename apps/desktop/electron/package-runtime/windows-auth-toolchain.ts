@@ -12,7 +12,15 @@ const EXPAND_ARCHIVE_COMMAND =
   'Expand-Archive -LiteralPath $env:HERMES_ARCHIVE_PATH -DestinationPath $env:HERMES_ARCHIVE_DESTINATION -Force'
 
 const PYTHON_PATH_FILE = 'python313._pth'
-const PYTHON_PATH_CONTENT = 'python313.zip\n.\nLib\\site-packages\n..\nimport site\n'
+// The temporary runtime is nested one directory deeper than the published
+// auth-venv (`activeRoot\\.auth-runtime-stage-*\\venv`).  Embedded Python
+// resolves entries in an `._pth` file relative to that directory, so the
+// source checkout is two levels up while verification runs.  Once the
+// runtime is atomically promoted to `activeRoot\\auth-venv`, the checkout is
+// one level up.  Keep both contracts explicit; relying on cwd/PYTHONPATH is
+// incorrect because verification intentionally uses Python's isolated mode.
+const STAGING_PYTHON_PATH_CONTENT = 'python313.zip\n.\nLib\\site-packages\n..\\..\nimport site\n'
+const PUBLISHED_PYTHON_PATH_CONTENT = 'python313.zip\n.\nLib\\site-packages\n..\nimport site\n'
 const HARD_TIMEOUT_MS = 5 * 60_000
 const IDLE_TIMEOUT_MS = 60_000
 const KILL_GRACE_MS = 2_000
@@ -212,6 +220,12 @@ function beginAuthTransaction(activeRoot: string): AuthTransaction {
 function publishAuthRuntime(stagingRuntime: string, activeRoot: string, transaction: AuthTransaction): void {
   const runtimeRoot = path.join(activeRoot, 'auth-venv')
 
+  // Verification happens while the runtime is still under `.auth-runtime-
+  // stage-*`, where the source checkout is two levels above the interpreter.
+  // Rewrite the path file before promotion so the published runtime keeps
+  // the canonical one-level `..` source entry.
+  fs.writeFileSync(path.join(stagingRuntime, PYTHON_PATH_FILE), PUBLISHED_PYTHON_PATH_CONTENT, 'utf8')
+
   if (transaction.backupName) {
     fs.renameSync(runtimeRoot, path.join(activeRoot, transaction.backupName))
   }
@@ -362,7 +376,11 @@ export async function prepareWindowsPackagedAuthRuntime(options: PrepareOptions)
   assertToolchain(toolchain)
   fs.mkdirSync(activeRoot, { recursive: true })
   const sourceContract = readSourceContract(activeRoot)
-  await retireAuthOwners({ activeRoot })
+  // A previous build may have launched its owner from either the packaged
+  // embedded interpreter or the standard venv Scripts layout.  Both are
+  // exact Ansatz-owned paths; retire them before replacing auth-venv so an
+  // old owner cannot reconnect to the newly published bridge contract.
+  await retireAuthOwners({ activeRoot, includeLegacyVenv: true })
   recoverWindowsAuthRuntimeTransaction(activeRoot)
 
   const stagingRoot = path.join(activeRoot, `.auth-runtime-stage-${process.pid}-${Date.now()}`)
@@ -404,7 +422,7 @@ export async function prepareWindowsPackagedAuthRuntime(options: PrepareOptions)
     requireWindowsX64Pe(toolchain.uvAssetPath, 'uv executable')
     fs.copyFileSync(toolchain.uvAssetPath, uvExecutable)
     fs.mkdirSync(path.join(stagingRuntime, 'Lib', 'site-packages'), { recursive: true })
-    fs.writeFileSync(path.join(stagingRuntime, PYTHON_PATH_FILE), PYTHON_PATH_CONTENT, 'utf8')
+    fs.writeFileSync(path.join(stagingRuntime, PYTHON_PATH_FILE), STAGING_PYTHON_PATH_CONTENT, 'utf8')
 
     await runRequired(
       runProcess,
@@ -438,10 +456,13 @@ export async function prepareWindowsPackagedAuthRuntime(options: PrepareOptions)
 
     const verification = [
       'import httpx, keyring',
+      'import ntsecuritycon, pywintypes, win32api, win32con, win32file, win32pipe, win32security',
       'from hermes_cli.client_auth import bridge',
       'from hermes_cli.client_auth.backend_scope_protocol import DESKTOP_SCOPE_PROTOCOL_VERSION',
+      'from hermes_cli.client_auth.runtime import runtime_endpoint',
       `assert bridge.PROTOCOL_VERSION == ${AUTH_BRIDGE_PROTOCOL_VERSION}`,
       `assert DESKTOP_SCOPE_PROTOCOL_VERSION == ${DESKTOP_SCOPE_PROTOCOL_VERSION}`,
+      "endpoint = runtime_endpoint(); assert endpoint.owner_sid.startswith('S-1-')",
       'backend = keyring.get_keyring()',
       "identity = f'{backend.__class__.__module__}.{backend.__class__.__name__}'",
       "assert 'Windows' in identity, identity"

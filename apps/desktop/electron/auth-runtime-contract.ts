@@ -297,10 +297,26 @@ export function authRuntimeProbeSnippet(
   scopeProtocolVersion = DESKTOP_SCOPE_PROTOCOL_VERSION
 ): string {
   return [
+    'import os',
+    // Exercise the same external-auth contract used by the desktop-spawned
+    // backend. Keep the probe self-contained so it does not depend on a
+    // logged-in account or a running Hermes owner process.
+    "os.environ['ANSATZ_EXTERNAL_AUTH'] = '1'",
+    "os.environ['ANSATZ_EXTERNAL_AUTH_RUNTIME_INSTANCE_ID'] = '0' * 32",
+    "os.environ['ANSATZ_EXTERNAL_AUTH_EPOCH'] = '0'",
+    'import hermes_cli.client_auth.guard as guard',
     'import hermes_cli.client_auth.bridge as bridge',
     'from hermes_cli.client_auth.backend_scope_protocol import DESKTOP_SCOPE_PROTOCOL_VERSION',
+    'from hermes_cli.client_auth.runtime import external_auth_enabled, external_auth_scope, runtime_endpoint',
     `assert bridge.PROTOCOL_VERSION == ${protocolVersion}`,
-    `assert DESKTOP_SCOPE_PROTOCOL_VERSION == ${scopeProtocolVersion}`
+    `assert DESKTOP_SCOPE_PROTOCOL_VERSION == ${scopeProtocolVersion}`,
+    'assert external_auth_enabled()',
+    "assert external_auth_scope().runtime_instance_id == '0' * 32",
+    "guard.enforce_raw_argv(['doctor'])",
+    "windows_modules = ('ntsecuritycon', 'pywintypes', 'win32api', 'win32con', 'win32file', 'win32pipe', 'win32security')",
+    "assert os.name != 'nt' or all(__import__(module) for module in windows_modules)",
+    "endpoint = runtime_endpoint() if os.name == 'nt' else None",
+    "assert os.name != 'nt' or endpoint.owner_sid.startswith('S-1-')"
   ].join('; ')
 }
 
