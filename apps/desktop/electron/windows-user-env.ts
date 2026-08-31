@@ -7,7 +7,7 @@
 // login, so a variable set via `setx` AFTER login is invisible in process.env
 // even though a fresh shell — and the Hermes CLI — sees it immediately. The
 // desktop's HERMES_HOME resolution relies on process.env, so that stale-snapshot
-// gap silently sends the backend to the default %LOCALAPPDATA%\hermes. Reading
+// gap silently sends the backend to the default %LOCALAPPDATA%\AnsatzVoiceTraceClient. Reading
 // the live registry value closes the gap. See #45471.
 
 import { execFileSync } from 'node:child_process'

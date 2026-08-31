@@ -40,7 +40,7 @@ NC='\033[0m' # No Color
 BOLD='\033[1m'
 
 # Configuration
-HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"
+HERMES_HOME="${HERMES_HOME:-$HOME/.ansatz-voice-trace-client}"
 # INSTALL_DIR is resolved AFTER arg parsing and OS detection so we can pick an
 # FHS-style layout for root installs.  Track whether the user gave us an
 # explicit directory — if so we never override it.

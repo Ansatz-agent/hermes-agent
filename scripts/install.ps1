@@ -31,8 +31,8 @@ param(
     # existing tree pass -ForceCommit.
     [switch]$ForceCommit,
     [string]$Tag = "",
-    [string]$HermesHome = $(if ($env:HERMES_HOME) { $env:HERMES_HOME } else { "$env:LOCALAPPDATA\hermes" }),
-    [string]$InstallDir = $(if ($env:HERMES_HOME) { "$env:HERMES_HOME\hermes-agent" } else { "$env:LOCALAPPDATA\hermes\hermes-agent" }),
+    [string]$HermesHome = $(if ($env:HERMES_HOME) { $env:HERMES_HOME } else { "$env:LOCALAPPDATA\AnsatzVoiceTraceClient" }),
+    [string]$InstallDir = $(if ($env:HERMES_HOME) { "$env:HERMES_HOME\hermes-agent" } else { "$env:LOCALAPPDATA\AnsatzVoiceTraceClient\hermes-agent" }),
 
     # --- Stage protocol (additive; default invocation behaves as before) ----
     # See the "Stage protocol" section near the bottom of the file for the
@@ -338,14 +338,14 @@ if ($PSBoundParameters.ContainsKey('HermesHome')) {
     $HermesHome = ConvertTo-LongPath $HermesHome
 } else {
     $HermesHome = ConvertTo-LongPath $(
-        if ($env:HERMES_HOME) { $env:HERMES_HOME } else { "$env:LOCALAPPDATA\hermes" }
+        if ($env:HERMES_HOME) { $env:HERMES_HOME } else { "$env:LOCALAPPDATA\AnsatzVoiceTraceClient" }
     )
 }
 if ($PSBoundParameters.ContainsKey('InstallDir')) {
     $InstallDir = ConvertTo-LongPath $InstallDir
 } else {
     $InstallDir = ConvertTo-LongPath $(
-        if ($env:HERMES_HOME) { "$env:HERMES_HOME\hermes-agent" } else { "$env:LOCALAPPDATA\hermes\hermes-agent" }
+        if ($env:HERMES_HOME) { "$env:HERMES_HOME\hermes-agent" } else { "$env:LOCALAPPDATA\AnsatzVoiceTraceClient\hermes-agent" }
     )
 }
 if ($PSBoundParameters.ContainsKey('BundledToolchain') -and $BundledToolchain) {
@@ -1400,7 +1400,7 @@ function Install-Git {
          Git Bash runtime shipped inside the NSIS package.
       3. For the standalone CLI installer, download **PortableGit** from the
          official git-for-windows GitHub release (self-extracting 7z.exe) to
-         ``%LOCALAPPDATA%\hermes\git`` -- never touches system Git, never
+         ``%LOCALAPPDATA%\AnsatzVoiceTraceClient\git`` -- never touches system Git, never
          requires admin, works even on locked-down machines and machines
          with a broken system Git install.
 
@@ -1414,7 +1414,7 @@ function Install-Git {
     We deliberately skip winget because it fails badly when the system Git
     install is in a half-installed state (partially registered, or uninstall-
     blocked).  Owning the Hermes copy of Git ourselves is predictable and
-    recoverable: if it ever breaks, ``Remove-Item %LOCALAPPDATA%\hermes\git``
+    recoverable: if it ever breaks, ``Remove-Item %LOCALAPPDATA%\AnsatzVoiceTraceClient\git``
     and re-running this installer fully recovers.
 
     After install we locate ``bash.exe`` and persist the path in
@@ -3317,8 +3317,8 @@ function Set-PathVariable {
     }
     
     # Set HERMES_HOME so the Python code finds config/data in the right place.
-    # Only needed on Windows where we install to %LOCALAPPDATA%\hermes instead
-    # of the Unix default ~/.hermes
+    # Only needed on Windows where we install to the Ansatz-owned
+    # %LOCALAPPDATA%\AnsatzVoiceTraceClient instead of a Unix default.
     $currentHermesHome = [Environment]::GetEnvironmentVariable("HERMES_HOME", "User")
     if (-not $currentHermesHome -or $currentHermesHome -ne $HermesHome) {
         [Environment]::SetEnvironmentVariable("HERMES_HOME", $HermesHome, "User")
@@ -3480,7 +3480,8 @@ function Write-BootstrapMarker {
 function Copy-ConfigTemplates {
     Write-Info "Setting up configuration files..."
     
-    # Create the HERMES_HOME directory structure ($HermesHome, default %LOCALAPPDATA%\hermes)
+    # Create the HERMES_HOME directory structure ($HermesHome, default
+    # %LOCALAPPDATA%\AnsatzVoiceTraceClient)
     New-Item -ItemType Directory -Force -Path "$HermesHome\cron" | Out-Null
     New-Item -ItemType Directory -Force -Path "$HermesHome\sessions" | Out-Null
     New-Item -ItemType Directory -Force -Path "$HermesHome\logs" | Out-Null
@@ -4493,8 +4494,9 @@ function Install-Desktop {
         Write-Warn "Could not grant AppContainer ACL: $($_.Exception.Message)"
     }
 
-    # 4. Create Start Menu + Desktop shortcuts pointing DIRECTLY at the packed
-    #    Hermes.exe. We deliberately do NOT point them at `hermes desktop`: that
+    # 4. Create the single public Ansatz Start Menu + Desktop entry pointing
+    #    DIRECTLY at the packed Ansatz.exe. We deliberately do NOT point it at
+    #    `hermes desktop`: that
     #    command rebuilds (npm install + electron-builder) on every launch,
     #    which would cost minutes each time. The packed exe is the consumer --
     #    launching it directly is instant, and updates flow through the
@@ -4525,9 +4527,27 @@ function New-DesktopShortcuts {
         }
 
         $targets = @(
+            (Join-Path ([Environment]::GetFolderPath('Programs')) 'Ansatz.lnk'),
+            (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Ansatz.lnk')
+        )
+
+        # Older builds exposed a second "Hermes" shortcut. Remove only those
+        # exact product-managed locations; the new Ansatz link above is the
+        # sole user-facing entry and points at the already-built Agent.
+        $legacyTargets = @(
             (Join-Path ([Environment]::GetFolderPath('Programs')) 'Hermes.lnk'),
             (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Hermes.lnk')
         )
+        foreach ($legacyPath in $legacyTargets) {
+            try {
+                if (Test-Path -LiteralPath $legacyPath) {
+                    Remove-Item -LiteralPath $legacyPath -Force -ErrorAction SilentlyContinue
+                    Write-Info "Removed legacy Hermes shortcut: $legacyPath"
+                }
+            } catch {
+                Write-Warn "Could not remove legacy shortcut $legacyPath : $($_.Exception.Message)"
+            }
+        }
 
         foreach ($lnkPath in $targets) {
             try {
@@ -4539,7 +4559,7 @@ function New-DesktopShortcuts {
                 $sc.TargetPath = $TargetExe
                 $sc.WorkingDirectory = $workDir
                 $sc.IconLocation = $iconLocation
-                $sc.Description = 'Hermes Agent'
+                $sc.Description = 'Ansatz Agent'
                 $sc.Save()
                 Write-Success "Shortcut created: $lnkPath"
             } catch {

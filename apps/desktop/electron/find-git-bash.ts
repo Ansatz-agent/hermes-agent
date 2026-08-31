@@ -11,7 +11,7 @@ export interface GitBashOptions {
  * Locate bash.exe on Windows.
  * Resolution order (first match wins):
  *   1. HERMES_GIT_BASH_PATH env var override
- *   2. PortableGit under %LOCALAPPDATA%\hermes\git\ (install.ps1)
+ *   2. PortableGit under %LOCALAPPDATA%\AnsatzVoiceTraceClient\git\ (install.ps1)
  *   3. Standard Git for Windows install locations
  *   4. %LOCALAPPDATA%\Programs\Git\ (user-scoped)
  *   5. bash on PATH

@@ -2753,7 +2753,7 @@ function makeDashboardReadyFile() {
 }
 
 // resolveGitBinary — locate git.exe on Windows. A fresh installer-driven
-// install only has PortableGit under %LOCALAPPDATA%\hermes\git (never on
+// install only has PortableGit under %LOCALAPPDATA%\AnsatzVoiceTraceClient\git (never on
 // PATH), so a bare spawn('git') ENOENTs and self-update checks fail with
 // "Couldn't check for updates". Mirror findGitBash: PortableGit first, then
 // standard Git-for-Windows locations, then PATH. Cached after first probe.
@@ -4701,7 +4701,8 @@ function resolveHermesBackend(backendArgs, options: any = {}) {
   }
 
   // 3. ACTIVE_HERMES_ROOT — the canonical install at
-  //    %LOCALAPPDATA%\\hermes\\hermes-agent (Windows) or ~/.hermes/hermes-agent.
+  //    %LOCALAPPDATA%\\AnsatzVoiceTraceClient\\hermes-agent (Windows) or
+  //    ~/.ansatz-voice-trace-client/hermes-agent.
   //    A valid bootstrap marker proves Desktop finished the first-run install
   //    flow, but marker provenance is NOT the same thing as runtime usability:
   //    the CLI can create the exact same repo+venv layout, and older desktop
@@ -4859,7 +4860,7 @@ function resolveHermesBackend(backendArgs, options: any = {}) {
     // backend hands the spawn step a guaranteed ModuleNotFoundError.
     // Verify the import works before trusting the candidate; on
     // failure, fall through to step 6 so the bootstrap runner pulls
-    // a uv-managed 3.11 into %LOCALAPPDATA%\hermes\hermes-agent\venv.
+    // a uv-managed 3.11 into %LOCALAPPDATA%\AnsatzVoiceTraceClient\hermes-agent\venv.
     if (canImportHermesCli(python, { env: probeEnv })) {
       return {
         kind: 'python',
@@ -5066,7 +5067,7 @@ async function ensureRuntime(backend, { scope = 'runtime' }: any = {}) {
   // On Windows, preflight Git Bash. Hermes' terminal tool calls bash.exe
   // directly (tools/environments/local.py); without it the agent can't run
   // terminal commands. install.ps1's Stage-Git puts PortableGit at
-  // %LOCALAPPDATA%\hermes\git\, which findGitBash() picks up, so for any
+  // %LOCALAPPDATA%\AnsatzVoiceTraceClient\git\, which findGitBash() picks up, so for any
   // user who completed the bootstrap this is a no-op. For users who got
   // here via an external `hermes` on PATH, this check still helps.
   if (IS_WINDOWS && !findGitBash()) {
@@ -9497,7 +9498,7 @@ function remoteAuthPythonCandidates(sshConfig) {
     { executable: 'python3', platform: 'posix' },
     { executable: 'python', platform: 'posix' },
     {
-      executable: '%LOCALAPPDATA%\\hermes\\hermes-agent\\venv\\Scripts\\python.exe',
+      executable: '%LOCALAPPDATA%\\AnsatzVoiceTraceClient\\hermes-agent\\venv\\Scripts\\python.exe',
       platform: 'windows'
     }
   )
@@ -11160,11 +11161,10 @@ async function startHermes() {
           ),
           // Explicitly pin HERMES_HOME for the child so Python's get_hermes_home()
           // resolves to the SAME location our resolveHermesHome() picked. Without
-          // this pin, Python falls back to ~/.hermes on every platform — fine on
-          // mac/linux (where our default matches), but on Windows our default is
-          // %LOCALAPPDATA%\hermes, which differs from C:\Users\<u>\.hermes.
-          // Mismatch would split config / sessions / .env / logs across two
-          // directories. install.ps1 sets HERMES_HOME via setx; the desktop
+          // this pin, Python falls back to its platform default on every
+          // platform. Explicitly pin the Ansatz-owned root so config / sessions
+          // / .env / logs cannot split across two directories. install.ps1
+          // sets HERMES_HOME via setx; the desktop
           // can't reliably do that, so we set it inline for every spawn.
           TERMINAL_CWD: hermesCwd,
           // Marks this dashboard backend as desktop-spawned so it runs the cron

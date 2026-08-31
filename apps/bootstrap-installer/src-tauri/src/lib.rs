@@ -114,23 +114,20 @@ pub fn run() {
         .manage(Arc::new(AppState::new(mode)))
         .setup(move |app| {
             use tauri::Manager;
-            // Launcher fast path (macOS only): a bare ("Install") launch when
-            // Hermes is already installed should NOT show the installer or
-            // rebuild — it should just open the app, so the /Applications
-            // "Hermes" doubles as a normal launcher (first run installs, every
-            // later run launches instantly). The window is kept hidden until
-            // here via `"visible": false` so this path never flashes a window.
-            //
-            // Gated to macOS deliberately: on Windows/Linux the installer keeps
-            // its existing behavior (Windows users relaunch via the Start
-            // Menu/Desktop "Hermes" shortcuts that install.ps1 creates, and a
-            // reliable detached relaunch there needs the DETACHED_PROCESS +
-            // startup-grace handling used by launch_hermes_desktop — out of
-            // scope here). So this is a pure no-op on non-macOS.
+            // Launcher fast path: a bare ("Install") launch when Ansatz is
+            // already installed should NOT show the installer or rebuild — it
+            // should just open the Agent. This keeps the Setup executable as
+            // the single public entry point: first run installs, every later
+            // run launches the installed Agent. Windows uses the same detached
+            // process hand-off as the explicit launch command, so no console
+            // window or second installer process is left behind.
             //
             // `--reinstall`/`--repair` opts out so a broken install can be
             // repaired by re-running setup instead of launching the bad app.
-            if cfg!(target_os = "macos") && mode == AppMode::Install && !force_setup {
+            if (cfg!(target_os = "macos") || cfg!(target_os = "windows"))
+                && mode == AppMode::Install
+                && !force_setup
+            {
                 let install_root = paths::hermes_home().join("hermes-agent");
                 // A newly downloaded Setup carries a new source payload. In
                 // that case it must enter the normal install UI and refresh
