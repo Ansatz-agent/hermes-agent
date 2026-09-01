@@ -163,6 +163,55 @@ def test_stream_uses_rewritten_request_and_post_intercept_chunks(relay_turn):
     assert turn.logical_llm_calls == {}
 
 
+def test_product_stream_observer_sees_raw_usage_chunk_dropped_by_interceptor(
+    relay_turn, monkeypatch
+):
+    relay, _turn = relay_turn
+    monkeypatch.setattr(
+        ansatz_trace_policy,
+        "ansatz_product_trace_enabled",
+        lambda: True,
+    )
+    observed = []
+
+    def drop_usage_only_chunk(request, next_call):
+        async def generate():
+            upstream = await next_call(request)
+            async for chunk in upstream:
+                if chunk.get("choices"):
+                    yield chunk
+
+        return generate()
+
+    usage = {"prompt_tokens": 10, "completion_tokens": 3, "total_tokens": 13}
+    relay.intercepts.register_llm_stream_execution(
+        "drop-usage-only",
+        1,
+        drop_usage_only_chunk,
+    )
+    try:
+        stream = relay_llm.stream(
+            {"model": "test-model", "messages": []},
+            lambda _request: iter(
+                [
+                    {"model": "test-model", "choices": [{"delta": {"content": "ok"}}]},
+                    {"model": "test-model", "choices": [], "usage": usage},
+                ]
+            ),
+            session_id="session-1",
+            name="test-provider",
+            model_name="test-model",
+            finalizer=lambda: {"choices": []},
+            on_chunk=observed.append,
+            metadata={"api_mode": "custom", "api_request_id": "request-usage-only"},
+        )
+        list(stream)
+    finally:
+        relay.intercepts.deregister_llm_stream_execution("drop-usage-only")
+
+    assert observed[-1]["usage"] == usage
+
+
 
 
 
@@ -418,6 +467,51 @@ def test_non_stream_defers_logical_success_and_reuses_scope_for_retry(relay_turn
     relay_llm.complete_logical_call("request-retry", outcome="success")
 
     assert turn.logical_llm_calls == {}
+
+
+def test_complete_logical_call_attaches_validated_usage_and_cost(relay_turn, monkeypatch):
+    relay, turn = relay_turn
+    captured_outputs = []
+    original_pop = relay.scope.pop
+
+    def capture_pop(*args, **kwargs):
+        captured_outputs.append(kwargs.get("output"))
+        return original_pop(*args, **kwargs)
+
+    monkeypatch.setattr(relay.scope, "pop", capture_pop)
+    relay_llm.execute(
+        {"model": "test-model", "messages": []},
+        lambda _request: {"content": "valid"},
+        session_id="session-1",
+        name="test-provider",
+        model_name="test-model",
+        metadata={"api_mode": "custom", "api_request_id": "request-accounting"},
+        defer_logical_completion=True,
+    )
+
+    relay_llm.complete_logical_call(
+        "request-accounting",
+        outcome="success",
+        usage={
+            "prompt_tokens": 11,
+            "completion_tokens": 7,
+            "total_tokens": 18,
+            "cache_read_tokens": 3,
+        },
+        cost_usd=0.00125,
+    )
+
+    assert turn.logical_llm_calls == {}
+    assert captured_outputs[-1] == {
+        "outcome": "success",
+        "usage": {
+            "prompt_tokens": 11,
+            "completion_tokens": 7,
+            "total_tokens": 18,
+            "cache_read_tokens": 3,
+        },
+        "cost_usd": 0.00125,
+    }
 
 
 def test_non_stream_result_survives_logical_scope_close_failure(

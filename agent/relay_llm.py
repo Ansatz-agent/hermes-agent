@@ -883,6 +883,8 @@ def _complete_logical(
     model_name: str | None = None,
     provider_name: str | None = None,
     response_model_name: str | None = None,
+    usage: dict[str, int] | None = None,
+    cost_usd: float | None = None,
 ) -> None:
     if logical is None:
         return
@@ -898,6 +900,10 @@ def _complete_logical(
             return
         try:
             output = {"outcome": outcome}
+            if usage:
+                output["usage"] = dict(usage)
+            if cost_usd is not None and cost_usd > 0:
+                output["cost_usd"] = cost_usd
             if model_name is not None and provider_name is not None:
                 output.update({"model": model_name, "provider": provider_name})
                 if response_model_name is not None:
@@ -964,6 +970,8 @@ def complete_logical_call(
     model_name: str | None = None,
     provider_name: str | None = None,
     response_model_name: str | None = None,
+    usage: dict[str, int] | None = None,
+    cost_usd: float | None = None,
 ) -> None:
     """Complete the active turn's logical LLM call after caller validation."""
     turn = relay_runtime.active_turn()
@@ -978,6 +986,8 @@ def complete_logical_call(
             model_name=model_name,
             provider_name=provider_name,
             response_model_name=response_model_name,
+            usage=usage,
+            cost_usd=cost_usd,
         )
 
 

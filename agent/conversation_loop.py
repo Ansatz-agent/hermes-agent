@@ -3932,6 +3932,9 @@ def run_conversation(
                             "error": "First response truncated due to output length limit"
                         }
                 
+                logical_usage = None
+                logical_cost_usd = None
+
                 # Track actual token usage from response for context management
                 if hasattr(response, 'usage') and response.usage:
                     canonical_usage = normalize_usage(
@@ -3994,6 +3997,7 @@ def run_conversation(
                         "cache_write_tokens": canonical_usage.cache_write_tokens,
                         "reasoning_tokens": canonical_usage.reasoning_tokens,
                     }
+                    logical_usage = dict(usage_dict)
                     # Capture the boundary latch before update_from_response()
                     # consumes it. Only a real provider prompt count for the
                     # request immediately following a completed compaction can
@@ -4121,6 +4125,13 @@ def run_conversation(
                     if _moa_ref_cost is not None:
                         try:
                             agent.session_estimated_cost_usd += float(_moa_ref_cost)
+                        except (TypeError, ValueError):  # pragma: no cover - defensive
+                            pass
+                    if cost_result.amount_usd is not None:
+                        logical_cost_usd = float(cost_result.amount_usd)
+                    if _moa_ref_cost is not None:
+                        try:
+                            logical_cost_usd = (logical_cost_usd or 0.0) + float(_moa_ref_cost)
                         except (TypeError, ValueError):  # pragma: no cover - defensive
                             pass
                     agent.session_cost_status = cost_result.status
@@ -4254,10 +4265,12 @@ def run_conversation(
                         pass
                 from agent import relay_llm
 
-                relay_llm.complete_logical_call(
-                    api_request_id,
-                    outcome="success",
-                )
+                logical_completion: dict[str, Any] = {"outcome": "success"}
+                if logical_usage:
+                    logical_completion["usage"] = logical_usage
+                if logical_cost_usd is not None and logical_cost_usd > 0:
+                    logical_completion["cost_usd"] = logical_cost_usd
+                relay_llm.complete_logical_call(api_request_id, **logical_completion)
                 agent._touch_activity(f"API call #{api_call_count} completed")
                 break  # Success, exit retry loop
 
