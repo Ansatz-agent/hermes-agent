@@ -737,6 +737,72 @@ def build_subprocess_env(
     return env
 
 
+def _managed_git_install_roots() -> list[str]:
+    """Return Hermes-managed Git roots in preference order.
+
+    Packaged Ansatz builds use a product-specific ``HERMES_HOME`` (for
+    example ``%LOCALAPPDATA%\\AnsatzVoiceTraceClient``), while older installs
+    used ``%LOCALAPPDATA%\\hermes``.  Keep the process/product root first so a
+    freshly-installed portable Git is found even when the current request is
+    scoped to a profile (profiles do not get their own Git installation), then
+    retain the profile and legacy paths for compatibility.
+    """
+    roots: list[str] = []
+    try:
+        # ``get_default_hermes_root`` deliberately strips a ``profiles/<name>``
+        # suffix, so it remains anchored at the process/product installation
+        # root even when ``--profile`` rewrites HERMES_HOME or a ContextVar
+        # override is active.  The other two getters cover custom per-profile
+        # Git trees and deployments that do not expose the root helper.
+        from hermes_constants import (
+            get_default_hermes_root,
+            get_hermes_home,
+            get_process_hermes_home,
+        )
+
+        home_getters = (
+            get_default_hermes_root,
+            get_process_hermes_home,
+            get_hermes_home,
+        )
+        for getter in home_getters:
+            try:
+                configured_home = os.fspath(getter())
+            except Exception:
+                continue
+            if configured_home and configured_home.strip():
+                roots.append(os.path.join(configured_home, "git"))
+    except Exception:
+        # Keep this low-level resolver usable during early bootstrap/import
+        # when hermes_constants may not yet be importable.
+        configured_home = os.environ.get("HERMES_HOME", "").strip()
+        if configured_home:
+            roots.append(os.path.join(configured_home, "git"))
+
+    local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
+    if local_appdata:
+        legacy = os.path.join(local_appdata, "hermes", "git")
+        # ``HERMES_HOME`` normally resolves to this same path on legacy
+        # installs.  Avoid probing it twice while preserving deterministic
+        # order for custom product homes.
+        norm_roots = {os.path.normcase(os.path.normpath(root)) for root in roots}
+        if os.path.normcase(os.path.normpath(legacy)) not in norm_roots:
+            roots.append(legacy)
+
+    # The same home can be returned by the root/process/profile getters (for
+    # the default profile).  Preserve first occurrence while keeping Windows
+    # path comparisons case-insensitive.
+    unique: list[str] = []
+    seen: set[str] = set()
+    for root in roots:
+        key = os.path.normcase(os.path.normpath(root))
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(root)
+    return unique
+
+
 def _find_bash() -> str:
     """Find bash for command execution."""
     if not _IS_WINDOWS:
@@ -759,18 +825,19 @@ def _find_bash() -> str:
     # brick the terminal.  install.ps1 drops PortableGit here when needed.
     #
     # Layouts (both checked so upgrades between MinGit and PortableGit
-    # installs work transparently):
-    #   PortableGit: %LOCALAPPDATA%\hermes\git\bin\bash.exe   (primary)
-    #   MinGit:      %LOCALAPPDATA%\hermes\git\usr\bin\bash.exe (legacy/32-bit fallback)
-    _local_appdata = os.environ.get("LOCALAPPDATA", "")
-    _hermes_portable_git = os.path.join(_local_appdata, "hermes", "git") if _local_appdata else ""
-    if _hermes_portable_git:
+    # installs work transparently).  The configured HERMES_HOME root is first;
+    # the legacy %LOCALAPPDATA%\hermes root remains a compatibility fallback:
+    #   PortableGit: <home>\git\bin\bash.exe   (primary)
+    #   MinGit:      <home>\git\usr\bin\bash.exe (legacy/32-bit fallback)
+    for portable_git in _managed_git_install_roots():
         for candidate in (
-            os.path.join(_hermes_portable_git, "bin", "bash.exe"),        # PortableGit (primary)
-            os.path.join(_hermes_portable_git, "usr", "bin", "bash.exe"), # MinGit fallback
+            os.path.join(portable_git, "bin", "bash.exe"),        # PortableGit (primary)
+            os.path.join(portable_git, "usr", "bin", "bash.exe"), # MinGit fallback
         ):
             if os.path.isfile(candidate) and candidate not in candidates:
                 candidates.append(candidate)
+
+    _local_appdata = os.environ.get("LOCALAPPDATA", "")
 
     # Check known Git for Windows install locations before PATH lookup.
     # On machines with both WSL and Git for Windows, shutil.which("bash")
@@ -791,7 +858,8 @@ def _find_bash() -> str:
     # Prefer the first candidate that can actually start.  A stale
     # HERMES_GIT_BASH_PATH pointing at a broken Git-for-Windows install
     # (``Directory \\drivers\\etc does not exist``) must not win over a
-    # healthy portable Git under %LOCALAPPDATA%\\hermes\\git.
+    # healthy portable Git under the configured HERMES_HOME (or its legacy
+    # %LOCALAPPDATA%\\hermes fallback).
     for candidate in candidates:
         if _bash_starts(candidate):
             if candidate != custom and custom and os.path.isfile(custom):

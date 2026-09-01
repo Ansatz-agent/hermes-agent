@@ -132,6 +132,61 @@ class TestFindBashSkipsBrokenCustomPath:
         assert _find_bash() == str(portable)
 
 
+@pytest.mark.windows_only
+class TestFindBashUsesConfiguredHermesHome:
+    """A packaged product's HERMES_HOME Git install wins over legacy paths."""
+
+    def test_prefers_hermes_home_git_when_system_git_is_missing(
+        self, tmp_path, monkeypatch
+    ):
+        import tools.environments.local as local_mod
+
+        configured_home = tmp_path / "AnsatzVoiceTraceClient"
+        managed = configured_home / "git" / "bin" / "bash.exe"
+        managed.parent.mkdir(parents=True)
+        managed.write_text("", encoding="utf-8")
+        legacy = tmp_path / "legacy" / "hermes" / "git" / "bin" / "bash.exe"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text("", encoding="utf-8")
+
+        monkeypatch.setenv("HERMES_HOME", str(configured_home))
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "legacy"))
+        monkeypatch.delenv("HERMES_GIT_BASH_PATH", raising=False)
+        monkeypatch.setenv("ProgramFiles", str(tmp_path / "missing-program-files"))
+        monkeypatch.delenv("ProgramFiles(x86)", raising=False)
+        monkeypatch.setattr(local_mod.shutil, "which", lambda _name: None)
+        monkeypatch.setattr(local_mod, "_bash_starts", lambda _path: True)
+        local_mod._bash_starts_cache.clear()
+        local_mod._bash_probe_details_cache.clear()
+
+        assert _find_bash() == str(managed)
+
+    def test_profile_override_still_uses_product_root_git(self, tmp_path, monkeypatch):
+        """A profile-scoped HERMES_HOME must not hide the shared Git tree."""
+        import hermes_constants
+        import tools.environments.local as local_mod
+
+        product_home = tmp_path / "AnsatzVoiceTraceClient"
+        profile_home = product_home / "profiles" / "coder"
+        managed = product_home / "git" / "bin" / "bash.exe"
+        managed.parent.mkdir(parents=True)
+        managed.write_text("", encoding="utf-8")
+
+        monkeypatch.setenv("HERMES_HOME", str(product_home))
+        monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "legacy"))
+        monkeypatch.delenv("HERMES_GIT_BASH_PATH", raising=False)
+        monkeypatch.setattr(local_mod.shutil, "which", lambda _name: None)
+        monkeypatch.setattr(local_mod, "_bash_starts", lambda _path: True)
+        local_mod._bash_starts_cache.clear()
+        local_mod._bash_probe_details_cache.clear()
+
+        token = hermes_constants.set_hermes_home_override(str(profile_home))
+        try:
+            assert _find_bash() == str(managed)
+        finally:
+            hermes_constants.reset_hermes_home_override(token)
+
+
 class TestGitBashExternalProgramProbe:
     """The Windows health check must exercise MSYS child-process creation."""
 

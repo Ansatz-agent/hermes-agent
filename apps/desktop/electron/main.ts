@@ -2783,7 +2783,8 @@ function findGitBash() {
     isWindows: IS_WINDOWS,
     env: process.env,
     fileExists,
-    findOnPath
+    findOnPath,
+    hermesHome: HERMES_HOME
   })
 }
 
@@ -2819,11 +2820,11 @@ function makeDashboardReadyFile() {
   return path.join(dir, `dashboard-${process.pid}-${Date.now()}-${crypto.randomBytes(6).toString('hex')}.json`)
 }
 
-// resolveGitBinary — locate git.exe on Windows. A fresh installer-driven
-// install only has PortableGit under %LOCALAPPDATA%\hermes\git (never on
-// PATH), so a bare spawn('git') ENOENTs and self-update checks fail with
-// "Couldn't check for updates". Mirror findGitBash: PortableGit first, then
-// standard Git-for-Windows locations, then PATH. Cached after first probe.
+// resolveGitBinary — locate git.exe on Windows. A fresh Ansatz installer-driven
+// install places PortableGit under the active product runtime
+// (HERMES_HOME\git), which is deliberately not assumed to be on PATH. Keep the
+// old %LOCALAPPDATA%\hermes\git location as a compatibility fallback, then
+// check standard Git-for-Windows locations and PATH. Cached after first probe.
 let _gitBinaryCache = null
 
 function resolveGitBinary() {
@@ -2837,8 +2838,15 @@ function resolveGitBinary() {
     return _gitBinaryCache
   }
 
-  const localAppData = process.env.LOCALAPPDATA || ''
   const candidates = []
+
+  // Resolve the active product root directly. The installer runs in a child
+  // PowerShell process and cannot refresh Electron's environment block, so a
+  // disk probe is required immediately after bootstrap completes.
+  candidates.push(path.join(HERMES_HOME, 'git', 'cmd', 'git.exe'))
+  candidates.push(path.join(HERMES_HOME, 'git', 'bin', 'git.exe'))
+
+  const localAppData = process.env.LOCALAPPDATA || ''
 
   if (localAppData) {
     candidates.push(path.join(localAppData, 'hermes', 'git', 'cmd', 'git.exe'))
@@ -5138,9 +5146,9 @@ async function ensureRuntime(backend, { scope = 'runtime' }: any = {}) {
   // On Windows, preflight Git Bash. Hermes' terminal tool calls bash.exe
   // directly (tools/environments/local.py); without it the agent can't run
   // terminal commands. install.ps1's Stage-Git puts PortableGit at
-  // %LOCALAPPDATA%\hermes\git\, which findGitBash() picks up, so for any
-  // user who completed the bootstrap this is a no-op. For users who got
-  // here via an external `hermes` on PATH, this check still helps.
+  // HERMES_HOME\git\ (the Ansatz package uses its dedicated runtime root),
+  // which findGitBash() probes directly. For users who got here via an
+  // external `hermes` on PATH, the standard Git locations still help.
   if (IS_WINDOWS && !findGitBash()) {
     throw new Error(
       'Git for Windows is required for Ansatz on Windows (provides Git Bash, ' +
