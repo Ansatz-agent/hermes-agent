@@ -118,6 +118,83 @@ def test_release_api_and_static_archive_work_over_plain_http(tmp_path):
     assert "/static/ansatz-0.18.0.tar.gz" in requests
 
 
+def test_no_git_desktop_bundle_update_check_uses_release_server(
+    tmp_path, monkeypatch, capsys
+):
+    """A managed source snapshot must not fall back to the Git check path."""
+    install_root = tmp_path / "managed" / "hermes-agent"
+    install_root.mkdir(parents=True)
+    (install_root / ".install_method").write_text(
+        "desktop-bundle\n", encoding="utf-8"
+    )
+    (install_root / ".hermes-bundled-source.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "commit": "c" * 40,
+                "archiveSha256": "d" * 64,
+                "version": "0.17.0",
+                "source": "release-server",
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert not (install_root / ".git").exists()
+
+    requests: list[str] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802 - stdlib callback name
+            requests.append(self.path)
+            if self.path.startswith("/api/v1/ansatz/releases/latest?"):
+                body = json.dumps(
+                    {
+                        "schemaVersion": 1,
+                        "product": "ansatz",
+                        "channel": "stable",
+                        "version": "0.18.0",
+                        "commit": COMMIT,
+                        "archive": {
+                            "url": "/static/ansatz-0.18.0.tar.gz",
+                            "size": 1,
+                            "sha256": "b" * 64,
+                        },
+                    }
+                ).encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            self.send_error(404)
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        from hermes_cli import main as main_module
+
+        monkeypatch.setattr(main_module, "PROJECT_ROOT", install_root)
+        monkeypatch.setenv(
+            UPDATE_BASE_URL_ENV, f"http://127.0.0.1:{server.server_port}"
+        )
+        main_module._cmd_update_check()
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+    output = capsys.readouterr().out
+    assert "Ansatz 0.18.0 is available" in output
+    assert "Not a git repository" not in output
+    assert len(requests) == 1
+    assert requests[0].startswith("/api/v1/ansatz/releases/latest?")
+    assert "channel=stable" in requests[0]
+
+
 @pytest.mark.parametrize(
     "extra",
     [
