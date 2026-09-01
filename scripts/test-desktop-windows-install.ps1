@@ -4,6 +4,8 @@ param(
     [Parameter(Mandatory = $true)][string]$ExpectedCommit,
     [Parameter(Mandatory = $true)][string]$ExpectedVersion,
     [Parameter(Mandatory = $true)][string]$LogPath,
+    [string]$ProductName = 'Ansatz',
+    [string]$ExecutableName = 'Ansatz',
     [switch]$RunAuthE2E,
     [switch]$RunCredentialE2E,
     [string]$AuthLogPath = '',
@@ -59,6 +61,9 @@ if ([String]::IsNullOrWhiteSpace($ExpectedCommit)) {
 if ([String]::IsNullOrWhiteSpace($ExpectedVersion)) {
     throw 'ExpectedVersion must not be empty'
 }
+if ([String]::IsNullOrWhiteSpace($ProductName) -or [String]::IsNullOrWhiteSpace($ExecutableName)) {
+    throw 'ProductName and ExecutableName must not be empty'
+}
 if ($StartupTimeoutSeconds -le 0 -or $StabilitySeconds -lt 0) {
     throw 'Timeout values must be non-negative and startup timeout must be greater than zero'
 }
@@ -77,8 +82,8 @@ $installDir = Join-Path $testRoot 'install'
 $userDataDir = Join-Path $testRoot 'electron-user-data'
 $hermesHome = Join-Path $testRoot 'hermes-home'
 $workspace = Join-Path $testRoot 'workspace'
-$exePath = Join-Path $installDir 'Hermes.exe'
-$uninstallerPath = Join-Path $installDir 'Uninstall Hermes.exe'
+$exePath = Join-Path $installDir "$ExecutableName.exe"
+$uninstallerPath = Join-Path $installDir "Uninstall $ProductName.exe"
 $savedEnvironment = @{}
 $startedProcess = $null
 $installed = $false
@@ -111,7 +116,7 @@ $isolatedEnvironment = @{
     HERMES_DESKTOP_USER_DATA_DIR = $userDataDir
     HERMES_HOME = $hermesHome
     HERMES_DESKTOP_SKIP_QUIT_CONFIRM = '1'
-    HERMES_DESKTOP_APP_NAME = "HermesWindowsAcceptance-$([Guid]::NewGuid().ToString('N'))"
+    HERMES_DESKTOP_APP_NAME = "${ProductName}WindowsAcceptance-$([Guid]::NewGuid().ToString('N'))"
 }
 if ($RunAuthE2E) {
     $isolatedEnvironment['HERMES_E2E_INSTALLED_BINARY'] = $exePath
@@ -146,8 +151,8 @@ try {
     }
 
     $versionInfo = (Get-Item -LiteralPath $exePath).VersionInfo
-    if ($versionInfo.ProductName -ne 'Hermes' -or $versionInfo.FileDescription -ne 'Hermes') {
-        throw "Wrong executable identity: ProductName=$($versionInfo.ProductName), FileDescription=$($versionInfo.FileDescription)"
+    if ($versionInfo.ProductName -ne $ProductName -or $versionInfo.FileDescription -ne $ProductName) {
+        throw "Wrong executable identity: expected $ProductName, ProductName=$($versionInfo.ProductName), FileDescription=$($versionInfo.FileDescription)"
     }
     if (-not $versionInfo.ProductVersion.StartsWith($ExpectedVersion, [StringComparison]::OrdinalIgnoreCase)) {
         throw "Installed version $($versionInfo.ProductVersion) does not match expected $ExpectedVersion"
@@ -210,7 +215,7 @@ try {
         $cdpPort = Get-AvailableLoopbackPort
         $credentialTimeoutMilliseconds = 45 * 60 * 1000
 
-        Write-SmokeLog 'Launching installed Hermes for credential-backed acceptance'
+        Write-SmokeLog "Launching installed $ProductName for credential-backed acceptance"
         $startedProcess = Start-Process -FilePath $exePath -WorkingDirectory $workspace -ArgumentList @(
             '--remote-debugging-address=127.0.0.1',
             "--remote-debugging-port=$cdpPort",
@@ -218,13 +223,13 @@ try {
             '--no-sandbox'
         ) -PassThru
         Wait-ForCondition -TimeoutSeconds $StartupTimeoutSeconds `
-            -FailureMessage 'Hermes credential acceptance window did not appear before timeout' -Condition {
+            -FailureMessage "$ProductName credential acceptance window did not appear before timeout" -Condition {
             $startedProcess.Refresh()
-            if ($startedProcess.HasExited) { throw "Hermes exited early with code $($startedProcess.ExitCode)" }
+            if ($startedProcess.HasExited) { throw "$ProductName exited early with code $($startedProcess.ExitCode)" }
             return $startedProcess.MainWindowHandle -ne 0
         }
         Wait-ForCondition -TimeoutSeconds $StartupTimeoutSeconds `
-            -FailureMessage 'Hermes credential diagnostic endpoint did not bind before timeout' -Condition {
+            -FailureMessage "$ProductName credential diagnostic endpoint did not bind before timeout" -Condition {
             $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $cdpPort -ErrorAction SilentlyContinue)
             return $listeners.Count -gt 0
         }
@@ -233,7 +238,7 @@ try {
                 Where-Object { $_.LocalAddress -notin @('127.0.0.1', '::1') }
         )
         if ($foreignListeners.Count -ne 0) {
-            throw 'Hermes credential diagnostic endpoint was not loopback-only'
+            throw "$ProductName credential diagnostic endpoint was not loopback-only"
         }
 
         $driverInfo = [Diagnostics.ProcessStartInfo]::new()
@@ -285,17 +290,17 @@ try {
         }
         Write-SmokeLog 'Credential-backed login, runtime preparation, logout, and relock passed'
     } else {
-        Write-SmokeLog 'Launching installed Hermes'
+        Write-SmokeLog "Launching installed $ProductName"
         $startedProcess = Start-Process -FilePath $exePath -WorkingDirectory $workspace -PassThru
-        Wait-ForCondition -TimeoutSeconds $StartupTimeoutSeconds -FailureMessage 'Hermes window did not appear before timeout' -Condition {
+        Wait-ForCondition -TimeoutSeconds $StartupTimeoutSeconds -FailureMessage "$ProductName window did not appear before timeout" -Condition {
             $startedProcess.Refresh()
-            if ($startedProcess.HasExited) { throw "Hermes exited early with code $($startedProcess.ExitCode)" }
+            if ($startedProcess.HasExited) { throw "$ProductName exited early with code $($startedProcess.ExitCode)" }
             return $startedProcess.MainWindowHandle -ne 0
         }
         Start-Sleep -Seconds $StabilitySeconds
         $startedProcess.Refresh()
-        if ($startedProcess.HasExited) { throw 'Hermes exited during the stability interval' }
-        Write-SmokeLog 'Hermes window is present and the process remained stable'
+        if ($startedProcess.HasExited) { throw "$ProductName exited during the stability interval" }
+        Write-SmokeLog "$ProductName window is present and the process remained stable"
     }
 } catch {
     $primaryFailure = $_
@@ -344,7 +349,7 @@ try {
             Start-Sleep -Milliseconds 400
         }
         if ($cleanPasses -lt 3) {
-            $cleanupFailures.Add('installed Hermes processes survived bounded cleanup')
+            $cleanupFailures.Add("installed $ProductName processes survived bounded cleanup")
         }
     }
 
@@ -376,4 +381,4 @@ try {
 
 if ($null -ne $primaryFailure) { throw $primaryFailure }
 if ($cleanupFailures.Count -gt 0) { throw ($cleanupFailures -join '; ') }
-Write-SmokeLog 'Windows NSIS install/launch/uninstall smoke passed'
+Write-SmokeLog "Windows NSIS $ProductName install/launch/uninstall smoke passed"

@@ -104,6 +104,8 @@ jobs:
             -InstallerPath $installer.FullName `
             -ExpectedCommit $env:GITHUB_SHA `
             -ExpectedVersion $version `
+            -ProductName Ansatz `
+            -ExecutableName Ansatz `
             -LogPath (Join-Path $env:RUNNER_TEMP 'hermes-windows-smoke.log')
 
       - name: Credentialed installed-app login
@@ -122,6 +124,8 @@ jobs:
             -InstallerPath $installer.FullName `
             -ExpectedCommit $env:GITHUB_SHA `
             -ExpectedVersion $version `
+            -ProductName Ansatz `
+            -ExecutableName Ansatz `
             -LogPath (Join-Path $env:RUNNER_TEMP 'hermes-windows-credential-smoke.log') `
             -RunCredentialE2E `
             -AuthLogPath (Join-Path $env:RUNNER_TEMP 'hermes-windows-credential-auth.log') `

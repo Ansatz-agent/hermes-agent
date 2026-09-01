@@ -83,6 +83,16 @@ npm run dist:linux   # AppImage + deb + rpm
 npm run pack         # unpacked app under release/ (no installer)
 ```
 
+For a reproducible Windows x64 NSIS build with locked dependencies, payload
+auditing, and clean-install verification, run this from the repository root:
+
+```powershell
+npm run package:desktop:windows
+```
+
+See [`docs/desktop-windows-build.md`](../../docs/desktop-windows-build.md) for
+the prerequisites, preflight check, logs, and artifact report.
+
 Installers are built and uploaded to GitHub Releases manually. macOS/Windows signing & notarization happen automatically when the relevant credentials are present in the environment (`CSC_LINK` / `CSC_KEY_PASSWORD` / `APPLE_*` for macOS, `WIN_CSC_*` for Windows).
 
 ### How it works

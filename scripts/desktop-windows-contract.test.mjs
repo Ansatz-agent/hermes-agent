@@ -281,8 +281,10 @@ test('Windows product scripts expose native package and installed-auth verificat
     fs.readFileSync(path.resolve(import.meta.dirname, '..', 'package.json'), 'utf8')
   )
   assert.equal(rootPackage.scripts['build:desktop:windows'], 'node scripts/build-desktop-windows.mjs')
+  assert.equal(rootPackage.scripts['package:desktop:windows'], 'node scripts/package-desktop-windows.mjs')
   assert.match(rootPackage.scripts['test:desktop:windows-contract'], /desktop-windows-contract\.test\.mjs/)
   assert.match(rootPackage.scripts['test:desktop:windows-contract'], /desktop-credential-login\.test\.mjs/)
+  assert.match(rootPackage.scripts['test:desktop:windows-contract'], /package-desktop-windows\.test\.mjs/)
 
   const hostHarness = fs.readFileSync(
     path.resolve(import.meta.dirname, 'test-desktop-windows-auth-host.ps1'),
@@ -299,6 +301,10 @@ test('Windows product scripts expose native package and installed-auth verificat
   assert.match(installHarness, /test:e2e:installed-windows-smoke/)
   assert.match(installHarness, /test:e2e:installed-windows-auth/)
   assert.match(installHarness, /desktop-credential-login\.mjs/)
+  assert.match(installHarness, /\$ProductName\s*=\s*'Ansatz'/)
+  assert.match(installHarness, /\$ExecutableName\s*=\s*'Ansatz'/)
+  assert.match(installHarness, /\$ExecutableName\.exe/)
+  assert.match(installHarness, /Uninstall \$ProductName\.exe/)
   assert.match(installHarness, /RedirectStandardInput\s*=\s*\$true/)
   assert.match(installHarness, /Remove-Item -LiteralPath "Env:HERMES_E2E_USERNAME"/)
   assert.match(installHarness, /Remove-Item -LiteralPath "Env:HERMES_E2E_PASSWORD"/)

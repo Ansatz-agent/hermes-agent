@@ -13,7 +13,8 @@
   "scripts": {
     "build:desktop:dmg": "bash scripts/build-desktop-dmg.sh",
     "build:desktop:windows": "node scripts/build-desktop-windows.mjs",
-    "test:desktop:windows-contract": "node --test scripts/desktop-windows-contract.test.mjs scripts/build-desktop-windows.test.mjs scripts/desktop-credential-login.test.mjs",
+    "package:desktop:windows": "node scripts/package-desktop-windows.mjs",
+    "test:desktop:windows-contract": "node --test scripts/desktop-windows-contract.test.mjs scripts/build-desktop-windows.test.mjs scripts/package-desktop-windows.test.mjs scripts/desktop-credential-login.test.mjs",
     "postinstall": "echo '\u2705 Node dependencies installed. Run: python run_agent.py --help'",
     "install:root": "npm install --workspaces=false",
     "install:web": "npm install --workspace web",
