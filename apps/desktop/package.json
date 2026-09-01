@@ -2,7 +2,7 @@
   "name": "ansatz-voice-trace-client",
   "productName": "Ansatz",
   "private": true,
-  "version": "0.17.0",
+  "version": "0.17.1",
   "description": "Install-first voice client with authenticated Trace relay.",
   "author": "Ansatz Agent",
   "type": "module",
