@@ -360,14 +360,52 @@ test('redacts an unknown bridge failure while preserving local authorization', a
   assert.equal(JSON.stringify(events).includes('sessionid'), false)
 })
 
-test('local bridge recovery preserves the original scope without cleanup', async () => {
+test('local bridge recovery preserves the scope when the authenticated owner is unchanged', async () => {
+  const bridge = fixedBridge(authenticated)
+  const replacement = fixedBridge(authenticated)
+  const order: string[] = []
+
+  const cleanup = vi.fn(async () => {
+    assert.fail('same-owner recovery must not clean the existing scope')
+  })
+
+  const recoverBridge = vi.fn(async () => {
+    order.push('recover')
+
+    return replacement
+  })
+
+  const coordinator = new AuthCoordinator(bridge, {
+    cleanup,
+    clock: () => 42,
+    pollIntervalMs: 0,
+    recoverBridge
+  })
+  coordinator.subscribe(status => order.push(`event:${status.state}`))
+  await coordinator.start()
+  const originalScope = coordinator.scope('local')
+  order.length = 0
+  bridge.status.mockRejectedValueOnce(new AuthBridgeError('runtime_unavailable', 'runtime_unavailable'))
+
+  const result = await coordinator.refresh('local', { recoverRuntime: true })
+
+  assert.equal(result.state, 'authenticated')
+  assert.deepEqual(coordinator.scope('local'), originalScope)
+  assert.equal(cleanup.mock.calls.length, 0)
+  await assert.doesNotReject(coordinator.requireScope(originalScope))
+  assert.equal(recoverBridge.mock.calls.length, 1)
+  assert.equal(replacement.status.mock.calls.length, 1)
+  assert.deepEqual(order, ['event:authenticated', 'recover', 'event:authenticated', 'event:authenticated'])
+})
+
+test('local bridge recovery replaces a stale scope when the authenticated owner changes', async () => {
   const bridge = fixedBridge(authenticated)
   const replacement = fixedBridge({ ...authenticated, runtime_instance_id: 'runtime-2', epoch: 3 })
   const order: string[] = []
   let coordinator: AuthCoordinator
 
   const cleanup = vi.fn(async () => {
-    assert.fail('transient local recovery must not clean the existing scope')
+    assert.equal(coordinator.scope('local'), null)
     order.push('cleanup')
   })
 
@@ -389,16 +427,31 @@ test('local bridge recovery preserves the original scope without cleanup', async
   })
   coordinator.subscribe(status => order.push(`event:${status.state}`))
   await coordinator.start()
+  const oldScope = coordinator.scope('local')
   order.length = 0
   bridge.status.mockRejectedValueOnce(new AuthBridgeError('runtime_unavailable', 'runtime_unavailable'))
 
   const result = await coordinator.refresh('local', { recoverRuntime: true })
 
   assert.equal(result.state, 'authenticated')
-  assert.equal(coordinator.scope('local')?.runtime_instance_id, 'runtime-1')
+  assert.deepEqual(coordinator.scope('local'), {
+    connection_id: 'local',
+    runtime_instance_id: 'runtime-2',
+    epoch: 3
+  })
+  assert.equal(cleanup.mock.calls.length, 1)
+  await assert.rejects(coordinator.requireScope(oldScope), /AUTH_REQUIRED/)
+  await assert.doesNotReject(coordinator.require('local', 'local'))
   assert.equal(recoverBridge.mock.calls.length, 1)
   assert.equal(replacement.status.mock.calls.length, 1)
-  assert.deepEqual(order, ['event:authenticated', 'recover', 'event:authenticated', 'event:authenticated'])
+  assert.deepEqual(order, [
+    'event:authenticated',
+    'recover',
+    'event:authenticated',
+    'event:locked',
+    'cleanup',
+    'event:authenticated'
+  ])
 })
 
 test('ordinary local refresh degrades without rebuilding an unavailable bridge', async () => {
