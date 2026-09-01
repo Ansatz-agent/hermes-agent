@@ -516,7 +516,15 @@ export class AuthCoordinator {
     if (isLocallyAuthorized(status)) {
       const nextScope = connectionScopeFromStatus(status, connectionId)
 
-      if (previousScope && isLocallyAuthorized(previousStatus) && !sameAccount(previousStatus, status)) {
+      const scopeOwnerChanged =
+        previousScope &&
+        (previousScope.runtime_instance_id !== nextScope.runtime_instance_id || previousScope.epoch !== nextScope.epoch)
+
+      if (
+        previousScope &&
+        isLocallyAuthorized(previousStatus) &&
+        (!sameAccount(previousStatus, status) || scopeOwnerChanged)
+      ) {
         const locked = lockFrom(previousStatus, 'session_rejected')
         this.scopes.delete(connectionId)
         this.advanceGeneration(connectionId)
