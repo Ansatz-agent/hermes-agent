@@ -53,6 +53,19 @@ def _make_empty_chunk(model=None, usage=None):
     return SimpleNamespace(choices=[], model=model, usage=usage)
 
 
+def test_stream_chunk_accounting_reads_usage_only_provider_chunk():
+    from agent.chat_completion_helpers import _stream_chunk_accounting
+
+    usage = SimpleNamespace(prompt_tokens=10, completion_tokens=3, total_tokens=13)
+
+    model, captured = _stream_chunk_accounting(
+        _make_empty_chunk(model="deepseek-v4-flash", usage=usage)
+    )
+
+    assert model == "deepseek-v4-flash"
+    assert captured is usage
+
+
 # ── Test: Streaming Accumulator ──────────────────────────────────────────
 
 
@@ -1634,4 +1647,3 @@ class TestBedrockReasoningStaleFloor:
         from agent.chat_completion_helpers import _bedrock_reasoning_stale_floor
 
         assert _bedrock_reasoning_stale_floor(model_id) == expected
-

@@ -3232,6 +3232,13 @@ def _build_partial_stream_stub(
     )
 
 
+def _stream_chunk_accounting(chunk: Any) -> tuple[Any, Any]:
+    """Return provider model/usage before Relay codecs can drop usage-only chunks."""
+    if isinstance(chunk, dict):
+        return chunk.get("model"), chunk.get("usage")
+    return getattr(chunk, "model", None), getattr(chunk, "usage", None)
+
+
 def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=None):
     """Streaming variant of _interruptible_api_call for real-time token delivery.
 
@@ -3914,6 +3921,14 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
             last_chunk_time["t"] = time.time()
             return True
 
+        def _capture_provider_accounting(_chunk: Any) -> None:
+            nonlocal model_name, usage_obj
+            chunk_model, chunk_usage = _stream_chunk_accounting(_chunk)
+            if chunk_model:
+                model_name = chunk_model
+            if chunk_usage:
+                usage_obj = chunk_usage
+
         def _relay_final_response() -> dict[str, Any]:
             tool_calls = [tool_calls_acc[index] for index in sorted(tool_calls_acc)]
             return {
@@ -3942,6 +3957,7 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                 name=str(getattr(agent, "provider", "") or "provider"),
                 model_name=str(getattr(agent, "model", "") or ""),
                 finalizer=_relay_final_response,
+                on_chunk=_capture_provider_accounting,
                 on_stream_created=_stream_created,
                 accept_chunk=_accept_stream_chunk,
                 completed_response_predicate=lambda value: hasattr(value, "choices"),
