@@ -53,6 +53,17 @@ test('bundled runtime installs, reuses, and refreshes only verified desktop payl
     classifyBundledRuntime({
       packaged: true,
       runtimeUsable: true,
+      installMethod: 'desktop-bundle',
+      sourceCommit: OTHER_COMMIT,
+      sourceOrigin: 'release-server',
+      payloadCommit: PAYLOAD_COMMIT
+    }),
+    'reuse'
+  )
+  assert.equal(
+    classifyBundledRuntime({
+      packaged: true,
+      runtimeUsable: true,
       installMethod: 'source',
       payloadCommit: PAYLOAD_COMMIT
     }),

@@ -107,6 +107,42 @@ test('schema-2 managed auth contract matches current packaged payload and lock',
   }
 })
 
+test('managed auth contract accepts a newer Release Server source than the shell payload', () => {
+  const fixture = createManagedFixture()
+  const updatedCommit = 'd'.repeat(40)
+  const updatedArchive = 'e'.repeat(64)
+
+  try {
+    writeFile(
+      fixture.activeRoot,
+      '.hermes-bundled-source.json',
+      JSON.stringify({
+        schemaVersion: 1,
+        commit: updatedCommit,
+        archiveSha256: updatedArchive,
+        installedAt: '2026-08-22T00:00:00.000Z',
+        source: 'release-server',
+        version: '0.17.1'
+      })
+    )
+    writeFile(
+      fixture.activeRoot,
+      '.hermes-auth-bootstrap-complete',
+      JSON.stringify({
+        ...fixture.marker,
+        sourceCommit: updatedCommit,
+        sourceArchiveSha256: updatedArchive
+      })
+    )
+
+    const result = validateFixture(fixture)
+    assert.equal(result.ok, true)
+    assert.equal(result.reason, null)
+  } finally {
+    fs.rmSync(fixture.tempRoot, { recursive: true, force: true })
+  }
+})
+
 test('managed auth contract accepts a legacy launcher only as a compatibility fallback', () => {
   const fixture = createManagedFixture()
 

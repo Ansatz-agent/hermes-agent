@@ -626,9 +626,10 @@ def format_docker_update_message() -> str:
 
 _DESKTOP_BUNDLE_UPDATE_MESSAGE = """\
 Ansatz was installed from a bundled source snapshot. `ansatz update` checks the
-Ansatz release server, downloads its pinned source archive, and then runs the
-same dependency, build, migration, and restart stages used by a Hermes source
-update. Set ANSATZ_UPDATE_BASE_URL to an http(s) server when testing from a VM."""
+Ansatz GitHub-Releases-compatible endpoint, downloads its pinned source asset,
+and then runs the same dependency, build, migration, and restart stages used by
+a Hermes source update. Set ANSATZ_UPDATE_BASE_URL to an http(s) server when
+testing from a VM."""
 
 
 def format_desktop_bundle_update_message() -> str:

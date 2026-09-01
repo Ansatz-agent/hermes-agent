@@ -362,7 +362,10 @@ export async function prepareWindowsPackagedAuthRuntime(options: PrepareOptions)
   assertToolchain(toolchain)
   fs.mkdirSync(activeRoot, { recursive: true })
   const sourceContract = readSourceContract(activeRoot)
-  await retireAuthOwners({ activeRoot })
+  // Migrate installs created before the isolated auth-venv layout: their
+  // owner was launched from venv\Scripts and would otherwise survive an
+  // auth-runtime rebuild, keeping native files locked for the next update.
+  await retireAuthOwners({ activeRoot, includeLegacyVenv: true })
   recoverWindowsAuthRuntimeTransaction(activeRoot)
 
   const stagingRoot = path.join(activeRoot, `.auth-runtime-stage-${process.pid}-${Date.now()}`)
@@ -436,7 +439,16 @@ export async function prepareWindowsPackagedAuthRuntime(options: PrepareOptions)
       'offline authentication dependency installation'
     )
 
+    // The embedded Python runtime is intentionally invoked in isolated mode so
+    // user/site configuration cannot affect the authentication environment.
+    // In the staging layout the runtime lives two directories below
+    // `activeRoot`, and the temporary `python313._pth` therefore does not put
+    // the source tree on sys.path.  Add the validated bundled source root
+    // explicitly for this probe; the published runtime keeps using its own
+    // `python313._pth` contract.
+    const sourceRootLiteral = JSON.stringify(path.resolve(activeRoot))
     const verification = [
+      `import sys; sys.path.insert(0, ${sourceRootLiteral})`,
       'import httpx, keyring',
       'from hermes_cli.client_auth import bridge',
       'from hermes_cli.client_auth.backend_scope_protocol import DESKTOP_SCOPE_PROTOCOL_VERSION',

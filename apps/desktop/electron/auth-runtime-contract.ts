@@ -133,20 +133,14 @@ function parseAuthRuntimeMarker(value: unknown): AuthRuntimeMarker | null {
 function readManagedSourceContract(
   activeRoot: string,
   bundledBootstrapRoot: string | null
-): { commit: string; archiveSha256: string } | null {
-  if (!bundledBootstrapRoot) {
-    return null
-  }
+): { commit: string; archiveSha256: string; source: string | null } | null {
 
   const sourcePath = path.join(activeRoot, BUNDLED_SOURCE_MARKER_NAME)
-  const payloadPath = path.join(bundledBootstrapRoot, PAYLOAD_MANIFEST_NAME)
-
-  if (!isRegularFile(sourcePath) || !isRegularFile(payloadPath)) {
+  if (!isRegularFile(sourcePath)) {
     return null
   }
 
   const source = readJson(sourcePath)
-  const payload = readJson(payloadPath)
 
   if (
     !isPlainObject(source) ||
@@ -154,21 +148,43 @@ function readManagedSourceContract(
     typeof source.commit !== 'string' ||
     !COMMIT_RE.test(source.commit) ||
     typeof source.archiveSha256 !== 'string' ||
-    !SHA256_RE.test(source.archiveSha256) ||
-    !isPlainObject(payload) ||
-    payload.schemaVersion !== 1 ||
-    typeof payload.commit !== 'string' ||
-    !COMMIT_RE.test(payload.commit) ||
-    !isPlainObject(payload.archive) ||
-    typeof payload.archive.sha256 !== 'string' ||
-    !SHA256_RE.test(payload.archive.sha256) ||
-    source.commit !== payload.commit ||
-    source.archiveSha256 !== payload.archive.sha256
+    !SHA256_RE.test(source.archiveSha256)
   ) {
     return null
   }
 
-  return { commit: source.commit, archiveSha256: source.archiveSha256 }
+  // The active source can be newer than the payload embedded in the shell:
+  // `ansatz update` applies a Release Server archive without rebuilding the
+  // Electron process.  The source marker is the authoritative contract for
+  // that managed runtime.  Keep the payload file check for legacy bundled
+  // installs, where the marker has no Release Server provenance.
+  const sourceOrigin = typeof source.source === 'string' ? source.source : null
+
+  if (bundledBootstrapRoot && sourceOrigin !== 'release-server') {
+    const payloadPath = path.join(bundledBootstrapRoot, PAYLOAD_MANIFEST_NAME)
+
+    if (!isRegularFile(payloadPath)) {
+      return null
+    }
+
+    const payload = readJson(payloadPath)
+
+    if (
+      !isPlainObject(payload) ||
+      payload.schemaVersion !== 1 ||
+      typeof payload.commit !== 'string' ||
+      !COMMIT_RE.test(payload.commit) ||
+      !isPlainObject(payload.archive) ||
+      typeof payload.archive.sha256 !== 'string' ||
+      !SHA256_RE.test(payload.archive.sha256) ||
+      source.commit !== payload.commit ||
+      source.archiveSha256 !== payload.archive.sha256
+    ) {
+      return null
+    }
+  }
+
+  return { commit: source.commit, archiveSha256: source.archiveSha256, source: sourceOrigin }
 }
 
 function defaultResolveGitHead(activeRoot: string): string | null {
@@ -276,7 +292,11 @@ export function validateAuthRuntimeContract({
   if (bundledBootstrapRoot) {
     const managed = readManagedSourceContract(activeRoot, bundledBootstrapRoot)
 
-    if (!managed || marker.sourceCommit !== managed.commit || marker.sourceArchiveSha256 !== managed.archiveSha256) {
+    if (
+      !managed ||
+      marker.sourceCommit !== managed.commit ||
+      marker.sourceArchiveSha256 !== managed.archiveSha256
+    ) {
       return fail('bundled_source_mismatch', marker)
     }
   } else if (fs.existsSync(gitMetadata)) {

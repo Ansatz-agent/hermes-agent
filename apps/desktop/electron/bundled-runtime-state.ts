@@ -7,6 +7,7 @@ export interface BundledRuntimeInput {
   runtimeUsable: boolean
   installMethod?: string | null
   sourceCommit?: string | null
+  sourceOrigin?: string | null
   payloadCommit?: string | null
   transactionPending?: boolean
 }
@@ -36,6 +37,7 @@ export function classifyBundledRuntime({
   runtimeUsable,
   installMethod,
   sourceCommit,
+  sourceOrigin,
   payloadCommit,
   transactionPending = false
 }: BundledRuntimeInput): BundledRuntimeDecision {
@@ -63,6 +65,16 @@ export function classifyBundledRuntime({
   }
 
   if (sourceCommit === payloadCommit) {
+    return 'reuse'
+  }
+
+  // A managed Release Server update intentionally replaces the source tree
+  // without rebuilding the Electron shell.  In that case the app's embedded
+  // first-install payload is expected to lag behind the active source.  Do
+  // not treat that normal state as a request to restore the older payload on
+  // every restart.  A fresh installer still uses the payload when no usable
+  // runtime exists; interrupted transactions remain covered above.
+  if (sourceOrigin === 'release-server') {
     return 'reuse'
   }
 

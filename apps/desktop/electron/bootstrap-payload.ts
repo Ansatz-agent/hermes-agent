@@ -36,7 +36,6 @@ const REQUIRED_SOURCE_PATHS = [
 const FORBIDDEN_ARCHIVE_PREFIXES = [
   'hermes-agent/tests/',
   'hermes-agent/tests-js/',
-  'hermes-agent/docs/',
   'hermes-agent/website/',
   'hermes-agent/.github/',
   'hermes-agent/.git/'
@@ -48,6 +47,14 @@ const TEST_ENTRY_RE =
 const DECLARATION_TEST_RE = /\.(test|spec)-d\.ts$/
 const NESTED_DOCS_RE = /(^|\/)docs(\/|$)/
 const GIT_METADATA_RE = /(^|\/)\.(gitignore|gitattributes|gitmodules)$/
+// The managed-download policy is consumed by the runtime when it resolves
+// release-server URLs.  These are the only documentation entries that belong
+// in a production source payload; all other docs remain excluded.
+const DOWNLOAD_POLICY_DOC_ENTRIES = new Set([
+  'hermes-agent/docs',
+  'hermes-agent/docs/security',
+  'hermes-agent/docs/security/hermes-managed-download-origins.json'
+])
 
 export interface BundledPayloadManifest {
   schemaVersion: 1
@@ -77,6 +84,9 @@ export interface BundledSourceMarker {
   commit: string
   archiveSha256: string
   installedAt: string
+  /** Optional provenance written by the Release Server archive updater. */
+  source?: string
+  version?: string
 }
 
 export interface PreparedBundledSource {
@@ -233,12 +243,14 @@ export function archiveEntryIsSafe(entry: string): boolean {
 }
 
 function archiveEntryIsForbidden(entry: string): boolean {
+  const normalized = entry.replace(/\/$/, '')
+
   return (
     FORBIDDEN_ARCHIVE_PREFIXES.some(prefix => entry.startsWith(prefix)) ||
     TEST_ENTRY_RE.test(entry) ||
     DECLARATION_TEST_RE.test(entry) ||
-    NESTED_DOCS_RE.test(entry) ||
-    GIT_METADATA_RE.test(entry) ||
+    (NESTED_DOCS_RE.test(normalized) && !DOWNLOAD_POLICY_DOC_ENTRIES.has(normalized)) ||
+    GIT_METADATA_RE.test(normalized) ||
     !runtimeScriptEntryIsAllowed(entry)
   )
 }

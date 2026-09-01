@@ -354,6 +354,7 @@ import {
   wrapHandoffForDetachedConsole
 } from './updater-process'
 import { formatBlockerMessage, formatProbeFailedMessage, scanVenvBlockers } from './venv-blocker-scan'
+import { retireExactWindowsAuthOwners } from './windows-auth-owner'
 import { fetchMarketplaceThemes, searchMarketplaceThemes } from './vscode-marketplace'
 import { createWakeIndicatorWindowController } from './wake-indicator-window'
 import { readWindowBelow } from './window-below'
@@ -883,6 +884,43 @@ function resolveCompleteRuntimeBootstrapRequest() {
   return candidate?.kind === 'bootstrap-needed' ? candidate : fullRuntimeBootstrapRequest()
 }
 
+function packagedWindowsAuthRuntimeReady() {
+  return (
+    IS_PACKAGED &&
+    IS_WINDOWS &&
+    isAuthRuntimeUsable({
+      activeRoot: ACTIVE_HERMES_ROOT,
+      bundledBootstrapRoot: BUNDLED_BOOTSTRAP_ROOT,
+      platform: process.platform,
+      requireLauncher: false
+    })
+  )
+}
+
+async function ensurePackagedWindowsAuthRuntime() {
+  if (!IS_PACKAGED || !IS_WINDOWS || packagedWindowsAuthRuntimeReady()) {
+    return
+  }
+
+  const candidate = resolveHermesBackend([], { requirePythonModule: true })
+  if (readActiveInstallMethod() !== 'desktop-bundle' && candidate?.kind !== 'bootstrap-needed') {
+    // Do not replace an externally-managed Python installation merely because
+    // the packaged shell has no auth-venv of its own.  The forced repair below
+    // is only for the source-bundled install contract.
+    return
+  }
+
+  // A managed install can have a usable full venv while its auth-venv is
+  // missing (for example after an interrupted first launch).  In that case
+  // force the bundled bootstrap path instead of reusing the main venv: the
+  // auth owner must live outside the venv that Desktop later scans and
+  // replaces during updates.
+  const bootstrap = candidate?.kind === 'bootstrap-needed' ? candidate : fullRuntimeBootstrapRequest()
+
+  rememberLog('[bootstrap] authentication runtime missing; preparing the isolated Windows auth environment')
+  await ensureRuntime(bootstrap, { scope: 'auth' })
+}
+
 async function startDesktopAuthRuntime() {
   if (desktopAuthCoordinator) {
     return
@@ -892,69 +930,73 @@ async function startDesktopAuthRuntime() {
     return desktopAuthStartupPromise
   }
 
-  const startup = prepareInstallFirstRuntime({
-    resolveBackend: resolveCompleteRuntimeBootstrapRequest,
-    ensureRuntime,
-    runtimeGate: desktopRuntimeGate,
-    startAuthBridge: async () => {
-      if (desktopAuthCoordinator) {
-        return
-      }
+  const startup = (async () => {
+    await ensurePackagedWindowsAuthRuntime()
 
-      const bridge = createDesktopAuthBridge()
+    await prepareInstallFirstRuntime({
+      resolveBackend: resolveCompleteRuntimeBootstrapRequest,
+      ensureRuntime,
+      runtimeGate: desktopRuntimeGate,
+      startAuthBridge: async () => {
+        if (desktopAuthCoordinator) {
+          return
+        }
 
-      const coordinator = new AuthCoordinator(bridge, {
-        cleanup: cleanupDesktopCapabilities,
-        recoverBridge: recoverDesktopAuthBridge
-      })
+        const bridge = createDesktopAuthBridge()
 
-      desktopAuthBridge = bridge
-      desktopAuthCoordinator = coordinator
-      coordinator.subscribe((status, connectionId) => {
-        broadcastDesktopAuthStatus(status, connectionId)
+        const coordinator = new AuthCoordinator(bridge, {
+          cleanup: cleanupDesktopCapabilities,
+          recoverBridge: recoverDesktopAuthBridge
+        })
 
-        if (connectionId === 'local' && status.state === 'authenticated') {
-          coordinateAuthenticatedDesktopRuntime({
-            enableCapabilities: enableDesktopCapabilityShell,
-            rendererAvailable: Boolean(mainWindow && !mainWindow.isDestroyed()),
-            startBackend: () => {
-              void startHermes().catch(error => {
-                const failureCode = error?.code || 'backend-start-failed'
-                rememberLog(`[runtime] authenticated backend start failed: ${failureCode}`)
-              })
-            },
-            syncTraceOwner: () => {
-              const traceScope = coordinator.scope('local')
+        desktopAuthBridge = bridge
+        desktopAuthCoordinator = coordinator
+        coordinator.subscribe((status, connectionId) => {
+          broadcastDesktopAuthStatus(status, connectionId)
 
-              if (traceScope) {
-                const traceOwner = traceOwnerFromScope(status, traceScope, desktopInstallationId)
-
-                void prepareDesktopTraceForwarder(traceScope, traceOwner).catch(error => {
-                  rememberLog(`[trace] authenticated owner sync failed: ${safeTraceFailureCode(error)}`)
+          if (connectionId === 'local' && status.state === 'authenticated') {
+            coordinateAuthenticatedDesktopRuntime({
+              enableCapabilities: enableDesktopCapabilityShell,
+              rendererAvailable: Boolean(mainWindow && !mainWindow.isDestroyed()),
+              startBackend: () => {
+                void startHermes().catch(error => {
+                  const failureCode = error?.code || 'backend-start-failed'
+                  rememberLog(`[runtime] authenticated backend start failed: ${failureCode}`)
                 })
+              },
+              syncTraceOwner: () => {
+                const traceScope = coordinator.scope('local')
+
+                if (traceScope) {
+                  const traceOwner = traceOwnerFromScope(status, traceScope, desktopInstallationId)
+
+                  void prepareDesktopTraceForwarder(traceScope, traceOwner).catch(error => {
+                    rememberLog(`[trace] authenticated owner sync failed: ${safeTraceFailureCode(error)}`)
+                  })
+                }
               }
-            }
-          })
-        }
-      })
+            })
+          }
+        })
 
-      try {
-        await coordinator.start()
-      } catch (error) {
-        if (desktopAuthCoordinator === coordinator) {
-          desktopAuthCoordinator = null
-        }
+        try {
+          await coordinator.start()
+        } catch (error) {
+          if (desktopAuthCoordinator === coordinator) {
+            desktopAuthCoordinator = null
+          }
 
-        if (desktopAuthBridge === bridge) {
-          desktopAuthBridge = null
-        }
+          if (desktopAuthBridge === bridge) {
+            desktopAuthBridge = null
+          }
 
-        coordinator.stop()
-        bridge.close()
-        throw error
+          coordinator.stop()
+          bridge.close()
+          throw error
+        }
       }
-    }
-  })
+    })
+  })()
 
   desktopAuthStartupPromise = startup
 
@@ -3635,7 +3677,31 @@ function reapOrphanedBackendsOnce() {
 // aggressively SIGKILL-ing the backend here would be an untested behavior change
 // for no benefit. So we no-op off Windows and leave that path exactly as it was.
 async function releaseBackendLockForUpdate(updateRoot) {
-  return releaseBackendLock(updateRoot, 'updates')
+  const result = await releaseBackendLock(updateRoot, 'updates')
+
+  if (!result.unlocked || !IS_WINDOWS) {
+    return result
+  }
+
+  // Older managed installs launched the authentication owner from the main
+  // venv.  That owner (and its uv child) is outside the desktop backend
+  // ownership registry, so stopping only our serve process leaves the venv
+  // scan blocked forever after an upgrade.  Retire only exact, same-user
+  // Ansatz auth owners, including the legacy venv layout, before scanning.
+  try {
+    const retired = await retireExactWindowsAuthOwners({
+      activeRoot: updateRoot,
+      includeLegacyVenv: true
+    })
+
+    if (retired.stopped > 0) {
+      rememberLog(`[updates] retired ${retired.stopped} legacy authentication owner process(es)`)
+    }
+  } catch (error) {
+    rememberLog(`[updates] authentication owner retirement failed: ${error?.message || String(error)}`)
+  }
+
+  return result
 }
 
 // Shared backend teardown + venv-shim unlock wait. Used by BOTH the self-update
@@ -4447,6 +4513,7 @@ function classifyPackagedBundledRuntime(runtimeUsable) {
     runtimeUsable,
     installMethod: readActiveInstallMethod(),
     sourceCommit: sourceMarker?.commit || null,
+    sourceOrigin: sourceMarker?.source || null,
     payloadCommit: typeof payloadManifest?.commit === 'string' ? payloadManifest.commit : null,
     transactionPending: fs.existsSync(bundledSourceBackupPath(ACTIVE_HERMES_ROOT))
   })
@@ -4964,7 +5031,12 @@ async function ensureRuntime(backend, { scope = 'runtime' }: any = {}) {
   if (backend.kind === 'bootstrap-needed') {
     rememberLog('[bootstrap] no Ansatz install found; starting first-launch bootstrap')
 
-    if (await handOffWindowsBootstrapRecovery('bootstrap-needed')) {
+    // Authentication bootstrap must stay in-process.  The staged Setup
+    // updater only knows how to perform the full runtime flow; handing off
+    // here would leave the auth bridge falling back to the main venv and make
+    // the subsequent Windows update preflight report the auth process as a
+    // live venv blocker.
+    if (scope !== 'auth' && (await handOffWindowsBootstrapRecovery('bootstrap-needed'))) {
       const handoffError: Error & { isBootstrapFailure?: boolean; bootstrapHandedOff?: boolean } = new Error(
         'Ansatz recovery was handed off to Ansatz Setup. The desktop will restart when recovery completes.'
       )

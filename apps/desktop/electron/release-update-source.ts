@@ -1,8 +1,11 @@
 const UPDATE_BASE_URL_ENV = 'ANSATZ_UPDATE_BASE_URL'
 const DEFAULT_UPDATE_BASE_URL = 'https://setup.hermes-agent.nousresearch.com'
-const LATEST_RELEASE_PATH = '/api/v1/ansatz/releases/latest'
+const RELEASE_REPOSITORY = 'Ansatz-agent/hermes-agent'
+const LATEST_RELEASE_PATH = `/repos/${RELEASE_REPOSITORY}/releases/latest`
+const SOURCE_ARCHIVE_ASSET_NAME = 'hermes-backend.tar.gz'
 const COMMIT_RE = /^[0-9a-f]{40}$/i
 const SHA256_RE = /^[0-9a-f]{64}$/
+const MAX_ARCHIVE_BYTES = 2 * 1024 * 1024 * 1024
 
 interface ReleaseArchive {
   url: string
@@ -11,8 +14,6 @@ interface ReleaseArchive {
 }
 
 export interface AnsatzReleaseMetadata {
-  schemaVersion: 1
-  product: 'ansatz' | 'ansatz-agent'
   version: string
   commit: string
   channel: string
@@ -47,56 +48,85 @@ function architectureName(architecture: string): string {
   return architecture
 }
 
-function validateReleaseMetadata(raw: unknown, baseUrl: string): AnsatzReleaseMetadata {
+function sourceAssetNames(platform: NodeJS.Platform, architecture: string): string[] {
+  return [
+    `hermes-backend-${platformName(platform)}-${architectureName(architecture)}.tar.gz`,
+    SOURCE_ARCHIVE_ASSET_NAME
+  ]
+}
+
+function validateReleaseMetadata(
+  raw: unknown,
+  baseUrl: string,
+  {
+    platform = process.platform,
+    architecture = process.arch
+  }: { platform?: NodeJS.Platform; architecture?: string } = {}
+): AnsatzReleaseMetadata {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     throw new Error('release metadata must be a JSON object')
   }
 
   const value = raw as Record<string, any>
 
-  if (value.schemaVersion !== 1) {throw new Error('release metadata schemaVersion must be 1')}
-
-  if (value.product !== 'ansatz' && value.product !== 'ansatz-agent') {
-    throw new Error('release metadata product must identify Ansatz')
+  if (value.draft !== false || value.prerelease !== false) {
+    throw new Error('latest release must be published and stable')
   }
 
-  if (typeof value.version !== 'string' || !/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(value.version)) {
-    throw new Error('release metadata version is invalid')
-  }
+  const tagName = typeof value.tag_name === 'string' ? value.tag_name.trim() : ''
+  const version = /^[vV]/.test(tagName) ? tagName.slice(1) : tagName
 
-  if (typeof value.commit !== 'string' || !COMMIT_RE.test(value.commit) || /^0+$/.test(value.commit)) {
-    throw new Error('release metadata commit must be a real Git SHA')
+  if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(version)) {
+    throw new Error('release metadata tag_name is invalid')
   }
 
   if (
-    !value.archive ||
-    typeof value.archive.url !== 'string' ||
-    !Number.isSafeInteger(value.archive.size) ||
-    value.archive.size <= 0 ||
-    typeof value.archive.sha256 !== 'string' ||
-    !SHA256_RE.test(value.archive.sha256)
+    typeof value.target_commitish !== 'string' ||
+    !COMMIT_RE.test(value.target_commitish) ||
+    /^0+$/.test(value.target_commitish)
   ) {
-    throw new Error('release archive metadata is invalid')
+    throw new Error('release metadata target_commitish must be a real Git SHA')
   }
 
-  const archiveUrl = new URL(value.archive.url, `${baseUrl}/`)
+  const names = sourceAssetNames(platform, architecture)
+  const assets = Array.isArray(value.assets) ? value.assets : null
+  const archive = assets
+    ? names
+        .map(name => assets.find(asset => asset && typeof asset === 'object' && asset.name === name))
+        .find(Boolean)
+    : null
+  const digestMatch =
+    archive && typeof archive.digest === 'string' ? /^sha256:([0-9a-f]{64})$/i.exec(archive.digest) : null
+
+  if (
+    !archive ||
+    archive.state !== 'uploaded' ||
+    typeof archive.browser_download_url !== 'string' ||
+    !Number.isSafeInteger(archive.size) ||
+    archive.size <= 0 ||
+    archive.size > MAX_ARCHIVE_BYTES ||
+    !digestMatch ||
+    !SHA256_RE.test(digestMatch[1])
+  ) {
+    throw new Error(`release source asset metadata is invalid (${names.join(' or ')})`)
+  }
+
+  const archiveUrl = new URL(archive.browser_download_url, `${baseUrl}/`)
 
   if (archiveUrl.protocol !== 'http:' && archiveUrl.protocol !== 'https:') {
     throw new Error('release archive URL must use http(s)')
   }
 
   return {
-    schemaVersion: 1,
-    product: value.product,
-    version: value.version,
-    commit: value.commit.toLowerCase(),
-    channel: typeof value.channel === 'string' && value.channel ? value.channel : 'stable',
+    version,
+    commit: value.target_commitish.toLowerCase(),
+    channel: 'stable',
     archive: {
       url: archiveUrl.toString(),
-      size: value.archive.size,
-      sha256: value.archive.sha256.toLowerCase()
+      size: archive.size,
+      sha256: digestMatch[1].toLowerCase()
     },
-    ...(typeof value.publishedAt === 'string' ? { publishedAt: value.publishedAt } : {})
+    ...(typeof value.published_at === 'string' ? { publishedAt: value.published_at } : {})
   }
 }
 
@@ -134,26 +164,28 @@ async function fetchLatestRelease({
 } = {}): Promise<AnsatzReleaseMetadata> {
   const baseUrl = resolveUpdateBaseUrl(environment)
   const endpoint = new URL(LATEST_RELEASE_PATH, `${baseUrl}/`)
-  endpoint.searchParams.set('channel', 'stable')
-  endpoint.searchParams.set('platform', platformName(platform))
-  endpoint.searchParams.set('arch', architectureName(architecture))
 
   const response = await fetchImpl(endpoint, {
-    headers: { Accept: 'application/json' },
+    headers: {
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28'
+    },
     signal: AbortSignal.timeout(15_000)
   })
 
   if (!response.ok) {throw new Error(`release server returned HTTP ${response.status}`)}
 
-  return validateReleaseMetadata(await response.json(), baseUrl)
+  return validateReleaseMetadata(await response.json(), baseUrl, { platform, architecture })
 }
 
 export {
   DEFAULT_UPDATE_BASE_URL,
   fetchLatestRelease,
   LATEST_RELEASE_PATH,
+  RELEASE_REPOSITORY,
   releaseIsNewer,
   resolveUpdateBaseUrl,
+  SOURCE_ARCHIVE_ASSET_NAME,
   UPDATE_BASE_URL_ENV,
   validateReleaseMetadata
 }

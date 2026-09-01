@@ -98,12 +98,16 @@ test('failed preparation remains terminal and retryable', async () => {
 
 test('auth status refresh does not tear down an already trusted desktop runtime', () => {
   const source = fs.readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
+  const subscriptionStart = source.indexOf('coordinator.subscribe((status, connectionId) => {')
+  const startupTry = source.indexOf('\n        try {\n          await coordinator.start()', subscriptionStart)
 
   const authSubscription = source.slice(
-    source.indexOf('coordinator.subscribe((status, connectionId) => {'),
-    source.indexOf('\n      try {', source.indexOf('coordinator.subscribe((status, connectionId) => {'))
+    subscriptionStart,
+    startupTry
   )
 
+  assert.notEqual(subscriptionStart, -1)
+  assert.notEqual(startupTry, -1)
   assert.doesNotMatch(authSubscription, /cleanupDesktopCapabilities|desktopRuntimeGate\.invalidate/)
 })
 

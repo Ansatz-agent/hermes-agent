@@ -12,16 +12,20 @@ const SHA256 = 'b'.repeat(64)
 
 function metadata(overrides: Record<string, unknown> = {}) {
   return {
-    schemaVersion: 1,
-    product: 'ansatz',
-    channel: 'stable',
-    version: '0.18.0',
-    commit: COMMIT,
-    archive: {
-      url: '/static/ansatz-0.18.0.tar.gz',
-      size: 123,
-      sha256: SHA256
-    },
+    tag_name: 'v0.18.0',
+    target_commitish: COMMIT,
+    draft: false,
+    prerelease: false,
+    published_at: '2026-09-01T00:00:00Z',
+    assets: [
+      {
+        name: 'hermes-backend.tar.gz',
+        state: 'uploaded',
+        size: 123,
+        digest: `sha256:${SHA256}`,
+        browser_download_url: '/Ansatz-agent/hermes-agent/releases/download/v0.18.0/hermes-backend.tar.gz'
+      }
+    ],
     ...overrides
   }
 }
@@ -35,10 +39,12 @@ describe('release update source', () => {
 
   it('resolves static archive URLs against the configured server', () => {
     const release = validateReleaseMetadata(metadata(), 'http://192.168.56.1:8765')
-    expect(release.archive.url).toBe('http://192.168.56.1:8765/static/ansatz-0.18.0.tar.gz')
+    expect(release.archive.url).toBe(
+      'http://192.168.56.1:8765/Ansatz-agent/hermes-agent/releases/download/v0.18.0/hermes-backend.tar.gz'
+    )
   })
 
-  it('queries the platform-specific latest-release endpoint', async () => {
+  it('queries the GitHub-compatible latest-release endpoint', async () => {
     let requestedUrl = ''
 
     const fetchImpl: typeof fetch = async input => {
@@ -55,14 +61,13 @@ describe('release update source', () => {
     })
 
     const requested = new URL(requestedUrl)
-    expect(requested.pathname).toBe('/api/v1/ansatz/releases/latest')
-    expect(requested.searchParams.get('platform')).toBe('windows')
-    expect(requested.searchParams.get('arch')).toBe('x64')
+    expect(requested.pathname).toBe('/repos/Ansatz-agent/hermes-agent/releases/latest')
+    expect(requested.search).toBe('')
     expect(release.version).toBe('0.18.0')
   })
 
   it('treats a different commit at the same version as a refreshed release', () => {
-    const release = validateReleaseMetadata(metadata({ version: '0.17.0' }), 'https://updates.example')
+    const release = validateReleaseMetadata(metadata({ tag_name: 'v0.17.0' }), 'https://updates.example')
     expect(releaseIsNewer(release, '0.17.0', 'c'.repeat(40))).toBe(true)
     expect(releaseIsNewer(release, '0.18.0', 'c'.repeat(40))).toBe(false)
   })

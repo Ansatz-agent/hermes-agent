@@ -841,6 +841,43 @@ class TestNodeRuntimeNpmResolution:
             env=ANY,
         )
 
+    def test_packaged_desktop_detector_accepts_ansatz_executable(self, tmp_path, monkeypatch):
+        """The renamed Ansatz shell must count as an installed packaged app."""
+        from hermes_cli import main as hm
+
+        desktop_dir = tmp_path / "apps" / "desktop"
+        exe = desktop_dir / "release" / "win-unpacked" / "Ansatz.exe"
+        exe.parent.mkdir(parents=True)
+        exe.write_bytes(b"MZ")
+        monkeypatch.setattr(hm.sys, "platform", "win32")
+
+        assert hm._desktop_packaged_executable(desktop_dir) == exe
+
+    def test_archive_update_keeps_shell_when_desktop_source_is_unchanged(
+        self, tmp_path, monkeypatch
+    ):
+        """Backend-only releases must not require a local Electron toolchain."""
+        from hermes_cli import main as hm
+        from hermes_cli import update_cmd
+
+        desktop_dir = tmp_path / "apps" / "desktop"
+        exe = desktop_dir / "release" / "win-unpacked" / "Ansatz.exe"
+        exe.parent.mkdir(parents=True)
+        exe.write_bytes(b"MZ")
+        monkeypatch.setattr(hm.sys, "platform", "win32")
+        monkeypatch.setattr(hm, "_resolve_node_runtime_npm", lambda: "npm.cmd")
+        monkeypatch.setattr(hm, "_desktop_build_needed", lambda *a, **k: True)
+        monkeypatch.setattr(update_cmd, "_desktop_app_present", lambda _dir: True)
+        monkeypatch.setattr(update_cmd, "_m", lambda: hm)
+        with patch.object(update_cmd, "_run_logged_subprocess") as desktop_build:
+            update_cmd._rebuild_desktop_after_update(
+                desktop_dir,
+                had_desktop_app_before_update=True,
+                desktop_source_changed=False,
+            )
+
+        desktop_build.assert_not_called()
+
     def test_archive_update_preserves_installed_desktop_artifacts(self, tmp_path, monkeypatch):
         """Source archives retain generated Desktop output before ``apps/`` swaps."""
         from hermes_cli import update_cmd

@@ -30,6 +30,30 @@ def test_exact_unauthenticated_shapes(argv):
 @pytest.mark.parametrize(
     "argv",
     [
+        ["update"],
+        ["update", "--check"],
+        ["update", "--yes", "--gateway", "--force", "--branch", "main"],
+    ],
+)
+def test_update_maintenance_command_is_available_without_auth(argv):
+    assert classify_raw_argv(argv).auth_free is True
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["desktop", "--build-only"],
+        ["desktop", "--force-build", "--build-only"],
+        ["gui", "--force-build", "--build-only"],
+    ],
+)
+def test_headless_desktop_rebuild_is_available_without_auth(argv):
+    assert classify_raw_argv(argv).auth_free is True
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
         [],
         ["login", "--provider", "nous"],
         ["logout", "--"],
@@ -40,6 +64,9 @@ def test_exact_unauthenticated_shapes(argv):
         ["--version", "--help"],
         ["doctor"],
         ["gateway", "status"],
+        ["desktop"],
+        ["desktop", "--force-build"],
+        ["desktop", "--skip-build"],
     ],
 )
 def test_every_shape_variant_is_protected(argv):

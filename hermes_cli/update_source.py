@@ -1,10 +1,11 @@
-"""Release-server source acquisition for managed Ansatz installations.
+"""GitHub-Releases-compatible source acquisition for managed Ansatz installs.
 
 Hermes' normal updater obtains a new source tree from Git and then runs the
 dependency/build/migration stages against that tree.  A packaged Ansatz
 installation has no repository credentials or ``.git`` directory, so it uses
-the same downstream update pipeline with one different input: a release API
-describes a reviewed ``hermes-backend.tar.gz`` archive hosted by the operator.
+the same downstream update pipeline with one different input: an operator-hosted
+GitHub Releases compatible endpoint describes a reviewed
+``hermes-backend.tar.gz`` asset.
 
 The production endpoint has a built-in default.  Developers may point a VM at
 an ordinary HTTP server on the host with ``ANSATZ_UPDATE_BASE_URL``; this
@@ -27,7 +28,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Mapping
-from urllib.parse import urlencode, urljoin, urlparse
+from urllib.parse import urljoin, urlparse
 from urllib.request import Request, urlopen
 
 from packaging.version import InvalidVersion, Version
@@ -35,8 +36,9 @@ from packaging.version import InvalidVersion, Version
 
 UPDATE_BASE_URL_ENV = "ANSATZ_UPDATE_BASE_URL"
 DEFAULT_UPDATE_BASE_URL = "https://setup.hermes-agent.nousresearch.com"
-LATEST_RELEASE_PATH = "/api/v1/ansatz/releases/latest"
-RELEASE_SCHEMA_VERSION = 1
+RELEASE_REPOSITORY = "Ansatz-agent/hermes-agent"
+LATEST_RELEASE_PATH = f"/repos/{RELEASE_REPOSITORY}/releases/latest"
+SOURCE_ARCHIVE_ASSET_NAME = "hermes-backend.tar.gz"
 SOURCE_MARKER_NAME = ".hermes-bundled-source.json"
 
 _COMMIT_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
@@ -115,14 +117,14 @@ def latest_release_url(
     target_platform: str | None = None,
     architecture: str | None = None,
 ) -> str:
-    query = urlencode(
-        {
-            "channel": channel,
-            "platform": target_platform or current_platform(),
-            "arch": architecture or current_architecture(),
-        }
-    )
-    return f"{base_url.rstrip('/')}{LATEST_RELEASE_PATH}?{query}"
+    """Return the GitHub-style latest endpoint without custom query parameters.
+
+    The keyword arguments remain accepted for callers that used the previous
+    release-server helper; asset selection now happens against the response's
+    ``assets`` list instead of being encoded in the request URL.
+    """
+    del channel, target_platform, architecture
+    return f"{base_url.rstrip('/')}{LATEST_RELEASE_PATH}"
 
 
 def _request(url: str) -> Request:
@@ -133,7 +135,8 @@ def _request(url: str) -> Request:
     return Request(
         url,
         headers={
-            "Accept": "application/json",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
             "User-Agent": f"ansatz-agent/{__version__}",
         },
     )
@@ -146,53 +149,91 @@ def _read_limited(response, limit: int) -> bytes:
     return value
 
 
-def parse_release_metadata(raw: object, *, base_url: str) -> ReleaseMetadata:
+def _source_asset_names(target_platform: str, architecture: str) -> tuple[str, ...]:
+    """Prefer an explicit target asset, then the platform-neutral source asset."""
+    return (
+        f"hermes-backend-{target_platform}-{architecture}.tar.gz",
+        SOURCE_ARCHIVE_ASSET_NAME,
+    )
+
+
+def parse_release_metadata(
+    raw: object,
+    *,
+    base_url: str,
+    target_platform: str | None = None,
+    architecture: str | None = None,
+) -> ReleaseMetadata:
     if not isinstance(raw, dict):
         raise UpdateSourceError("release metadata must be a JSON object")
-    if raw.get("schemaVersion") != RELEASE_SCHEMA_VERSION:
-        raise UpdateSourceError(
-            f"release metadata schemaVersion must be {RELEASE_SCHEMA_VERSION}"
-        )
-    if raw.get("product") not in {"ansatz", "ansatz-agent"}:
-        raise UpdateSourceError("release metadata product must identify Ansatz")
+    if raw.get("draft") is not False or raw.get("prerelease") is not False:
+        raise UpdateSourceError("latest release must be published and stable")
 
-    version = str(raw.get("version") or "").strip()
+    tag_name = str(raw.get("tag_name") or "").strip()
+    version = tag_name[1:] if tag_name[:1].lower() == "v" else tag_name
     try:
         Version(version)
     except InvalidVersion as exc:
-        raise UpdateSourceError("release metadata version is invalid") from exc
+        raise UpdateSourceError("release metadata tag_name is invalid") from exc
 
-    commit = str(raw.get("commit") or "").lower()
+    commit = str(raw.get("target_commitish") or "").lower()
     if not _COMMIT_RE.fullmatch(commit) or set(commit) == {"0"}:
-        raise UpdateSourceError("release metadata commit must be a real Git SHA")
+        raise UpdateSourceError(
+            "release metadata target_commitish must be a real Git SHA"
+        )
 
-    channel = str(raw.get("channel") or "stable").strip() or "stable"
-    archive_raw = raw.get("archive")
-    if not isinstance(archive_raw, dict):
-        raise UpdateSourceError("release metadata archive is missing")
-    archive_url = str(archive_raw.get("url") or "").strip()
+    assets = raw.get("assets")
+    if not isinstance(assets, list):
+        raise UpdateSourceError("release metadata assets must be an array")
+    names = _source_asset_names(
+        target_platform or current_platform(),
+        architecture or current_architecture(),
+    )
+    archive_raw = next(
+        (
+            asset
+            for name in names
+            for asset in assets
+            if isinstance(asset, dict) and asset.get("name") == name
+        ),
+        None,
+    )
+    if archive_raw is None:
+        raise UpdateSourceError(
+            f"release is missing source asset ({' or '.join(names)})"
+        )
+    if archive_raw.get("state") != "uploaded":
+        raise UpdateSourceError("release source asset is not uploaded")
+    archive_url = str(archive_raw.get("browser_download_url") or "").strip()
     if not archive_url:
-        raise UpdateSourceError("release metadata archive.url is missing")
+        raise UpdateSourceError("release source asset browser_download_url is missing")
     archive_url = urljoin(base_url.rstrip("/") + "/", archive_url)
     parsed_archive_url = urlparse(archive_url)
     if parsed_archive_url.scheme not in {"http", "https"} or not parsed_archive_url.netloc:
         raise UpdateSourceError("release archive URL must use http(s)")
 
     size = archive_raw.get("size")
-    if not isinstance(size, int) or isinstance(size, bool) or not (0 < size <= _MAX_ARCHIVE_BYTES):
+    if (
+        not isinstance(size, int)
+        or isinstance(size, bool)
+        or not (0 < size <= _MAX_ARCHIVE_BYTES)
+    ):
         raise UpdateSourceError("release archive size is invalid")
-    sha256 = str(archive_raw.get("sha256") or "").lower()
+    digest = str(archive_raw.get("digest") or "").lower()
+    algorithm, separator, sha256 = digest.partition(":")
+    if algorithm != "sha256" or separator != ":":
+        raise UpdateSourceError("release archive digest must use sha256")
     if not _SHA256_RE.fullmatch(sha256):
         raise UpdateSourceError("release archive SHA-256 is invalid")
 
-    published = raw.get("publishedAt")
+    published = raw.get("published_at")
     if published is not None and not isinstance(published, str):
-        raise UpdateSourceError("release metadata publishedAt must be a string")
+        raise UpdateSourceError("release metadata published_at must be a string")
 
     return ReleaseMetadata(
         version=version,
         commit=commit,
-        channel=channel,
+        channel="stable",
         archive=ReleaseArchive(url=archive_url, size=size, sha256=sha256),
         published_at=published,
     )
@@ -206,13 +247,12 @@ def fetch_latest_release(
     architecture: str | None = None,
     timeout: float = 15.0,
 ) -> ReleaseMetadata:
+    if channel != "stable":
+        raise UpdateSourceError(
+            "GitHub latest-release endpoint supports the stable channel only"
+        )
     base = (base_url or resolve_update_base_url()).rstrip("/")
-    url = latest_release_url(
-        base,
-        channel=channel,
-        target_platform=target_platform,
-        architecture=architecture,
-    )
+    url = latest_release_url(base)
     try:
         with urlopen(_request(url), timeout=timeout) as response:
             payload = _read_limited(response, _MAX_METADATA_BYTES)
@@ -224,7 +264,12 @@ def fetch_latest_release(
         raw = json.loads(payload.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise UpdateSourceError("release server returned invalid JSON") from exc
-    return parse_release_metadata(raw, base_url=base)
+    return parse_release_metadata(
+        raw,
+        base_url=base,
+        target_platform=target_platform,
+        architecture=architecture,
+    )
 
 
 def release_is_newer(
@@ -390,6 +435,51 @@ def write_source_marker(source_root: Path, release: ReleaseMetadata) -> None:
             os.unlink(temporary_name)
         except OSError:
             pass
+
+
+def sync_auth_runtime_marker(source_root: Path, release: ReleaseMetadata) -> bool:
+    """Move an existing auth-runtime marker to the newly applied source.
+
+    The Windows auth environment is deliberately kept outside the source
+    archive.  When only Python source changes, rebuilding that embedded
+    environment is unnecessary; its marker nevertheless contains the source
+    identity used by the desktop contract validator.  Update that identity
+    only when the marker and auth lock are already internally consistent.  A
+    missing, malformed, or lock-mismatched marker is left untouched so the
+    desktop bootstrap can perform a full auth-runtime repair instead.
+    """
+    marker_path = source_root / ".hermes-auth-bootstrap-complete"
+    lock_path = source_root / "desktop_auth_runtime" / "uv.lock"
+    try:
+        marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        lock_hash = hashlib.sha256(lock_path.read_bytes()).hexdigest()
+    except (OSError, json.JSONDecodeError):
+        return False
+
+    if (
+        not isinstance(marker, dict)
+        or marker.get("schemaVersion") != 2
+        or marker.get("scope") != "auth"
+        or not _COMMIT_RE.fullmatch(str(marker.get("sourceCommit") or ""))
+        or not _SHA256_RE.fullmatch(str(marker.get("authLockSha256") or ""))
+        or marker.get("authLockSha256") != lock_hash
+        or marker.get("protocolVersion") != 2
+    ):
+        return False
+
+    marker["sourceCommit"] = release.commit
+    marker["sourceArchiveSha256"] = release.archive.sha256
+    temporary = marker_path.with_name(f"{marker_path.name}.{os.getpid()}.tmp")
+    try:
+        temporary.write_text(json.dumps(marker, indent=2) + "\n", encoding="utf-8")
+        os.replace(temporary, marker_path)
+    except OSError:
+        try:
+            temporary.unlink()
+        except OSError:
+            pass
+        return False
+    return True
 
 
 def stage_desktop_payload_inputs(

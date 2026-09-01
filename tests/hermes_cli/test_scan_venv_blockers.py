@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import builtins
 import json
+import os
+import subprocess
 import sys
 import types
 from pathlib import Path
@@ -163,6 +165,26 @@ def _run_main_with_detector(monkeypatch, capsys, matches):
         main()
     out = capsys.readouterr().out
     return excinfo.value.code, json.loads(out)
+
+
+def test_direct_scan_is_not_auth_gated(tmp_path):
+    """The Desktop maintenance probe must run before a user logs in."""
+    root = Path(__file__).resolve().parents[2]
+    environment = os.environ.copy()
+    environment.update({"HERMES_HOME": str(tmp_path / "home"), "PYTHONPATH": str(root)})
+
+    result = subprocess.run(
+        [sys.executable, "-m", "hermes_cli._scan_venv_blockers"],
+        cwd=root,
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+
+    assert result.returncode != 20
+    assert "AUTH_REQUIRED" not in result.stderr
 
 
 def test_probe_fail_json_is_unambiguous_failure() -> None:

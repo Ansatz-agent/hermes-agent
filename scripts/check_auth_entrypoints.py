@@ -227,7 +227,13 @@ def _excluded(relative: Path, *, source_tree: bool) -> bool:
 def _manifest_payload(ids: set[str]) -> dict[str, object]:
     entries = []
     for entry_id in sorted(ids):
-        if entry_id in {
+        if entry_id == "python:hermes_cli/_scan_venv_blockers.py":
+            # This is an internal maintenance probe launched by the Desktop
+            # update hand-off after the managed backend has been stopped.  It
+            # must remain runnable while auth is unavailable; treating it as a
+            # user-facing capability makes every Windows update fail closed.
+            startup = "maintenance"
+        elif entry_id in {
             "installer:scripts/install.ps1",
             "installer:scripts/install.sh",
         }:

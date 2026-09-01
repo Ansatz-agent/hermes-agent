@@ -11,6 +11,7 @@ import {
 
 const ACTIVE_ROOT = String.raw`C:\Users\张 三\AppData\Local\hermes\hermes-agent`
 const PYTHON = path.win32.join(ACTIVE_ROOT, 'auth-venv', 'python.exe')
+const LEGACY_PYTHONW = path.win32.join(ACTIVE_ROOT, 'venv', 'Scripts', 'pythonw.exe')
 const SID = 'S-1-5-21-100-200-300-400'
 
 function ownerRecord(overrides: Partial<WindowsProcessRecord> = {}): WindowsProcessRecord {
@@ -79,6 +80,31 @@ test('exact Windows auth owner path comparison is canonical and case-insensitive
   )
 })
 
+test('legacy venv auth owners are accepted only when explicitly included', () => {
+  const record = ownerRecord({
+    executablePath: LEGACY_PYTHONW,
+    commandLine: `"${LEGACY_PYTHONW}" -m hermes_cli.client_auth.runtime owner`
+  })
+
+  assert.equal(
+    isExactWindowsAuthOwnerProcess(record, {
+      activeRoot: ACTIVE_ROOT,
+      currentSid: SID,
+      excludedPids: new Set()
+    }),
+    false
+  )
+  assert.equal(
+    isExactWindowsAuthOwnerProcess(record, {
+      activeRoot: ACTIVE_ROOT,
+      currentSid: SID,
+      excludedPids: new Set(),
+      expectedExecutables: [LEGACY_PYTHONW]
+    }),
+    true
+  )
+})
+
 test('owner retirement passes install root as data and revalidates each selected PID', async () => {
   const calls: Array<{ args: string[]; env: NodeJS.ProcessEnv; timeout: number }> = []
   const inventory = JSON.stringify({ currentSid: SID, processes: [ownerRecord()] })
@@ -115,6 +141,35 @@ test('owner retirement passes install root as data and revalidates each selected
     }),
     true
   )
+})
+
+test('legacy owner retirement opts into the legacy interpreter paths', async () => {
+  const calls: Array<{ env: NodeJS.ProcessEnv; script: string }> = []
+  const record = ownerRecord({
+    executablePath: LEGACY_PYTHONW,
+    commandLine: `"${LEGACY_PYTHONW}" -m hermes_cli.client_auth.runtime owner`
+  })
+
+  const result = await retireExactWindowsAuthOwners({
+    activeRoot: ACTIVE_ROOT,
+    includeLegacyVenv: true,
+    callerPids: [99],
+    runPowerShell: async (_command, args, options) => {
+      const encodedIndex = args.indexOf('-EncodedCommand')
+      calls.push({
+        env: options.env,
+        script: Buffer.from(args[encodedIndex + 1], 'base64').toString('utf16le')
+      })
+
+      return calls.length === 1
+        ? { status: 0, stdout: JSON.stringify({ currentSid: SID, processes: [record] }), stderr: '' }
+        : { status: 0, stdout: JSON.stringify({ stopped: true, processId: record.processId }), stderr: '' }
+    }
+  })
+
+  assert.deepEqual(result, { inspected: 1, stopped: 1 })
+  assert.equal(calls[0].env.HERMES_AUTH_OWNER_INCLUDE_LEGACY_VENV, '1')
+  assert.match(calls[0].script, /venv\\Scripts\\pythonw\.exe/)
 })
 
 test('owner retirement accepts proof that an inventoried PID is no longer the auth owner', async () => {

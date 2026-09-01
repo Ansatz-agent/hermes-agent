@@ -19,8 +19,15 @@ function makePayloadFixture({
   symlink = false,
   androidHelper = false,
   githubWorkflow = false,
+  downloadPolicyDocs = false,
   platform = 'darwin'
-}: { symlink?: boolean; androidHelper?: boolean; githubWorkflow?: boolean; platform?: 'darwin' | 'win32' } = {}) {
+}: {
+  symlink?: boolean
+  androidHelper?: boolean
+  githubWorkflow?: boolean
+  downloadPolicyDocs?: boolean
+  platform?: 'darwin' | 'win32'
+} = {}) {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'hermes-bootstrap-payload-'))
   const sourceRoot = path.join(tempRoot, 'source', 'hermes-agent')
   const bootstrapRoot = path.join(tempRoot, 'bootstrap')
@@ -44,6 +51,14 @@ function makePayloadFixture({
   if (githubWorkflow) {
     fs.mkdirSync(path.join(sourceRoot, '.github', 'workflows'), { recursive: true })
     fs.writeFileSync(path.join(sourceRoot, '.github', 'workflows', 'desktop-dmg.yml'), 'name: CI only\n')
+  }
+
+  if (downloadPolicyDocs) {
+    fs.mkdirSync(path.join(sourceRoot, 'docs', 'security'), { recursive: true })
+    fs.writeFileSync(
+      path.join(sourceRoot, 'docs', 'security', 'hermes-managed-download-origins.json'),
+      '{}\n'
+    )
   }
 
   const archivePath = path.join(bootstrapRoot, 'hermes-backend.tar.gz')
@@ -131,6 +146,22 @@ test('verified payload resolves and stages a complete managed source transaction
     assert.equal(fs.existsSync(path.join(activeRoot, 'scripts', 'install.sh')), true)
     assert.equal(JSON.parse(fs.readFileSync(prepared.markerPath, 'utf8')).commit, COMMIT)
     await prepared.finalize()
+  } finally {
+    fs.rmSync(fixture.tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('payload permits only the managed download policy documentation', async () => {
+  const fixture = makePayloadFixture({ downloadPolicyDocs: true })
+
+  try {
+    const payload = await resolveBundledPayload({
+      bootstrapRoot: fixture.bootstrapRoot,
+      installStamp: { commit: COMMIT },
+      targetPlatform: 'darwin'
+    })
+
+    assert.equal(payload.manifest.commit, COMMIT)
   } finally {
     fs.rmSync(fixture.tempRoot, { recursive: true, force: true })
   }

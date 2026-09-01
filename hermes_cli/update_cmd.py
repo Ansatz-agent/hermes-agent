@@ -800,9 +800,10 @@ def _update_via_archive(args, *, had_desktop_app_before_update: bool = False):
     """Update a packaged install from the operator's versioned source archive.
 
     This is Hermes' archive fallback with the acquisition seam changed: no Git
-    checkout and no GitHub archive URL are involved.  The server supplies a
-    version/commit/size/SHA contract, then the existing two-phase top-level
-    replacement and post-update dependency/build stages apply that source.
+    checkout or private-repository credentials are required.  The server
+    exposes a GitHub Releases-compatible response and source asset; the
+    existing two-phase top-level replacement and post-update dependency/build
+    stages then apply that source.
     """
     import tempfile
 
@@ -815,6 +816,7 @@ def _update_via_archive(args, *, had_desktop_app_before_update: bool = False):
         read_source_marker,
         release_is_newer,
         stage_desktop_payload_inputs,
+        sync_auth_runtime_marker,
         write_source_marker,
     )
 
@@ -826,6 +828,18 @@ def _update_via_archive(args, *, had_desktop_app_before_update: bool = False):
 
     active_tool_dependencies = _m()._capture_active_tool_dependencies()
     marker = read_source_marker(_m().PROJECT_ROOT) or {}
+    # Compare the desktop source before and after the archive transaction.
+    # ``apps/desktop/build`` and ``release`` are generated artifacts and are
+    # excluded by ``_compute_desktop_content_hash``; a backend-only release
+    # therefore does not need to rebuild Electron on the user's machine.
+    desktop_source_hash_before = None
+    try:
+        desktop_source_hash_before = _m()._compute_desktop_content_hash(
+            _m().PROJECT_ROOT
+        )
+    except Exception:
+        # If hashing is unavailable, retain the conservative rebuild path.
+        pass
 
     print("→ Checking the Ansatz release server...")
     try:
@@ -904,6 +918,8 @@ def _update_via_archive(args, *, had_desktop_app_before_update: bool = False):
             raise
         update_count = len(staged)
         write_source_marker(_m().PROJECT_ROOT, release)
+        if sync_auth_runtime_marker(_m().PROJECT_ROOT, release):
+            print("  ✓ Updated authentication runtime source contract")
         (_m().PROJECT_ROOT / ".hermes_build_sha").write_text(
             release.commit + "\n", encoding="utf-8"
         )
@@ -982,9 +998,19 @@ def _update_via_archive(args, *, had_desktop_app_before_update: bool = False):
 
     node_failures = _update_node_dependencies()
     _m()._build_web_ui(_m().PROJECT_ROOT / "web")
+    desktop_source_changed = None
+    if desktop_source_hash_before is not None:
+        try:
+            desktop_source_changed = (
+                _m()._compute_desktop_content_hash(_m().PROJECT_ROOT)
+                != desktop_source_hash_before
+            )
+        except Exception:
+            desktop_source_changed = None
     _rebuild_desktop_after_update(
         _m().PROJECT_ROOT / "apps" / "desktop",
         had_desktop_app_before_update=had_desktop_app_before_update,
+        desktop_source_changed=desktop_source_changed,
     )
 
     try:
@@ -4208,7 +4234,10 @@ def _desktop_app_present(desktop_dir: Path) -> bool:
 
 
 def _rebuild_desktop_after_update(
-    desktop_dir: Path, *, had_desktop_app_before_update: bool
+    desktop_dir: Path,
+    *,
+    had_desktop_app_before_update: bool,
+    desktop_source_changed: bool | None = None,
 ) -> None:
     """Rebuild an installed Desktop app when its source or artifact changed."""
     # The release tree is ignored by git and can disappear during an update.
@@ -4220,6 +4249,19 @@ def _rebuild_desktop_after_update(
         and _m()._resolve_node_runtime_npm()
         and has_desktop_app
     ):
+        return
+
+    # A packaged install updates the Python/runtime source independently of
+    # the Electron shell.  The source archive also carries generated
+    # ``apps/desktop/build`` inputs, but those are ignored by the content hash
+    # and do not require a new Electron build.  In particular, a release that
+    # only changes backend code must remain usable when the VM cannot download
+    # optional desktop build dependencies (Electron/get-windows).  The caller
+    # supplies a before/after source hash for archive updates; ``None`` keeps
+    # the historical conservative behaviour for callers that cannot prove the
+    # shell is unchanged.
+    if desktop_source_changed is False and _m()._desktop_packaged_executable(desktop_dir) is not None:
+        print("  ✓ Desktop source unchanged; keeping the installed packaged app")
         return
 
     print("→ Checking if desktop app needs rebuilding...")

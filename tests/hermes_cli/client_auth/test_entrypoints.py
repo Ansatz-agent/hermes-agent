@@ -402,3 +402,19 @@ def test_manifest_auth_shell_and_locked_waiting_entries_are_covered():
         root / "plugins" / "kanban" / "systemd" / "hermes-kanban-dispatcher.service"
     ).read_text(encoding="utf-8")
     assert "hermes_cli.client_auth.runtime service kanban" in kanban_unit
+
+
+def test_update_venv_scan_is_a_maintenance_entrypoint():
+    """The Desktop updater must run the scan before auth is available."""
+    root = Path(__file__).resolve().parents[3]
+    manifest = json.loads(
+        (root / "hermes_cli" / "client_auth" / "entrypoints.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    entry = next(
+        item
+        for item in manifest["entrypoints"]
+        if item["id"] == "python:hermes_cli/_scan_venv_blockers.py"
+    )
+    assert entry["startup"] == "maintenance"

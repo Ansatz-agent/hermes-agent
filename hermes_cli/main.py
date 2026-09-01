@@ -6299,17 +6299,27 @@ def _desktop_packaged_executable(desktop_dir: Path) -> Optional[Path]:
     """Return the current platform's unpacked Electron app executable."""
     release_dir = desktop_dir / "release"
     if sys.platform == "darwin":
-        candidates = list(release_dir.glob("mac*/Hermes.app/Contents/MacOS/Hermes"))
+        # Ansatz is the shipped product name. Keep Hermes as a compatibility
+        # candidate for installs produced before the rebrand.
+        candidates = [
+            *release_dir.glob("mac*/Ansatz.app/Contents/MacOS/Ansatz"),
+            *release_dir.glob("mac*/Hermes.app/Contents/MacOS/Hermes"),
+        ]
     elif sys.platform == "win32":
         candidates = [
+            release_dir / "win-unpacked" / "Ansatz.exe",
             release_dir / "win-unpacked" / "Hermes.exe",
+            release_dir / "win-ia32-unpacked" / "Ansatz.exe",
             release_dir / "win-ia32-unpacked" / "Hermes.exe",
+            release_dir / "win-arm64-unpacked" / "Ansatz.exe",
             release_dir / "win-arm64-unpacked" / "Hermes.exe",
         ]
     else:
         candidates = [
+            release_dir / "linux-unpacked" / "Ansatz",
             release_dir / "linux-unpacked" / "hermes",
             release_dir / "linux-unpacked" / "Hermes",
+            release_dir / "linux-arm64-unpacked" / "Ansatz",
             release_dir / "linux-arm64-unpacked" / "hermes",
             release_dir / "linux-arm64-unpacked" / "Hermes",
         ]

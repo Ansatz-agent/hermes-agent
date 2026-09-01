@@ -113,7 +113,7 @@
     {
       "id": "python:hermes_cli/_scan_venv_blockers.py",
       "interactive": false,
-      "startup": "guarded"
+      "startup": "maintenance"
     },
     {
       "id": "python:hermes_cli/client_auth/bridge.py",

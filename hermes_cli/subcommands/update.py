@@ -19,7 +19,7 @@ def build_update_parser(subparsers, *, cmd_update: Callable) -> None:
         help="Update Hermes Agent to the latest version",
         description=(
             "Install the latest source release and refresh dependencies. "
-            "Git checkouts use their remote; packaged installs use the Ansatz release server."
+            "Git checkouts use their remote; packaged installs use a GitHub Releases-compatible endpoint."
         ),
     )
     update_parser.add_argument(

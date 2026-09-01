@@ -153,6 +153,7 @@ test('Windows auth runtime uses System32 PowerShell and only bundled local packa
     )
     const verification = calls.find(call => call.command.endsWith('python.exe'))
     assert.ok(verification)
+    assert.match(verification.args.join(' '), /sys\.path\.insert\(0/)
     assert.match(verification.args.join(' '), /bridge\.PROTOCOL_VERSION == 2/)
     assert.match(verification.args.join(' '), /DESKTOP_SCOPE_PROTOCOL_VERSION == 2/)
     assert.match(

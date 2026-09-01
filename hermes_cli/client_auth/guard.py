@@ -20,6 +20,32 @@ AUTH_FREE = frozenset(
 )
 
 
+def _is_update_command(argv: Sequence[str]) -> bool:
+    """Return whether argv invokes the source-update maintenance command.
+
+    ``ansatz update`` is intentionally available before the protected runtime
+    is authorized: packaged installs must be able to refresh their source and
+    dependencies when the auth runtime is signed out or temporarily
+    unavailable.  The update parser owns validation of its flags; keeping the
+    command-level exemption here also covers the detached Windows hand-off
+    invocation (``update --yes --gateway ...``) without exempting any other
+    capability command.
+    """
+    return bool(argv) and argv[0] == "update"
+
+
+def _is_desktop_build_command(argv: Sequence[str]) -> bool:
+    """Return whether argv is the headless desktop rebuild maintenance path.
+
+    The Windows updater invokes ``desktop --force-build --build-only`` after
+    applying a source archive.  This operation only rebuilds local assets and
+    never starts the agent or accesses account data, so it must be able to run
+    while the auth runtime is unavailable, just like ``update`` itself.  Keep
+    the exemption narrow: a normal ``desktop`` launch remains protected.
+    """
+    return bool(argv) and argv[0] in {"desktop", "gui"} and "--build-only" in argv
+
+
 @dataclass(frozen=True)
 class GuardDecision:
     auth_free: bool
@@ -39,7 +65,11 @@ def classify_raw_argv(argv: Sequence[str]) -> GuardDecision:
     except Exception:
         interactive = False
     return GuardDecision(
-        auth_free=shape in AUTH_FREE,
+        auth_free=(
+            shape in AUTH_FREE
+            or _is_update_command(shape)
+            or _is_desktop_build_command(shape)
+        ),
         interactive=interactive,
     )
 
