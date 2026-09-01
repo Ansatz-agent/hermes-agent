@@ -362,3 +362,13 @@ test('Windows executable identity stamps the Ansatz app version, not the Electro
   assert.equal(options['version-string'].ProductName, 'Ansatz')
   assert.equal(options['version-string'].FileDescription, 'Ansatz')
 })
+
+test('Windows afterPack identity hook uses the desktop package version', () => {
+  const source = fs.readFileSync(
+    path.resolve(import.meta.dirname, '..', 'apps', 'desktop', 'scripts', 'set-exe-identity.mjs'),
+    'utf8'
+  )
+  assert.match(source, /import PACKAGE_JSON from '\.\.\/package\.json' with \{ type: 'json' \}/)
+  assert.match(source, /import \{ exeIdentityOptions \} from '\.\/exe-identity-options\.mjs'/)
+  assert.match(source, /exeIdentityOptions\(\{ icon, productVersion: PACKAGE_JSON\.version \}\)/)
+})

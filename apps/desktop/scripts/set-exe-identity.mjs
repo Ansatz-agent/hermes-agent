@@ -40,6 +40,8 @@ import { existsSync } from 'node:fs'
 
 import { rcedit } from 'rcedit'
 
+import PACKAGE_JSON from '../package.json' with { type: 'json' }
+import { exeIdentityOptions } from './exe-identity-options.mjs'
 import { isMain } from './utils.mjs'
 
 // Stamp the Hermes icon + identity onto `exe`. Resolves on success, throws on
@@ -59,15 +61,7 @@ async function stampExeIdentity(exe, desktopRoot = resolve(import.meta.dirname, 
   console.log(`[set-exe-identity] stamping ${exe}`)
   console.log(`[set-exe-identity] icon: ${icon}`)
 
-  await rcedit(exe, {
-    icon,
-    'version-string': {
-      ProductName: 'Ansatz',
-      FileDescription: 'Ansatz',
-      CompanyName: 'Ansatz Agent',
-      LegalCopyright: 'Copyright (c) 2026 Ansatz Agent'
-    }
-  })
+  await rcedit(exe, exeIdentityOptions({ icon, productVersion: PACKAGE_JSON.version }))
 
   console.log('[set-exe-identity] done — Ansatz icon + identity stamped')
 }
