@@ -27,6 +27,10 @@ if __name__ == "__main__":
     from hermes_cli.client_auth.guard import enforce_direct_entrypoint
 
     enforce_direct_entrypoint("direct.cli")
+    from hermes_cli.client_auth.trace.bootstrap import bootstrap_trace
+    from hermes_cli.client_auth.trace.identity import TraceEntrypoint
+
+    bootstrap_trace(TraceEntrypoint.CLI)
 
 import logging
 import copy
