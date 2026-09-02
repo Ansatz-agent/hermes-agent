@@ -9353,11 +9353,15 @@ async function createDesktopTraceSession(
     installationId: owner.installationId,
     onUploadEvent: (event: TraceUploadEvent) => {
       if (event.kind === 'success') {
-        rememberLog(`[trace] upload success outcome=${event.outcome} status=${event.status}`)
+        rememberLog(
+          `[trace] upload success batch_id=${event.batchId} outcome=${event.outcome} ` +
+            `http_status=${event.status} elapsed_ms=${event.elapsedMs} request_id=${event.requestId ?? 'none'}`
+        )
       } else {
         rememberLog(
-          `[trace] upload failure status=${event.status === null ? 'network' : event.status}; ` +
-            'durable retry/quarantine policy applied'
+          `[trace] upload failure batch_id=${event.batchId} failure=${event.failureCode} ` +
+            `http_status=${event.status ?? 'none'} elapsed_ms=${event.elapsedMs} ` +
+            `request_id=${event.requestId ?? 'none'}; durable retry/quarantine policy applied`
         )
       }
     },

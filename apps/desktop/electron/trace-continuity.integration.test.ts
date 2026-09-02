@@ -270,6 +270,7 @@ async function launchTraceHarness(options: {
   keyProtector?: TraceKeyProtector
   localCommitError?: Error
   owner: TraceOwner
+  random?: () => number
   receiptCapacityBytes?: number
   runtime?: TraceDurabilityRuntime
   userData: string
@@ -342,6 +343,7 @@ async function launchTraceHarness(options: {
     credentialProvider,
     fetchImpl: options.fetchImpl ?? fetch,
     installationId,
+    random: options.random,
     recovery: controller,
     store: observedStore,
     upstreamUrl: options.gateway.endpoint
@@ -687,6 +689,44 @@ test('offline accepted Trace survives quit and uploads FIFO only from the same-a
       ['accepted', 'accepted']
     )
     await resumed.quit()
+  } finally {
+    await cleanupContinuityTest(harnesses, [gateway], userData)
+  }
+})
+
+test('same running Trace session resumes an offline durable batch after the Gateway returns online', async () => {
+  const userData = await temporaryUserData()
+  const gateway = await ControllableGateway.start('offline')
+  const body = payload('in-process-resume')
+  const harnesses: TraceHarness[] = []
+
+  try {
+    const harness = await launchTraceHarness({ gateway, owner: owner('a'), random: () => 0.5, userData })
+    harnesses.push(harness)
+
+    assert.equal((await harness.post(body, 1)).status, 200)
+    await waitFor(async () => {
+      const diagnostics = await harness.diagnostics()
+      const unavailableAttempts = gateway.attempts.filter(attempt => attempt.outcome === 'unavailable')
+
+      return diagnostics.pending === 1 && unavailableAttempts.length >= 2
+    })
+
+    const unavailable = gateway.attempts.filter(attempt => attempt.outcome === 'unavailable').slice(-1)[0]
+    assert.ok(unavailable)
+    assert.equal(unavailable.digest, sha256(body))
+
+    gateway.setOnline(true)
+    await waitFor(async () => (await harness.diagnostics()).pending === 0)
+
+    const receipts = gateway.attempts.filter(
+      attempt => attempt.outcome === 'accepted' || attempt.outcome === 'duplicate'
+    )
+
+    assert.equal(gateway.logicalBatchCount, 1)
+    assert.equal(receipts.length, 1)
+    assert.equal(receipts[0]?.batchId, unavailable.batchId)
+    assert.deepEqual([...gateway.logical.values()], [{ body, digest: sha256(body) }])
   } finally {
     await cleanupContinuityTest(harnesses, [gateway], userData)
   }
