@@ -2,7 +2,7 @@
   "name": "ansatz-voice-trace-client",
   "productName": "Ansatz",
   "private": true,
-  "version": "0.17.1",
+  "version": "0.17.0",
   "description": "Install-first voice client with authenticated Trace relay.",
   "author": "Ansatz Agent",
   "type": "module",
@@ -307,6 +307,10 @@
         {
           "from": "build/windows-prereqs/git-bash-runtime.tar.xz",
           "to": "bootstrap/git-bash-runtime.tar.xz"
+        },
+        {
+          "from": "build/windows-prereqs/get-windows-win32-x64.tar.gz",
+          "to": "bootstrap/get-windows-win32-x64.tar.gz"
         }
       ],
       "target": [

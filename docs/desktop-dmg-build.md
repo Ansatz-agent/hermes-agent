@@ -97,7 +97,7 @@ is not part of the DMG payload.
 
 For this local-testing milestone the macOS build explicitly uses Electron
 Builder's ad-hoc identity (`mac.identity=-`). The pipeline then runs
-`codesign --verify --deep --strict` against the packaged `Hermes.app`; an
+`codesign --verify --deep --strict` against the packaged `Ansatz.app`; an
 unsigned or partially signed bundle fails the build instead of producing a DMG
 that opens to a blank renderer.
 

@@ -387,7 +387,7 @@ async fn download(kind: ScriptKind, commit_or_ref: &str, dest_path: &Path) -> Re
         .build()
         .context("building download client")?
         .get(&url)
-        .header("User-Agent", "ansatz-setup/0.17.1")
+        .header("User-Agent", "ansatz-setup/0.17.0")
         .send()
         .await
         .with_context(|| format!("GET {url}"))?;

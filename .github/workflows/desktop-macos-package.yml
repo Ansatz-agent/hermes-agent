@@ -74,7 +74,7 @@ jobs:
           mkdir -p "$mount"
           hdiutil attach "$dmg" -mountpoint "$mount" -nobrowse -readonly
           trap 'hdiutil detach "$mount" -force >/dev/null 2>&1 || true' EXIT
-          app="$mount/Ansatz Voice Trace Client.app"
+          app="$mount/Ansatz.app"
           asar="$app/Contents/Resources/app.asar"
           node --input-type=module -e \
             "import {listPackage} from '@electron/asar'; const entries=listPackage(process.argv[1]); const bad=entries.find(x=>/(^|\/)\.github\/|credential-login|\.log$/i.test(x)); if(bad) throw new Error('forbidden ASAR entry: '+bad)" \
@@ -103,12 +103,12 @@ jobs:
           mkdir -p "$mount" "$home"
           hdiutil attach "$dmg" -mountpoint "$mount" -nobrowse -readonly
           cleanup() {
-            pkill -f '/Applications/Ansatz Voice Trace Client.app/Contents/MacOS/AnsatzVoiceTraceClient' >/dev/null 2>&1 || true
+            pkill -f '/Applications/Ansatz.app/Contents/MacOS/Ansatz' >/dev/null 2>&1 || true
             hdiutil detach "$mount" -force >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
-          ditto "$mount/Ansatz Voice Trace Client.app" "/Applications/Ansatz Voice Trace Client.app"
-          HERMES_HOME="$home" "/Applications/Ansatz Voice Trace Client.app/Contents/MacOS/AnsatzVoiceTraceClient" \
+          ditto "$mount/Ansatz.app" "/Applications/Ansatz.app"
+          HERMES_HOME="$home" "/Applications/Ansatz.app/Contents/MacOS/Ansatz" \
             --remote-debugging-address=127.0.0.1 \
             --remote-debugging-port=9222 >/dev/null 2>&1 &
           for _ in $(seq 1 240); do
