@@ -271,7 +271,7 @@ import {
 } from './profile-session-routing'
 import { createQuickEntryShortcut, quickEntryWindowBounds, sanitizeQuickEntrySettings } from './quick-entry'
 import { type ActiveWork, mergeActiveWork, normalizeActiveWork, quitPromptFor } from './quit-guard'
-import { fetchLatestRelease, releaseIsNewer } from './release-update-source'
+import { fetchLatestRelease, releaseIsNewer, resolveBundledCurrentVersion } from './release-update-source'
 import * as remoteLifecycle from './remote-lifecycle'
 import {
   RemoteLivenessTracker,
@@ -345,6 +345,7 @@ import { isOfficialSshRemote, OFFICIAL_REPO_HTTPS_URL } from './update-remote'
 import {
   collectRelaunchArgs,
   observeUpdaterHandoff,
+  resolvePlatformUpdateHandoff,
   resolvePosixScriptHandoff,
   resolveStagedUpdaterBinary,
   resolveUpdateScriptHandoff,
@@ -3060,7 +3061,8 @@ async function checkUpdates() {
       try {
         const release = await fetchLatestRelease()
         const marker = readBundledSourceMarker(updateRoot)
-        const available = releaseIsNewer(release, app.getVersion(), marker?.commit)
+        const currentVersion = resolveBundledCurrentVersion(app.getVersion(), marker?.version)
+        const available = releaseIsNewer(release, currentVersion, marker?.commit)
 
         return {
           supported: true,
@@ -3076,7 +3078,7 @@ async function checkUpdates() {
           fetchedAt: Date.now(),
           message: available
             ? `Ansatz ${release.version} is available from the release server.`
-            : `Ansatz ${app.getVersion()} is up to date.`
+            : `Ansatz ${currentVersion} is up to date.`
         }
       } catch (error) {
         return {
@@ -3796,9 +3798,15 @@ async function applyUpdates(opts = {}) {
     const updateRoot = resolveUpdateRoot()
     const managedBundle = readActiveInstallMethod() === 'desktop-bundle'
     const updater = resolveUpdaterBinary()
+    const managedBundleHandoff = resolvePlatformUpdateHandoff(updateRoot, { isWindows: IS_WINDOWS })
 
-    if (managedBundle && !resolveUpdateScriptHandoff(updateRoot)) {
-      const message = 'The packaged update hand-off script is missing. Repair this installation with Ansatz Setup before updating.'
+    // A managed bundle can use either its staged Setup binary or the
+    // repository-owned platform hand-off. The previous check always called
+    // the Windows-only resolver, so macOS installs with posix.sh were
+    // rejected before applyUpdatesPosixHandoff() could run.
+    if (managedBundle && !updater && !managedBundleHandoff) {
+      const message =
+        'The packaged update hand-off script is missing. Repair this installation with Ansatz Setup before updating.'
       emitUpdateProgress({ stage: 'error', message, percent: null })
 
       return { ok: false, error: 'update-handoff-missing', message }
@@ -3825,7 +3833,7 @@ async function applyUpdates(opts = {}) {
       // PowerShell and the checkout — so fall through to the normal hand-off
       // when the script exists. Only when the checkout predates the script do
       // we surface the manual one-liner.
-      if (!resolveUpdateScriptHandoff(updateRoot)) {
+      if (!resolvePlatformUpdateHandoff(updateRoot, { isWindows: IS_WINDOWS })) {
         // They DO have a working `hermes` on PATH / in the venv, so the
         // correct path is the one-liner in their native medium. We show the
         // EXACT command, branch-pinned to the checkout they're on — bare
@@ -3967,6 +3975,9 @@ async function applyUpdates(opts = {}) {
     // The hand-off script is source and therefore advances with both Git and
     // release-archive updates. The staged Setup binary remains a repair/first-
     // install artifact; re-running its embedded old snapshot is not an update.
+    // This branch is the Windows PowerShell hand-off. POSIX uses the early
+    // applyUpdatesPosixHandoff() path above; wrapping a POSIX recipe with the
+    // Windows cmd/start launcher would make the hand-off unspawnable.
     const scriptHandoff = resolveUpdateScriptHandoff(updateRoot)
     let child
 

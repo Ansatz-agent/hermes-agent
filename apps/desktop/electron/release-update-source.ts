@@ -151,6 +151,18 @@ function releaseIsNewer(release: AnsatzReleaseMetadata, currentVersion: string, 
   return Boolean(currentCommit && release.commit !== currentCommit.toLowerCase())
 }
 
+/**
+ * Resolve the version that represents the source currently used by a packaged
+ * installation. The Electron bundle can intentionally lag behind the managed
+ * backend source after a backend-only update, so the source marker is the
+ * authoritative version when it is present.
+ */
+function resolveBundledCurrentVersion(appVersion: string, markerVersion?: string | null): string {
+  const sourceVersion = typeof markerVersion === 'string' ? markerVersion.trim() : ''
+
+  return sourceVersion || appVersion
+}
+
 async function fetchLatestRelease({
   environment = process.env,
   platform = process.platform,
@@ -183,6 +195,7 @@ export {
   fetchLatestRelease,
   LATEST_RELEASE_PATH,
   RELEASE_REPOSITORY,
+  resolveBundledCurrentVersion,
   releaseIsNewer,
   resolveUpdateBaseUrl,
   SOURCE_ARCHIVE_ASSET_NAME,

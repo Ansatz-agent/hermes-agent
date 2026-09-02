@@ -33,9 +33,8 @@ export interface UpdateScriptHandoff {
  *
  * Returns the spawn recipe when the script exists in the checkout, or null
  * (caller falls back to the staged binary — old checkouts that predate the
- * script keep working unchanged). Windows-only by the same policy as
- * resolveStagedUpdaterBinary: POSIX updates in place via
- * applyUpdatesPosixInApp and needs no hand-off at all.
+ * script keep working unchanged). This resolver is Windows-only; POSIX uses
+ * resolvePosixScriptHandoff below.
  */
 export function resolveUpdateScriptHandoff(
   updateRoot: string,
@@ -66,6 +65,23 @@ export function resolveUpdateScriptHandoff(
   }
 
   return null
+}
+
+/**
+ * Resolve the repository-owned update hand-off for the current platform.
+ *
+ * Managed bundles need a hand-off preflight before the desktop can quit. Keep
+ * the platform-specific resolvers separate because their spawn recipes and
+ * fallback semantics differ, but centralize the selection so callers cannot
+ * accidentally use the Windows resolver on POSIX (which always returns null).
+ */
+export function resolvePlatformUpdateHandoff(
+  updateRoot: string,
+  deps: ResolveUpdateScriptHandoffDeps = {}
+): UpdateScriptHandoff | null {
+  const isWindows = deps.isWindows ?? process.platform === 'win32'
+
+  return isWindows ? resolveUpdateScriptHandoff(updateRoot, deps) : resolvePosixScriptHandoff(updateRoot, deps)
 }
 
 /**

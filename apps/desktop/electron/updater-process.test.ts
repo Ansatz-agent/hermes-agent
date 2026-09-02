@@ -8,6 +8,7 @@ import {
   collectRelaunchArgs,
   MARKER_SELF_ADOPT_EPOCH_MS,
   observeUpdaterHandoff,
+  resolvePlatformUpdateHandoff,
   resolvePosixScriptHandoff,
   resolveStagedUpdaterBinary,
   resolveUpdateScriptHandoff,
@@ -222,13 +223,43 @@ test('resolveUpdateScriptHandoff returns null when the checkout predates the scr
   assert.equal(handoff, null)
 })
 
-test('resolveUpdateScriptHandoff is Windows-only (POSIX updates in place)', () => {
+test('resolveUpdateScriptHandoff remains Windows-only', () => {
   const handoff = resolveUpdateScriptHandoff('/home/hermes/.hermes/hermes-agent', {
     isWindows: false,
     fileExists: () => true
   })
 
   assert.equal(handoff, null)
+})
+
+test('resolvePlatformUpdateHandoff selects the POSIX script on macOS/Linux', () => {
+  const root = '/home/hermes/.hermes/hermes-agent'
+  const expected = path.join(root, 'scripts', 'desktop-update', 'posix.sh')
+
+  const handoff = resolvePlatformUpdateHandoff(root, {
+    isWindows: false,
+    fileExists: candidate => candidate === expected
+  })
+
+  assert.ok(handoff)
+  assert.equal(handoff.command, '/bin/bash')
+  assert.equal(handoff.scriptPath, expected)
+  assert.deepEqual(handoff.args, [expected])
+})
+
+test('resolvePlatformUpdateHandoff selects the PowerShell script on Windows', () => {
+  const root = String.raw`C:\Users\hermes\AppData\Local\hermes\hermes-agent`
+  const expected = path.join(root, 'scripts', 'desktop-update', 'windows.ps1')
+
+  const handoff = resolvePlatformUpdateHandoff(root, {
+    isWindows: true,
+    fileExists: candidate => candidate === expected
+  })
+
+  assert.ok(handoff)
+  assert.equal(handoff.command, 'powershell')
+  assert.equal(handoff.scriptPath, expected)
+  assert.deepEqual(handoff.args, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', expected])
 })
 
 test('wrapHandoffForDetachedConsole routes through cmd start with own console', () => {

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   fetchLatestRelease,
   releaseIsNewer,
+  resolveBundledCurrentVersion,
   resolveUpdateBaseUrl,
   validateReleaseMetadata
 } from './release-update-source'
@@ -70,5 +71,19 @@ describe('release update source', () => {
     const release = validateReleaseMetadata(metadata({ tag_name: 'v0.17.0' }), 'https://updates.example')
     expect(releaseIsNewer(release, '0.17.0', 'c'.repeat(40))).toBe(true)
     expect(releaseIsNewer(release, '0.18.0', 'c'.repeat(40))).toBe(false)
+  })
+
+  it('uses the bundled source marker version when the Electron shell is older', () => {
+    const release = validateReleaseMetadata(metadata({ tag_name: 'v0.17.1' }), 'https://updates.example')
+    const currentVersion = resolveBundledCurrentVersion('0.17.0', '0.17.1')
+
+    expect(currentVersion).toBe('0.17.1')
+    expect(releaseIsNewer(release, currentVersion, COMMIT)).toBe(false)
+    expect(releaseIsNewer(release, '0.17.0', COMMIT)).toBe(true)
+  })
+
+  it('falls back to the Electron version when the source marker has no version', () => {
+    expect(resolveBundledCurrentVersion('0.17.0')).toBe('0.17.0')
+    expect(resolveBundledCurrentVersion('0.17.0', '  ')).toBe('0.17.0')
   })
 })
