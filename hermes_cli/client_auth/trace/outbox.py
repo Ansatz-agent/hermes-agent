@@ -162,7 +162,7 @@ class TraceOutbox:
         path.mkdir(parents=True, exist_ok=True)
         database = path / "outbox.db"
         try:
-            connection = sqlite3.connect(database, isolation_level=None)
+            connection = sqlite3.connect(database, isolation_level=None, check_same_thread=False)
             connection.row_factory = sqlite3.Row
             connection.execute("PRAGMA journal_mode=WAL")
             connection.execute("PRAGMA synchronous=FULL")
@@ -350,6 +350,12 @@ class TraceOutbox:
             return self._decode_row(row)
         except Exception as exc:
             raise TraceOutboxUnavailable("Trace outbox ciphertext is invalid") from exc
+
+    def next_retry_at(self) -> int | None:
+        row = self._connection.execute(
+            "SELECT next_retry_at_ms FROM batches WHERE status = 'pending' ORDER BY sequence LIMIT 1"
+        ).fetchone()
+        return None if row is None else row["next_retry_at_ms"]
 
     def mark_retry(self, batch_id: str, *, next_retry_at_ms: int) -> None:
         self._require_open()
