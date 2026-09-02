@@ -83,6 +83,8 @@ _AUTH_KEYRING_SERVICE_PATTERN = re.compile(
     flags=re.ASCII,
 )
 _DEFAULT_AUTH_KEYRING_SERVICE = "cn.c2sml.hermes.remote-auth"
+_TRACE_KEYRING_SERVICE = "cn.c2sml.hermes.trace-data-keys"
+_TRACE_KEY_NAME_PATTERN = re.compile(r"account-[a-f0-9]{64}", flags=re.ASCII)
 _EXPLICIT_TERMINAL_REASONS = frozenset(
     {"account_disabled", "account_revoked", "session_revoked"}
 )
@@ -1941,6 +1943,47 @@ class _KeyringSecretBackend:
             keyring.delete_password(service, self.ACCOUNT)
         except PasswordDeleteError:
             return
+
+
+class KeyringTraceSecretStore:
+    """Narrow byte storage for account-bound Trace data keys."""
+
+    def available(self) -> bool:
+        try:
+            import keyring
+
+            return float(keyring.get_keyring().priority) > 0
+        except Exception:
+            return False
+
+    def read(self, name: str) -> bytes | None:
+        self._validate_name(name)
+        import keyring
+
+        raw = keyring.get_password(_TRACE_KEYRING_SERVICE, name)
+        if raw is None:
+            return None
+        try:
+            return base64.b64decode(raw, validate=True)
+        except (ValueError, TypeError) as exc:
+            raise RuntimeError("protected Trace key is invalid") from exc
+
+    def write(self, name: str, value: bytes) -> None:
+        self._validate_name(name)
+        if not isinstance(value, bytes):
+            raise TypeError("protected Trace key must be bytes")
+        import keyring
+
+        keyring.set_password(
+            _TRACE_KEYRING_SERVICE,
+            name,
+            base64.b64encode(value).decode("ascii"),
+        )
+
+    @staticmethod
+    def _validate_name(name: str) -> None:
+        if _TRACE_KEY_NAME_PATTERN.fullmatch(name) is None:
+            raise ValueError("invalid protected Trace key name")
 
 
 class ProcessHardener:
