@@ -24,7 +24,9 @@ Use the existing `ControllableGateway` and `launchTraceHarness`:
 
 1. Start the gateway offline and launch one authenticated trace harness.
 2. Post one trace and wait until the request is durably admitted locally while
-   the gateway records an unavailable attempt.
+   the gateway records at least two unavailable attempts. The second failed
+   attempt must come from the recovery pump, ensuring that the in-memory retry
+   timer has been scheduled rather than observing only the admission fast path.
 3. Switch the same gateway instance to online without quitting or recreating
    the harness.
 4. Wait for the existing retry timer to fire and for the outbox to drain; do
