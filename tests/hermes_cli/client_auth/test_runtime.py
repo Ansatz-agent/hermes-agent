@@ -271,11 +271,17 @@ def test_trace_transport_control_frame_is_closed_and_loopback_only():
     parsed = parse_trace_transport_registration(frame)
     assert parsed.endpoint == frame["endpoint"]
     assert "a" * 43 not in repr(parsed)
+    for entrypoint in ("cli", "dashboard", "desktop", "voice"):
+        assert parse_trace_transport_registration(
+            {**frame, "entrypoint": entrypoint}
+        ).entrypoint == entrypoint
 
     with pytest.raises(AuthRequired):
         parse_trace_transport_registration({**frame, "endpoint": "https://example.com/v1/traces"})
     with pytest.raises(AuthRequired):
         parse_trace_transport_registration({**frame, "unknown": True})
+    with pytest.raises(AuthRequired):
+        parse_trace_transport_registration({**frame, "entrypoint": ""})
 
 
 def test_running_backend_control_attaches_trace_transport_without_restart(monkeypatch):
@@ -3133,7 +3139,7 @@ def test_remote_owner_trace_credential_protocol_is_exact_and_installation_bound(
 
     assert result.installation_id == installation_id
     assert json.loads(connection.sent) == {
-        "version": 3,
+        "version": 4,
         "operation": "trace_token",
         "installation_id": installation_id,
         "client_version": "0.17.0",
@@ -4746,7 +4752,12 @@ def test_owner_broker_versions_snapshot_shape_for_rolling_upgrade():
             assert v3["ok"] is True
             assert v3["snapshot"]["cloud_state"] is None
 
-            for invalid in (4, "1", None):
+            v4 = roundtrip(4)
+            assert v4["version"] == 4
+            assert v4["ok"] is True
+            assert v4["snapshot"]["cloud_state"] is None
+
+            for invalid in (5, "1", None):
                 rejected = roundtrip(invalid)
                 assert rejected["ok"] is False
         finally:
@@ -4789,11 +4800,11 @@ def test_remote_owner_falls_back_to_protocol_v1_for_an_old_owner():
     first = owner.refresh(timeout=1.0)
     assert first.state is AuthState.SIGNED_OUT
     versions = [json.loads(frame)["version"] for frame in sent_frames]
-    assert versions == [3, 2, 1], "client must negotiate down to an old v1 owner"
+    assert versions == [4, 3, 2, 1], "client must negotiate down to an old v1 owner"
 
     owner.refresh(timeout=1.0)
     versions = [json.loads(frame)["version"] for frame in sent_frames]
-    assert versions == [3, 2, 1, 1], "the downgrade must be sticky for the owner connection"
+    assert versions == [4, 3, 2, 1, 1], "the downgrade must be sticky for the owner connection"
 
 
 def test_remote_owner_falls_back_to_protocol_v2_without_misreading_cloud_state():
@@ -4834,7 +4845,7 @@ def test_remote_owner_falls_back_to_protocol_v2_without_misreading_cloud_state()
 
     assert snapshot.state is AuthState.SIGNED_OUT
     assert snapshot.cloud_state is None
-    assert [json.loads(frame)["version"] for frame in sent_frames] == [3, 2]
+    assert [json.loads(frame)["version"] for frame in sent_frames] == [4, 3, 2]
 
 
 def _seeded_legacy_backend(client: FakeAuthClient, principal_key: str) -> FakeSecretBackend:
@@ -5038,10 +5049,10 @@ def test_remote_owner_sends_native_context_only_on_protocol_v2_or_newer():
 
     assert result.state is AuthState.SIGNED_OUT
     requests = [json.loads(frame) for frame in sent_frames]
-    assert [request["version"] for request in requests] == [3, 2, 1]
-    for request in requests[:2]:
+    assert [request["version"] for request in requests] == [4, 3, 2, 1]
+    for request in requests[:3]:
         assert request["installation_id"] == INSTALLATION_ID
         assert request["client_version"] == "0.17.0"
-    assert set(requests[2]) == {"version", "operation"}, (
+    assert set(requests[3]) == {"version", "operation"}, (
         "an old owner cannot upgrade, so the v1 fallback must drop the context"
     )

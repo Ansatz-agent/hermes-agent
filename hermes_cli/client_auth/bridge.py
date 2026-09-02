@@ -16,6 +16,7 @@ from hermes_cli.client_auth.runtime import (
     account_login,
     account_logout,
     account_status,
+    account_trace_ingress_open,
     account_trace_token,
     clear_entrypoint_owner,
     connect_runtime_owner,
@@ -168,11 +169,34 @@ def _trace_token(params: Mapping[str, object]) -> dict[str, object]:
     return _validated_trace_result(credential, installation_id=installation_id)
 
 
+def _trace_ingress_open(params: Mapping[str, object]) -> dict[str, object]:
+    entrypoint = params.get("entrypoint")
+    consumer_id = params.get("consumer_id")
+    if (
+        entrypoint not in {"cli", "dashboard", "desktop", "voice"}
+        or not isinstance(consumer_id, str)
+        or re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._:-]{0,127}", consumer_id) is None
+    ):
+        raise ValueError("invalid trace ingress fields")
+    registration = account_trace_ingress_open(
+        entrypoint=entrypoint,
+        consumer_id=consumer_id,
+    )
+    return {
+        "endpoint": registration.endpoint,
+        "authorization": registration.authorization,
+        "installation_id": registration.installation_id,
+        "entrypoint": registration.entrypoint,
+        "plugins_toml": registration.plugins_toml,
+    }
+
+
 METHODS: dict[str, Callable[[Mapping[str, object]], dict[str, object]]] = {
     "status": _status,
     "login": _login,
     "logout": _logout,
     "trace_token": _trace_token,
+    "trace_ingress_open": _trace_ingress_open,
 }
 ALLOWED_PARAMS = {
     "status": frozenset({"installation_id", "client_version"}),
@@ -181,6 +205,7 @@ ALLOWED_PARAMS = {
     "trace_token": frozenset(
         {"installation_id", "client_version", "telemetry_schema_version"}
     ),
+    "trace_ingress_open": frozenset({"entrypoint", "consumer_id"}),
 }
 
 
