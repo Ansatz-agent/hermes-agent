@@ -76,7 +76,7 @@ const VALIDATION_REASONS = new Set([
 
 const TERMINAL_REASONS = new Set(['signed_out', 'session_revoked', 'account_disabled', 'account_revoked'])
 
-export type AuthMethod = 'status' | 'login' | 'logout' | 'trace_token'
+export type AuthMethod = 'status' | 'login' | 'logout' | 'trace_token' | 'trace_ingress_open'
 
 export type NativeClientContext = { installation_id: string; client_version: string }
 
@@ -99,11 +99,25 @@ export type TraceCredential = {
   installation_id: string
 }
 
+export type TraceIngressRequest = {
+  entrypoint: 'desktop'
+  consumer_id: string
+}
+
+export type TraceIngressLease = {
+  endpoint: string
+  authorization: string
+  installation_id: string
+  entrypoint: 'desktop'
+  plugins_toml: string
+}
+
 type AuthRequest =
   | { method: 'status'; params: NativeClientContext }
   | { method: 'login'; params: { username: string; password: string } & NativeClientContext }
   | { method: 'logout'; params: Record<string, never> }
   | { method: 'trace_token'; params: TraceTokenRequest }
+  | { method: 'trace_ingress_open'; params: TraceIngressRequest }
 
 type ChildLike = {
   stdin: NodeJS.WritableStream
@@ -140,7 +154,7 @@ type DesktopAuthBridgeOptions = {
 type PendingRequest = {
   reject: (error: AuthBridgeError) => void
   request: AuthRequest
-  resolve: (result: BridgeStatus | TraceCredential) => void
+  resolve: (result: BridgeStatus | TraceCredential | TraceIngressLease) => void
   timer: ReturnType<typeof setTimeout>
 }
 
@@ -288,9 +302,14 @@ export class DesktopAuthBridge {
     return this.invoke({ method: 'trace_token', params: request })
   }
 
+  traceIngress(request: TraceIngressRequest): Promise<TraceIngressLease> {
+    return this.invoke({ method: 'trace_ingress_open', params: request })
+  }
+
   invoke(request: Exclude<AuthRequest, { method: 'trace_token' }>): Promise<BridgeStatus>
   invoke(request: Extract<AuthRequest, { method: 'trace_token' }>): Promise<TraceCredential>
-  invoke(request: AuthRequest): Promise<BridgeStatus | TraceCredential> {
+  invoke(request: Extract<AuthRequest, { method: 'trace_ingress_open' }>): Promise<TraceIngressLease>
+  invoke(request: AuthRequest): Promise<BridgeStatus | TraceCredential | TraceIngressLease> {
     if (!isValidRequest(request)) {
       return Promise.reject(new AuthBridgeError('invalid_request'))
     }
@@ -308,7 +327,7 @@ export class DesktopAuthBridge {
       return Promise.reject(runtimeUnavailable())
     }
 
-    return new Promise<BridgeStatus | TraceCredential>((resolve, reject) => {
+    return new Promise<BridgeStatus | TraceCredential | TraceIngressLease>((resolve, reject) => {
       const timer = setTimeout(
         () => this.failRuntime(),
         request.method === 'login'
@@ -408,6 +427,8 @@ export class DesktopAuthBridge {
       const validResult =
         pending.request.method === 'trace_token'
           ? isTraceCredential(response.result, pending.request.params.installation_id, this.clock())
+          : pending.request.method === 'trace_ingress_open'
+            ? isTraceIngressLease(response.result)
           : isBridgeStatus(response.result)
 
       if (Object.keys(response).length !== 3 || !validResult) {
@@ -489,6 +510,15 @@ function isValidRequest(value: unknown): value is AuthRequest {
     )
   }
 
+  if (value.method === 'trace_ingress_open') {
+    return (
+      sameKeys(value.params, ['entrypoint', 'consumer_id']) &&
+      value.params.entrypoint === 'desktop' &&
+      typeof value.params.consumer_id === 'string' &&
+      /^[0-9A-Za-z][0-9A-Za-z._:-]{0,127}$/.test(value.params.consumer_id)
+    )
+  }
+
   return (
     value.method === 'login' &&
     paramKeys.length === 4 &&
@@ -546,6 +576,38 @@ export function traceCredentialExpiresAt(
 
 function isTraceCredential(value: unknown, expectedInstallationId: string, now: number): value is TraceCredential {
   return traceCredentialExpiresAt(value, expectedInstallationId, now) !== null
+}
+
+function isTraceIngressLease(value: unknown): value is TraceIngressLease {
+  if (
+    !isPlainObject(value) ||
+    !sameKeys(value, ['endpoint', 'authorization', 'installation_id', 'entrypoint', 'plugins_toml']) ||
+    typeof value.endpoint !== 'string' ||
+    typeof value.authorization !== 'string' ||
+    typeof value.plugins_toml !== 'string' ||
+    !isUuidV4(value.installation_id) ||
+    value.entrypoint !== 'desktop' ||
+    !/^Bearer [0-9A-Za-z_-]{43}$/.test(value.authorization) ||
+    !value.plugins_toml.replaceAll('\\', '/').endsWith('/ansatz-voice-trace/plugins.toml')
+  ) {
+    return false
+  }
+  try {
+    const endpoint = new URL(value.endpoint)
+    return (
+      endpoint.protocol === 'http:' &&
+      endpoint.hostname === '127.0.0.1' &&
+      Number(endpoint.port) >= 1 &&
+      Number(endpoint.port) <= 65535 &&
+      endpoint.pathname === '/v1/traces' &&
+      endpoint.search === '' &&
+      endpoint.hash === '' &&
+      endpoint.username === '' &&
+      endpoint.password === ''
+    )
+  } catch {
+    return false
+  }
 }
 
 function parseRfc3339Epoch(value: string): number | null {

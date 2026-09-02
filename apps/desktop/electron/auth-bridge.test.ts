@@ -323,6 +323,31 @@ test('requests one short-lived Trace credential with exact installation identity
   bridge.close()
 })
 
+test('requests one exact Desktop ingress lease without a cloud credential', async () => {
+  const { bridge, child } = bridgeFixture()
+  const pending = bridge.traceIngress({ entrypoint: 'desktop', consumer_id: 'desktop-local' })
+  const request = await readRequest(child)
+  const lease = {
+    endpoint: 'http://127.0.0.1:49152/v1/traces',
+    authorization: `Bearer ${'a'.repeat(43)}`,
+    installation_id: traceRequest.installation_id,
+    entrypoint: 'desktop' as const,
+    plugins_toml: '/opt/Ansatz/config/ansatz-voice-trace/plugins.toml'
+  }
+
+  assert.deepEqual(request, {
+    version: 2,
+    id: '1',
+    method: 'trace_ingress_open',
+    params: { entrypoint: 'desktop', consumer_id: 'desktop-local' }
+  })
+  respond(child, { version: 2, id: '1', result: lease })
+
+  assert.deepEqual(await pending, lease)
+  assert.equal(JSON.stringify(lease).includes('access_token'), false)
+  bridge.close()
+})
+
 test('Trace credentials fail closed on malformed, stale, or extra response fields', async () => {
   for (const result of [
     { ...traceCredential, access_token: '' },
