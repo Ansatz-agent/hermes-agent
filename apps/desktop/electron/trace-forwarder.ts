@@ -52,8 +52,24 @@ type TraceOutbox = {
 type FetchLike = (input: string | URL, init?: RequestInit) => Promise<Response>
 
 export type TraceUploadEvent =
-  | { kind: 'success'; outcome: DurableReceipt['outcome']; status: number }
-  | { kind: 'failure'; status: number | null }
+  | {
+      batchId: string
+      elapsedMs: number
+      kind: 'success'
+      outcome: DurableReceipt['outcome']
+      requestId: string | null
+      status: number
+    }
+  | {
+      batchId: string
+      elapsedMs: number
+      failureCode: TraceUploadFailureCode
+      kind: 'failure'
+      requestId: string | null
+      status: number | null
+    }
+
+export type TraceUploadFailureCode = 'credential' | 'network' | 'http_rejected' | 'missing_receipt'
 
 type TraceForwarderOptions = {
   clock?: () => number
@@ -87,7 +103,9 @@ type UploadAuthorization = { generation: number; owner: TraceOwner }
 class UpstreamFailure extends Error {
   constructor(
     readonly status: number | null,
-    readonly retryAfterMs: number | null = null
+    readonly retryAfterMs: number | null = null,
+    readonly failureCode: TraceUploadFailureCode = status === null ? 'network' : 'http_rejected',
+    readonly requestId: string | null = null
   ) {
     super(status === null ? 'trace_gateway_unavailable' : `trace_gateway_${status}`)
     this.name = 'UpstreamFailure'
@@ -451,8 +469,6 @@ export class TraceForwarder {
       return
     }
 
-    this.reportUploadEvent({ kind: 'failure', status: error.status })
-
     try {
       this.requireActiveOwner(batch.owner, generation)
     } catch {
@@ -519,14 +535,12 @@ export class TraceForwarder {
         }
 
         if (!(error instanceof UpstreamFailure)) {
-          this.reportUploadEvent({ kind: 'failure', status: null })
           this.deferRetry(batch.batchId, null)
 
           return
         }
 
         if (error.status === 403) {
-          this.reportUploadEvent({ kind: 'failure', status: error.status })
           if (!this.terminalRevoked) {
             this.deferRetry(batch.batchId, error.retryAfterMs, 1_000)
           }
@@ -535,7 +549,6 @@ export class TraceForwarder {
         }
 
         if (error.status === 400 || error.status === 409 || error.status === 413 || error.status === 415) {
-          this.reportUploadEvent({ kind: 'failure', status: error.status })
           this.requireActiveOwner(owner, generation)
           await this.store.quarantine(batch.batchId, `gateway_${error.status}`)
           this.retryByBatch.delete(batch.batchId)
@@ -543,7 +556,6 @@ export class TraceForwarder {
           continue
         }
 
-        this.reportUploadEvent({ kind: 'failure', status: error.status })
         this.deferRetry(batch.batchId, error.retryAfterMs)
 
         return
@@ -570,20 +582,26 @@ export class TraceForwarder {
     authorization: UploadAuthorization,
     awaitTerminalRevocation: boolean
   ): Promise<DurableReceipt> {
+    const startedAt = this.clock()
+    let phase: 'preflight' | 'credential' | 'network' | 'response' = 'preflight'
+
     try {
       this.requireActiveOwner(batch.owner, generation)
       this.requireUploadAuthorization(authorization.owner, authorization.generation)
       await this.uploadBarrier?.()
       this.requireActiveOwner(batch.owner, generation)
       this.requireUploadAuthorization(authorization.owner, authorization.generation)
+      phase = 'credential'
       const initial = await this.credentialProvider.current()
       this.requireActiveOwner(batch.owner, generation)
       this.requireUploadAuthorization(authorization.owner, authorization.generation)
+      phase = 'network'
       const response = await this.fetchUpstream(batch, initial)
       this.requireActiveOwner(batch.owner, generation)
       this.requireUploadAuthorization(authorization.owner, authorization.generation)
 
       if (response.status !== 401) {
+        phase = 'response'
         const receipt = await this.requireGatewayReceipt(
           response,
           batch,
@@ -591,22 +609,32 @@ export class TraceForwarder {
           authorization,
           awaitTerminalRevocation
         )
-        this.reportUploadEvent({ kind: 'success', outcome: receipt.outcome, status: response.status })
+        this.reportUploadEvent({
+          batchId: batch.batchId,
+          elapsedMs: elapsedUploadMs(startedAt, this.clock()),
+          kind: 'success',
+          outcome: receipt.outcome,
+          requestId: traceRequestId(response),
+          status: response.status
+        })
 
         return receipt
       }
 
       this.credentialProvider.invalidate()
       this.recovery.trigger('upload-401')
+      phase = 'credential'
       const refreshed = await this.credentialProvider.current({ forceRefresh: true })
       this.requireActiveOwner(batch.owner, generation)
       this.requireUploadAuthorization(authorization.owner, authorization.generation)
       this.recovery.trigger('token-ready')
 
+      phase = 'network'
       const retried = await this.fetchUpstream(batch, refreshed)
       this.requireActiveOwner(batch.owner, generation)
       this.requireUploadAuthorization(authorization.owner, authorization.generation)
 
+      phase = 'response'
       const receipt = await this.requireGatewayReceipt(
         retried,
         batch,
@@ -614,15 +642,32 @@ export class TraceForwarder {
         authorization,
         awaitTerminalRevocation
       )
-      this.reportUploadEvent({ kind: 'success', outcome: receipt.outcome, status: retried.status })
+      this.reportUploadEvent({
+        batchId: batch.batchId,
+        elapsedMs: elapsedUploadMs(startedAt, this.clock()),
+        kind: 'success',
+        outcome: receipt.outcome,
+        requestId: traceRequestId(retried),
+        status: retried.status
+      })
 
       return receipt
     } catch (error) {
-      if (error instanceof UpstreamFailure) {
-        throw error
-      }
+      const failure =
+        error instanceof UpstreamFailure
+          ? error
+          : new UpstreamFailure(null, null, phase === 'credential' ? 'credential' : 'network')
 
-      throw new UpstreamFailure(null)
+      this.reportUploadEvent({
+        batchId: batch.batchId,
+        elapsedMs: elapsedUploadMs(startedAt, this.clock()),
+        failureCode: failure.failureCode,
+        kind: 'failure',
+        requestId: failure.requestId,
+        status: failure.status
+      })
+
+      throw failure
     }
   }
 
@@ -713,7 +758,7 @@ export class TraceForwarder {
     credential: TraceCredential
   ): Promise<Response> {
     if (credential.installation_id !== this.installationId) {
-      throw new Error('trace_credential_unavailable')
+      throw new UpstreamFailure(null, null, 'credential')
     }
 
     const controller = new AbortController()
@@ -839,16 +884,39 @@ async function firstDurableOwner(
 
 function requireGatewayReceipt(response: Response, batchId: string, now: number): DurableReceipt {
   if (response.status < 200 || response.status >= 300) {
-    throw new UpstreamFailure(response.status, parseTraceRetryAfterMs(response.headers.get('retry-after'), now))
+    throw new UpstreamFailure(
+      response.status,
+      parseTraceRetryAfterMs(response.headers.get('retry-after'), now),
+      'http_rejected',
+      traceRequestId(response)
+    )
   }
 
   const outcome = response.headers.get('x-trace-receipt')
 
   if (response.headers.get('x-trace-batch-id') !== batchId || (outcome !== 'accepted' && outcome !== 'duplicate')) {
-    throw new UpstreamFailure(null)
+    throw new UpstreamFailure(response.status, null, 'missing_receipt', traceRequestId(response))
   }
 
   return { batchId, outcome, receivedAt: now }
+}
+
+function elapsedUploadMs(startedAt: number, endedAt: number): number {
+  const elapsed = endedAt - startedAt
+
+  return Number.isSafeInteger(elapsed) && elapsed >= 0 ? elapsed : 0
+}
+
+function traceRequestId(response: Response): string | null {
+  const value = response.headers.get('x-request-id') ?? response.headers.get('request-id')
+
+  if (value === null) {
+    return null
+  }
+
+  const sanitized = value.trim().replace(/[^A-Za-z0-9._:-]/g, '_').slice(0, 128)
+
+  return sanitized || null
 }
 
 const TERMINAL_REVOCATION_CODES = new Set<TerminalTraceRevocation['code']>([

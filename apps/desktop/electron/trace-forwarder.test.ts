@@ -184,6 +184,81 @@ test('product Trace uploads use the public same-origin Gateway API by default', 
   assert.equal(DEFAULT_TRACE_UPSTREAM_URL, 'https://c2sml.cn/trace-ingest/v1/traces')
 })
 
+const uploadDiagnosticScenarios = [
+  {
+    label: 'credential failures',
+    credentialProvider: () =>
+      new RefreshingTraceCredentialProvider(
+        {
+          async load() {
+            throw new Error('trace_credential_provider_offline')
+          }
+        },
+        { clock: () => traceCredentialNow }
+      ),
+    expected: { failureCode: 'credential', status: null, requestId: null },
+    fetchImpl: async () => new Response(Buffer.alloc(0), { status: 503 })
+  },
+  {
+    label: 'network failures',
+    expected: { failureCode: 'network', status: null, requestId: null },
+    fetchImpl: async () => {
+      throw new Error('connect ECONNREFUSED')
+    }
+  },
+  {
+    label: 'HTTP rejections',
+    expected: { failureCode: 'http_rejected', status: 503, requestId: 'req-http-503' },
+    fetchImpl: async () => new Response(Buffer.alloc(0), { status: 503, headers: { 'x-request-id': 'req-http-503' } })
+  },
+  {
+    label: 'missing receipts',
+    expected: { failureCode: 'missing_receipt', status: 202, requestId: 'req_missing_receipt' },
+    fetchImpl: async () =>
+      new Response(Buffer.alloc(0), {
+        status: 202,
+        headers: { 'request-id': 'req missing/receipt' }
+      })
+  }
+] as const
+
+for (const scenario of uploadDiagnosticScenarios) {
+  test(`classifies Trace upload ${scenario.label} without exposing raw errors`, async () => {
+    const { root, store } = await temporaryStore()
+    const events: unknown[] = []
+    const batch = await store.enqueue(envelope(`diagnostic-${scenario.expected.failureCode}`))
+    const forwarder = new TraceForwarder({
+      clock: () => traceCredentialNow,
+      credentialProvider:
+        ('credentialProvider' in scenario ? scenario.credentialProvider() : undefined) ??
+        new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
+      fetchImpl: scenario.fetchImpl,
+      installationId,
+      onUploadEvent: event => events.push(event),
+      store
+    })
+
+    await forwarder.start(validOwner())
+
+    try {
+      await forwarder.pump()
+      assert.deepEqual(events, [
+        {
+          batchId: batch.batchId,
+          elapsedMs: 0,
+          failureCode: scenario.expected.failureCode,
+          kind: 'failure',
+          requestId: scenario.expected.requestId,
+          status: scenario.expected.status
+        }
+      ])
+    } finally {
+      await forwarder.stop({ flushMs: 0 })
+      await rm(root, { force: true, recursive: true })
+    }
+  })
+}
+
 test('a matching Gateway receipt owns a trace before local fsync without retaining payload bytes', async () => {
   const root = await mkdtemp(join(process.cwd(), 'tmp', 'trace-forwarder-gateway-first-'))
 
