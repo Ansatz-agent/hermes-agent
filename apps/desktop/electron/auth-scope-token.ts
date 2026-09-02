@@ -51,6 +51,7 @@ export type ScopeControlAck = ScopeTokenRegisteredAck | ScopeTokenPromotedAck
 
 export type TraceTransportRegistration = {
   endpoint: string
+  entrypoint: 'desktop'
   installationId: string
   localBearer: string
   pluginsToml: string
@@ -167,6 +168,7 @@ export function encodeTraceTransportRegistration(transport: TraceTransportRegist
     !endpoint.port ||
     endpoint.search ||
     endpoint.hash ||
+    transport.entrypoint !== 'desktop' ||
     !/^[0-9A-Za-z_-]{43}$/.test(transport.localBearer) ||
     Buffer.from(transport.localBearer, 'base64url').byteLength !== 32 ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(transport.installationId) ||
@@ -178,7 +180,7 @@ export function encodeTraceTransportRegistration(transport: TraceTransportRegist
   const frame = `${JSON.stringify({
     authorization: `Bearer ${transport.localBearer}`,
     endpoint: transport.endpoint,
-    entrypoint: 'desktop',
+    entrypoint: transport.entrypoint,
     installation_id: transport.installationId,
     operation: 'register_trace_transport',
     plugins_toml: transport.pluginsToml,

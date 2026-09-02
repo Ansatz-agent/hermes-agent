@@ -2,7 +2,6 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 
 import type { TraceCredential } from './auth-bridge'
-import { deriveOtlpCorrelation } from './otlp-correlation'
 import { splitOtlpExportTraceRequest } from './otlp-split'
 import type { TraceCredentialProvider } from './trace-credential-provider'
 import { respondTraceUnavailable } from './trace-ingress-facade'
@@ -354,7 +353,7 @@ export class TraceForwarder {
         return respond(response, 413)
       }
 
-      const metadata = traceMetadata(request, body)
+      const metadata = traceMetadata(request)
 
       if (!metadata) {
         return respond(response, 400)
@@ -811,7 +810,7 @@ export class TraceForwarder {
   }
 }
 
-function traceMetadata(request: IncomingMessage, body: Buffer): TraceMetadata | null {
+function traceMetadata(request: IncomingMessage): TraceMetadata | null {
   const hermesSessionId = singleHeader(request.headers['x-hermes-session-id'])
   const entrypoint = singleHeader(request.headers['x-trace-entrypoint'])
   const runId = singleHeader(request.headers['x-trace-run-id'])
@@ -819,16 +818,7 @@ function traceMetadata(request: IncomingMessage, body: Buffer): TraceMetadata | 
   const supplied = [hermesSessionId, entrypoint, runId, telemetrySchemaVersion].filter(Boolean).length
 
   if (supplied === 0) {
-    const derived = deriveOtlpCorrelation(body)
-
-    return derived
-      ? {
-          entrypoint: 'desktop',
-          hermesSessionId: derived.sessionId,
-          runId: derived.runId,
-          telemetrySchemaVersion: '1'
-        }
-      : null
+    return null
   }
 
   if (

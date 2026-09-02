@@ -92,6 +92,7 @@ test('encodes strict v2 register and promote frames inside bounded stdin frames'
 test('serializes dynamic Trace transport only inside the bounded main-to-backend control frame', () => {
   const encoded = encodeTraceTransportRegistration({
     endpoint: 'http://127.0.0.1:49152/v1/traces',
+    entrypoint: 'desktop',
     installationId: '11111111-1111-4111-8111-111111111111',
     localBearer: 'a'.repeat(43),
     pluginsToml: '/Applications/Ansatz.app/Contents/Resources/config/ansatz-voice-trace/plugins.toml'
@@ -107,6 +108,19 @@ test('serializes dynamic Trace transport only inside the bounded main-to-backend
     version: 1
   })
   assert.ok(Buffer.byteLength(encoded) <= 4_096)
+})
+
+test('rejects a Trace transport registration without an explicit desktop entrypoint', () => {
+  assert.throws(
+    () =>
+      encodeTraceTransportRegistration({
+        endpoint: 'http://127.0.0.1:49152/v1/traces',
+        installationId: '11111111-1111-4111-8111-111111111111',
+        localBearer: 'a'.repeat(43),
+        pluginsToml: '/Applications/Ansatz.app/Contents/Resources/config/ansatz-voice-trace/plugins.toml'
+      } as never),
+    /Invalid Trace transport registration/
+  )
 })
 
 test('rejects malformed scopes and entropy before producing a candidate', () => {

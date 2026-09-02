@@ -306,7 +306,7 @@ export class DesktopAuthBridge {
     return this.invoke({ method: 'trace_ingress_open', params: request })
   }
 
-  invoke(request: Exclude<AuthRequest, { method: 'trace_token' }>): Promise<BridgeStatus>
+  invoke(request: Extract<AuthRequest, { method: 'status' | 'login' | 'logout' }>): Promise<BridgeStatus>
   invoke(request: Extract<AuthRequest, { method: 'trace_token' }>): Promise<TraceCredential>
   invoke(request: Extract<AuthRequest, { method: 'trace_ingress_open' }>): Promise<TraceIngressLease>
   invoke(request: AuthRequest): Promise<BridgeStatus | TraceCredential | TraceIngressLease> {

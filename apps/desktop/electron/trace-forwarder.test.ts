@@ -1389,7 +1389,7 @@ test('loopback forwarder accepts exact protobuf and adds only the public bearer 
   }
 })
 
-test('real Relay OTLP without custom correlation headers is canonicalized for the Gateway', async () => {
+test('real Relay OTLP without explicit correlation headers is rejected instead of defaulting to desktop', async () => {
   const calls: Headers[] = []
   const traceId = '00112233445566778899aabbccddeeff'
   const { root, store } = await temporaryStore()
@@ -1413,12 +1413,8 @@ test('real Relay OTLP without custom correlation headers is canonicalized for th
       includeCorrelationHeaders: false
     })
 
-    assert.equal(response.status, 200)
-    await waitFor(() => calls.length === 1)
-    assert.equal(calls[0].get('x-hermes-session-id'), 'desktop-session-real')
-    assert.equal(calls[0].get('x-trace-run-id'), traceId)
-    assert.equal(calls[0].get('x-trace-entrypoint'), 'desktop')
-    assert.equal(calls[0].get('x-telemetry-schema-version'), '1')
+    assert.equal(response.status, 400)
+    assert.equal(calls.length, 0)
   } finally {
     await forwarder.stop({ flushMs: 3_000 })
     await rm(root, { force: true, recursive: true })

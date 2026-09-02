@@ -17,6 +17,7 @@ test('recovered facade attaches each live generation with its actual override ro
   const frame = JSON.parse(
     encodeTraceTransportRegistration({
       endpoint: 'http://127.0.0.1:49152/v1/traces',
+      entrypoint: 'desktop',
       installationId: '11111111-1111-4111-8111-111111111111',
       localBearer: 'a'.repeat(43),
       pluginsToml: `${recovered.root}/config/ansatz-voice-trace/plugins.toml`

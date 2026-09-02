@@ -170,6 +170,7 @@ test('authenticated Trace settings are child-only and override inherited disable
     pathModule: path.posix,
     trace: {
       endpoint: 'http://127.0.0.1:49152/v1/traces',
+      entrypoint: 'desktop',
       installationId: '11111111-1111-4111-8111-111111111111',
       localAuthorization: 'Bearer local-epoch-secret',
       pluginsToml: '/Applications/Ansatz.app/Contents/Resources/config/plugins.toml'
@@ -181,6 +182,24 @@ test('authenticated Trace settings are child-only and override inherited disable
   assert.equal(env.ANSATZ_TRACE_INSTALLATION_ID, '11111111-1111-4111-8111-111111111111')
   assert.equal(env.ANSATZ_TRACE_ENTRYPOINT, 'desktop')
   assert.match(env.HERMES_NEMO_RELAY_PLUGINS_TOML, /plugins\.toml$/)
+})
+
+test('Trace settings without an explicit desktop entrypoint are disabled', () => {
+  const env = buildDesktopBackendEnv({
+    hermesHome: '/Users/test/.ansatz-voice-trace-client',
+    currentEnv: { PATH: '/usr/bin' },
+    platform: 'darwin',
+    pathModule: path.posix,
+    trace: {
+      endpoint: 'http://127.0.0.1:49152/v1/traces',
+      installationId: '11111111-1111-4111-8111-111111111111',
+      localAuthorization: 'Bearer local-epoch-secret',
+      pluginsToml: '/Applications/Ansatz.app/Contents/Resources/config/plugins.toml'
+    }
+  })
+
+  assert.equal(env.ANSATZ_TRACE_LOCAL_ENDPOINT, undefined)
+  assert.equal(env.ANSATZ_TRACE_ENTRYPOINT, undefined)
 })
 
 test('normalizeHermesHomeRoot maps profile homes back to the global Hermes root', () => {
