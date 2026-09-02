@@ -217,7 +217,7 @@ const uploadDiagnosticScenarios = [
     fetchImpl: async () =>
       new Response(Buffer.alloc(0), {
         status: 202,
-        headers: { 'request-id': 'req missing/receipt' }
+        headers: { 'request-id': 'req missing/receipt', 'x-request-id': '' }
       })
   }
 ] as const

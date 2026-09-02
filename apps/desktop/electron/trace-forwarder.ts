@@ -908,7 +908,8 @@ function elapsedUploadMs(startedAt: number, endedAt: number): number {
 }
 
 function traceRequestId(response: Response): string | null {
-  const value = response.headers.get('x-request-id') ?? response.headers.get('request-id')
+  const primary = response.headers.get('x-request-id')?.trim()
+  const value = primary || response.headers.get('request-id')
 
   if (value === null) {
     return null
