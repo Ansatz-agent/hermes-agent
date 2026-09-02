@@ -9238,7 +9238,7 @@ async function loadCurrentDesktopTraceCredential(
   return credential
 }
 
-async function createDesktopTraceSession(
+async function createDesktopLegacyTraceRecoverySession(
   scope: ConnectionScope,
   requestedOwner: TraceOwner
 ): Promise<TraceDurabilitySession> {
@@ -9377,10 +9377,13 @@ async function createDesktopTraceSession(
     uploadBarrier: migrationBarrier === null ? undefined : () => migrationBarrier
   })
 
-  let started
+  const started = {
+    endpoint: 'disabled://legacy-trace-recovery',
+    localBearer: ''
+  }
 
   try {
-    started = await forwarder.start(owner)
+    await forwarder.startRecovery(owner)
   } catch (error) {
     await forwarder.stop({ flushMs: 0 }).catch(() => {})
     await store.close().catch(() => {})
@@ -9446,22 +9449,16 @@ async function createDesktopTraceSession(
 }
 
 const desktopTraceCoordinator = new TraceDurabilityCoordinator({
-  createSession: (owner, scope) => createDesktopTraceSession(scope, owner),
+  createSession: (owner, scope) => createDesktopLegacyTraceRecoverySession(scope, owner),
   facade: {
     detach() {
-      desktopTraceFacadeReady = false
-      desktopTraceFacade?.detach()
+      // Legacy ciphertext recovery never publishes a local admission socket.
     },
-    install(ingress) {
-      if (desktopTraceFacade === null) {
-        throw new Error('trace_ingress_facade_unavailable')
-      }
-
-      desktopTraceFacade.install(ingress)
-      desktopTraceFacadeReady = true
+    install(_ingress) {
+      // New OTLP is admitted only by the shared auth-owner ingress lease.
     },
     rotateBearer() {
-      rotateDesktopTraceIngressBearer({ reattach: false })
+      // There is no Electron-owned admission bearer in recovery-only mode.
     }
   },
   async onAdmissionReady() {
@@ -9508,6 +9505,10 @@ async function ensureDesktopTraceForwarder(scope: ConnectionScope, requestedOwne
 
     desktopSharedTraceLease = lease
     desktopSharedTraceScope = scope
+
+    void desktopTraceCoordinator.activate({ owner: requestedOwner, scope }).catch(error => {
+      rememberLog(`[trace] legacy outbox recovery unavailable: ${safeTraceFailureCode(error)}`)
+    })
 
     try {
       await attachDesktopTraceTransportToRunningBackends()

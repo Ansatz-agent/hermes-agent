@@ -446,6 +446,41 @@ test('an existing durable backlog disables direct Gateway upload until recovery 
   }
 })
 
+test('legacy recovery mode drains ciphertext without opening a local admission socket', async () => {
+  const calls: Buffer[] = []
+  const { root, store } = await temporaryStore()
+  await store.enqueue(envelope('legacy-drain'))
+
+  const forwarder = new TraceForwarder({
+    credentialProvider: new RefreshingTraceCredentialProvider(credentialSource(), { clock: () => traceCredentialNow }),
+    fetchImpl: async (_input, init) => {
+      calls.push(Buffer.from(init?.body as Buffer))
+      const headers = new Headers(init?.headers)
+
+      return new Response(Buffer.alloc(0), {
+        status: 200,
+        headers: {
+          'x-trace-batch-id': headers.get('idempotency-key') ?? '',
+          'x-trace-receipt': 'accepted'
+        }
+      })
+    },
+    installationId,
+    store
+  })
+
+  try {
+    await forwarder.startRecovery(validOwner())
+    assert.equal(forwarder.ingress(), null)
+    await forwarder.pump()
+    assert.equal(calls.length, 1)
+    assert.equal((await store.diagnostics()).pending, 0)
+  } finally {
+    await forwarder.stop({ flushMs: 3_000 })
+    await rm(root, { force: true, recursive: true })
+  }
+})
+
 test('same-account owner rebind keeps ingress and durably records the new session owner', async () => {
   const { root, store } = await temporaryStore()
   const ownerA = validOwner()
