@@ -667,20 +667,37 @@ compression:
 # Context engine
 # =============================================================================
 # The default "compressor" performs whole-history summarization. Select the
-# bundled "object_context" engine to add Context Compression Strategy V1:
-# large structured objects in recent verbatim user/assistant/tool Deltas are
-# replaced in-place by stable Cards and remain exactly retrievable. The normal
-# whole-history summarizer continues independently and consumes the Card view.
+# bundled "object_context" engine to add Object Context V1.1/V1.2. The default
+# V1.1 scheduler keeps the immediate-request economic behavior. Opting into
+# V1.2 uses bounded Hot Tail/pending queues and amortized batch crossing while
+# preserving raw-first exposure and atomic Cards/receipts. The normal
+# whole-history summarizer remains independent and consumes that view.
 context:
-  engine: compressor             # set to object_context to enable V1
+  engine: compressor             # set to object_context to enable Object Context
   object_context:
-    hot_tail_max_deltas: 8
-    hot_tail_token_budget_ratio: 0.25
-    context_soft_limit_ratio: 0.75
+    enabled: true
+    scheduler: economic          # economic (V1.1) | amortized_batch (V1.2)
+    hot_tail_max_inferences: 4   # V1.2 OR bound; prospective next boundary counts
+    hot_tail_max_tokens: 12800   # V1.2 OR bound; equality is within the limit
+    amortized_cache_read_weight: 0.10  # repeated-read cost weight, not a benefit
+    batch_policy: dynamic        # dynamic (W/Q + flush-all) | fixed (oldest N)
+    fixed_batch_size: 4          # eligible Pending Deltas; used by fixed only
+    # Pending caps are fixed at 2x: 8 buckets / 25,600 raw tokens. Equality is
+    # legal; strictly exceeding either cap forces flush-all before the next send.
+    min_raw_exposures: 1         # clamped to at least one
+    economic_min_net_saving_tokens: 1000
+    economic_min_net_saving_usd: null  # optional additional gate when priced
+    economic_cache_read_ratio_fallback: 0.10
+    economic_cache_write_ratio_fallback: 1.00
+    emergency_context_ratio: 0.90
     object_prefilter_min_tokens: 256
     min_absolute_saving_tokens: 128
     min_relative_saving_ratio: 0.25
-    summary_max_tokens: 64
+    # Summary inference is only for V1.1 economic normal and the shared
+    # emergency path (including V1.2 emergency). V1.2 amortized/capacity
+    # batches always use deterministic summary-free Cards.
+    card_summary_enabled: false
+    summary_max_tokens: 64        # only used on an enabled path above
     wm_grace_deltas: 20
     recent_retrieval_active_deltas: 20
     retrieval_max_tokens_ratio: 0.50

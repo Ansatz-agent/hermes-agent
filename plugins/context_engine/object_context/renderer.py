@@ -6,7 +6,6 @@ import copy
 from collections import defaultdict
 from typing import Any, Iterable, Sequence
 
-from .cards import render_retrieval_card
 from .detection import message_key
 
 
@@ -118,30 +117,4 @@ def project_compressed_messages(
             local["message_ordinal"] = 0
             local_rows.append(local)
         rendered[ordinal] = apply_occurrence_cards([message], local_rows)[0]
-    return rendered
-
-
-def project_historical_retrievals(
-    messages: Sequence[dict[str, Any]],
-    *,
-    event_lookup,
-    active_tool_call_ids: set[str],
-) -> list[dict[str, Any]]:
-    """Keep current leases raw and collapse older retrieval results to Cards."""
-
-    rendered = copy.deepcopy(list(messages))
-    for message in rendered:
-        if not isinstance(message, dict) or message.get("role") != "tool":
-            continue
-        tool_call_id = str(message.get("tool_call_id") or "")
-        if not tool_call_id or tool_call_id in active_tool_call_ids:
-            continue
-        event = event_lookup(tool_call_id)
-        if not event:
-            continue
-        message["content"] = render_retrieval_card(
-            object_ref=str(event["object_ref"]),
-            reason=str(event.get("reason") or ""),
-            status=str(event.get("status") or "unknown"),
-        )
     return rendered

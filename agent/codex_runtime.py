@@ -101,7 +101,12 @@ def _coerce_usage_int(value: Any) -> int:
     return 0
 
 
-def _record_codex_app_server_usage(agent, turn) -> dict[str, Any]:
+def _record_codex_app_server_usage(
+    agent,
+    turn,
+    *,
+    response_accepted: bool = True,
+) -> dict[str, Any]:
     """Translate Codex app-server token usage into Hermes accounting.
 
     Codex app-server reports usage via thread/tokenUsage/updated as:
@@ -120,14 +125,32 @@ def _record_codex_app_server_usage(agent, turn) -> dict[str, Any]:
     usage = getattr(turn, "token_usage_last", None)
     if not isinstance(usage, dict) or not usage:
         compressor = getattr(agent, "context_compressor", None)
-        if (
-            compressor is not None
-            and getattr(compressor, "awaiting_real_usage_after_compression", False)
+        if compressor is not None and (
+            getattr(compressor, "awaiting_real_usage_after_compression", False)
+            or getattr(
+                compressor,
+                "needs_success_notification_without_usage",
+                False,
+            )
         ):
             # No usage means this turn cannot adjudicate the pending compaction.
             # Consume the marker so a later unrelated reading is not charged to
-            # it and preflight deferral cannot stay latched indefinitely.
-            compressor.update_from_response({})
+            # it and preflight deferral cannot stay latched indefinitely. A
+            # request-scoped context engine can also explicitly opt in so a
+            # valid no-usage response still confirms its selected Raw view.
+            deferred_observer = getattr(compressor, "observe_response_usage", None)
+            if (
+                not response_accepted
+                and getattr(
+                    compressor,
+                    "defers_response_success_until_inference_commit",
+                    False,
+                )
+                and callable(deferred_observer)
+            ):
+                deferred_observer({})
+            else:
+                compressor.update_from_response({})
         if agent._session_db and agent.session_id:
             try:
                 if not agent._session_db_created:
@@ -183,7 +206,19 @@ def _record_codex_app_server_usage(agent, turn) -> dict[str, Any]:
     compressor = getattr(agent, "context_compressor", None)
     if compressor is not None:
         try:
-            compressor.update_from_response(usage_dict)
+            deferred_observer = getattr(compressor, "observe_response_usage", None)
+            if (
+                not response_accepted
+                and getattr(
+                    compressor,
+                    "defers_response_success_until_inference_commit",
+                    False,
+                )
+                and callable(deferred_observer)
+            ):
+                deferred_observer(usage_dict)
+            else:
+                compressor.update_from_response(usage_dict)
             context_window = getattr(turn, "model_context_window", None)
             if isinstance(context_window, int) and context_window > 0:
                 compressor.context_length = context_window
@@ -877,7 +912,11 @@ def run_codex_app_server_turn(
         getattr(agent, "_iters_since_skill", 0) + turn.tool_iterations
     )
     _record_codex_app_server_compaction(agent, turn)
-    usage_result = _record_codex_app_server_usage(agent, turn)
+    usage_result = _record_codex_app_server_usage(
+        agent,
+        turn,
+        response_accepted=(not turn.interrupted and turn.error is None),
+    )
     api_calls = 1
 
     # Now check the skill nudge AFTER iters were incremented — same

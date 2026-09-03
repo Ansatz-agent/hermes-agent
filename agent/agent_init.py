@@ -2509,8 +2509,25 @@ def init_agent(
     try:
         _ctx_cfg = _agent_cfg.get("context", {}) if isinstance(_agent_cfg, dict) else {}
         _engine_name = _ctx_cfg.get("engine", "compressor") or "compressor"
+        if _engine_name == "object_context":
+            _object_cfg = _ctx_cfg.get("object_context", {})
+            if isinstance(_object_cfg, dict) and _object_cfg.get("enabled") is False:
+                _engine_name = "compressor"
     except Exception:
         pass
+
+    if _engine_name == "object_context" and agent.api_mode == "codex_app_server":
+        # Codex app-server owns an opaque server-side thread and accepts only
+        # the next user input; Hermes cannot replace its historical provider
+        # message view with Q0/Qc. Loading Object Context here would expose a
+        # status surface whose Raw exposure, W and cache facts never describe
+        # the requests Codex actually sends. Fail explicitly to the built-in
+        # compressor until that transport offers a real context-selection API.
+        _ra().logger.warning(
+            "Object Context is unavailable with api_mode=codex_app_server; "
+            "falling back to the built-in compressor"
+        )
+        _engine_name = "compressor"
 
     if _engine_name != "compressor":
         # Try loading from plugins/context_engine/<name>/

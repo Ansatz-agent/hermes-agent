@@ -892,6 +892,55 @@ class TestMaxIterationsSummaryReplay:
         assert messages[0]["content"] == "q1"
         assert messages[0]["api_content"] == "q1\n\nPLUGIN-CTX"
 
+    def test_empty_summary_attempts_release_context_fence_without_success(self):
+        from run_agent import AIAgent
+        from agent.chat_completion_helpers import handle_max_iterations
+
+        agent = AIAgent(
+            api_key="test-key",
+            base_url="https://openrouter.ai/api/v1",
+            quiet_mode=True,
+            skip_context_files=True,
+            skip_memory=True,
+        )
+        agent._cached_system_prompt = "SYS"
+        rejected = MagicMock()
+        agent.context_compressor = types.SimpleNamespace(
+            defers_response_success_until_inference_commit=True,
+            confirm_response_rejected=rejected,
+        )
+
+        calls = []
+
+        class _Completions:
+            def create(self, **kwargs):
+                calls.append(kwargs)
+                return "EMPTY-RESPONSE"
+
+        client = types.SimpleNamespace(
+            chat=types.SimpleNamespace(completions=_Completions())
+        )
+        transport = types.SimpleNamespace(
+            normalize_response=lambda _response: types.SimpleNamespace(content="")
+        )
+        messages = [{"role": "user", "content": "work"}]
+
+        with patch.object(
+            agent, "_ensure_primary_openai_client", return_value=client
+        ), patch.object(
+            agent, "_get_transport", return_value=transport
+        ), patch(
+            "agent.conversation_loop._apply_context_engine_selection",
+            side_effect=lambda _agent, selected, *_args, **_kwargs: selected,
+        ):
+            out = handle_max_iterations(agent, messages, 5)
+
+        assert "iteration limit" in out
+        assert len(calls) == 2
+        rejected.assert_called_once_with()
+        assert agent._max_iterations_summary_local_fallback is True
+        assert not any(message.get("role") == "assistant" for message in messages)
+
 
 class TestSessionRowExistsBeforePreflightCompaction:
     """Moving the crash persist after prefetch/pre_llm_call (one write with

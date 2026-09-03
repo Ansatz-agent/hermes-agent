@@ -2808,6 +2808,11 @@ def try_activate_fallback(agent, reason: "FailoverReason | None" = None) -> bool
 
 def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
     """Request a summary when max iterations are reached. Returns the final response text."""
+    # The turn finalizer uses this one-shot provenance bit to distinguish a
+    # real accepted provider summary from our local error text.  Reset it at
+    # the start so a prior exhausted turn can never contaminate this one.
+    agent._max_iterations_summary_local_fallback = False
+    agent._max_iterations_summary_response_confirmed = False
     agent._safe_print(
         f"⚠️  Reached maximum iterations ({agent.max_iterations}). Requesting summary..."
     )
@@ -2917,6 +2922,42 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
             if isinstance(api_msg, dict):
                 for internal_key in [k for k in api_msg if isinstance(k, str) and k.startswith("_")]:
                     api_msg.pop(internal_key, None)
+
+        # The iteration-limit summary is a real provider inference and must
+        # obey the same request-time Object Context contract as the main loop.
+        # Apply selection only after structural sanitization, using the exact
+        # summary request view that will be sent.
+        from agent.conversation_loop import (
+            _apply_context_engine_selection,
+            _canonicalize_api_tool_calls,
+            _confirm_context_engine_response_accepted,
+        )
+        from agent.message_sanitization import _sanitize_messages_surrogates
+
+        def _select_summary_context(selected_messages):
+            for selected_message in selected_messages:
+                if isinstance(selected_message, dict) and isinstance(
+                    selected_message.get("content"), str
+                ):
+                    selected_message["content"] = selected_message[
+                        "content"
+                    ].strip()
+            _canonicalize_api_tool_calls(selected_messages)
+            _sanitize_messages_surrogates(selected_messages)
+            return _apply_context_engine_selection(
+                agent,
+                selected_messages,
+                messages,
+                messages[-1] if messages else None,
+                logger=logger,
+            )
+
+        def _confirm_summary_response() -> None:
+            agent._max_iterations_summary_response_confirmed = bool(
+                _confirm_context_engine_response_accepted(agent, logger=logger)
+            )
+
+        api_messages = _select_summary_context(api_messages)
 
         summary_extra_body = {}
         try:
@@ -3063,6 +3104,7 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
                 final_response = re.sub(r'<think>.*?</think>\s*', '', final_response, flags=re.DOTALL).strip()
             if final_response:
                 summary_call_outcome = "success"
+                _confirm_summary_response()
                 append_message(
                     messages,
                     {"role": "assistant", "content": final_response},
@@ -3071,6 +3113,7 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
                 final_response = "I reached the iteration limit and couldn't generate a summary."
         else:
             # Retry summary generation
+            api_messages = _select_summary_context(api_messages)
             if agent.api_mode == "codex_responses":
                 codex_kwargs = agent._build_api_kwargs(api_messages)
                 codex_kwargs.pop("tools", None)
@@ -3128,6 +3171,7 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
                     final_response = re.sub(r'<think>.*?</think>\s*', '', final_response, flags=re.DOTALL).strip()
                 if final_response:
                     summary_call_outcome = "success"
+                    _confirm_summary_response()
                     append_message(
                         messages,
                         {"role": "assistant", "content": final_response},
@@ -3141,6 +3185,25 @@ def handle_max_iterations(agent, messages: list, api_call_count: int) -> str:
         logger.warning("Failed to get summary response: %s", e)
         final_response = f"I reached the maximum iterations ({agent.max_iterations}) but couldn't summarize. Error: {str(e)}"
     finally:
+        if summary_call_outcome != "success":
+            # A selected summary request that returned empty content or raised
+            # never became an application-accepted inference.  Release Object
+            # Context's request-attempt fence without advancing Raw exposure,
+            # Hot age, or Pending waiting area.  The text returned below is a
+            # local UI fallback and must not later be registered as a Delta.
+            engine = getattr(agent, "context_compressor", None)
+            reject_response = getattr(engine, "confirm_response_rejected", None)
+            if callable(reject_response):
+                try:
+                    reject_response()
+                except Exception:
+                    logger.warning(
+                        "Context engine iteration-summary rejection failed "
+                        "(session=%s)",
+                        getattr(agent, "session_id", None) or "-",
+                        exc_info=True,
+                    )
+            agent._max_iterations_summary_local_fallback = True
         from agent import relay_llm
 
         relay_llm.complete_logical_call(

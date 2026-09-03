@@ -114,6 +114,63 @@ def _finalize(
     )
 
 
+def test_local_iteration_summary_fallback_is_synthetic_and_not_a_delta(monkeypatch):
+    monkeypatch.setattr("hermes_cli.plugins.invoke_hook", lambda *_a, **_kw: [])
+    agent = _LimitAgent()
+
+    def local_fallback(_messages, _api_call_count):
+        agent._handle_max_iterations_called = True
+        agent._max_iterations_summary_local_fallback = True
+        return "local summary error"
+
+    agent._handle_max_iterations = local_fallback
+    committed = []
+    monkeypatch.setattr(
+        "agent.conversation_loop._notify_context_engine_delta_committed",
+        lambda *_args, **kwargs: committed.append(kwargs),
+    )
+    monkeypatch.setattr(
+        "agent.conversation_loop._notify_context_engine_turn_complete",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = _finalize(agent, final_response=None, exit_reason="unknown")
+
+    assert result["final_response"] == "local summary error"
+    assert result["messages"][-1]["_iteration_summary_synthetic"] is True
+    assert committed == []
+    assert agent._max_iterations_summary_local_fallback is False
+
+
+def test_accepted_iteration_summary_remains_a_real_inference_delta(monkeypatch):
+    monkeypatch.setattr("hermes_cli.plugins.invoke_hook", lambda *_a, **_kw: [])
+    agent = _LimitAgent()
+
+    def accepted_summary(_messages, _api_call_count):
+        agent._handle_max_iterations_called = True
+        agent._max_iterations_summary_response_confirmed = True
+        return "summary from extra call"
+
+    agent._handle_max_iterations = accepted_summary
+    committed = []
+    monkeypatch.setattr(
+        "agent.conversation_loop._notify_context_engine_delta_committed",
+        lambda *_args, **kwargs: committed.append(kwargs),
+    )
+    monkeypatch.setattr(
+        "agent.conversation_loop._notify_context_engine_turn_complete",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = _finalize(agent, final_response=None, exit_reason="unknown")
+
+    assert result["messages"][-1].get("_iteration_summary_synthetic") is None
+    assert len(committed) == 1
+    assert committed[0]["kind"] == "inference"
+    assert committed[0]["response_already_confirmed"] is True
+    assert agent._max_iterations_summary_response_confirmed is False
+
+
 
 
 
@@ -233,5 +290,3 @@ def test_published_pending_candidate_is_not_duplicated_by_finalizer(monkeypatch)
     assert agent.persisted_messages is not None
     persisted_roles = [m["role"] for m in agent.persisted_messages]
     assert persisted_roles == ["user", "assistant"]
-
-

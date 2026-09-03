@@ -31,6 +31,9 @@ def _config():
                 "wm_grace_deltas": 20,
                 "recent_retrieval_active_deltas": 20,
                 "retrieval_max_tokens_ratio": 0.9,
+                "economic_min_net_saving_tokens": 1,
+                "economic_cache_read_ratio_fallback": 1.0,
+                "economic_cache_write_ratio_fallback": 1.0,
             },
         },
     }
@@ -223,6 +226,37 @@ def test_real_host_user_card_exact_retrieval_same_turn_and_next_turn_unload(tmp_
     )
 
 
+def test_real_host_outer_whitespace_payload_is_exposed_then_projected(tmp_path):
+    agent, db = _agent(tmp_path)
+    core = _large_json()
+    raw = f"  \n{core}\n  "
+    observed = []
+
+    def provider(**kwargs):
+        messages = kwargs["messages"]
+        observed.append(messages)
+        if len(observed) == 1:
+            assert messages[-1]["content"] == core
+            return _response("Stored the whitespace-wrapped payload.")
+        rendered = json.dumps(messages, ensure_ascii=False)
+        assert core not in rendered
+        assert "<OBJECT_CARD>" in rendered
+        return _response("Used the projected payload.")
+
+    agent.client.chat.completions.create.side_effect = provider
+    try:
+        first = agent.run_conversation(raw)
+        second = agent.run_conversation(
+            "Use the payload.", conversation_history=first["messages"]
+        )
+    finally:
+        db.close()
+
+    assert first["final_response"] == "Stored the whitespace-wrapped payload."
+    assert second["final_response"] == "Used the projected payload."
+    assert len(observed) == 2
+
+
 def test_real_host_multiple_tool_calls_form_one_delta_and_keep_pairing(tmp_path):
     agent, db = _agent(tmp_path, tools=("web_search",))
     large_result = json.dumps({
@@ -283,7 +317,46 @@ def test_real_host_multiple_tool_calls_form_one_delta_and_keep_pairing(tmp_path)
         "search-call-1",
         "search-call-2",
     }
-    assert all("<OBJECT_CARD>" in message["content"] for message in results)
+    if not all("<OBJECT_CARD>" in message["content"] for message in results):
+        raise AssertionError(
+            json.dumps(
+                {
+                    "results": [
+                        {
+                            "tool_call_id": message["tool_call_id"],
+                            "name": message.get("name"),
+                            "tool_name": message.get("tool_name"),
+                            "timestamp": message.get("timestamp"),
+                            "content": message["content"][:120],
+                        }
+                        for message in results
+                    ],
+                    "delta_state": tool_deltas[0].state.value,
+                    "raw_seen_count": tool_deltas[0].raw_seen_count,
+                    "raw_present_in_request": engine._raw_delta_present(
+                        tool_deltas[0], request
+                    ),
+                    "raw_messages": [
+                        {
+                            "role": message.get("role"),
+                            "tool_call_id": message.get("tool_call_id"),
+                            "name": message.get("name"),
+                            "tool_name": message.get("tool_name"),
+                            "content": str(message.get("content"))[:120],
+                        }
+                        for message in tool_deltas[0].raw_view
+                    ],
+                    "request_tool_calls": assistant.get("tool_calls"),
+                    "raw_tool_calls": tool_deltas[0].raw_view[0].get("tool_calls"),
+                    "projection_epoch_id": tool_deltas[0].projection_epoch_id,
+                    "decision": repr(engine._last_economic_decision),
+                    "occurrence_count": len(
+                        engine._store.occurrences_for_delta(tool_deltas[0].delta_id)
+                    ),
+                },
+                ensure_ascii=False,
+            )
+        )
     assert all(large_result not in message["content"] for message in results)
 
 
@@ -308,6 +381,33 @@ def test_provider_retry_commits_one_user_and_one_successful_inference_delta(tmp_
     assert len({delta.delta_id for delta in deltas}) == 2
     assert deltas[0].raw_view[0]["content"] == "Retry this provider request."
     assert deltas[1].raw_view[0]["content"] == "Succeeded after retry."
+    assert deltas[0].raw_seen_count == 1
+    # The provider adapter retries the identical already-selected request; it
+    # does not invoke the request-selection hook a second time.
+    assert deltas[0].first_seen_request_sequence == 1
+    assert deltas[0].last_seen_request_sequence == 1
+    assert deltas[1].raw_seen_count == 0
+
+
+def test_success_without_usage_confirms_only_raw_deltas_in_provider_request(tmp_path):
+    agent, db = _agent(tmp_path)
+    agent.client.chat.completions.create.return_value = _response(
+        "Successful response without usage."
+    )
+
+    try:
+        result = agent.run_conversation("Count this raw request.")
+    finally:
+        db.close()
+
+    assert result["final_response"] == "Successful response without usage."
+    deltas = agent.context_compressor._store.list_deltas("host-e2e")
+    assert [delta.kind for delta in deltas] == ["user", "inference"]
+    assert deltas[0].raw_seen_count == 1
+    assert deltas[0].first_seen_request_sequence == 1
+    # The final assistant Delta is committed after this provider request and
+    # therefore remains unseen until it appears raw in a later successful one.
+    assert deltas[1].raw_seen_count == 0
 
 
 def test_real_host_synthetic_auto_continue_creates_no_v1_delta(tmp_path):

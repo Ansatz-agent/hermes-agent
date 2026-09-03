@@ -1742,15 +1742,33 @@ DEFAULT_CONFIG = {
     # a plugin in plugins/context_engine/<name>/ or ~/.hermes/plugins/.
     "context": {
         "engine": "compressor",
-        # Optional Context Compression Strategy V1 engine. These settings are
+        # Optional Object Context V1.1/V1.2 engine. These settings are
         # inert unless context.engine is explicitly set to "object_context".
         "object_context": {
-            "hot_tail_max_deltas": 8,
-            "hot_tail_token_budget_ratio": 0.25,
-            "context_soft_limit_ratio": 0.75,
+            "enabled": True,
+            "scheduler": "economic",
+            # V1.2 Hot Tail uses these as OR bounds. Pending hard caps are
+            # derived at 2x; equality is legal, so no pending override exists.
+            "hot_tail_max_inferences": 4,
+            "hot_tail_max_tokens": 12800,
+            # Repeated-read cost weight for V1.2 amortized crossing. The fixed
+            # intercept is F0=0 and intentionally has no configuration key.
+            "amortized_cache_read_weight": 0.10,
+            # V1.2 dynamic preserves the W/Q crossing + flush-all policy.
+            # fixed waits for N eligible Pending Deltas and publishes the
+            # oldest N; capacity/emergency remain explicit safety overrides.
+            "batch_policy": "dynamic",
+            "fixed_batch_size": 4,
+            "min_raw_exposures": 1,
+            "economic_min_net_saving_tokens": 1000,
+            "economic_min_net_saving_usd": None,
+            "economic_cache_read_ratio_fallback": 0.10,
+            "economic_cache_write_ratio_fallback": 1.00,
+            "emergency_context_ratio": 0.90,
             "object_prefilter_min_tokens": 256,
             "min_absolute_saving_tokens": 128,
             "min_relative_saving_ratio": 0.25,
+            "card_summary_enabled": False,
             "summary_max_tokens": 64,
             "wm_grace_deltas": 20,
             "recent_retrieval_active_deltas": 20,

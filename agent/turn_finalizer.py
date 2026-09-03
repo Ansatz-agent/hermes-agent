@@ -110,6 +110,8 @@ def finalize_turn(
     )
 
     iteration_limit_fallback = False
+    iteration_summary_local_fallback = False
+    iteration_summary_response_confirmed = False
     preserved_verification_fallback = False
     if continuation_budget_exhausted:
         # A verification/continuation gate deliberately withheld a composed
@@ -141,6 +143,16 @@ def finalize_turn(
                 "— requesting summary..."
             )
         final_response = agent._handle_max_iterations(messages, api_call_count)
+        iteration_summary_local_fallback = bool(
+            getattr(agent, "_max_iterations_summary_local_fallback", False)
+        )
+        iteration_summary_response_confirmed = bool(
+            getattr(agent, "_max_iterations_summary_response_confirmed", False)
+        )
+        # Consume the helper's one-shot marker now.  The local variable remains
+        # authoritative for the rest of this finalization only.
+        agent._max_iterations_summary_local_fallback = False
+        agent._max_iterations_summary_response_confirmed = False
         iteration_limit_fallback = True
 
     if iteration_limit_fallback:
@@ -316,10 +328,13 @@ def finalize_turn(
             if _tail_role != "assistant":
                 # Tail is not an assistant row — append the final response
                 # so the durable turn closes with the answer (#43849/#44100).
-                append_message(
-                    messages,
-                    {"role": "assistant", "content": final_response},
-                )
+                _closing_message = {
+                    "role": "assistant",
+                    "content": final_response,
+                }
+                if iteration_summary_local_fallback:
+                    _closing_message["_iteration_summary_synthetic"] = True
+                append_message(messages, _closing_message)
             elif isinstance(_tail, dict) and _tail.get("content") != final_response and _is_pure_tool_call_tail(_tail):
                 # The tail IS an assistant row, but a *pure tool-call turn*:
                 # tool_calls with no text of its own. The role check alone
@@ -336,6 +351,8 @@ def finalize_turn(
                 # candidate collapse — the provisional answer was persisted and
                 # reused as the terminal response, #65919 §7).
                 _tail["content"] = final_response
+                if iteration_summary_local_fallback:
+                    _tail["_iteration_summary_synthetic"] = True
                 # The normal assistant builder already stamps this row. Cover
                 # legacy/exceptional pure-tool tails before they become a
                 # delivered final response.
@@ -665,6 +682,7 @@ def finalize_turn(
                         "_empty_terminal_sentinel",
                         "_dropped_toolcall_nudge",
                         "_kanban_stop_synthetic",
+                        "_iteration_summary_synthetic",
                     )
                 ):
                     break
@@ -681,6 +699,9 @@ def finalize_turn(
                     logger=logger,
                     source_start_index=_final_assistant_index,
                     usage=_turn_usage,
+                    response_already_confirmed=(
+                        iteration_summary_response_confirmed
+                    ),
                 )
 
         _notify_context_engine_turn_complete(

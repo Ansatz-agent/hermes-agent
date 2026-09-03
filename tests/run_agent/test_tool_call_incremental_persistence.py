@@ -247,6 +247,44 @@ def test_failed_assistant_persist_blocks_ui_projection_and_tool_side_effects():
     assert isinstance(result.get("error"), str) and result["error"].strip() != ""
 
 
+def test_accepted_tool_call_confirms_context_before_tool_result_failure():
+    """A durable provider reply remains accepted if downstream tooling fails."""
+
+    agent = _make_agent()
+    tool_call = _mock_tool_call(call_id="accepted-before-tool-failure")
+    agent.client.chat.completions.create.return_value = _mock_response(
+        content="I'll inspect it now.",
+        finish_reason="tool_calls",
+        tool_calls=[tool_call],
+    )
+    context_engine = SimpleNamespace(
+        select_after_message_sanitization=False,
+        select_context=MagicMock(return_value=None),
+        defers_response_success_until_inference_commit=True,
+        needs_success_notification_without_usage=False,
+        confirm_response_accepted=MagicMock(),
+        on_delta_committed=MagicMock(),
+    )
+    agent.context_compressor = context_engine
+    agent._flush_messages_to_session_db = MagicMock(return_value=True)
+
+    def _fail_after_provider_acceptance(*_args, **_kwargs):
+        agent._incremental_persistence_failed = True
+
+    agent._execute_tool_calls = MagicMock(side_effect=_fail_after_provider_acceptance)
+
+    result = agent.run_conversation("inspect the repository")
+
+    assert result["turn_exit_reason"] == "session_persistence_failed"
+    context_engine.confirm_response_accepted.assert_called_once_with()
+    # The real user boundary is registered, but the incomplete assistant/tool
+    # causal group is not. The already accepted provider request is nevertheless
+    # counted exactly once.
+    assert [
+        call.args[0].kind for call in context_engine.on_delta_committed.call_args_list
+    ] == ["user"]
+
+
 def test_locked_flush_exception_surfaces_locked_cause_in_result_contract():
     """SQLite write-lock contention must surface as a 'locked' cause.
 

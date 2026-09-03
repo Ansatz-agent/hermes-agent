@@ -236,15 +236,27 @@ def test_card_schema_is_stable_immutable_and_benefit_gated():
         record,
         summary="Prints one directly specified value.",
         contains={"language": "python", "functions": []},
+        origin={
+            "role": "tool",
+            "tool": "read_file",
+            "operation": "read",
+            "target": "demo.py",
+        },
     )
     first = render_card(card)
     second = render_card(card)
     assert first == second
     assert first.startswith(CARD_OPEN) and first.endswith(CARD_CLOSE)
     payload = parse_card_text(first)
-    assert payload["schema_version"] == "1.0"
+    assert payload["schema_version"] == "1.1"
     assert payload["object_ref"].endswith("@v1")
     assert payload["language"] == "python"
+    assert payload["origin"] == {
+        "operation": "read",
+        "role": "tool",
+        "target": "demo.py",
+        "tool": "read_file",
+    }
     assert "sha256" not in payload and "physical_path" not in payload
 
     assert benefit_gate(
@@ -259,6 +271,26 @@ def test_card_schema_is_stable_immutable_and_benefit_gated():
         min_absolute_saving_tokens=10,
         min_relative_saving_ratio=0.1,
     )[0]
+
+
+def test_card_without_semantic_summary_omits_field_but_keeps_origin():
+    record = replace(
+        _record(ObjectType.STRUCTURED_DATA, '{"key": "value"}'),
+        name="request payload",
+    )
+    card = build_card(
+        record,
+        summary="",
+        contains={"format": "json", "top_level_keys": ["key"]},
+        origin={"role": "user"},
+    )
+
+    payload = parse_card_text(render_card(card))
+
+    assert payload["schema_version"] == "1.1"
+    assert "summary" not in payload
+    assert payload["origin"] == {"role": "user"}
+    assert payload["contains"]["top_level_keys"] == ["key"]
 
 
 def test_renderer_replaces_only_exact_span_and_preserves_multimodal_parts():

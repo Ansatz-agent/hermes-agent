@@ -170,6 +170,38 @@ _HANDOFF_SKIP_FINAL_RESPONSE = (
 INTERRUPT_WAITING_FOR_MODEL_PREFIX = "Operation interrupted: waiting for model response ("
 
 
+def _record_persistence_isolated_main_usage(
+    agent: Any, usage: Any, *, estimated_cost_usd: Optional[float]
+) -> bool:
+    """Record model usage for a fork that must not persist its transcript."""
+
+    session_db = getattr(agent, "_isolated_main_usage_session_db", None)
+    session_id = getattr(agent, "_isolated_main_usage_session_id", None)
+    task = str(getattr(agent, "_isolated_main_usage_task", "") or "")
+    if session_db is None or not session_id or not task:
+        return False
+    try:
+        session_db.record_auxiliary_usage(
+            session_id,
+            task,
+            model=agent.model,
+            billing_provider=agent.provider,
+            billing_base_url=agent.base_url,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            cache_read_tokens=usage.cache_read_tokens,
+            cache_write_tokens=usage.cache_write_tokens,
+            reasoning_tokens=usage.reasoning_tokens,
+            estimated_cost_usd=estimated_cost_usd,
+        )
+        return True
+    except Exception:
+        logger.debug(
+            "Persistence-isolated main usage recording failed", exc_info=True
+        )
+        return False
+
+
 def _should_rearm_compression_budget(
     compression_attempts: int,
     *,
@@ -1608,6 +1640,39 @@ def _notify_context_engine_turn_complete(
         )
 
 
+def _confirm_context_engine_response_accepted(agent: Any, *, logger: Any) -> bool:
+    """Consume one selected request after application-level acceptance.
+
+    Returns whether the deferred engine callback completed.  Tool-call replies
+    are accepted as soon as their assistant row is durable, before tool-result
+    execution; the returned flag lets the later complete-Delta publication
+    avoid invoking the same callback twice while still retrying if the early
+    callback itself raised.
+    """
+
+    engine = getattr(agent, "context_compressor", None)
+    if engine is None or not getattr(
+        engine,
+        "defers_response_success_until_inference_commit",
+        False,
+    ):
+        return False
+    confirm_response = getattr(engine, "confirm_response_accepted", None)
+    if not callable(confirm_response):
+        return False
+    try:
+        confirm_response()
+        return True
+    except Exception:
+        logger.warning(
+            "Context engine accepted-response notification failed "
+            "(session=%s)",
+            getattr(agent, "session_id", None) or "-",
+            exc_info=True,
+        )
+        return False
+
+
 def _notify_context_engine_delta_committed(
     agent: Any,
     *,
@@ -1619,6 +1684,7 @@ def _notify_context_engine_delta_committed(
     inference_id: str = "",
     source_start_index: int = -1,
     usage: Optional[Dict[str, Any]] = None,
+    response_already_confirmed: bool = False,
 ) -> None:
     """Publish one immutable causal Delta to the active Context Engine.
 
@@ -1661,6 +1727,9 @@ def _notify_context_engine_delta_committed(
         agent._context_engine_committed_delta_ids = committed
     if delta_id in committed:
         return
+
+    if normalized_kind == "inference" and not response_already_confirmed:
+        _confirm_context_engine_response_accepted(agent, logger=logger)
 
     conversation_id = ""
     root_resolver = getattr(agent, "_conversation_root_id", None)
@@ -2362,13 +2431,21 @@ def run_conversation(
             if 0 <= current_turn_user_idx < len(messages)
             else None
         )
-        api_messages = _apply_context_engine_selection(
-            agent,
-            api_messages,
-            messages,
-            _sel_incoming,
-            logger=request_logger,
+        _selection_after_sanitization = bool(
+            getattr(
+                agent.context_compressor,
+                "select_after_message_sanitization",
+                False,
+            )
         )
+        if not _selection_after_sanitization:
+            api_messages = _apply_context_engine_selection(
+                agent,
+                api_messages,
+                messages,
+                _sel_incoming,
+                logger=request_logger,
+            )
 
         # Safety net: strip orphaned tool results / add stubs for missing
         # results before sending to the API.  Runs unconditionally — not
@@ -2405,6 +2482,19 @@ def run_conversation(
         # lone surrogates (U+D800-U+DFFF) that crash json.dumps() inside
         # the OpenAI SDK. Sanitizing here prevents the 3-retry cycle.
         _sanitize_messages_surrogates(api_messages)
+
+        if _selection_after_sanitization:
+            # Object Context computes L0/Lc and snapshots Raw presence from
+            # this canonical transport-facing view. Running it earlier would
+            # count messages later dropped by orphan/thinking repair and would
+            # compare a sanitized previous success with an unsanitized Q0.
+            api_messages = _apply_context_engine_selection(
+                agent,
+                api_messages,
+                messages,
+                _sel_incoming,
+                logger=request_logger,
+            )
 
         # NOTE (empty-content class fix): no send-time pad loop here.  The
         # single owner for "never send a turn strict wire validation rejects
@@ -4009,7 +4099,22 @@ def run_conversation(
                             False,
                         )
                     )
-                    agent.context_compressor.update_from_response(usage_dict)
+                    _deferred_usage_observer = getattr(
+                        agent.context_compressor,
+                        "observe_response_usage",
+                        None,
+                    )
+                    if (
+                        getattr(
+                            agent.context_compressor,
+                            "defers_response_success_until_inference_commit",
+                            False,
+                        )
+                        and callable(_deferred_usage_observer)
+                    ):
+                        _deferred_usage_observer(usage_dict)
+                    else:
+                        agent.context_compressor.update_from_response(usage_dict)
                     _compression_threshold = int(
                         getattr(agent.context_compressor, "threshold_tokens", 0)
                         or 0
@@ -4050,17 +4155,40 @@ def run_conversation(
                     # of interest is the cost/size of the latest assembled
                     # request, so we keep the most recent call's usage.
                     agent._last_turn_usage = dict(usage_dict)
-                elif getattr(
-                    agent.context_compressor,
-                    "awaiting_real_usage_after_compression",
-                    False,
+                elif (
+                    getattr(
+                        agent.context_compressor,
+                        "awaiting_real_usage_after_compression",
+                        False,
+                    )
+                    or getattr(
+                        agent.context_compressor,
+                        "needs_success_notification_without_usage",
+                        False,
+                    )
                 ):
-                    # A response with no usage cannot adjudicate whether the
-                    # prior compaction cleared the threshold. Consume the pending
-                    # verdict now so a much later, unrelated reading is not
-                    # charged to that old compaction, and so preflight deferral
-                    # does not remain latched indefinitely.
-                    agent.context_compressor.update_from_response({})
+                    # A response with no usage still completes request-scoped
+                    # lifecycle state. The legacy compressor consumes a pending
+                    # effectiveness verdict; engines that explicitly opt in can
+                    # confirm a successful selection/exposure without treating
+                    # the absent counters as measured zero-token telemetry.
+                    _deferred_usage_observer = getattr(
+                        agent.context_compressor,
+                        "observe_response_usage",
+                        None,
+                    )
+                    if (
+                        getattr(
+                            agent.context_compressor,
+                            "defers_response_success_until_inference_commit",
+                            False,
+                        )
+                        and callable(_deferred_usage_observer)
+                    ):
+                        _deferred_usage_observer({})
+                    else:
+                        agent.context_compressor.update_from_response({})
+                    agent._last_turn_usage = {}
 
                 if hasattr(response, 'usage') and response.usage:
                     # Cache discovered context length after successful call.
@@ -4137,6 +4265,30 @@ def run_conversation(
                     agent.session_cost_status = cost_result.status
                     agent.session_cost_source = cost_result.source
 
+                    # Per-call cost delta = aggregator cost + MoA advisor cost
+                    # (each priced at its own rate). Reused by both normal
+                    # session persistence and persistence-isolated fork
+                    # accounting below.
+                    _cost_delta = None
+                    if cost_result.amount_usd is not None:
+                        _cost_delta = float(cost_result.amount_usd)
+                    if _moa_ref_cost is not None:
+                        try:
+                            _cost_delta = (_cost_delta or 0.0) + float(_moa_ref_cost)
+                        except (TypeError, ValueError):  # pragma: no cover
+                            pass
+
+                    # Background-review forks deliberately have no live
+                    # _session_db so they cannot persist their harness/messages.
+                    # Their model usage is still real provider spend, however;
+                    # record only that numeric delta as an auxiliary task on
+                    # the parent conversation.
+                    _record_persistence_isolated_main_usage(
+                        agent,
+                        canonical_usage,
+                        estimated_cost_usd=_cost_delta,
+                    )
+
                     # Persist token counts to session DB for /insights.
                     # Do this for every platform with a session_id so non-CLI
                     # sessions (gateway, cron, delegated runs) cannot lose
@@ -4154,18 +4306,6 @@ def run_conversation(
                             # affects 0 rows without error).
                             if not agent._session_db_created:
                                 agent._ensure_db_session()
-                            # Per-call cost delta = aggregator cost + MoA
-                            # advisor cost (each priced at its own rate). Folded
-                            # here so state.db's estimated_cost_usd includes the
-                            # full MoA spend, matching the folded token counts.
-                            _cost_delta = None
-                            if cost_result.amount_usd is not None:
-                                _cost_delta = float(cost_result.amount_usd)
-                            if _moa_ref_cost is not None:
-                                try:
-                                    _cost_delta = (_cost_delta or 0.0) + float(_moa_ref_cost)
-                                except (TypeError, ValueError):  # pragma: no cover
-                                    pass
                             # Enqueued, not written: the background writer
                             # applies the delta off the turn thread (a cold
                             # state.db UPDATE here stalled the tool loop for
@@ -7236,6 +7376,15 @@ def run_conversation(
                     failed = True
                     break
 
+                # The provider inference is application-accepted once its
+                # canonical assistant tool-call row is durable. Tool execution
+                # and tool-result persistence are separate downstream work;
+                # failure there must not erase the request that already read
+                # Raw Pending context or delay its success boundary.
+                _tool_response_confirmed = _confirm_context_engine_response_accepted(
+                    agent, logger=logger
+                )
+
                 # A UI must never observe an assistant/tool-call row that is
                 # still only an ephemeral in-memory projection. Emit interim
                 # commentary only after the canonical SessionDB append above.
@@ -7275,6 +7424,7 @@ def run_conversation(
                     logger=logger,
                     source_start_index=_inference_delta_start,
                     usage=getattr(agent, "_last_turn_usage", None),
+                    response_already_confirmed=_tool_response_confirmed,
                 )
 
                 if agent._tool_guardrail_halt_decision is not None:

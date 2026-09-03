@@ -11,11 +11,13 @@ from .models import ObjectCard, ObjectRecord
 from .store import ObjectContextStore, canonical_json
 
 
-CARD_SCHEMA_VERSION = "1.0"
+CARD_SCHEMA_VERSION = "1.1"
+RETRIEVAL_CARD_SCHEMA_VERSION = "1.1"
 CARD_OPEN = "<OBJECT_CARD>"
 CARD_CLOSE = "</OBJECT_CARD>"
 RETRIEVAL_CARD_OPEN = "<RETRIEVAL_CARD>"
 RETRIEVAL_CARD_CLOSE = "</RETRIEVAL_CARD>"
+_ORIGIN_KEYS = frozenset({"role", "tool", "operation", "target"})
 
 
 def build_card(
@@ -23,6 +25,7 @@ def build_card(
     *,
     summary: str,
     contains: dict[str, Any],
+    origin: dict[str, Any] | None = None,
 ) -> ObjectCard:
     card = ObjectCard(
         schema_version=CARD_SCHEMA_VERSION,
@@ -34,6 +37,7 @@ def build_card(
         language=record.language,
         summary=str(summary or "").strip(),
         contains=contains if isinstance(contains, dict) else {},
+        origin=origin if isinstance(origin, dict) else {},
         metadata={
             key: record.metadata[key]
             for key in ("format", "mime_type")
@@ -55,8 +59,16 @@ def validate_card(card: ObjectCard) -> None:
     object_id, version = parsed
     if object_id != card.object_id or version != card.version:
         raise ValueError("Card identity fields disagree")
-    if not card.summary:
-        raise ValueError("Card summary must be non-empty")
+    if not isinstance(card.origin, dict):
+        raise ValueError("Card origin must be a mapping")
+    unexpected_origin_keys = set(card.origin).difference(_ORIGIN_KEYS)
+    if unexpected_origin_keys:
+        raise ValueError("Card origin contains unsupported fields")
+    if any(
+        not isinstance(value, str) or not value.strip()
+        for value in card.origin.values()
+    ):
+        raise ValueError("Card origin values must be non-empty strings")
     if "@latest" in card.object_ref:
         raise ValueError("historical Card cannot use latest")
 
@@ -69,9 +81,12 @@ def card_payload(card: ObjectCard) -> dict[str, Any]:
         "version": card.version,
         "type": card.object_type.value,
         "name": card.name,
-        "summary": card.summary,
         "contains": card.contains,
     }
+    if card.summary:
+        payload["summary"] = card.summary
+    if card.origin:
+        payload["origin"] = card.origin
     if card.language:
         payload["language"] = card.language
     if card.metadata:
@@ -91,18 +106,14 @@ def render_card(card: ObjectCard) -> str:
 def render_retrieval_card(
     *,
     object_ref: str,
-    reason: str,
-    status: str,
-    scope: str = "full_object",
+    status: str = "success",
 ) -> str:
     if ObjectContextStore.parse_object_ref(object_ref) is None:
         raise ValueError("malformed retrieval object_ref")
     payload = {
-        "schema_version": CARD_SCHEMA_VERSION,
+        "schema_version": RETRIEVAL_CARD_SCHEMA_VERSION,
         "object_ref": object_ref,
         "action": "retrieved",
-        "scope": scope,
-        "reason": str(reason or ""),
         "status": str(status or "unknown"),
     }
     return f"{RETRIEVAL_CARD_OPEN}\n{canonical_json(payload)}\n{RETRIEVAL_CARD_CLOSE}"

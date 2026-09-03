@@ -4097,6 +4097,11 @@ class TestRunConversation:
         proceeds."""
         self._setup_agent(agent)
         agent.valid_tool_names.add("write_file")
+        agent.context_compressor.needs_success_notification_without_usage = True
+        agent.context_compressor.defers_response_success_until_inference_commit = True
+        agent.context_compressor.observe_response_usage = MagicMock()
+        agent.context_compressor.confirm_response_accepted = MagicMock()
+        agent.context_compressor.on_delta_committed = MagicMock()
         bad_tc = _mock_tool_call(
             name="write_file",
             arguments='{"path":"report.md","content":"partial',
@@ -4130,6 +4135,10 @@ class TestRunConversation:
         # Tool was executed on the retry (good_resp)
         mock_hfc.assert_called_once()
         assert result["final_response"] == "Done!"
+        # The truncated first attempt is application-rejected before the
+        # accepted-response observation seam and must not advance exposure/W.
+        assert agent.context_compressor.observe_response_usage.call_count == 2
+        assert agent.context_compressor.confirm_response_accepted.call_count == 2
 
     def test_stub_stall_mid_tool_call_recovers_within_3_retries(self, agent):
         """A network stream stall mid tool-call (PARTIAL_STREAM_STUB_ID) must

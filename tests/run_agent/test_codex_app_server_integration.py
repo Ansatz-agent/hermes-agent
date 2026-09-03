@@ -18,6 +18,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import run_agent
+from agent.codex_runtime import _record_codex_app_server_usage
 from agent.transports.codex_app_server_session import CodexAppServerSession, TurnResult
 
 
@@ -73,6 +74,87 @@ class TestApiModeAccepted:
 
 
 class TestRunConversationCodexPath:
+    def test_no_usage_notifies_opted_in_context_engine(self):
+        compressor = SimpleNamespace(
+            awaiting_real_usage_after_compression=False,
+            needs_success_notification_without_usage=True,
+            update_from_response=MagicMock(),
+        )
+        agent = SimpleNamespace(
+            context_compressor=compressor,
+            session_api_calls=0,
+            _session_db=None,
+            session_id="session-no-usage",
+            _session_db_created=False,
+            model="test-model",
+            provider="openai",
+            base_url="https://stub.invalid",
+        )
+        turn = SimpleNamespace(token_usage_last=None)
+
+        assert _record_codex_app_server_usage(agent, turn) == {}
+
+        assert agent.session_api_calls == 1
+        compressor.update_from_response.assert_called_once_with({})
+
+    @pytest.mark.parametrize(
+        "usage",
+        [
+            None,
+            {
+                "totalTokens": 10,
+                "inputTokens": 8,
+                "cachedInputTokens": 2,
+                "outputTokens": 2,
+                "reasoningOutputTokens": 0,
+            },
+        ],
+    )
+    def test_rejected_turn_observes_usage_without_confirming_deferred_engine(
+        self, usage
+    ):
+        compressor = SimpleNamespace(
+            awaiting_real_usage_after_compression=False,
+            needs_success_notification_without_usage=True,
+            defers_response_success_until_inference_commit=True,
+            observe_response_usage=MagicMock(),
+            update_from_response=MagicMock(),
+        )
+        agent = SimpleNamespace(
+            context_compressor=compressor,
+            session_api_calls=0,
+            session_prompt_tokens=0,
+            session_completion_tokens=0,
+            session_total_tokens=0,
+            session_input_tokens=0,
+            session_output_tokens=0,
+            session_cache_read_tokens=0,
+            session_cache_write_tokens=0,
+            session_reasoning_tokens=0,
+            session_estimated_cost_usd=0.0,
+            session_cost_status="unknown",
+            session_cost_source="",
+            _session_db=None,
+            session_id="session-rejected",
+            _session_db_created=False,
+            model="test-model",
+            provider="openai",
+            base_url="https://stub.invalid",
+        )
+        turn = SimpleNamespace(
+            token_usage_last=usage,
+            model_context_window=None,
+        )
+
+        _record_codex_app_server_usage(
+            agent,
+            turn,
+            response_accepted=False,
+        )
+
+        compressor.observe_response_usage.assert_called_once()
+        compressor.update_from_response.assert_not_called()
+
     def test_run_conversation_returns_codex_shape(self, fake_session):
         agent = _make_codex_agent()
         # No background review fork during tests

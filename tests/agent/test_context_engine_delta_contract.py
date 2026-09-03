@@ -38,6 +38,17 @@ class _CapturingEngine(_BaseEngine):
         self.deltas.append(delta)
 
 
+class _DeferredCapturingEngine(_CapturingEngine):
+    defers_response_success_until_inference_commit = True
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.accepted_notifications = 0
+
+    def confirm_response_accepted(self) -> None:
+        self.accepted_notifications += 1
+
+
 def _agent(engine: ContextEngine) -> SimpleNamespace:
     return SimpleNamespace(
         context_compressor=engine,
@@ -145,6 +156,55 @@ def test_user_and_inference_sequences_have_distinct_ids():
         "turn-2:inference:1",
     ]
     assert [delta.kind for delta in engine.deltas] == ["user", "inference"]
+
+
+def test_deferred_success_is_confirmed_once_at_inference_commit_only():
+    engine = _DeferredCapturingEngine()
+    agent = _agent(engine)
+
+    _notify_context_engine_delta_committed(
+        agent,
+        kind="user",
+        turn_id="turn-deferred",
+        sequence=0,
+        delta_messages=[{"role": "user", "content": "question"}],
+        logger=logging.getLogger(__name__),
+    )
+    for _ in range(2):
+        _notify_context_engine_delta_committed(
+            agent,
+            kind="inference",
+            turn_id="turn-deferred",
+            sequence=1,
+            delta_messages=[{"role": "assistant", "content": "accepted"}],
+            logger=logging.getLogger(__name__),
+        )
+
+    assert engine.accepted_notifications == 1
+    assert [delta.delta_id for delta in engine.deltas] == [
+        "turn-deferred:user:0",
+        "turn-deferred:inference:1",
+    ]
+
+
+def test_preconfirmed_inference_delta_does_not_repeat_success_callback():
+    engine = _DeferredCapturingEngine()
+    agent = _agent(engine)
+
+    _notify_context_engine_delta_committed(
+        agent,
+        kind="inference",
+        turn_id="turn-preconfirmed",
+        sequence=1,
+        delta_messages=[{"role": "assistant", "content": "accepted"}],
+        logger=logging.getLogger(__name__),
+        response_already_confirmed=True,
+    )
+
+    assert engine.accepted_notifications == 0
+    assert [delta.delta_id for delta in engine.deltas] == [
+        "turn-preconfirmed:inference:1"
+    ]
 
 
 def test_declared_synthetic_run_cannot_emit_user_or_inference_deltas():

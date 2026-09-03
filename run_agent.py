@@ -6335,6 +6335,7 @@ class AIAgent:
             self._is_anthropic_oauth = _is_oauth_token(runtime_key) if self.provider == "anthropic" else False
             self.api_key = runtime_key
             self.base_url = runtime_base.rstrip("/") if isinstance(runtime_base, str) else runtime_base
+            self._notify_context_engine_credential_route()
             return
 
         self.api_key = runtime_key
@@ -6343,6 +6344,33 @@ class AIAgent:
         self._client_kwargs["base_url"] = self.base_url
         self._reapply_route_client_config(route_changed=route_changed)
         self._replace_primary_openai_client(reason="credential_rotation")
+        self._notify_context_engine_credential_route()
+
+    def _notify_context_engine_credential_route(self) -> None:
+        """Invalidate cache facts when a credential/account namespace changes."""
+
+        engine = getattr(self, "context_compressor", None)
+        update = getattr(engine, "update_model", None)
+        if not callable(update):
+            return
+        try:
+            update(
+                model=self.model,
+                context_length=max(
+                    1,
+                    int(getattr(engine, "context_length", 0) or 1),
+                ),
+                base_url=self.base_url,
+                api_key=self.api_key,
+                provider=self.provider,
+                api_mode=self.api_mode,
+            )
+        except Exception:
+            logger.warning(
+                "Context engine credential-route invalidation failed; "
+                "request processing remains available",
+                exc_info=True,
+            )
 
     def _reapply_route_client_config(self, *, route_changed: bool) -> None:
         """Recompute route-derived client kwargs for the current ``self.base_url``.
@@ -8648,8 +8676,16 @@ class AIAgent:
             # dimension) — the fix for aux spend being invisible in analytics
             # (issue #23270).
             acct_token = set_accounting_context(
-                getattr(self, "_session_db", None),
-                getattr(self, "session_id", None),
+                getattr(
+                    self,
+                    "_aux_accounting_session_db",
+                    getattr(self, "_session_db", None),
+                ),
+                getattr(
+                    self,
+                    "_aux_accounting_session_id",
+                    getattr(self, "session_id", None),
+                ),
             )
             from agent.auxiliary_client import scoped_runtime_main
 
