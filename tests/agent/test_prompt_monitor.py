@@ -122,6 +122,62 @@ def test_capture_preserves_prompt_view_redacts_and_drops_transport_fields(
         assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
 
 
+def test_capture_keeps_json_valid_for_secret_like_source_assignments(tmp_path: Path):
+    content = "\n".join(
+        f'example_{index}.py:{100 + index}: AUTH_USER_MODEL = "auth.User{index}"'
+        for index in range(5)
+    )
+    request = {
+        "model": "test-model",
+        "messages": [
+            {"role": "user", "content": "inspect the search results"},
+            {"role": "tool", "name": "search_files", "content": content},
+        ],
+    }
+    original = json.loads(json.dumps(request))
+
+    path = capture_llm_request(
+        request,
+        source="main",
+        settings=PromptMonitorSettings(enabled=True, max_files=10),
+        hermes_home=tmp_path,
+    )
+
+    assert path is not None and path.is_file()
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    body = payload["request"]["body"]
+    assert [message["role"] for message in body["messages"]] == ["user", "tool"]
+    assert body["messages"][1]["name"] == "search_files"
+    assert "AUTH_USER_MODEL" in body["messages"][1]["content"]
+    assert request == original
+
+
+def test_capture_masks_opaque_values_in_sensitive_structured_fields(tmp_path: Path):
+    opaque = "opaque-credential-without-a-known-provider-prefix"
+    request = {
+        "model": "test-model",
+        "messages": [{"role": "user", "content": "hello"}],
+        "metadata": {
+            "api_key": opaque,
+            "token_count": opaque,
+        },
+    }
+
+    path = capture_llm_request(
+        request,
+        source="main",
+        settings=PromptMonitorSettings(enabled=True, max_files=10),
+        hermes_home=tmp_path,
+    )
+
+    assert path is not None
+    metadata = json.loads(path.read_text(encoding="utf-8"))["request"]["body"][
+        "metadata"
+    ]
+    assert metadata["api_key"] != opaque
+    assert metadata["token_count"] == opaque
+
+
 def test_auxiliary_capture_can_be_excluded(tmp_path: Path):
     path = capture_llm_request(
         _request(),

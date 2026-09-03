@@ -12,6 +12,7 @@ import os
 import re
 import shlex
 import threading
+from collections.abc import Mapping
 from urllib.parse import unquote_plus
 
 # Basenames treated as ``.env`` files by _command_reads_env_file. Imported
@@ -63,6 +64,37 @@ _SENSITIVE_BODY_KEYS = frozenset({
     "private_key",
     "authorization",
     "key",
+})
+
+# Exact field names whose scalar values must be masked when redacting a
+# structured payload. This intentionally avoids substring matching (for
+# example, ``token_count`` is not a credential) while covering the JSON-field
+# and header names handled by the text redactor. Both underscored and compact
+# API-key spellings are normalized by ``_is_structured_secret_key`` below.
+_STRUCTURED_SECRET_KEYS = frozenset({
+    "access_token",
+    "api_key",
+    "apikey",
+    "auth",
+    "auth_token",
+    "authorization",
+    "bearer",
+    "client_secret",
+    "credential",
+    "id_token",
+    "jwt",
+    "key_material",
+    "password",
+    "passwd",
+    "private_key",
+    "proxy_authorization",
+    "raw_secret",
+    "refresh_token",
+    "secret",
+    "secret_input",
+    "secret_value",
+    "token",
+    "x_api_key",
 })
 
 # Snapshot at import time so runtime env mutations (e.g. LLM-generated
@@ -1007,6 +1039,68 @@ def redact_sensitive_text(
         text = _SIGNAL_PHONE_RE.sub(_redact_phone, text)
 
     return text
+
+
+def _is_structured_secret_key(value) -> bool:
+    """Return whether a mapping key directly names a credential value."""
+
+    normalized = str(value).strip().casefold().replace("-", "_")
+    return normalized in _STRUCTURED_SECRET_KEYS
+
+
+def redact_sensitive_structure(value, *, force: bool = False):
+    """Redact a JSON-like value without ever rewriting its serialization.
+
+    Running regex substitutions over an already-serialized JSON document is
+    unsafe: source-code text such as ``AUTH_USER_MODEL = \"auth.User\"`` may
+    be mistaken for an environment credential, and a head/tail mask can split
+    the document's escaped quote or newline boundary. Walking scalar values
+    first keeps JSON punctuation outside the redactor's reach; the caller can
+    serialize the returned structure afterward with normal escaping.
+
+    Exact credential-named mapping fields receive key-aware masking so opaque
+    values remain protected even when their text has no recognizable vendor
+    prefix. If the text redactor itself fails, the affected scalar is replaced
+    with a closed sentinel instead of returning potentially sensitive text or
+    making the entire monitoring payload unavailable.
+    """
+
+    def _visit(item, *, sensitive: bool = False):
+        if isinstance(item, Mapping):
+            return {
+                str(key): _visit(
+                    child,
+                    sensitive=sensitive or _is_structured_secret_key(key),
+                )
+                for key, child in item.items()
+            }
+        if isinstance(item, (list, tuple)):
+            return [_visit(child, sensitive=sensitive) for child in item]
+        if sensitive:
+            if item is None:
+                return None
+            return _mask_token(str(item))
+        if isinstance(item, str):
+            try:
+                return redact_sensitive_text(item, force=force)
+            except Exception:
+                logger.warning(
+                    "Could not redact a structured string value; replacing it",
+                    exc_info=True,
+                )
+                return "[redaction-unavailable]"
+        if item is None or isinstance(item, (bool, int, float)):
+            return item
+        try:
+            return redact_sensitive_text(str(item), force=force)
+        except Exception:
+            logger.warning(
+                "Could not redact a structured scalar value; replacing it",
+                exc_info=True,
+            )
+            return "[redaction-unavailable]"
+
+    return _visit(value)
 
 
 # Commands whose stdout is an environment-variable dump (KEY=value lines),

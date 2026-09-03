@@ -1937,12 +1937,11 @@ def dump_api_request_debug(
         # full request body (system prompt, tool defs, context-embedded
         # values), and this path fires unconditionally on API errors — so it
         # otherwise lands any context-embedded secret in cleartext on disk.
-        # Run the serialized dump through the same scrubber used for logs/tool
-        # output, then hand the resulting payload back to the shared atomic
-        # JSON writer so request dumps keep the same write semantics as before.
-        from agent.redact import redact_sensitive_text
-        _serialized = json.dumps(dump_payload, ensure_ascii=False, indent=2, default=str)
-        _redacted_payload = json.loads(redact_sensitive_text(_serialized, force=True))
+        # Redact the copied scalar values before serialization so source-code
+        # quotes/backslashes cannot be mistaken for JSON syntax and corrupt the
+        # diagnostic dump.
+        from agent.redact import redact_sensitive_structure
+        _redacted_payload = redact_sensitive_structure(dump_payload, force=True)
         atomic_json_write(dump_file, _redacted_payload, default=str)
 
         agent._vprint(f"{agent.log_prefix}🧾 Request debug dump written to: {dump_file}")

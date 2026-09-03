@@ -1915,6 +1915,36 @@ def test_dump_api_request_debug_uses_chat_completions_url(monkeypatch, tmp_path)
     assert payload["request"]["url"] == "http://127.0.0.1:9208/v1/chat/completions"
 
 
+def test_dump_api_request_debug_keeps_secret_like_source_json_valid(
+    monkeypatch, tmp_path
+):
+    """Source assignments must not corrupt the serialized debug breadcrumb."""
+    import json
+
+    agent = _build_agent(monkeypatch)
+    agent.logs_dir = tmp_path
+    content = "\n".join(
+        f'example_{index}.py:{100 + index}: AUTH_USER_MODEL = "auth.User{index}"'
+        for index in range(5)
+    )
+
+    dump_file = agent._dump_api_request_debug(
+        {
+            "model": "gpt-5.6-luna",
+            "messages": [
+                {"role": "tool", "name": "search_files", "content": content}
+            ],
+        },
+        reason="preflight",
+    )
+
+    payload = json.loads(dump_file.read_text(encoding="utf-8"))
+    message = payload["request"]["body"]["messages"][0]
+    assert message["role"] == "tool"
+    assert message["name"] == "search_files"
+    assert "AUTH_USER_MODEL" in message["content"]
+
+
 
 
 # --- Reasoning-only response tests (fix for empty content retry loop) ---

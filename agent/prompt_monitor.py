@@ -130,12 +130,14 @@ def _request_body_copy(request_kwargs: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _redacted_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
-    """Redact after serialization so secrets nested anywhere are covered."""
+    """Redact scalar values while keeping JSON structure serializer-owned."""
 
-    from agent.redact import redact_sensitive_text
+    from agent.redact import redact_sensitive_structure
 
-    serialized = json.dumps(payload, ensure_ascii=False, indent=2, default=str)
-    return json.loads(redact_sensitive_text(serialized, force=True))
+    redacted = redact_sensitive_structure(payload, force=True)
+    if not isinstance(redacted, dict):  # pragma: no cover - Mapping contract
+        raise TypeError("redacted prompt-monitor payload is not an object")
+    return redacted
 
 
 def _ensure_private_directory(directory: Path) -> None:
