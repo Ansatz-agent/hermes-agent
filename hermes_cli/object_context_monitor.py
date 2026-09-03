@@ -2,22 +2,545 @@
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
+import logging
 import math
 import os
+import secrets
+import threading
 from collections import OrderedDict
 from datetime import datetime
 from html import escape
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from hermes_constants import get_hermes_home
 from utils import atomic_write_text
 
 
-MONITOR_SCHEMA_VERSION = 7
+MONITOR_SCHEMA_VERSION = 12
 MONITOR_DIRNAME = "object-context-monitor"
+_EXCLUDED_AUXILIARY_TASKS = frozenset({"background_review"})
+_MONITOR_LOOPBACK_HOST = "127.0.0.1"
+logger = logging.getLogger(__name__)
+_DECISION_EXPORT_FIELDS = (
+    "projection_epoch_id",
+    "request_attempt_id",
+    "request_sequence",
+    "decision_kind",
+    "decision_mode",
+    "decision_reason",
+    "candidate_count",
+    "member_delta_ids",
+    "member_object_refs",
+    "earliest_changed_delta_id",
+    "baseline_prompt_tokens",
+    "candidate_prompt_tokens",
+    "gross_tokens_removed",
+    "card_or_receipt_tokens",
+    "baseline_reusable_prefix_tokens",
+    "candidate_reusable_prefix_tokens",
+    "cache_tokens_invalidated",
+    "cache_penalty_equivalent_tokens",
+    "known_summary_cost_equivalent_tokens",
+    "net_saving_equivalent_tokens",
+    "net_saving_usd",
+    "cache_read_weight",
+    "cache_write_weight",
+    "pricing_source",
+    "pricing_version",
+    "estimator_source",
+    "policy_version",
+    "created_at",
+)
+_AMORTIZED_EXPORT_FIELDS = (
+    *_DECISION_EXPORT_FIELDS,
+    "batch_policy",
+    "fixed_batch_size",
+    "baseline_state",
+    "cache_granularity_tokens",
+    "hot_underexposed_count",
+    "hot_seen_delta_count",
+    "hot_seen_bucket_count",
+    "hot_tail_tokens",
+    "hot_overflow_tokens",
+    "hot_start_token_offset",
+    "pending_delta_count",
+    "pending_bucket_count",
+    "pending_raw_tokens",
+    "pending_gain_tokens",
+    "wait_area_token_requests",
+    "wait_loss_now",
+    "wait_loss_increment",
+    "wait_loss_projected",
+    "shared_cached_hot_tokens",
+    "shared_overhead_equivalent_tokens",
+    "crossing_margin",
+    "emergency_triggered",
+    "pending_count_over",
+    "pending_tokens_over",
+    "amortized_crossed",
+    "immediate_crossed",
+    "amortized_cache_read_weight",
+    "amortized_baseline_prompt_tokens",
+    "amortized_candidate_prompt_tokens",
+    "amortized_baseline_reusable_prefix_tokens",
+    "amortized_candidate_reusable_prefix_tokens",
+    "immediate_cache_penalty_equivalent_tokens",
+    "immediate_net_saving_equivalent_tokens",
+    "immediate_net_saving_usd",
+    "immediate_cache_read_weight",
+    "immediate_cache_write_weight",
+    "immediate_pricing_source",
+    "immediate_pricing_version",
+)
+
+
+class _MonitorHTTPServer(ThreadingHTTPServer):
+    """Loopback-only HTTP transport for a live monitor document."""
+
+    daemon_threads = True
+    block_on_close = False
+    request_queue_size = 5
+
+
+class _MonitorRequestHandler(BaseHTTPRequestHandler):
+    """Serve exactly one unguessable monitor route without HTTP caching."""
+
+    protocol_version = "HTTP/1.1"
+    server_version = "AnsatzObjectContextMonitor"
+    sys_version = ""
+
+    def _monitor_server(self) -> "ObjectContextMonitorServer":
+        return getattr(self.server, "monitor")
+
+    def _authorized(self) -> bool:
+        monitor = self._monitor_server()
+        path = self.path.partition("?")[0]
+        host = str(self.headers.get("Host") or "")
+        return secrets.compare_digest(path, monitor.route_path) and (
+            secrets.compare_digest(host, monitor.authority)
+        )
+
+    def _send_common_headers(self, *, content_type: str, length: int) -> None:
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(length))
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Cross-Origin-Resource-Policy", "same-origin")
+        self.send_header(
+            "Permissions-Policy",
+            "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+        )
+
+    def _send_plain(self, status: int, message: str, *, include_body: bool) -> None:
+        body = message.encode("utf-8")
+        self.send_response(status)
+        self._send_common_headers(
+            content_type="text/plain; charset=utf-8",
+            length=len(body),
+        )
+        self.end_headers()
+        if include_body:
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+
+    def _serve_monitor(self, *, include_body: bool) -> None:
+        if not self._authorized():
+            self._send_plain(404, "Not found\n", include_body=include_body)
+            return
+        try:
+            body = self._monitor_server().render_latest().encode("utf-8")
+        except Exception as exc:
+            logger.debug(
+                "Object Context live monitor render failed (%s)",
+                type(exc).__name__,
+            )
+            self._send_plain(
+                503,
+                "Monitor data is temporarily unavailable. Refresh to retry.\n",
+                include_body=include_body,
+            )
+            return
+        self.send_response(200)
+        self._send_common_headers(
+            content_type="text/html; charset=utf-8",
+            length=len(body),
+        )
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'none'; script-src 'unsafe-inline'; "
+            "style-src 'unsafe-inline'; img-src 'self' data:; "
+            "connect-src 'none'; base-uri 'none'; form-action 'none'; "
+            "frame-ancestors 'none'",
+        )
+        self.end_headers()
+        if include_body:
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                pass
+
+    def do_GET(self) -> None:  # noqa: N802 - stdlib handler contract
+        self._serve_monitor(include_body=True)
+
+    def do_HEAD(self) -> None:  # noqa: N802 - stdlib handler contract
+        self._serve_monitor(include_body=False)
+
+    def log_message(self, _format: str, *_args: Any) -> None:
+        """Keep browser refreshes out of the interactive CLI transcript."""
+
+
+class ObjectContextMonitorServer:
+    """A process-local live view backed by a fresh telemetry loader per GET."""
+
+    def __init__(
+        self,
+        server: _MonitorHTTPServer,
+        *,
+        route_path: str,
+        timeline_loader: Callable[[], Mapping[str, Any] | None],
+        initial_timeline: Mapping[str, Any],
+    ) -> None:
+        self._server = server
+        self._timeline_loader = timeline_loader
+        self._latest_timeline = dict(initial_timeline)
+        self._latest_html = render_monitor_html(self._latest_timeline)
+        self._load_lock = threading.Lock()
+        self._close_lock = threading.Lock()
+        self._closed = False
+        self.route_path = route_path
+        port = int(server.server_address[1])
+        self.authority = f"{_MONITOR_LOOPBACK_HOST}:{port}"
+        self.url = f"http://{self.authority}{route_path}"
+        self._thread = threading.Thread(
+            target=server.serve_forever,
+            kwargs={"poll_interval": 0.1},
+            daemon=True,
+            name="object-context-monitor-http",
+        )
+        setattr(server, "monitor", self)
+        try:
+            self._thread.start()
+        except BaseException:
+            self._closed = True
+            server.server_close()
+            raise
+        atexit.register(self.close)
+
+    @property
+    def is_running(self) -> bool:
+        return not self._closed and self._thread.is_alive()
+
+    def render_latest(self) -> str:
+        """Reload persisted telemetry and fall back to the last good document."""
+
+        with self._load_lock:
+            candidate: Mapping[str, Any] | None = None
+            try:
+                loaded = self._timeline_loader()
+                if isinstance(loaded, Mapping):
+                    candidate = dict(loaded)
+            except Exception as exc:
+                logger.debug(
+                    "Object Context live monitor reload failed (%s); using last snapshot",
+                    type(exc).__name__,
+                )
+
+            if candidate is not None:
+                try:
+                    rendered = render_monitor_html(candidate)
+                except Exception as exc:
+                    logger.debug(
+                        "Object Context live monitor rejected refreshed telemetry (%s); "
+                        "using last snapshot",
+                        type(exc).__name__,
+                    )
+                else:
+                    self._latest_timeline = dict(candidate)
+                    self._latest_html = rendered
+                    return rendered
+            return self._latest_html
+
+    def close(self) -> None:
+        """Stop accepting refreshes and release the loopback socket."""
+
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+        try:
+            if self._thread.is_alive():
+                self._server.shutdown()
+        finally:
+            self._server.server_close()
+            if threading.current_thread() is not self._thread:
+                self._thread.join(timeout=1.0)
+            try:
+                atexit.unregister(self.close)
+            except Exception:
+                pass
+
+
+def start_monitor_server(
+    *,
+    timeline_loader: Callable[[], Mapping[str, Any] | None],
+    initial_timeline: Mapping[str, Any],
+) -> ObjectContextMonitorServer:
+    """Start a token-gated monitor on an ephemeral IPv4 loopback port."""
+
+    route_path = f"/{secrets.token_urlsafe(24)}/"
+    server = _MonitorHTTPServer(
+        (_MONITOR_LOOPBACK_HOST, 0),
+        _MonitorRequestHandler,
+    )
+    try:
+        return ObjectContextMonitorServer(
+            server,
+            route_path=route_path,
+            timeline_loader=timeline_loader,
+            initial_timeline=initial_timeline,
+        )
+    except BaseException:
+        server.server_close()
+        raise
+
+
+_AMORTIZED_SIGNAL_FIELDS = frozenset(
+    field
+    for field in _AMORTIZED_EXPORT_FIELDS
+    if field not in _DECISION_EXPORT_FIELDS
+    and field
+    not in {"baseline_state", "cache_granularity_tokens", "emergency_triggered"}
+)
+_AMORTIZED_FLAG_FIELDS = frozenset({
+    "emergency_triggered",
+    "pending_count_over",
+    "pending_tokens_over",
+    "amortized_crossed",
+    "immediate_crossed",
+})
+_DECISION_TOKEN_FIELDS = frozenset({
+    "projection_epoch_id",
+    "request_attempt_id",
+    "decision_kind",
+    "decision_mode",
+    "decision_reason",
+    "pricing_source",
+    "pricing_version",
+    "estimator_source",
+    "policy_version",
+    "baseline_state",
+    "batch_policy",
+    "earliest_changed_delta_id",
+    "immediate_pricing_source",
+    "immediate_pricing_version",
+})
+_REQUEST_OBSERVATION_EXPORT_FIELDS = (
+    "request_attempt_id",
+    "success_sequence",
+    "exposure_request_sequence",
+    "route_namespace_hash",
+    "outcome",
+    "raw_delta_count",
+    "accrued_delta_count",
+    "skipped_pending_delta_count",
+    "newly_eligible_delta_count",
+    "created_at",
+)
+_DECISION_NONNEGATIVE_INTEGER_FIELDS = frozenset({
+    "request_sequence",
+    "candidate_count",
+    "baseline_prompt_tokens",
+    "candidate_prompt_tokens",
+    "gross_tokens_removed",
+    "card_or_receipt_tokens",
+    "baseline_reusable_prefix_tokens",
+    "candidate_reusable_prefix_tokens",
+    "cache_tokens_invalidated",
+    "cache_granularity_tokens",
+    "fixed_batch_size",
+    "hot_underexposed_count",
+    "hot_seen_delta_count",
+    "hot_seen_bucket_count",
+    "hot_tail_tokens",
+    "hot_overflow_tokens",
+    "hot_start_token_offset",
+    "pending_delta_count",
+    "pending_bucket_count",
+    "pending_raw_tokens",
+    "pending_gain_tokens",
+    "shared_cached_hot_tokens",
+    "amortized_baseline_prompt_tokens",
+    "amortized_candidate_prompt_tokens",
+    "amortized_baseline_reusable_prefix_tokens",
+    "amortized_candidate_reusable_prefix_tokens",
+})
+_DECISION_NONNEGATIVE_NUMBER_FIELDS = frozenset({
+    "cache_penalty_equivalent_tokens",
+    "known_summary_cost_equivalent_tokens",
+    "cache_read_weight",
+    "cache_write_weight",
+    "wait_area_token_requests",
+    "wait_loss_now",
+    "wait_loss_increment",
+    "wait_loss_projected",
+    "shared_overhead_equivalent_tokens",
+    "amortized_cache_read_weight",
+    "immediate_cache_penalty_equivalent_tokens",
+    "immediate_cache_read_weight",
+    "immediate_cache_write_weight",
+    "created_at",
+})
+_DECISION_SIGNED_NUMBER_FIELDS = frozenset({
+    "net_saving_equivalent_tokens",
+    "net_saving_usd",
+    "crossing_margin",
+    "immediate_net_saving_equivalent_tokens",
+    "immediate_net_saving_usd",
+})
+
+
+def _content_free_token(value: Any) -> str:
+    text = str(value or "").strip()
+    if not (1 <= len(text) <= 128):
+        return ""
+    if not all(
+        character.isascii()
+        and (character.isalnum() or character in "._:+-/@")
+        for character in text
+    ):
+        return ""
+    return text
+
+
+def _optional_finite_number(value: Any, *, nonnegative: bool) -> float | None:
+    if value is None or isinstance(value, (bool, str, bytes, bytearray)):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number) or (nonnegative and number < 0):
+        return None
+    return number
+
+
+def _optional_nonnegative_integer(value: Any) -> int | None:
+    number = _optional_finite_number(value, nonnegative=True)
+    if number is None or not number.is_integer():
+        return None
+    return int(number)
+
+
+def _is_v12_decision(decision: Mapping[str, Any]) -> bool:
+    """Recognize explicit and early V1.2 rows without relabelling V1.1."""
+
+    version = str(decision.get("policy_version") or "").strip().casefold()
+    version_tokens = (
+        version.replace("_", "-").replace(":", "-").split("-")
+        if version
+        else ()
+    )
+    explicit_v12 = any(
+        token in {"1.2", "v1.2"}
+        or token.startswith(("1.2.", "v1.2."))
+        for token in version_tokens
+    )
+    if explicit_v12:
+        return True
+    if version:
+        return False
+    return any(decision.get(field) is not None for field in _AMORTIZED_SIGNAL_FIELDS)
+
+
+def _decision_counts(
+    decisions: Sequence[Mapping[str, Any]], field: str
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for decision in decisions:
+        value = _content_free_token(decision.get(field))
+        if value:
+            counts[value] = counts.get(value, 0) + 1
+    return counts
+
+
+def _decision_flag(decision: Mapping[str, Any], field: str) -> bool:
+    return decision.get(field) is True
+
+
+def _sanitize_decision(
+    decision: Mapping[str, Any], fields: Sequence[str]
+) -> dict[str, Any]:
+    """Copy only the audited content-free decision telemetry contract."""
+
+    sanitized = {field: decision.get(field) for field in fields}
+    for field in _DECISION_TOKEN_FIELDS.intersection(fields):
+        value = _content_free_token(decision.get(field))
+        sanitized[field] = value or None
+    for field in ("member_delta_ids", "member_object_refs"):
+        if field not in fields:
+            continue
+        raw_values = decision.get(field)
+        values = (
+            raw_values
+            if isinstance(raw_values, Sequence)
+            and not isinstance(raw_values, (str, bytes, bytearray))
+            else ()
+        )
+        sanitized[field] = [
+            token
+            for token in (_content_free_token(value) for value in values)
+            if token
+        ]
+    for field in _AMORTIZED_FLAG_FIELDS.intersection(fields):
+        value = decision.get(field)
+        sanitized[field] = value if isinstance(value, bool) else None
+    for field in _DECISION_NONNEGATIVE_INTEGER_FIELDS.intersection(fields):
+        sanitized[field] = _optional_nonnegative_integer(decision.get(field))
+    for field in _DECISION_NONNEGATIVE_NUMBER_FIELDS.intersection(fields):
+        sanitized[field] = _optional_finite_number(
+            decision.get(field), nonnegative=True
+        )
+    for field in _DECISION_SIGNED_NUMBER_FIELDS.intersection(fields):
+        sanitized[field] = _optional_finite_number(
+            decision.get(field), nonnegative=False
+        )
+    return sanitized
+
+
+def _sanitize_request_observation(observation: Mapping[str, Any]) -> dict[str, Any]:
+    """Whitelist the store's content-free successful-request summary."""
+
+    sanitized = {
+        field: observation.get(field)
+        for field in _REQUEST_OBSERVATION_EXPORT_FIELDS
+    }
+    for field in ("request_attempt_id", "route_namespace_hash", "outcome"):
+        value = _content_free_token(observation.get(field))
+        sanitized[field] = value or None
+    for field in (
+        "success_sequence",
+        "exposure_request_sequence",
+        "raw_delta_count",
+        "accrued_delta_count",
+        "skipped_pending_delta_count",
+        "newly_eligible_delta_count",
+    ):
+        sanitized[field] = _optional_nonnegative_integer(observation.get(field))
+    sanitized["created_at"] = _optional_finite_number(
+        observation.get("created_at"), nonnegative=True
+    )
+    return sanitized
 
 
 def _finite_nonnegative(value: Any) -> float:
@@ -28,6 +551,14 @@ def _finite_nonnegative(value: Any) -> float:
     if not math.isfinite(number):
         return 0.0
     return max(0.0, number)
+
+
+def _finite_number(value: Any) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return number if math.isfinite(number) else 0.0
 
 
 def _cumulative(values: Sequence[float]) -> list[float]:
@@ -71,6 +602,11 @@ def _metric(event: Mapping[str, Any], name: str) -> float:
     return _finite_nonnegative(metrics.get(name))
 
 
+def _has_metrics(event: Mapping[str, Any], *names: str) -> bool:
+    metrics = event.get("metrics")
+    return isinstance(metrics, Mapping) and all(name in metrics for name in names)
+
+
 def _sequence_label(event: Mapping[str, Any], fallback: int) -> str:
     try:
         sequence = int(event.get("projection_sequence") or fallback)
@@ -79,15 +615,213 @@ def _sequence_label(event: Mapping[str, Any], fallback: int) -> str:
     return f"P{max(1, sequence)}"
 
 
+def _auxiliary_total(row: Mapping[str, Any]) -> float:
+    if "total_tokens" in row:
+        return _finite_nonnegative(row.get("total_tokens"))
+    return sum(
+        _finite_nonnegative(row.get(field))
+        for field in (
+            "input_tokens",
+            "output_tokens",
+            "cache_read_tokens",
+            "cache_write_tokens",
+        )
+    )
+
+
+def _compression_overhead(
+    timeline: Mapping[str, Any], *, gross_saved: float, project_count: int
+) -> dict[str, Any]:
+    """Build a non-double-counting compression overhead ledger.
+
+    Provider usage rows are exact when the provider returned usage.  Schema,
+    Card-text, and retrieved-payload values are rough token estimates.  Card
+    text and retrieved payload already live in the rendered conversation view,
+    so they are exposed for diagnosis but never subtracted a second time.
+    """
+
+    usage_rows = [
+        row
+        for row in timeline.get("auxiliary_usage") or []
+        if isinstance(row, Mapping)
+        and str(row.get("task") or "").strip()
+        not in _EXCLUDED_AUXILIARY_TASKS
+    ]
+    by_task: dict[str, dict[str, float]] = {}
+    for row in usage_rows:
+        task = str(row.get("task") or "").strip()
+        if not task:
+            continue
+        aggregate = by_task.setdefault(task, {"tokens": 0.0, "calls": 0.0})
+        aggregate["tokens"] += _auxiliary_total(row)
+        aggregate["calls"] += _finite_nonnegative(row.get("api_call_count"))
+
+    card_usage = by_task.get("object_context_card_summary", {})
+    legacy_usage = by_task.get("compression", {})
+    card_inference = _finite_nonnegative(card_usage.get("tokens"))
+    card_calls = int(_finite_nonnegative(card_usage.get("calls")))
+    summary_inference = _finite_nonnegative(legacy_usage.get("tokens"))
+    summary_calls = int(_finite_nonnegative(legacy_usage.get("calls")))
+    exact_inference = card_inference + summary_inference
+
+    raw_metrics = timeline.get("object_context_metrics")
+    metrics = raw_metrics if isinstance(raw_metrics, Mapping) else {}
+    card_text = _finite_nonnegative(metrics.get("card_tokens"))
+    retrieved_payload = _finite_nonnegative(metrics.get("retrieved_tokens"))
+    card_attempts = int(_finite_nonnegative(metrics.get("card_summary_attempts")))
+    summary_fallbacks = int(_finite_nonnegative(metrics.get("summary_fallbacks")))
+    retrieval_count = int(_finite_nonnegative(metrics.get("retrieval_count")))
+    schema_per_request = _finite_nonnegative(
+        timeline.get("retrieve_object_schema_tokens_per_request")
+    )
+    schema_tokens = schema_per_request * max(0, int(project_count))
+    known_overhead = exact_inference + schema_tokens
+    known_net = _finite_number(gross_saved) - known_overhead
+
+    other_auxiliary = sum(
+        values["tokens"]
+        for task, values in by_task.items()
+        if task not in {"compression", "object_context_card_summary"}
+    )
+    all_auxiliary = exact_inference + other_auxiliary
+    unmetered_attempts = max(0, card_attempts - card_calls)
+    legacy_ambiguous = bool(summary_calls and project_count)
+    legacy_metric_gap = bool(card_text and card_attempts == 0 and card_calls == 0)
+    coverage_complete = not (
+        unmetered_attempts or legacy_ambiguous or legacy_metric_gap
+    )
+    if legacy_ambiguous:
+        coverage_label = "历史 combined task：普通 summary 与旧 Card 无法拆分"
+    elif legacy_metric_gap:
+        coverage_label = "历史 Card 缺少 attempt/provider usage 明细"
+    elif unmetered_attempts:
+        coverage_label = (
+            f"{unmetered_attempts} 次 Card attempt 无 provider usage；"
+            "可能为失败、限流或无 usage 响应"
+        )
+    else:
+        coverage_label = "已记录的 compression inference usage 完整"
+
+    components = [
+        {
+            "key": "object_context_card_summary",
+            "label": "OC Card summary inference",
+            "tokens": round(card_inference, 6),
+            "calls": card_calls,
+            "measurement": "provider usage · exact",
+            "treatment": "从 Gross Saved 扣除",
+            "deducted": True,
+        },
+        {
+            "key": "compression",
+            "label": "Context summary / legacy Card inference",
+            "tokens": round(summary_inference, 6),
+            "calls": summary_calls,
+            "measurement": "provider usage · exact, historical task may be combined",
+            "treatment": "从 Gross Saved 扣除",
+            "deducted": True,
+        },
+        {
+            "key": "retrieve_object_schema",
+            "label": "retrieve_object tool schema",
+            "tokens": round(schema_tokens, 6),
+            "calls": max(0, int(project_count)),
+            "measurement": (
+                f"rough estimate · {round(schema_per_request, 6):g} tok/request"
+            ),
+            "treatment": "从 Gross Saved 扣除",
+            "deducted": True,
+        },
+        {
+            "key": "object_card_text",
+            "label": "OBJECT_CARD text footprint",
+            "tokens": round(card_text, 6),
+            "calls": card_attempts,
+            "measurement": "rough message-token estimate",
+            "treatment": "已在 rendered 中，不二次扣除",
+            "deducted": False,
+        },
+        {
+            "key": "retrieved_payload",
+            "label": "Retrieved payload / continuation",
+            "tokens": round(retrieved_payload, 6),
+            "calls": retrieval_count,
+            "measurement": "rough message-token estimate",
+            "treatment": "已在 rendered 中，不二次扣除",
+            "deducted": False,
+        },
+    ]
+    for task, values in sorted(by_task.items()):
+        if task in {"compression", "object_context_card_summary"}:
+            continue
+        components.append(
+            {
+                "key": f"auxiliary:{task}",
+                "label": f"Other auxiliary · {task}",
+                "tokens": round(values["tokens"], 6),
+                "calls": int(values["calls"]),
+                "measurement": "provider usage · exact",
+                "treatment": "非 compression；仅计入 Known Provider",
+                "deducted": False,
+            }
+        )
+    return {
+        "gross_saved_tokens": round(gross_saved, 6),
+        "exact_inference_tokens": round(exact_inference, 6),
+        "rough_schema_tokens": round(schema_tokens, 6),
+        "known_overhead_tokens": round(known_overhead, 6),
+        "known_net_saved_tokens": round(known_net, 6),
+        "card_text_tokens": round(card_text, 6),
+        "retrieved_payload_tokens": round(retrieved_payload, 6),
+        "other_auxiliary_tokens": round(other_auxiliary, 6),
+        "all_auxiliary_tokens": round(all_auxiliary, 6),
+        "card_summary_attempts": card_attempts,
+        "recorded_card_summary_calls": card_calls,
+        "unmetered_card_summary_attempts": unmetered_attempts,
+        "summary_fallbacks": summary_fallbacks,
+        "coverage_complete": coverage_complete,
+        "coverage_label": coverage_label,
+        "limitations": [
+            "provider failures/retries without usage cannot be assigned exact tokens",
+            "schema estimate counts projected requests; transport retries may add unmetered schema",
+        ],
+        "components": components,
+    }
+
+
 def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
     """Build one session's content-free chart payload."""
 
     raw_events = timeline.get("projections")
-    events = [event for event in raw_events or [] if isinstance(event, Mapping)]
+    all_events = [
+        event for event in raw_events or [] if isinstance(event, Mapping)
+    ]
     raw_requests = timeline.get("requests")
     requests = [
         event for event in raw_requests or [] if isinstance(event, Mapping)
     ]
+    # Background-review agents deliberately reuse the parent conversation's
+    # Object Context store, so their projections carry the same
+    # ``conversation_id``.  Durable SessionDB request usage, however, contains
+    # only the user-facing main loop.  When that exact request identity exists,
+    # retain projections only for its turns.  Legacy projections have no turn
+    # identity and remain visible rather than being silently erased; sessions
+    # without any request timeline likewise preserve historical behavior.
+    main_turn_ids = {
+        str(event.get("turn_id") or "").strip()
+        for event in requests
+        if str(event.get("turn_id") or "").strip()
+    }
+    events = (
+        [
+            event
+            for event in all_events
+            if bool(event.get("legacy"))
+            or str(event.get("turn_id") or "").strip() in main_turn_ids
+        ]
+        if main_turn_ids
+        else all_events
+    )
     legacy_count = sum(1 for event in events if bool(event.get("legacy")))
     turnless_count = sum(
         1
@@ -97,6 +831,75 @@ def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
     request_turnless_count = sum(
         1 for event in requests if not str(event.get("turn_id") or "")
     )
+
+    all_decisions: list[dict[str, Any]] = []
+    seen_decision_ids: set[str] = set()
+    for source_name in ("economic_decisions", "amortized_decisions"):
+        raw_decisions = timeline.get(source_name)
+        for decision in raw_decisions or []:
+            if not isinstance(decision, Mapping):
+                continue
+            copied = dict(decision)
+            identity = str(copied.get("projection_epoch_id") or "").strip()
+            if identity and identity in seen_decision_ids:
+                continue
+            if identity:
+                seen_decision_ids.add(identity)
+            all_decisions.append(copied)
+    amortized_decisions = [
+        decision for decision in all_decisions if _is_v12_decision(decision)
+    ]
+    # Missing policy_version is the historical V1.1 representation.  Keep it
+    # in the original group rather than retroactively reclassifying it.
+    economic_decisions = [
+        decision for decision in all_decisions if not _is_v12_decision(decision)
+    ]
+    request_observations = [
+        _sanitize_request_observation(observation)
+        for observation in timeline.get("request_observations") or []
+        if isinstance(observation, Mapping)
+    ]
+    economic_metrics_available = bool(economic_decisions)
+    amortized_metrics_available = bool(amortized_decisions)
+    normal_decisions = [
+        decision
+        for decision in economic_decisions
+        if str(decision.get("decision_mode") or "normal") == "normal"
+    ]
+    emergency_decisions = [
+        decision
+        for decision in economic_decisions
+        if str(decision.get("decision_mode") or "normal") == "emergency"
+    ]
+
+    def decision_series(
+        rows: Sequence[Mapping[str, Any]],
+        field: str,
+        *,
+        label_prefix: str = "D",
+    ) -> tuple[list[str], list[str], list[float]]:
+        selected = [
+            (ordinal, row)
+            for ordinal, row in enumerate(rows, start=1)
+            if row.get(field) is not None
+        ]
+        labels = [
+            f"{label_prefix}{ordinal}" for ordinal, _row in selected
+        ]
+        identities = [
+            " · ".join(
+                part
+                for part in (
+                    _content_free_token(row.get("projection_epoch_id"))
+                    or labels[index],
+                    _content_free_token(row.get("decision_reason")),
+                )
+                if part
+            )
+            for index, (_ordinal, row) in enumerate(selected)
+        ]
+        values = [_finite_number(row.get(field)) for _ordinal, row in selected]
+        return labels, identities, values
 
     request_labels = [f"R{index}" for index in range(1, len(requests) + 1)]
     request_ids = [
@@ -116,8 +919,39 @@ def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
     ]
     project_saved = [_metric(event, "tokens_saved") for event in events]
     project_raw = [_metric(event, "raw_context_tokens") for event in events]
-    # With Object Context off there are no projections.  Savings are still a
-    # real zero-valued series, aligned to universal model requests.
+    conversation_events = [
+        event
+        for event in events
+        if _has_metrics(
+            event,
+            "raw_conversation_tokens",
+            "rendered_conversation_tokens",
+            "conversation_tokens_saved",
+        )
+    ]
+    conversation_project_labels = [
+        _sequence_label(event, index)
+        for index, event in enumerate(conversation_events, start=1)
+    ]
+    conversation_project_ids = [
+        str(event.get("projection_id") or conversation_project_labels[index])
+        for index, event in enumerate(conversation_events)
+    ]
+    conversation_project_saved = [
+        _metric(event, "conversation_tokens_saved")
+        for event in conversation_events
+    ]
+    conversation_project_raw = [
+        _metric(event, "raw_conversation_tokens")
+        for event in conversation_events
+    ]
+    conversation_project_rendered = [
+        _metric(event, "rendered_conversation_tokens")
+        for event in conversation_events
+    ]
+    # Preserve the original assembled-message savings series.  With Object
+    # Context off there are no projections, so savings are a real zero-valued
+    # series aligned to universal model requests.
     savings_project_labels = project_labels or request_labels
     savings_project_ids = project_ids or request_ids
     savings_project_values = project_saved or [0.0] * len(requests)
@@ -126,6 +960,14 @@ def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
         _percentage(saved, raw)
         for saved, raw in zip(
             savings_project_values, savings_project_raw, strict=True
+        )
+    ]
+    conversation_project_saved_percent = [
+        _percentage(saved, raw)
+        for saved, raw in zip(
+            conversation_project_saved,
+            conversation_project_raw,
+            strict=True,
         )
     ]
 
@@ -260,6 +1102,72 @@ def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
         )
     ]
 
+    economic_series = {
+        field: decision_series(economic_decisions, field)
+        for field in (
+            "gross_tokens_removed",
+            "card_or_receipt_tokens",
+            "cache_penalty_equivalent_tokens",
+            "known_summary_cost_equivalent_tokens",
+        )
+    }
+    normal_net_series = decision_series(
+        normal_decisions, "net_saving_equivalent_tokens"
+    )
+    emergency_net_series = decision_series(
+        emergency_decisions, "net_saving_equivalent_tokens"
+    )
+    amortized_series = {
+        field: decision_series(
+            amortized_decisions,
+            field,
+            label_prefix="A",
+        )
+        for field in (
+            "hot_tail_tokens",
+            "hot_overflow_tokens",
+            "pending_bucket_count",
+            "pending_raw_tokens",
+            "pending_gain_tokens",
+            "wait_loss_projected",
+            "shared_overhead_equivalent_tokens",
+            "crossing_margin",
+            "amortized_crossed",
+            "pending_count_over",
+            "pending_tokens_over",
+            "immediate_crossed",
+            "immediate_net_saving_equivalent_tokens",
+        )
+    }
+    if economic_metrics_available:
+        economic_empty_message = "No scored decision exposes this metric."
+    elif amortized_metrics_available:
+        economic_empty_message = (
+            "V1.1 economic charts are separate; this session contains V1.2 "
+            "scheduler telemetry only."
+        )
+    else:
+        economic_empty_message = (
+            "V1.1 economic metrics unavailable for this legacy session."
+        )
+    amortized_empty_message = (
+        "V1.2 amortized metrics unavailable for this V1.1/legacy session."
+        if not amortized_metrics_available
+        else "No V1.2 decision exposes this metric."
+    )
+    amortized_mode_counts = _decision_counts(
+        amortized_decisions, "decision_mode"
+    )
+    amortized_reason_counts = _decision_counts(
+        amortized_decisions, "decision_reason"
+    )
+    amortized_mode_label = ", ".join(
+        f"{name}={count}" for name, count in amortized_mode_counts.items()
+    ) or "none"
+    amortized_reason_label = ", ".join(
+        f"{name}={count}" for name, count in amortized_reason_counts.items()
+    ) or "none"
+
     def chart(
         key: str,
         title: str,
@@ -270,6 +1178,8 @@ def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
         *,
         ids: Sequence[str] | None = None,
         modes: Mapping[str, Mapping[str, Any]] | None = None,
+        empty_message: str = "",
+        signed: bool = False,
     ) -> dict[str, Any]:
         payload = {
             "key": key,
@@ -278,8 +1188,20 @@ def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
             "unit": unit,
             "labels": list(labels),
             "ids": list(ids or labels),
-            "values": [round(_finite_nonnegative(value), 6) for value in values],
+            "values": [
+                round(
+                    _finite_number(value)
+                    if signed
+                    else _finite_nonnegative(value),
+                    6,
+                )
+                for value in values
+            ],
         }
+        if signed:
+            payload["signed"] = True
+        if empty_message:
+            payload["empty_message"] = empty_message
         if modes:
             payload["modes"] = {
                 mode_key: {
@@ -341,7 +1263,10 @@ def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
         {
             "key": "saved",
             "title": "Token 节省",
-            "description": "绝对值 raw − rendered · 比例 saved / raw",
+            "description": (
+                "原始 assembled message view：绝对值 raw − rendered · "
+                "比例 saved / raw"
+            ),
             "color": "#18a77b",
             "default_display_mode": "absolute",
             "display_modes": [
@@ -410,6 +1335,278 @@ def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
                         _cumulative(turn_saved),
                         _cumulative_percentages(turn_saved, turn_raw),
                     ),
+                ),
+            ],
+        },
+        {
+            "key": "conversation_saved",
+            "title": "对话记录 Token 节省",
+            "description": (
+                "额外指标：仅持久化 user / assistant / tool 对话，排除 "
+                "system prompt、tool schema、prefill 与其他临时请求内容"
+            ),
+            "color": "#0f9f88",
+            "default_display_mode": "absolute",
+            "display_modes": [
+                {"key": "absolute", "label": "Token 数"},
+                {"key": "relative", "label": "节省比例"},
+            ],
+            "charts": [
+                chart(
+                    "conversation-project-saved",
+                    "Project · 对话记录节省",
+                    "Project 轮次",
+                    "tokens",
+                    conversation_project_labels,
+                    conversation_project_saved,
+                    ids=conversation_project_ids,
+                    modes=savings_modes(
+                        "Project · 对话记录节省",
+                        "Project · 对话记录压缩率",
+                        conversation_project_saved,
+                        conversation_project_saved_percent,
+                    ),
+                    empty_message=(
+                        "该 session 尚无 conversation-only 遥测；旧的 Token "
+                        "节省图仍可正常查看，重启 CLI 后的新模型请求会开始记录。"
+                    ),
+                )
+            ],
+        },
+        {
+            "key": "economic",
+            "title": "V1.1 即时经济决策",
+            "description": (
+                "每次请求的 content-free 决策分解；normal 与 emergency "
+                "净值分开呈现，历史 V1 会话不补零"
+            ),
+            "color": "#c2418c",
+            "charts": [
+                chart(
+                    "economic-gross",
+                    "Decision · Gross removed",
+                    "经济决策",
+                    "tokens",
+                    economic_series["gross_tokens_removed"][0],
+                    economic_series["gross_tokens_removed"][2],
+                    ids=economic_series["gross_tokens_removed"][1],
+                    empty_message=economic_empty_message,
+                ),
+                chart(
+                    "economic-replacement",
+                    "Decision · Card / receipt footprint",
+                    "经济决策",
+                    "tokens",
+                    economic_series["card_or_receipt_tokens"][0],
+                    economic_series["card_or_receipt_tokens"][2],
+                    ids=economic_series["card_or_receipt_tokens"][1],
+                    empty_message=economic_empty_message,
+                ),
+                chart(
+                    "economic-cache-penalty",
+                    "Decision · Cache rewrite penalty",
+                    "经济决策",
+                    "tokens",
+                    economic_series["cache_penalty_equivalent_tokens"][0],
+                    economic_series["cache_penalty_equivalent_tokens"][2],
+                    ids=economic_series["cache_penalty_equivalent_tokens"][1],
+                    empty_message=economic_empty_message,
+                ),
+                chart(
+                    "economic-summary-cost",
+                    "Decision · Known summary cost",
+                    "经济决策",
+                    "tokens",
+                    economic_series[
+                        "known_summary_cost_equivalent_tokens"
+                    ][0],
+                    economic_series[
+                        "known_summary_cost_equivalent_tokens"
+                    ][2],
+                    ids=economic_series[
+                        "known_summary_cost_equivalent_tokens"
+                    ][1],
+                    empty_message=economic_empty_message,
+                ),
+                chart(
+                    "economic-normal-net",
+                    "Normal decision · Immediate net",
+                    "normal 经济决策",
+                    "tokens",
+                    normal_net_series[0],
+                    normal_net_series[2],
+                    ids=normal_net_series[1],
+                    empty_message=economic_empty_message,
+                    signed=True,
+                ),
+                chart(
+                    "economic-emergency-net",
+                    "Emergency decision · Immediate net",
+                    "emergency 经济决策",
+                    "tokens",
+                    emergency_net_series[0],
+                    emergency_net_series[2],
+                    ids=emergency_net_series[1],
+                    empty_message=economic_empty_message,
+                    signed=True,
+                ),
+            ],
+        },
+        {
+            "key": "amortized",
+            "title": "V1.2 摊销与容量决策",
+            "description": (
+                "独立的 content-free V1.2 调度遥测；W 是 projected waiting "
+                "loss，Q 是 shared rewrite cost，二者都是 crossing 信号而非"
+                "已实现的 Token 收益。"
+                " "
+                f"mode: {amortized_mode_label} · reason: {amortized_reason_label}"
+            ),
+            "color": "#0f766e",
+            "charts": [
+                chart(
+                    "amortized-hot-tokens",
+                    "Hot Tail · Raw tokens",
+                    "V1.2 决策",
+                    "tokens",
+                    amortized_series["hot_tail_tokens"][0],
+                    amortized_series["hot_tail_tokens"][2],
+                    ids=amortized_series["hot_tail_tokens"][1],
+                    empty_message=amortized_empty_message,
+                ),
+                chart(
+                    "amortized-hot-overflow",
+                    "Hot Tail · RAW_UNSEEN overflow",
+                    "V1.2 决策",
+                    "tokens",
+                    amortized_series["hot_overflow_tokens"][0],
+                    amortized_series["hot_overflow_tokens"][2],
+                    ids=amortized_series["hot_overflow_tokens"][1],
+                    empty_message=amortized_empty_message,
+                ),
+                chart(
+                    "amortized-pending-buckets",
+                    "Pending · Distinct buckets",
+                    "V1.2 决策",
+                    "count",
+                    amortized_series["pending_bucket_count"][0],
+                    amortized_series["pending_bucket_count"][2],
+                    ids=amortized_series["pending_bucket_count"][1],
+                    empty_message=amortized_empty_message,
+                ),
+                chart(
+                    "amortized-pending-raw",
+                    "Pending · Raw tokens",
+                    "V1.2 决策",
+                    "tokens",
+                    amortized_series["pending_raw_tokens"][0],
+                    amortized_series["pending_raw_tokens"][2],
+                    ids=amortized_series["pending_raw_tokens"][1],
+                    empty_message=amortized_empty_message,
+                ),
+                chart(
+                    "amortized-pending-gain",
+                    "Pending · Compression gain",
+                    "V1.2 决策",
+                    "tokens",
+                    amortized_series["pending_gain_tokens"][0],
+                    amortized_series["pending_gain_tokens"][2],
+                    ids=amortized_series["pending_gain_tokens"][1],
+                    empty_message=amortized_empty_message,
+                ),
+                chart(
+                    "amortized-w-projected",
+                    "W · Projected waiting loss",
+                    "V1.2 决策",
+                    "tokens",
+                    amortized_series["wait_loss_projected"][0],
+                    amortized_series["wait_loss_projected"][2],
+                    ids=amortized_series["wait_loss_projected"][1],
+                    empty_message=amortized_empty_message,
+                ),
+                chart(
+                    "amortized-q-overhead",
+                    "Q · Shared rewrite cost",
+                    "V1.2 决策",
+                    "tokens",
+                    amortized_series[
+                        "shared_overhead_equivalent_tokens"
+                    ][0],
+                    amortized_series[
+                        "shared_overhead_equivalent_tokens"
+                    ][2],
+                    ids=amortized_series[
+                        "shared_overhead_equivalent_tokens"
+                    ][1],
+                    empty_message=amortized_empty_message,
+                ),
+                chart(
+                    "amortized-crossing-margin",
+                    "Crossing · W − Q margin",
+                    "V1.2 决策",
+                    "tokens",
+                    amortized_series["crossing_margin"][0],
+                    amortized_series["crossing_margin"][2],
+                    ids=amortized_series["crossing_margin"][1],
+                    empty_message=amortized_empty_message,
+                    signed=True,
+                ),
+                chart(
+                    "amortized-crossed",
+                    "Crossing · Amortized flag",
+                    "V1.2 决策",
+                    "flag",
+                    amortized_series["amortized_crossed"][0],
+                    amortized_series["amortized_crossed"][2],
+                    ids=amortized_series["amortized_crossed"][1],
+                    empty_message=amortized_empty_message,
+                ),
+                chart(
+                    "amortized-cap-count",
+                    "Capacity · Bucket cap exceeded",
+                    "V1.2 决策",
+                    "flag",
+                    amortized_series["pending_count_over"][0],
+                    amortized_series["pending_count_over"][2],
+                    ids=amortized_series["pending_count_over"][1],
+                    empty_message=amortized_empty_message,
+                ),
+                chart(
+                    "amortized-cap-tokens",
+                    "Capacity · Token cap exceeded",
+                    "V1.2 决策",
+                    "flag",
+                    amortized_series["pending_tokens_over"][0],
+                    amortized_series["pending_tokens_over"][2],
+                    ids=amortized_series["pending_tokens_over"][1],
+                    empty_message=amortized_empty_message,
+                ),
+                chart(
+                    "amortized-immediate-counterfactual",
+                    "Counterfactual · V1.1 immediate flag",
+                    "V1.2 决策",
+                    "flag",
+                    amortized_series["immediate_crossed"][0],
+                    amortized_series["immediate_crossed"][2],
+                    ids=amortized_series["immediate_crossed"][1],
+                    empty_message=amortized_empty_message,
+                ),
+                chart(
+                    "amortized-immediate-net-counterfactual",
+                    "Counterfactual · V1.1 immediate net",
+                    "V1.2 决策",
+                    "tokens",
+                    amortized_series[
+                        "immediate_net_saving_equivalent_tokens"
+                    ][0],
+                    amortized_series[
+                        "immediate_net_saving_equivalent_tokens"
+                    ][2],
+                    ids=amortized_series[
+                        "immediate_net_saving_equivalent_tokens"
+                    ][1],
+                    empty_message=amortized_empty_message,
+                    signed=True,
                 ),
             ],
         },
@@ -492,7 +1689,7 @@ def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
         {
             "key": "time",
             "title": "模型请求耗时",
-            "description": "provider API request latency · 与 Object Context 开关无关",
+            "description": "main-loop provider API latency · auxiliary compression 不在此曲线",
             "color": "#3978d6",
             "charts": [
                 chart("request-time", "Request · 耗时", "模型请求", "ms", request_labels, request_time, ids=request_ids),
@@ -504,7 +1701,7 @@ def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
         {
             "key": "spent",
             "title": "Token 花费",
-            "description": "provider-reported prompt + output tokens · 与 Object Context 开关无关",
+            "description": "main-loop provider usage · compression auxiliary inference 见上方账本",
             "color": "#d97706",
             "charts": [
                 chart("request-spent", "Request · 花费", "模型请求", "tokens", request_labels, request_spent, ids=request_ids),
@@ -525,6 +1722,16 @@ def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
         for event in requests
         if _finite_nonnegative(event.get("started_at")) > 0
     ]
+    decision_timestamps = [
+        _finite_nonnegative(decision.get("created_at"))
+        for decision in all_decisions
+        if _finite_nonnegative(decision.get("created_at")) > 0
+    ]
+    observation_timestamps = [
+        _finite_nonnegative(observation.get("created_at"))
+        for observation in request_observations
+        if _finite_nonnegative(observation.get("created_at")) > 0
+    ]
     conversation_id = str(timeline.get("conversation_id") or "")
     title = str(timeline.get("title") or "").strip() or "未命名会话"
     first_projection_at = (
@@ -537,14 +1744,15 @@ def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
         if projection_timestamps
         else _finite_nonnegative(timeline.get("last_projection_at"))
     )
-    last_activity_at = _finite_nonnegative(
-        timeline.get("last_activity_at") or timeline.get("last_active")
+    last_activity_at = max(
+        _finite_nonnegative(
+            timeline.get("last_activity_at") or timeline.get("last_active")
+        ),
+        last_projection_at,
+        max(request_timestamps, default=0.0),
+        max(decision_timestamps, default=0.0),
+        max(observation_timestamps, default=0.0),
     )
-    if last_activity_at <= 0:
-        last_activity_at = max(
-            last_projection_at,
-            max(request_timestamps, default=0.0),
-        )
     usage_aggregate = timeline.get("usage_aggregate")
     aggregate = usage_aggregate if isinstance(usage_aggregate, Mapping) else {}
     aggregate_api_calls = int(_finite_nonnegative(aggregate.get("api_call_count")))
@@ -581,6 +1789,95 @@ def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
         "token_percent": 100.0 if requests else 0.0,
         "complete": bool(requests),
     }
+    gross_saved = sum(project_saved)
+    conversation_raw_tokens = sum(conversation_project_raw)
+    conversation_rendered_tokens = sum(conversation_project_rendered)
+    conversation_saved_tokens = sum(conversation_project_saved)
+    compression_overhead = _compression_overhead(
+        timeline,
+        gross_saved=gross_saved,
+        project_count=len(events),
+    )
+    normal_projection_decisions = [
+        decision
+        for decision in normal_decisions
+        if str(decision.get("decision_kind") or "") == "flush"
+    ]
+    emergency_projection_decisions = [
+        decision
+        for decision in emergency_decisions
+        if str(decision.get("decision_kind") or "") == "emergency"
+    ]
+    reason_counts = _decision_counts(economic_decisions, "decision_reason")
+    sanitized_economic_decisions = [
+        _sanitize_decision(decision, _DECISION_EXPORT_FIELDS)
+        for decision in economic_decisions
+    ]
+    sanitized_amortized_decisions = [
+        {
+            **_sanitize_decision(decision, _AMORTIZED_EXPORT_FIELDS),
+            "capacity_triggered": (
+                str(decision.get("decision_mode") or "") == "capacity"
+                or _decision_flag(decision, "pending_count_over")
+                or _decision_flag(decision, "pending_tokens_over")
+            ),
+        }
+        for decision in amortized_decisions
+    ]
+    amortized_wait_count = sum(
+        str(decision.get("decision_kind") or "") == "wait"
+        for decision in amortized_decisions
+    )
+    amortized_flush_count = sum(
+        str(decision.get("decision_kind") or "") == "flush"
+        for decision in amortized_decisions
+    )
+    amortized_emergency_count = sum(
+        str(decision.get("decision_kind") or "") == "emergency"
+        for decision in amortized_decisions
+    )
+    amortized_summary = {
+        "decision_count": len(amortized_decisions),
+        "wait_count": amortized_wait_count,
+        "flush_count": amortized_flush_count,
+        "emergency_count": amortized_emergency_count,
+        "publication_count": amortized_flush_count + amortized_emergency_count,
+        "mode_counts": amortized_mode_counts,
+        "reason_counts": amortized_reason_counts,
+        "capacity_trigger_count": sum(
+            bool(decision["capacity_triggered"])
+            for decision in sanitized_amortized_decisions
+        ),
+        "pending_count_over_count": sum(
+            _decision_flag(decision, "pending_count_over")
+            for decision in amortized_decisions
+        ),
+        "pending_tokens_over_count": sum(
+            _decision_flag(decision, "pending_tokens_over")
+            for decision in amortized_decisions
+        ),
+        "amortized_crossed_count": sum(
+            _decision_flag(decision, "amortized_crossed")
+            for decision in amortized_decisions
+        ),
+        "emergency_triggered_count": sum(
+            _decision_flag(decision, "emergency_triggered")
+            for decision in amortized_decisions
+        ),
+        "immediate_crossed_count": sum(
+            _decision_flag(decision, "immediate_crossed")
+            for decision in amortized_decisions
+        ),
+        "latest": (
+            sanitized_amortized_decisions[-1]
+            if sanitized_amortized_decisions
+            else None
+        ),
+    }
+    amortized_group = next(
+        group for group in groups if group.get("key") == "amortized"
+    )
+    amortized_group["summary"] = amortized_summary
     return {
         "schema_version": MONITOR_SCHEMA_VERSION,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -592,8 +1889,9 @@ def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
         "first_projection_at": first_projection_at,
         "last_projection_at": last_projection_at,
         "last_activity_at": last_activity_at,
-        "object_context_used": bool(events),
+        "object_context_used": bool(events or all_decisions),
         "has_projection_telemetry": bool(events),
+        "has_decision_telemetry": bool(all_decisions),
         "project_count": len(events),
         "request_count": aggregate_api_calls or len(requests),
         "request_event_count": len(requests),
@@ -613,6 +1911,29 @@ def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
         ),
         "legacy_project_count": legacy_count,
         "turnless_project_count": turnless_count,
+        "conversation_metric_count": len(conversation_events),
+        "conversation_metric_missing_count": max(
+            0, len(events) - len(conversation_events)
+        ),
+        "economic_metrics_available": economic_metrics_available,
+        "economic_decision_count": len(economic_decisions),
+        "normal_decision_count": len(normal_decisions),
+        "emergency_decision_count": len(emergency_decisions),
+        "normal_projection_count": len(normal_projection_decisions),
+        "emergency_projection_count": len(emergency_projection_decisions),
+        "economic_reason_counts": reason_counts,
+        "economic_decisions": sanitized_economic_decisions,
+        "amortized_metrics_available": amortized_metrics_available,
+        "amortized_decision_count": len(amortized_decisions),
+        "amortized_wait_count": amortized_wait_count,
+        "amortized_flush_count": amortized_flush_count,
+        "amortized_emergency_count": amortized_emergency_count,
+        "amortized_mode_counts": amortized_mode_counts,
+        "amortized_reason_counts": amortized_reason_counts,
+        "amortized_summary": amortized_summary,
+        "amortized_decisions": sanitized_amortized_decisions,
+        "request_observation_count": len(request_observations),
+        "request_observations": request_observations,
         "download_point_count": sum(
             (
                 sum(
@@ -626,7 +1947,85 @@ def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
             for chart_payload in group["charts"]
         ),
         "totals": {
-            "tokens_saved": round(sum(savings_project_values), 6),
+            "tokens_saved": round(gross_saved, 6),
+            "economic_normal_gross_tokens_removed": round(
+                sum(
+                    _finite_nonnegative(decision.get("gross_tokens_removed"))
+                    for decision in normal_projection_decisions
+                ),
+                6,
+            ),
+            "economic_normal_cache_penalty_tokens": round(
+                sum(
+                    _finite_nonnegative(
+                        decision.get("cache_penalty_equivalent_tokens")
+                    )
+                    for decision in normal_projection_decisions
+                ),
+                6,
+            ),
+            "economic_normal_summary_cost_tokens": round(
+                sum(
+                    _finite_nonnegative(
+                        decision.get("known_summary_cost_equivalent_tokens")
+                    )
+                    for decision in normal_projection_decisions
+                ),
+                6,
+            ),
+            "economic_normal_net_saving_tokens": round(
+                sum(
+                    _finite_number(decision.get("net_saving_equivalent_tokens"))
+                    for decision in normal_projection_decisions
+                ),
+                6,
+            ),
+            "economic_emergency_gross_tokens_removed": round(
+                sum(
+                    _finite_nonnegative(decision.get("gross_tokens_removed"))
+                    for decision in emergency_projection_decisions
+                ),
+                6,
+            ),
+            "economic_emergency_net_effect_tokens": round(
+                sum(
+                    _finite_number(decision.get("net_saving_equivalent_tokens"))
+                    for decision in emergency_projection_decisions
+                ),
+                6,
+            ),
+            "raw_conversation_tokens": round(conversation_raw_tokens, 6),
+            "rendered_conversation_tokens": round(
+                conversation_rendered_tokens, 6
+            ),
+            "conversation_tokens_saved": round(
+                conversation_saved_tokens, 6
+            ),
+            "conversation_reduction_percent": round(
+                _percentage(
+                    conversation_saved_tokens, conversation_raw_tokens
+                ),
+                6,
+            ),
+            "compression_inference_tokens": compression_overhead[
+                "exact_inference_tokens"
+            ],
+            "compression_schema_tokens_rough": compression_overhead[
+                "rough_schema_tokens"
+            ],
+            "compression_overhead_tokens": compression_overhead[
+                "known_overhead_tokens"
+            ],
+            "auxiliary_provider_tokens": compression_overhead[
+                "all_auxiliary_tokens"
+            ],
+            "all_provider_tokens_known": round(
+                provider_tokens + compression_overhead["all_auxiliary_tokens"],
+                6,
+            ),
+            "net_tokens_saved_known": compression_overhead[
+                "known_net_saved_tokens"
+            ],
             "api_duration_ms": round(sum(request_time), 6),
             "provider_tokens": round(provider_tokens, 6),
             "prompt_tokens": round(provider_prompt, 6),
@@ -637,6 +2036,7 @@ def build_monitor_payload(timeline: Mapping[str, Any]) -> dict[str, Any]:
                 _percentage(provider_cache_read, provider_prompt), 6
             ),
         },
+        "compression_overhead": compression_overhead,
         "groups": groups,
     }
 
@@ -693,11 +2093,23 @@ def build_monitor_dashboard_payload(timeline: Mapping[str, Any]) -> dict[str, An
             6,
         )
 
+    def signed_total(field: str) -> float:
+        return round(
+            sum(
+                _finite_number(session.get("totals", {}).get(field))
+                for session in sessions
+            ),
+            6,
+        )
+
     global_totals = {
         "project_count": sum(int(item["project_count"]) for item in sessions),
         "request_count": sum(int(item["request_count"]) for item in sessions),
         "request_event_count": sum(
             int(item["request_event_count"]) for item in sessions
+        ),
+        "request_observation_count": sum(
+            int(item["request_observation_count"]) for item in sessions
         ),
         "turn_count": sum(int(item["turn_count"]) for item in sessions),
         "cache_request_count": sum(
@@ -707,7 +2119,94 @@ def build_monitor_dashboard_payload(timeline: Mapping[str, Any]) -> dict[str, An
             int(item["timed_request_count"]) for item in sessions
         ),
         "legacy_project_count": sum(int(item["legacy_project_count"]) for item in sessions),
+        "economic_decision_count": sum(
+            int(item["economic_decision_count"]) for item in sessions
+        ),
+        "amortized_decision_count": sum(
+            int(item["amortized_decision_count"]) for item in sessions
+        ),
+        "amortized_wait_count": sum(
+            int(item["amortized_wait_count"]) for item in sessions
+        ),
+        "amortized_flush_count": sum(
+            int(item["amortized_flush_count"]) for item in sessions
+        ),
+        "amortized_emergency_count": sum(
+            int(item["amortized_emergency_count"]) for item in sessions
+        ),
+        "amortized_publication_count": sum(
+            int(item["amortized_summary"]["publication_count"])
+            for item in sessions
+        ),
+        "amortized_crossed_count": sum(
+            int(item["amortized_summary"]["amortized_crossed_count"])
+            for item in sessions
+        ),
+        "capacity_trigger_count": sum(
+            int(item["amortized_summary"]["capacity_trigger_count"])
+            for item in sessions
+        ),
+        "pending_count_over_count": sum(
+            int(item["amortized_summary"]["pending_count_over_count"])
+            for item in sessions
+        ),
+        "pending_tokens_over_count": sum(
+            int(item["amortized_summary"]["pending_tokens_over_count"])
+            for item in sessions
+        ),
+        "amortized_emergency_triggered_count": sum(
+            int(item["amortized_summary"]["emergency_triggered_count"])
+            for item in sessions
+        ),
+        "amortized_immediate_crossed_count": sum(
+            int(item["amortized_summary"]["immediate_crossed_count"])
+            for item in sessions
+        ),
+        "normal_projection_count": sum(
+            int(item["normal_projection_count"]) for item in sessions
+        ),
+        "emergency_projection_count": sum(
+            int(item["emergency_projection_count"]) for item in sessions
+        ),
+        "conversation_metric_count": sum(
+            int(item["conversation_metric_count"]) for item in sessions
+        ),
+        "conversation_metric_missing_count": sum(
+            int(item["conversation_metric_missing_count"])
+            for item in sessions
+        ),
         "tokens_saved": total("tokens_saved"),
+        "economic_normal_gross_tokens_removed": total(
+            "economic_normal_gross_tokens_removed"
+        ),
+        "economic_normal_cache_penalty_tokens": total(
+            "economic_normal_cache_penalty_tokens"
+        ),
+        "economic_normal_summary_cost_tokens": total(
+            "economic_normal_summary_cost_tokens"
+        ),
+        "economic_normal_net_saving_tokens": signed_total(
+            "economic_normal_net_saving_tokens"
+        ),
+        "economic_emergency_gross_tokens_removed": total(
+            "economic_emergency_gross_tokens_removed"
+        ),
+        "economic_emergency_net_effect_tokens": signed_total(
+            "economic_emergency_net_effect_tokens"
+        ),
+        "raw_conversation_tokens": total("raw_conversation_tokens"),
+        "rendered_conversation_tokens": total(
+            "rendered_conversation_tokens"
+        ),
+        "conversation_tokens_saved": total("conversation_tokens_saved"),
+        "compression_inference_tokens": total("compression_inference_tokens"),
+        "compression_schema_tokens_rough": total(
+            "compression_schema_tokens_rough"
+        ),
+        "compression_overhead_tokens": total("compression_overhead_tokens"),
+        "auxiliary_provider_tokens": total("auxiliary_provider_tokens"),
+        "all_provider_tokens_known": total("all_provider_tokens_known"),
+        "net_tokens_saved_known": signed_total("net_tokens_saved_known"),
         "api_duration_ms": total("api_duration_ms"),
         "provider_tokens": total("provider_tokens"),
         "prompt_tokens": total("prompt_tokens"),
@@ -722,6 +2221,29 @@ def build_monitor_dashboard_payload(timeline: Mapping[str, Any]) -> dict[str, An
         ),
         6,
     )
+    global_totals["conversation_reduction_percent"] = round(
+        _percentage(
+            global_totals["conversation_tokens_saved"],
+            global_totals["raw_conversation_tokens"],
+        ),
+        6,
+    )
+
+    def merged_decision_counts(field: str) -> dict[str, int]:
+        merged: dict[str, int] = {}
+        for session in sessions:
+            counts = session.get(field)
+            if not isinstance(counts, Mapping):
+                continue
+            for label, value in counts.items():
+                count = int(_finite_nonnegative(value))
+                if count:
+                    key = str(label)
+                    merged[key] = merged.get(key, 0) + count
+        return merged
+
+    amortized_mode_counts = merged_decision_counts("amortized_mode_counts")
+    amortized_reason_counts = merged_decision_counts("amortized_reason_counts")
     return {
         "schema_version": MONITOR_SCHEMA_VERSION,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -730,6 +2252,8 @@ def build_monitor_dashboard_payload(timeline: Mapping[str, Any]) -> dict[str, An
         "selected_conversation_id": selected_conversation_id,
         "session_count": len(sessions),
         "global_totals": global_totals,
+        "amortized_mode_counts": amortized_mode_counts,
+        "amortized_reason_counts": amortized_reason_counts,
         "sessions": sessions,
     }
 
@@ -803,7 +2327,7 @@ def render_monitor_html(timeline: Mapping[str, Any]) -> str:
     .panel-head { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:12px 15px; border-bottom:1px solid var(--border); }
     .panel-head h2 { margin:0; font-size:15px; }
     .run-search { width:min(290px,45vw); color:var(--ink); background:#fafafa; border-color:var(--border); }
-    .table-wrap { overflow:auto; } table { border-collapse:collapse; width:100%; min-width:960px; }
+    .table-wrap { overflow:auto; } table { border-collapse:collapse; width:100%; min-width:1100px; }
     th,td { padding:11px 15px; text-align:right; border-bottom:1px solid #ecebe7; font-variant-numeric:tabular-nums; white-space:nowrap; }
     th { color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.065em; background:#fafaf8; } th:first-child,td:first-child { text-align:left; }
     th:nth-child(2),td:nth-child(2) { text-align:center; }
@@ -816,6 +2340,17 @@ def render_monitor_html(timeline: Mapping[str, Any]) -> str:
     .session-head h2 { margin:0 0 3px; font-size:21px; } .session-head h2 .context-tag { margin-left:7px; } .session-id { color:var(--muted); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:11px; overflow-wrap:anywhere; }
     .session-actions { display:flex; flex-direction:column; align-items:flex-end; gap:8px; }
     .session-time { color:var(--muted); text-align:right; font-size:11px; } .session-kpis { margin-top:12px; margin-bottom:4px; }
+    .overhead-ledger { margin-top:18px; overflow:hidden; }
+    .overhead-summary { display:flex; flex-wrap:wrap; gap:8px; padding:12px 15px; background:#fffaf0; border-bottom:1px solid var(--border); }
+    .overhead-formula { width:100%; color:#5f4a13; font-size:11px; }
+    .overhead-chip { padding:4px 8px; border:1px solid #e2d2a5; border-radius:999px; background:#fff; color:#5f4a13; font-size:10px; font-variant-numeric:tabular-nums; }
+    .overhead-chip.warn { color:#9a3412; border-color:#fdba74; background:#fff7ed; }
+    .overhead-table { min-width:760px; }
+    .overhead-table tbody tr { cursor:default; }
+    .overhead-table th:nth-child(2),.overhead-table td:nth-child(2) { text-align:right; }
+    .overhead-table th:nth-child(4),.overhead-table td:nth-child(4),.overhead-table th:nth-child(5),.overhead-table td:nth-child(5) { text-align:left; white-space:normal; }
+    .measure-exact { color:#087153; font-weight:720; } .measure-rough { color:#9a6700; font-weight:720; }
+    .ledger-note { padding:10px 15px 13px; color:var(--muted); font-size:10px; border-top:1px solid #ecebe7; }
     .metric-group { margin-top:26px; } .group-heading { display:flex; justify-content:space-between; align-items:center; gap:16px; }
     .group-title { display:flex; align-items:center; gap:8px; margin:0; font-size:17px; }
     .group-dot { width:8px; height:8px; border-radius:3px; background:currentColor; } .group-description { color:var(--muted); margin:3px 0 10px; font-size:11px; }
@@ -858,10 +2393,10 @@ def render_monitor_html(timeline: Mapping[str, Any]) -> str:
     <div id="global-kpis" class="kpis"></div>
     <section class="panel" aria-label="All sessions">
       <div class="panel-head"><h2>Runs</h2><input id="run-search" class="run-search" type="search" placeholder="搜索标题或 ID" autocomplete="off"></div>
-      <div class="table-wrap"><table><thead><tr><th>Run</th><th>Context</th><th>Requests</th><th>Turns</th><th>Saved</th><th>Cache Hit</th><th>API Time</th><th>Tokens</th><th>Series</th><th>Updated</th></tr></thead><tbody id="run-body"></tbody></table></div>
+      <div class="table-wrap"><table><thead><tr><th>Run</th><th>Context</th><th>Requests</th><th>Turns</th><th>Conversation-only</th><th>Gross Saved</th><th>Overhead</th><th>Known Net</th><th>Cache Hit</th><th>API Time</th><th>Known Provider</th><th>Series</th><th>Updated</th></tr></thead><tbody id="run-body"></tbody></table></div>
     </section>
     <div id="workspace" class="workspace"></div>
-    <footer>本地离线快照 · 不含 prompt / 消息内容 · <code>/oc monitor</code> 刷新</footer>
+    <footer>不含 prompt / 消息内容 · 实时页面刷新浏览器即可重读数据 · <code>file://</code> 快照需重新运行 <code>/oc monitor</code></footer>
   </main>
 </div>
 <script>
@@ -870,8 +2405,12 @@ const NS="http://www.w3.org/2000/svg";
 const byId=id=>document.getElementById(id);
 const TOKEN_UNITS=[{threshold:1e9,label:"B"},{threshold:1e6,label:"M"},{threshold:1e3,label:"K"}];
 const fmtToken=value=>{const n=Math.max(0,Number(value||0));const unit=TOKEN_UNITS.find(item=>n>=item.threshold);if(unit){const scaled=n/unit.threshold;return `${new Intl.NumberFormat("en-US",{maximumSignificantDigits:3}).format(scaled)}${unit.label} tok`;}return new Intl.NumberFormat("en-US",{maximumFractionDigits:n<10?2:n<100?1:0}).format(n)+" tok";};
-const fmt=(value,unit)=>{const n=Number(value||0);if(unit==="percent")return new Intl.NumberFormat("zh-CN",{minimumFractionDigits:n>0&&n<1?2:0,maximumFractionDigits:2}).format(n)+"%";if(unit==="ms"){if(n>=36e5)return `${(n/36e5).toFixed(2)} h`;if(n>=6e4)return `${(n/6e4).toFixed(2)} min`;return n>=1000?`${(n/1000).toFixed(2)} s`:`${n.toFixed(n<10?2:1)} ms`;}return fmtToken(n);};
+const fmtSignedToken=value=>{const n=Number(value||0);return n<0?"−"+fmtToken(Math.abs(n)):fmtToken(n);};
+const fmt=(value,unit)=>{const n=Number(value||0);if(unit==="flag")return n<=0?"0":n>=1?"1":n.toFixed(2);if(unit==="count")return new Intl.NumberFormat("en-US",{maximumFractionDigits:0}).format(n);if(unit==="percent")return new Intl.NumberFormat("zh-CN",{minimumFractionDigits:n>0&&n<1?2:0,maximumFractionDigits:2}).format(n)+"%";if(unit==="ms"){if(n>=36e5)return `${(n/36e5).toFixed(2)} h`;if(n>=6e4)return `${(n/6e4).toFixed(2)} min`;return n>=1000?`${(n/1000).toFixed(2)} s`:`${n.toFixed(n<10?2:1)} ms`;}return fmtToken(n);};
+const fmtChart=(value,chart)=>chart.signed&&chart.unit==="tokens"?fmtSignedToken(value):fmt(value,chart.unit);
 const fmtCache=(percent,count)=>Number(count||0)>0?fmt(percent,"percent"):"—";
+const fmtConversation=(totals,measured,missing)=>{const count=Number(measured||0);const gap=Number(missing||0);if(count<=0)return gap>0?"N/A · legacy":"0 tok";const suffix=gap>0?" · partial":"";return `${fmtToken(totals.conversation_tokens_saved)} · ${fmt(totals.conversation_reduction_percent,"percent")}${suffix}`;};
+const schedulerStatus=session=>session.amortized_metrics_available?`${session.amortized_decision_count} V1.2 scheduler decisions · 尚未发布 Card`:`${session.economic_decision_count} V1.1 economic decisions · 尚未发布 Card`;
 const SHORT_DATE=new Intl.DateTimeFormat("zh-CN",{month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"});
 const dateFmt=value=>value?SHORT_DATE.format(new Date(Number(value)*1000)):"—";
 const shortId=value=>{const s=String(value||"unknown");return s.length>28?s.slice(0,17)+"…"+s.slice(-8):s;};
@@ -882,6 +2421,7 @@ function sample(chart,max=180){const n=chart.values.length;if(n<=max)return char
 function csvCell(value){let text=String(value??"");if(/^[=+\-@]/.test(text))text="'"+text;return `"${text.replace(/"/g,'""')}"`;}
 const CSV_HEADERS=["session_title","session_id","conversation_id","group_key","chart_key","chart_title","display_mode","point_index","label","identity","value","unit"];
 function chartRows(session,group,chart){return chart.values.map((value,index)=>[session.title,session.session_id,session.conversation_id,group.key,chart.key,chart.title,chart.display_mode||"default",index+1,chart.labels[index]||"",chart.ids[index]||"",value,chart.unit]);}
+function overheadRows(session){return session.compression_overhead.components.map((component,index)=>[session.title,session.session_id,session.conversation_id,"compression_overhead",component.key,component.label,component.measurement,index+1,component.treatment,component.deducted?"deducted":"informational",component.tokens,"tokens"]);}
 function resolveChartMode(chart,modeKey){const mode=chart.modes&&chart.modes[modeKey];return mode?{...chart,...mode,display_mode:modeKey}:{...chart,display_mode:"default"};}
 function safeFilename(value,fallback){const cleaned=String(value||"").trim().replace(/[\\/?%*:|"<>]/g,"_").replace(/\s+/g,"_").slice(0,64);return cleaned||fallback;}
 function csvDownload(session,suffix,rows){
@@ -894,20 +2434,27 @@ function chartDownload(session,group,chart){
   const suffix=chart.display_mode==="relative"?`${chart.key}_relative`:chart.key;
   return csvDownload(session,suffix,rows);
 }
-function sessionDownload(session){const rows=[];for(const group of session.groups)for(const chart of group.charts){if(chart.modes)for(const modeKey of Object.keys(chart.modes))rows.push(...chartRows(session,group,resolveChartMode(chart,modeKey)));else rows.push(...chartRows(session,group,resolveChartMode(chart,"default")));}return csvDownload(session,"all_charts",rows);}
+function sessionDownload(session){const rows=overheadRows(session);for(const group of session.groups)for(const chart of group.charts){if(chart.modes)for(const modeKey of Object.keys(chart.modes))rows.push(...chartRows(session,group,resolveChartMode(chart,modeKey)));else rows.push(...chartRows(session,group,resolveChartMode(chart,"default")));}return csvDownload(session,"all_metrics",rows);}
 function renderChart(session,group,chart){
   const card=document.createElement("article");card.className="chart";const head=document.createElement("div");head.className="chart-head";const title=document.createElement("div");title.className="chart-title";title.textContent=chart.title;const tools=document.createElement("div");tools.className="chart-tools";
-  const summary=document.createElement("div");summary.className="chart-summary";const latest=chart.values.length?chart.values[chart.values.length-1]:0;summary.textContent=`${fmt(latest,chart.unit)} · ${chart.values.length} pts`;
+  const summary=document.createElement("div");summary.className="chart-summary";const latest=chart.values.length?chart.values[chart.values.length-1]:0;summary.textContent=`${fmtChart(latest,chart)} · ${chart.values.length} pts`;
   const downloadData=chartDownload(session,group,chart);const download=document.createElement("a");download.className="download";download.textContent="CSV ↓";download.title=`下载「${chart.title}」完整数据`;download.setAttribute("aria-label",download.title);download.href=downloadData.href;download.download=downloadData.filename;tools.append(summary,download);head.append(title,tools);card.append(head);
-  if(!chart.values.length){const empty=document.createElement("div");empty.className="empty";empty.textContent="暂无数据";card.append(empty);return card;}
-  const W=760,H=275,M={l:72,r:18,t:16,b:43},PW=W-M.l-M.r,PH=H-M.t-M.b;const values=chart.values.map(Number);const maxValue=Math.max(...values,0);const yMax=chart.unit==="percent"?100:(maxValue>0?maxValue:1);const sx=index=>M.l+(values.length===1?PW/2:index*PW/(values.length-1));const sy=value=>M.t+PH-(Number(value)/yMax)*PH;const svg=node("svg",{viewBox:`0 0 ${W} ${H}`,role:"img","aria-label":chart.title});
-  for(let tick=0;tick<=4;tick++){const y=M.t+tick*PH/4;svg.append(node("line",{x1:M.l,y1:y,x2:W-M.r,y2:y,class:"grid"}));const label=node("text",{x:M.l-9,y:y+4,"text-anchor":"end",class:"axis-text"});label.textContent=fmt(yMax*(1-tick/4),chart.unit);svg.append(label);}
-  const points=values.map((value,index)=>`${sx(index)},${sy(value)}`);svg.append(node("polyline",{points:points.join(" "),class:"series",stroke:group.color}));for(const point of sample(chart)){const circle=node("circle",{cx:sx(point.index),cy:sy(point.value),r:3.5,class:"point",fill:group.color});const tip=node("title");const identity=chart.ids[point.index]||chart.labels[point.index]||String(point.index+1);tip.textContent=`${chart.labels[point.index]||point.index+1} · ${identity}\n${fmt(point.value,chart.unit)}`;circle.append(tip);svg.append(circle);}
+  if(!chart.values.length){const empty=document.createElement("div");empty.className="empty";empty.textContent=chart.empty_message||"暂无数据";card.append(empty);return card;}
+  const W=760,H=275,M={l:72,r:18,t:16,b:43},PW=W-M.l-M.r,PH=H-M.t-M.b;const values=chart.values.map(Number);const minValue=chart.signed?Math.min(...values,0):0;const maxValue=Math.max(...values,0);const yMin=chart.unit==="percent"||chart.unit==="flag"?0:minValue;let yMax=chart.unit==="percent"?100:chart.unit==="flag"?1:(maxValue>0?maxValue:1);if(yMax===yMin)yMax=yMin+1;const sx=index=>M.l+(values.length===1?PW/2:index*PW/(values.length-1));const sy=value=>M.t+((yMax-Number(value))/(yMax-yMin))*PH;const svg=node("svg",{viewBox:`0 0 ${W} ${H}`,role:"img","aria-label":chart.title});
+  for(let tick=0;tick<=4;tick++){const y=M.t+tick*PH/4;svg.append(node("line",{x1:M.l,y1:y,x2:W-M.r,y2:y,class:"grid"}));const label=node("text",{x:M.l-9,y:y+4,"text-anchor":"end",class:"axis-text"});label.textContent=fmtChart(yMax-(yMax-yMin)*tick/4,chart);svg.append(label);}
+  const points=values.map((value,index)=>`${sx(index)},${sy(value)}`);svg.append(node("polyline",{points:points.join(" "),class:"series",stroke:group.color}));for(const point of sample(chart)){const circle=node("circle",{cx:sx(point.index),cy:sy(point.value),r:3.5,class:"point",fill:group.color});const tip=node("title");const identity=chart.ids[point.index]||chart.labels[point.index]||String(point.index+1);tip.textContent=`${chart.labels[point.index]||point.index+1} · ${identity}\n${fmtChart(point.value,chart)}`;circle.append(tip);svg.append(circle);}
   const first=node("text",{x:M.l,y:H-24,"text-anchor":"start",class:"axis-text"});first.textContent=chart.labels[0]||"1";svg.append(first);const last=node("text",{x:W-M.r,y:H-24,"text-anchor":"end",class:"axis-text"});last.textContent=chart.labels[chart.labels.length-1]||String(values.length);svg.append(last);const axis=node("text",{x:M.l+PW/2,y:H-6,"text-anchor":"middle",class:"axis-text"});axis.textContent=chart.axis;svg.append(axis);card.append(svg);return card;
+}
+function renderOverheadLedger(session){
+  const data=session.compression_overhead;const panel=document.createElement("section");panel.className="panel overhead-ledger";panel.setAttribute("aria-label","Compression overhead ledger");const head=document.createElement("div");head.className="panel-head";const title=document.createElement("h2");title.textContent="Compression Overhead Ledger";const status=document.createElement("span");status.className=`overhead-chip${data.coverage_complete?"":" warn"}`;status.textContent=data.coverage_complete?"usage coverage complete":"partial / historical coverage";head.append(title,status);
+  const summary=document.createElement("div");summary.className="overhead-summary";const formula=document.createElement("div");formula.className="overhead-formula";formula.textContent="Known Net = Gross Saved − exact compression inference − rough retrieve_object schema. Card text 与 retrieved payload 已包含在 rendered context，不能二次扣除。";const chip=(label,value,signed=false)=>{const item=document.createElement("span");item.className="overhead-chip";item.textContent=`${label}: ${signed?fmtSignedToken(value):fmtToken(value)}`;return item;};summary.append(formula,chip("Gross",data.gross_saved_tokens),chip("Exact inference",data.exact_inference_tokens),chip("Rough schema",data.rough_schema_tokens),chip("Known overhead",data.known_overhead_tokens),chip("Known net",data.known_net_saved_tokens,true));
+  const wrap=document.createElement("div");wrap.className="table-wrap";const table=document.createElement("table");table.className="overhead-table";const thead=document.createElement("thead");const header=document.createElement("tr");for(const label of ["Component","Tokens","Calls","Evidence","Treatment"]){const th=document.createElement("th");th.textContent=label;header.append(th);}thead.append(header);const tbody=document.createElement("tbody");for(const component of data.components){const row=document.createElement("tr");const values=[component.label,fmtToken(component.tokens),String(component.calls),component.measurement,component.treatment];values.forEach((value,index)=>{const cell=document.createElement("td");cell.textContent=value;if(index===3)cell.className=component.measurement.includes("exact")?"measure-exact":"measure-rough";row.append(cell);});tbody.append(row);}table.append(thead,tbody);wrap.append(table);
+  const note=document.createElement("div");note.className="ledger-note";note.textContent=`Coverage: ${data.coverage_label} · Card attempts ${data.card_summary_attempts}, recorded provider responses ${data.recorded_card_summary_calls}, fallbacks ${data.summary_fallbacks}, unmetered attempts ${data.unmetered_card_summary_attempts}. Other auxiliary inference (background review / vision / title / etc.) ${fmtToken(data.other_auxiliary_tokens)}，不计入 compression overhead；Known Provider 总量会包含它。Limitations: ${data.limitations.join(" · ")}.`;
+  panel.append(head,summary,wrap,note);return panel;
 }
 let selectedId=DATA.selected_conversation_id;const groupDisplayModes={saved:"absolute",cache:"relative"};const selectedSession=()=>DATA.sessions.find(session=>session.conversation_id===selectedId)||DATA.sessions[0];
 const activeChart=(group,chart)=>resolveChartMode(chart,groupDisplayModes[group.key]||group.default_display_mode||"default");
-function renderGlobal(){const totals=DATA.global_totals;const host=byId("global-kpis");host.replaceChildren(kpi("Sessions",String(DATA.session_count)),kpi("Requests",new Intl.NumberFormat("en-US").format(totals.request_count)),kpi("Saved",fmt(totals.tokens_saved,"tokens")),kpi("Cache Hit",fmtCache(totals.cache_hit_percent,totals.request_count)),kpi("API Time",fmt(totals.api_duration_ms,"ms")),kpi("Provider Tokens",fmt(totals.provider_tokens,"tokens")));byId("snapshot-count").textContent=`${DATA.session_count} sessions · ${totals.request_count} model requests · ${totals.project_count} OC projections`;byId("generated").textContent=`Updated ${SHORT_DATE.format(new Date(DATA.generated_at))}`;}
+function renderGlobal(){const totals=DATA.global_totals;const host=byId("global-kpis");host.replaceChildren(kpi("Sessions",String(DATA.session_count)),kpi("Requests",new Intl.NumberFormat("en-US").format(totals.request_count)),kpi("Conversation-only Saved",fmtConversation(totals,totals.conversation_metric_count,totals.conversation_metric_missing_count)),kpi("Gross Saved",fmt(totals.tokens_saved,"tokens")),kpi("Compression Overhead",fmt(totals.compression_overhead_tokens,"tokens")),kpi("Known Net",fmtSignedToken(totals.net_tokens_saved_known)),kpi("Cache Hit",fmtCache(totals.cache_hit_percent,totals.request_count)),kpi("API Time",fmt(totals.api_duration_ms,"ms")),kpi("Known Provider",fmt(totals.all_provider_tokens_known,"tokens")));byId("snapshot-count").textContent=`${DATA.session_count} sessions · ${totals.request_count} main-loop requests · ${totals.project_count} OC projections`;byId("generated").textContent=`Updated ${SHORT_DATE.format(new Date(DATA.generated_at))}`;}
 function runMatches(session,query){return !query||String(session.title||"").toLowerCase().includes(query)||session.conversation_id.toLowerCase().includes(query)||String(session.session_id||"").toLowerCase().includes(query);}
 function renderRuns(query=""){
   const normalized=query.trim().toLowerCase();const sessions=DATA.sessions.filter(session=>runMatches(session,normalized));const side=byId("side-runs");const body=byId("run-body");side.replaceChildren();body.replaceChildren();
@@ -916,14 +2463,14 @@ function renderRuns(query=""){
     {label:"No Object Context",sessions:sessions.filter(session=>!session.object_context_used)},
   ];
   for(const group of sideGroups){if(!group.sessions.length)continue;const section=document.createElement("section");section.className="side-group";const heading=document.createElement("div");heading.className="side-group-head";const label=document.createElement("span");label.textContent=group.label;const count=document.createElement("span");count.className="side-group-count";count.textContent=String(group.sessions.length);heading.append(label,count);const list=document.createElement("div");list.className="side-group-list";for(const session of group.sessions){const button=document.createElement("button");button.className="side-run"+(session.conversation_id===selectedId?" selected":"");button.type="button";const titleRow=document.createElement("span");titleRow.className="side-run-title-row";const title=document.createElement("span");title.className="side-run-title";title.textContent=session.title;titleRow.append(title,contextTag(session));const id=document.createElement("span");id.className="side-run-id";id.textContent=session.conversation_id;const meta=document.createElement("span");meta.className="side-run-meta";meta.textContent=`${session.request_count} R · ${fmt(session.totals.provider_tokens,"tokens")}`;button.append(titleRow,id,meta);button.addEventListener("click",()=>selectSession(session.conversation_id));list.append(button);}section.append(heading,list);side.append(section);}
-  for(const session of sessions){const row=document.createElement("tr");if(session.conversation_id===selectedId)row.className="selected";const identity=document.createElement("td");const runTitle=document.createElement("span");runTitle.className="run-title";runTitle.textContent=session.title;if(session.is_active){const badge=document.createElement("span");badge.className="badge";badge.textContent="current";runTitle.append(badge);}const runId=document.createElement("span");runId.className="run-id";runId.textContent=shortId(session.conversation_id);runId.title=session.conversation_id;identity.append(runTitle,runId);const contextCell=document.createElement("td");contextCell.append(contextTag(session));const coverage=Math.max(0,Math.min(1,Number(session.request_usage_coverage.call_percent||0)/100));const cells=[identity,contextCell,session.request_count,session.turn_count,fmt(session.totals.tokens_saved,"tokens"),fmtCache(session.totals.cache_hit_percent,session.request_count),fmt(session.totals.api_duration_ms,"ms"),fmt(session.totals.provider_tokens,"tokens")];for(const value of cells){if(value instanceof Node)row.append(value);else{const cell=document.createElement("td");cell.textContent=String(value);row.append(cell);}}const coverageCell=document.createElement("td");const bar=document.createElement("span");bar.className="coverage";const fill=document.createElement("i");fill.style.width=`${Math.round(coverage*100)}%`;bar.append(fill);coverageCell.append(bar,`${Math.round(coverage*100)}%`);coverageCell.title="已恢复逐请求曲线 / 聚合请求总数";row.append(coverageCell);const last=document.createElement("td");last.textContent=dateFmt(session.last_activity_at);row.append(last);row.addEventListener("click",()=>selectSession(session.conversation_id));body.append(row);}
-  if(!sessions.length){const row=document.createElement("tr");const cell=document.createElement("td");cell.colSpan=10;cell.textContent="没有匹配的 session";cell.style.textAlign="center";cell.style.color="var(--muted)";row.append(cell);body.append(row);}
+  for(const session of sessions){const row=document.createElement("tr");if(session.conversation_id===selectedId)row.className="selected";const identity=document.createElement("td");const runTitle=document.createElement("span");runTitle.className="run-title";runTitle.textContent=session.title;if(session.is_active){const badge=document.createElement("span");badge.className="badge";badge.textContent="current";runTitle.append(badge);}const runId=document.createElement("span");runId.className="run-id";runId.textContent=shortId(session.conversation_id);runId.title=session.conversation_id;identity.append(runTitle,runId);const contextCell=document.createElement("td");contextCell.append(contextTag(session));const coverage=Math.max(0,Math.min(1,Number(session.request_usage_coverage.call_percent||0)/100));const cells=[identity,contextCell,session.request_count,session.turn_count,fmtConversation(session.totals,session.conversation_metric_count,session.conversation_metric_missing_count),fmt(session.totals.tokens_saved,"tokens"),fmt(session.totals.compression_overhead_tokens,"tokens"),fmtSignedToken(session.totals.net_tokens_saved_known),fmtCache(session.totals.cache_hit_percent,session.request_count),fmt(session.totals.api_duration_ms,"ms"),fmt(session.totals.all_provider_tokens_known,"tokens")];for(const value of cells){if(value instanceof Node)row.append(value);else{const cell=document.createElement("td");cell.textContent=String(value);row.append(cell);}}const coverageCell=document.createElement("td");const bar=document.createElement("span");bar.className="coverage";const fill=document.createElement("i");fill.style.width=`${Math.round(coverage*100)}%`;bar.append(fill);coverageCell.append(bar,`${Math.round(coverage*100)}%`);coverageCell.title="已恢复逐请求曲线 / 聚合请求总数";row.append(coverageCell);const last=document.createElement("td");last.textContent=dateFmt(session.last_activity_at);row.append(last);row.addEventListener("click",()=>selectSession(session.conversation_id));body.append(row);}
+  if(!sessions.length){const row=document.createElement("tr");const cell=document.createElement("td");cell.colSpan=13;cell.textContent="没有匹配的 session";cell.style.textAlign="center";cell.style.color="var(--muted)";row.append(cell);body.append(row);}
 }
 function renderWorkspace(){
-  const session=selectedSession();const host=byId("workspace");host.replaceChildren();if(!session)return;const head=document.createElement("div");head.className="session-head";const left=document.createElement("div");const title=document.createElement("h2");title.textContent=session.title;title.append(contextTag(session));if(session.is_active){const badge=document.createElement("span");badge.className="badge";badge.textContent="current";title.append(badge);}const identity=document.createElement("div");identity.className="session-id";identity.textContent=session.conversation_id;left.append(title,identity);const actions=document.createElement("div");actions.className="session-actions";const allData=sessionDownload(session);const downloadAll=document.createElement("a");downloadAll.className="download download-all";downloadAll.textContent=`全部 CSV · ${allData.rowCount}`;downloadAll.title=`下载「${session.title}」全部图表的 CSV 数据（含可切换模式）`;downloadAll.setAttribute("aria-label",downloadAll.title);downloadAll.href=allData.href;downloadAll.download=allData.filename;const time=document.createElement("div");time.className="session-time";time.textContent=session.has_projection_telemetry?`${session.project_count} OC projections · ${dateFmt(session.first_projection_at)} → ${dateFmt(session.last_projection_at)}`:"OC 未启用 · 节省量为 0";actions.append(downloadAll,time);head.append(left,actions);host.append(head);
-  const metrics=document.createElement("div");metrics.className="kpis session-kpis";metrics.append(kpi("Requests",String(session.request_count)),kpi("Turns",String(session.turn_count)),kpi("Saved",fmt(session.totals.tokens_saved,"tokens")),kpi("Cache Hit",fmtCache(session.totals.cache_hit_percent,session.request_count)),kpi("API Time",fmt(session.totals.api_duration_ms,"ms")),kpi("Provider Tokens",fmt(session.totals.provider_tokens,"tokens")));host.append(metrics);
+  const session=selectedSession();const host=byId("workspace");host.replaceChildren();if(!session)return;const head=document.createElement("div");head.className="session-head";const left=document.createElement("div");const title=document.createElement("h2");title.textContent=session.title;title.append(contextTag(session));if(session.is_active){const badge=document.createElement("span");badge.className="badge";badge.textContent="current";title.append(badge);}const identity=document.createElement("div");identity.className="session-id";identity.textContent=session.conversation_id;left.append(title,identity);const actions=document.createElement("div");actions.className="session-actions";const allData=sessionDownload(session);const downloadAll=document.createElement("a");downloadAll.className="download download-all";downloadAll.textContent=`全部 CSV · ${allData.rowCount}`;downloadAll.title=`下载「${session.title}」全部图表的 CSV 数据（含可切换模式）`;downloadAll.setAttribute("aria-label",downloadAll.title);downloadAll.href=allData.href;downloadAll.download=allData.filename;const time=document.createElement("div");time.className="session-time";time.textContent=session.has_projection_telemetry?`${session.project_count} OC projections · ${dateFmt(session.first_projection_at)} → ${dateFmt(session.last_projection_at)}`:session.has_decision_telemetry?schedulerStatus(session):"OC 未启用 · 节省量为 0";actions.append(downloadAll,time);head.append(left,actions);host.append(head);
+  const metrics=document.createElement("div");metrics.className="kpis session-kpis";metrics.append(kpi("Requests",String(session.request_count)),kpi("Turns",String(session.turn_count)),kpi("Conversation-only Saved",fmtConversation(session.totals,session.conversation_metric_count,session.conversation_metric_missing_count)),kpi("Gross Saved",fmt(session.totals.tokens_saved,"tokens")),kpi("Compression Overhead",fmt(session.totals.compression_overhead_tokens,"tokens")),kpi("Known Net",fmtSignedToken(session.totals.net_tokens_saved_known)),kpi("Known Provider",fmt(session.totals.all_provider_tokens_known,"tokens")));host.append(metrics,renderOverheadLedger(session));
   for(const group of session.groups){const section=document.createElement("section");section.className="metric-group";const heading=document.createElement("div");heading.className="group-heading";const title=document.createElement("h3");title.className="group-title";title.style.color=group.color;const dot=document.createElement("span");dot.className="group-dot";const label=document.createElement("span");label.textContent=group.title;title.append(dot,label);heading.append(title);if(Array.isArray(group.display_modes)){const toggle=document.createElement("div");toggle.className="metric-toggle";toggle.setAttribute("role","group");toggle.setAttribute("aria-label",`${group.title} 显示方式`);const selectedMode=groupDisplayModes[group.key]||group.default_display_mode;for(const mode of group.display_modes){const button=document.createElement("button");button.type="button";button.className="metric-mode";button.textContent=mode.label;button.setAttribute("aria-pressed",String(selectedMode===mode.key));button.addEventListener("click",()=>{if(groupDisplayModes[group.key]===mode.key)return;groupDisplayModes[group.key]=mode.key;renderWorkspace();});toggle.append(button);}heading.append(toggle);}const description=document.createElement("div");description.className="group-description";description.textContent=group.description;const charts=document.createElement("div");charts.className="charts";for(const chart of group.charts)charts.append(renderChart(session,group,activeChart(group,chart)));section.append(heading,description,charts);host.append(section);}
-  if(!session.request_usage_coverage.complete||session.request_turnless_count||session.turnless_project_count){const coverage=document.createElement("div");coverage.className="coverage-note";const label=document.createElement("strong");label.textContent="Coverage";coverage.append(label);const chip=value=>{const item=document.createElement("span");item.className="coverage-chip";item.textContent=value;coverage.append(item);};chip(`Request series ${session.request_event_count}/${session.request_count}`);chip(`Token series ${fmt(session.request_usage_coverage.event_tokens,"tokens")} / ${fmt(session.totals.provider_tokens,"tokens")}`);if(session.request_turnless_count)chip(`Request turn ID ${session.request_count-session.request_turnless_count}/${session.request_count}`);if(session.project_count&&session.turnless_project_count)chip(`OC turn ID ${session.project_count-session.turnless_project_count}/${session.project_count}`);if(session.legacy_project_count)chip(`Legacy OC ${session.legacy_project_count}`);host.append(coverage);}
+  if(!session.request_usage_coverage.complete||session.request_turnless_count||session.turnless_project_count||session.conversation_metric_missing_count||!session.economic_metrics_available){const coverage=document.createElement("div");coverage.className="coverage-note";const label=document.createElement("strong");label.textContent="Coverage";coverage.append(label);const chip=value=>{const item=document.createElement("span");item.className="coverage-chip";item.textContent=value;coverage.append(item);};chip(`Request series ${session.request_event_count}/${session.request_count}`);chip(`Token series ${fmt(session.request_usage_coverage.event_tokens,"tokens")} / ${fmt(session.totals.provider_tokens,"tokens")}`);if(session.request_turnless_count)chip(`Request turn ID ${session.request_count-session.request_turnless_count}/${session.request_count}`);if(session.project_count&&session.turnless_project_count)chip(`OC turn ID ${session.project_count-session.turnless_project_count}/${session.project_count}`);if(session.conversation_metric_missing_count)chip(`Conversation-only ${session.conversation_metric_count}/${session.project_count} · legacy rows unavailable`);if(session.legacy_project_count)chip(`Legacy OC ${session.legacy_project_count}`);if(!session.economic_metrics_available)chip(session.amortized_metrics_available?"V1.1 charts separate · V1.2 scheduler telemetry present":"V1.1 economic metrics unavailable · legacy session");host.append(coverage);}
 }
 function selectSession(conversationId){selectedId=conversationId;renderRuns(byId("run-search").value);renderWorkspace();history.replaceState(null,"",`#session=${encodeURIComponent(conversationId)}`);byId("workspace").scrollIntoView({behavior:"smooth",block:"start"});}
 function syncSearch(value){byId("run-search").value=value;byId("side-search").value=value;renderRuns(value);}byId("run-search").addEventListener("input",event=>syncSearch(event.target.value));byId("side-search").addEventListener("input",event=>syncSearch(event.target.value));
@@ -969,9 +2516,11 @@ def write_monitor_html(
 __all__ = [
     "MONITOR_DIRNAME",
     "MONITOR_SCHEMA_VERSION",
+    "ObjectContextMonitorServer",
     "build_monitor_dashboard_payload",
     "build_monitor_payload",
     "monitor_directory",
     "render_monitor_html",
+    "start_monitor_server",
     "write_monitor_html",
 ]

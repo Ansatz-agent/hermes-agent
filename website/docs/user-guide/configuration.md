@@ -1025,35 +1025,153 @@ context:
   engine: "lcm"          # must match the plugin's name
 ```
 
-The bundled `object_context` engine implements Context Compression Strategy
-V1. It losslessly externalizes large structured objects from recent verbatim
-user/assistant/tool Deltas into stable in-place Cards, while keeping the normal
-whole-history summarizer as an independent safety net:
+The bundled `object_context` engine implements Object Context V1.1 and V1.2.
+Both schedulers send every Delta raw successfully at least once before it may
+become a stable Card. `economic` is the compatible default and preserves the
+V1.1 immediate-next-request policy. `amortized_batch` opts into V1.2's bounded
+Hot Tail, pending batch, and amortized crossing. The normal whole-history
+summarizer remains an independent safety net:
+
+Object Context needs access to the complete provider message view. It works in
+the normal Chat Completions, Anthropic Messages and `codex_responses` loops,
+but `codex_app_server` owns an opaque server-side thread that Hermes cannot
+rewrite. Hermes therefore logs the incompatibility and falls back to the
+built-in whole-history compressor for that API mode rather than exposing
+misleading Object Context status.
 
 ```yaml
 context:
   engine: object_context
   object_context:
-    hot_tail_max_deltas: 8
-    hot_tail_token_budget_ratio: 0.25
-    context_soft_limit_ratio: 0.75
+    enabled: true
+    scheduler: economic
+    hot_tail_max_inferences: 4
+    hot_tail_max_tokens: 12800
+    amortized_cache_read_weight: 0.10
+    batch_policy: dynamic
+    fixed_batch_size: 4
+    min_raw_exposures: 1
+    economic_min_net_saving_tokens: 1000
+    economic_min_net_saving_usd: null
+    economic_cache_read_ratio_fallback: 0.10
+    economic_cache_write_ratio_fallback: 1.00
+    emergency_context_ratio: 0.90
     object_prefilter_min_tokens: 256
     min_absolute_saving_tokens: 128
     min_relative_saving_ratio: 0.25
+    card_summary_enabled: false  # economic normal/shared emergency only
     summary_max_tokens: 64
     wm_grace_deltas: 20
     recent_retrieval_active_deltas: 20
     retrieval_max_tokens_ratio: 0.50
 ```
 
-The model receives exact content only after calling
-`retrieve_object(object_ref, reason)`. Exact retrieval is full-object,
-SHA-256-verified, and limited to the current real user turn; it is never a
-semantic search or a partial/range read. See the bundled
+For V1.2, let `h = hot_tail_max_inferences` and
+`L_hot = hot_tail_max_tokens`. Hot Tail uses an OR bound. While preparing the
+next inference, its prospective boundary consumes one position. A raw-seen
+boundary leaves by age when
+`next_success_sequence - eligibility_success_sequence >= h`; V1.2 also moves
+the oldest eligible raw-seen bucket while the raw footprint is strictly greater
+than `L_hot`. It stops only when both dimensions are within their limits, and
+token equality is legal. Underexposed (`RAW_UNSEEN`) content can never be
+projected merely to satisfy a limit, so an indivisible unseen bucket may be
+reported as a temporary overflow. After the required raw exposure, the active
+turn has no unlimited special protection.
+
+Pending limits are fixed derivatives, not configuration keys: `2h` distinct
+buckets and `2L_hot` raw tokens. Equality is legal. Strictly exceeding either
+OR limit requires a flush-all of the eligible pending batch before the next
+provider request; the scheduler cannot choose to keep waiting or carry that
+eligible raw batch, although raw-exposure and Card-legality checks still apply.
+Decision priority is emergency, pending capacity, amortized crossing, then
+wait. The amortized model uses `amortized_cache_read_weight` and a fixed
+`F0 = 0`. In V1.2, the V1.1 summary-free full-render immediate score is
+counterfactual telemetry only. It uses V1.1 route pricing and configured gates
+without invoking the summary model:
+there is no automatic immediate-positive fast path and no second online shadow
+scheduler in this first release.
+
+Within `scheduler: amortized_batch`, `batch_policy: dynamic` preserves that
+original W/Q-triggered flush-all behavior. Set `batch_policy: fixed` and a
+positive `fixed_batch_size` to run a controlled fixed-count comparison on the
+same Hot Tail, Pending, Card, retrieval, and persistence machinery. An ordinary
+fixed decision waits for N eligible Pending Deltas and publishes the oldest N;
+N counts Deltas, not Cards or inference buckets. W/Q remains telemetry only in
+this mode. Capacity still flushes all eligible Pending Deltas, and emergency
+still uses the viability planner, so compare ordinary fixed batches using
+`decision_mode: fixed` rows rather than treating safety overrides as fixed-N.
+
+The model receives exact content after calling
+`retrieve_object(object_ref, reason)`. Exact retrieval is full-object and
+SHA-256-verified; its call/result is a normal inference Delta that must be sent
+raw once before a legal scheduler epoch may replace the result with a minimal
+same-reference receipt. Turn completion does not force that replacement.
+Retrieval is never semantic search or a partial/range read. See the bundled
 `plugins/context_engine/object_context/README.md` for lifecycle, storage,
 failure, and metric details.
 
-Plugin engines are **never auto-activated** — you must explicitly set `context.engine` to the plugin name. Available engines can be browsed and selected via `ansatz plugins` → Provider Plugins → Context Engine.
+A winning Card epoch is committed in one local durable transaction before the
+provider send. If that transaction fails, the full epoch rolls back and Hermes
+sends the prior committed `Q0` view. If the transaction succeeds but the
+provider call fails, the Card epoch is not rolled back; retry uses the committed
+view and the same Card bytes. Switching back to `scheduler: economic` affects
+future decisions after restart, but never rewrites committed Cards.
+
+`/object_context stats` and `/object_context monitor` separately expose the
+conversation-only saving: raw versus rendered persisted
+user/assistant/tool history, excluding the system prompt, tool schemas,
+prefills, and request-only injections. Full provider token usage remains a
+separate metric for cost analysis. Sessions created before the scoped
+telemetry was added show that field as legacy/unavailable rather than deriving
+it from the older system-inclusive message denominator.
+
+The monitor opens an unguessable URL bound only to `127.0.0.1`. Refreshing that
+browser page reloads current persisted telemetry while the CLI is running; the
+private standalone HTML file printed by the command remains a static fallback.
+
+The monitor exposes 36 charts. It retains the original gross-savings,
+prompt-cache, provider-latency, and provider-spend groups; adds the separate
+conversation-only savings chart; and keeps a six-chart V1.1 economic-decision
+group for gross removed tokens, Card/receipt footprint, cache rewrite penalty,
+known summary cost, normal immediate net, and emergency immediate net. Every
+wait/flush/fallback reason is content-free and auditable by stable decision
+identity. Old sessions without these fields are shown as “V1.1 economic metrics
+unavailable”; they are not backfilled with zeroes.
+
+An independent 13-chart V1.2 group shows Hot Tail raw tokens and
+`RAW_UNSEEN` overflow; Pending bucket count, raw tokens, and compression gain;
+projected waiting loss `W`; shared rewrite cost `Q`; signed `W - Q` crossing margin;
+amortized-crossing, pending-count-cap, and pending-token-cap flags; and the
+V1.1 summary-free full-render immediate flag/net as counterfactual comparison
+telemetry. The dedicated counterfactual fields use V1.1 route pricing; they do
+not reuse the V1.2 fixed-policy net. Hot, Pending,
+`W`, and `Q` are scheduler-state snapshots. `W` and `Q` determine a crossing;
+they are not realized token benefit and are never accumulated into savings
+totals. A durable V1.2 `wait` decision is sufficient OC evidence, so a
+wait-only session remains labelled `OC` before it publishes its first Card.
+V1.2 rows remain labelled with their scheduler/version and do not reclassify
+historical V1.1 decisions. Retrieved-payload size is diagnostic only and is
+never added a second time to provider prompt usage or spend.
+
+Card summaries are disabled by default. The
+`context.object_context.card_summary_enabled` setting belongs only to the V1.1
+economic planner: with `scheduler: economic`, normal projection and emergency
+projection honor it. With `scheduler: amortized_batch`, normal amortized
+crossing and capacity projection always remain deterministic and summary-free,
+regardless of the setting. V1.2 emergency reuses the shared economic emergency
+path and therefore still honors it.
+
+Set `context.object_context.card_summary_enabled: true` (or run
+`/object_context set card_summary_enabled true`) to summarize the provisional
+winner on those eligible economic/emergency paths before an exact scheduler
+recheck. Summary-free Cards omit `summary` but retain deterministic structural
+`contains` and bounded source `origin` metadata. Restart the CLI after changing
+the setting; use a new session for a clean A/B comparison because existing
+immutable Cards are not rewritten.
+
+Plugin engines are **never auto-activated** — you must explicitly set
+`context.engine` to the plugin name. Available engines can be browsed and
+selected via `ansatz plugins` → Provider Plugins → Context Engine.
 
 See [Memory Providers](/user-guide/features/memory-providers) for the analogous single-select system for memory plugins.
 

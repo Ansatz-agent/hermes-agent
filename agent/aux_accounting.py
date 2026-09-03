@@ -27,14 +27,24 @@ double-count (see ``_EXCLUDED_TASKS``).
 from __future__ import annotations
 
 import logging
+from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 logger = logging.getLogger(__name__)
 
 # (session_db, session_id) for the active agent turn, or None outside one.
 _accounting: ContextVar[Optional[tuple]] = ContextVar(
     "aux_accounting_context", default=None
+)
+
+# Optional attribution override for callers that deliberately reuse an
+# existing auxiliary route but need a more precise accounting dimension.  The
+# Object Context Card summarizer, for example, continues to use the configured
+# ``compression`` route while recording spend as
+# ``object_context_card_summary``.
+_task_override: ContextVar[Optional[str]] = ContextVar(
+    "aux_accounting_task_override", default=None
 )
 
 # Aux tasks whose usage is already accounted by the main loop — recording
@@ -68,6 +78,18 @@ def get_accounting_context() -> Optional[tuple]:
     return _accounting.get()
 
 
+@contextmanager
+def scoped_usage_task(task: str) -> Iterator[None]:
+    """Temporarily attribute auxiliary usage to *task* without rerouting it."""
+
+    normalized = str(task or "").strip() or None
+    token = _task_override.set(normalized)
+    try:
+        yield
+    finally:
+        _task_override.reset(token)
+
+
 def record_aux_usage(
     response: Any,
     task: Optional[str],
@@ -90,7 +112,8 @@ def record_aux_usage(
     originally-resolved route and are best-effort.
     """
     try:
-        if not task or task in _EXCLUDED_TASKS:
+        effective_task = _task_override.get() or task
+        if not effective_task or effective_task in _EXCLUDED_TASKS:
             return
         ctx = _accounting.get()
         if ctx is None:
@@ -123,7 +146,7 @@ def record_aux_usage(
 
         session_db.record_auxiliary_usage(
             session_id,
-            task,
+            effective_task,
             model=model,
             billing_provider=provider,
             billing_base_url=base_url,

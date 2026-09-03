@@ -134,7 +134,14 @@ class BoundedSummaryGenerator:
         summary_model = str(getattr(engine, "summary_model", "") or "")
         if summary_model:
             kwargs["model"] = summary_model
-        response = call(**kwargs)
+        # Keep the existing ``compression`` route/model selection while
+        # splitting Card-generation spend into its own accounting dimension.
+        # Custom test/integration callables may not pass through the shared
+        # auxiliary accounting chokepoint; the scope remains harmless there.
+        from agent.aux_accounting import scoped_usage_task
+
+        with scoped_usage_task("object_context_card_summary"):
+            response = call(**kwargs)
         message = response.choices[0].message
         if isinstance(message, dict):
             content = message.get("content")

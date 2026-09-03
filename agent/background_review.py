@@ -851,6 +851,23 @@ def _run_review_in_thread(
             # path (_flush_messages_to_session_db, _ensure_db_session,
             # _get_session_db_for_recall); the review writes only to the skill
             # and memory stores via its tools, which is all it needs.
+            # Numeric auxiliary usage is the sole exception: retain explicit
+            # accounting handles to the parent conversation so compression
+            # and Card-summary inference performed by the isolated review is
+            # measurable without allowing the fork to persist messages.
+            review_agent._aux_accounting_session_db = getattr(
+                agent, "_session_db", None
+            )
+            review_agent._aux_accounting_session_id = getattr(
+                agent, "session_id", None
+            )
+            review_agent._isolated_main_usage_session_db = getattr(
+                agent, "_session_db", None
+            )
+            review_agent._isolated_main_usage_session_id = getattr(
+                agent, "session_id", None
+            )
+            review_agent._isolated_main_usage_task = "background_review"
             review_agent._persist_disabled = True
             review_agent._session_db = None
             review_agent._session_json_enabled = False

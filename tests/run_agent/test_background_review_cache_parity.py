@@ -57,6 +57,7 @@ def _make_agent_stub(agent_cls):
     agent.provider_sort = "throughput"
     agent.provider_require_parameters = False
     agent.provider_data_collection = None
+    agent._session_db = object()
     return agent
 
 
@@ -164,6 +165,44 @@ def test_review_fork_inherits_parent_cached_system_prompt():
         f"Got {captured['written_prompt']!r}, expected {parent_prompt!r}. "
         "This breaks Anthropic/OpenRouter prefix-cache parity (#25322)."
     )
+
+
+def test_review_fork_keeps_numeric_usage_accounting_while_db_isolation_stays_on():
+    """The fork may account tokens, but must still have no persistence DB."""
+
+    import run_agent
+
+    agent = _make_agent_stub(run_agent.AIAgent)
+    captured = {}
+    _Recorder = _make_recorder_class(
+        captured,
+        record_on_run=(
+            "_session_db",
+            "_persist_disabled",
+            "_aux_accounting_session_db",
+            "_aux_accounting_session_id",
+            "_isolated_main_usage_session_db",
+            "_isolated_main_usage_session_id",
+            "_isolated_main_usage_task",
+        ),
+    )
+
+    with patch.object(run_agent, "AIAgent", _Recorder), patch(
+        "threading.Thread", _SyncThread
+    ):
+        agent._spawn_background_review(
+            messages_snapshot=[],
+            review_memory=True,
+            review_skills=False,
+        )
+
+    assert captured["_persist_disabled"] is True
+    assert captured["_session_db"] is None
+    assert captured["_aux_accounting_session_db"] is agent._session_db
+    assert captured["_aux_accounting_session_id"] == agent.session_id
+    assert captured["_isolated_main_usage_session_db"] is agent._session_db
+    assert captured["_isolated_main_usage_session_id"] == agent.session_id
+    assert captured["_isolated_main_usage_task"] == "background_review"
 
 
 def test_review_fork_inherits_parent_ephemeral_system_prompt():

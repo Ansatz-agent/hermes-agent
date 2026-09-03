@@ -83,6 +83,51 @@ class TestRecordAuxiliaryUsage:
         tasks = sorted(r["task"] for r in rows)
         assert tasks == ["", "title_generation"]
 
+    def test_auxiliary_usage_breakdown_groups_physical_lineage_by_task(self, db):
+        for session_id in ("root", "continuation"):
+            db.create_session(session_id, source="cli")
+        db.record_auxiliary_usage(
+            "root",
+            "object_context_card_summary",
+            model="summary-model",
+            input_tokens=100,
+            output_tokens=10,
+            cache_read_tokens=40,
+        )
+        db.record_auxiliary_usage(
+            "continuation",
+            "object_context_card_summary",
+            model="summary-model",
+            input_tokens=200,
+            output_tokens=20,
+            cache_write_tokens=30,
+        )
+        db.record_auxiliary_usage(
+            "continuation",
+            "vision",
+            model="vision-model",
+            input_tokens=50,
+            output_tokens=5,
+        )
+        db.update_token_counts(
+            "root", input_tokens=999, output_tokens=1, api_call_count=1
+        )
+
+        rows = db.auxiliary_usage_breakdown(["root", "continuation", "root"])
+
+        assert [row["task"] for row in rows] == [
+            "object_context_card_summary",
+            "vision",
+        ]
+        card = rows[0]
+        assert card["api_call_count"] == 2
+        assert card["input_tokens"] == 300
+        assert card["output_tokens"] == 30
+        assert card["cache_read_tokens"] == 40
+        assert card["cache_write_tokens"] == 30
+        assert card["prompt_tokens"] == 370
+        assert card["total_tokens"] == 400
+
 
 
 
@@ -176,6 +221,33 @@ class TestAmbientAccountingContext:
         assert rows[0]["input_tokens"] == 100
         assert rows[0]["output_tokens"] == 20
 
+    def test_scoped_usage_task_changes_attribution_without_changing_route_task(
+        self, db
+    ):
+        from agent.aux_accounting import (
+            record_aux_usage,
+            reset_accounting_context,
+            scoped_usage_task,
+            set_accounting_context,
+        )
+
+        db.create_session("s1", source="cli")
+        token = set_accounting_context(db, "s1")
+        try:
+            with scoped_usage_task("object_context_card_summary"):
+                record_aux_usage(_mk_response(), "compression")
+            record_aux_usage(_mk_response(prompt=10, completion=2), "compression")
+        finally:
+            reset_accounting_context(token)
+
+        rows = _usage_rows(db, "s1")
+        assert [row["task"] for row in rows] == [
+            "compression",
+            "object_context_card_summary",
+        ]
+        assert rows[0]["input_tokens"] == 10
+        assert rows[1]["input_tokens"] == 100
+
 
     def test_moa_tasks_excluded(self, db):
         """MoA advisor usage is already folded into the main-loop delta by
@@ -216,6 +288,69 @@ class TestAmbientAccountingContext:
         assert len(rows) == 1
         assert rows[0]["task"] == "web_extract"
         assert rows[0]["billing_provider"] == "openrouter"
+
+
+class TestPersistenceIsolatedMainUsage:
+    def test_background_review_main_usage_records_as_auxiliary_only(self):
+        from agent.conversation_loop import (
+            _record_persistence_isolated_main_usage,
+        )
+
+        calls = []
+        session_db = SimpleNamespace(
+            record_auxiliary_usage=lambda *args, **kwargs: calls.append(
+                (args, kwargs)
+            )
+        )
+        agent = SimpleNamespace(
+            _isolated_main_usage_session_db=session_db,
+            _isolated_main_usage_session_id="parent-session",
+            _isolated_main_usage_task="background_review",
+            model="review-model",
+            provider="openrouter",
+            base_url="https://provider.invalid/v1",
+        )
+        usage = SimpleNamespace(
+            input_tokens=100,
+            output_tokens=20,
+            cache_read_tokens=300,
+            cache_write_tokens=40,
+            reasoning_tokens=5,
+        )
+
+        recorded = _record_persistence_isolated_main_usage(
+            agent, usage, estimated_cost_usd=0.25
+        )
+
+        assert recorded is True
+        assert len(calls) == 1
+        args, kwargs = calls[0]
+        assert args == ("parent-session", "background_review")
+        assert kwargs == {
+            "model": "review-model",
+            "billing_provider": "openrouter",
+            "billing_base_url": "https://provider.invalid/v1",
+            "input_tokens": 100,
+            "output_tokens": 20,
+            "cache_read_tokens": 300,
+            "cache_write_tokens": 40,
+            "reasoning_tokens": 5,
+            "estimated_cost_usd": 0.25,
+        }
+
+    def test_missing_isolated_accounting_handles_is_a_noop(self):
+        from agent.conversation_loop import (
+            _record_persistence_isolated_main_usage,
+        )
+
+        assert (
+            _record_persistence_isolated_main_usage(
+                SimpleNamespace(),
+                SimpleNamespace(),
+                estimated_cost_usd=None,
+            )
+            is False
+        )
 
 
 
@@ -282,4 +417,3 @@ class TestInsightsAuxTotals:
         assert ov["total_output_tokens"] == 600
         models = {m["model"] for m in report["models"]}
         assert {"main-model", "glm-5"} <= models
-

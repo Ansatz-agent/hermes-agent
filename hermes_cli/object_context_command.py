@@ -20,23 +20,35 @@ from typing import Any, Mapping
 
 OBJECT_CONTEXT_ENGINE = "object_context"
 BUILTIN_ENGINE = "compressor"
+ECONOMIC_SCHEDULER = "economic"
+AMORTIZED_BATCH_SCHEDULER = "amortized_batch"
+DYNAMIC_BATCH_POLICY = "dynamic"
+FIXED_BATCH_POLICY = "fixed"
 
 
 @dataclass(frozen=True)
 class ParameterSpec:
-    """One supported Object Context V1 configuration value."""
+    """One supported Object Context V1.1/V1.2 configuration value."""
 
-    default: int | float
-    value_type: type[int] | type[float]
-    minimum: int | float
+    default: Any
+    value_type: type[bool] | type[int] | type[float] | type[str]
+    minimum: int | float | None
     maximum: int | float | None
     description: str
+    nullable: bool = False
+    choices: tuple[str, ...] = ()
 
     @property
     def range_label(self) -> str:
+        if self.value_type is bool:
+            return "true | false"
+        if self.value_type is str:
+            return " | ".join(self.choices) if self.choices else "string"
+        assert self.minimum is not None
+        nullable = " | null" if self.nullable else ""
         if self.maximum is None:
-            return f">= {self.minimum}"
-        return f"{self.minimum} ≤ value ≤ {self.maximum}"
+            return f">= {self.minimum}{nullable}"
+        return f"{self.minimum} ≤ value ≤ {self.maximum}{nullable}"
 
 
 # Keep this table aligned with ObjectContextEngine's constructor and
@@ -44,26 +56,99 @@ class ParameterSpec:
 # accepting arbitrary keys would make typos look successful while the engine
 # silently ignores them.
 PARAMETER_SPECS: dict[str, ParameterSpec] = {
-    "hot_tail_max_deltas": ParameterSpec(
-        8,
+    "enabled": ParameterSpec(
+        True,
+        bool,
+        None,
+        None,
+        "additional Object Context gate; /object_context on|off also updates it",
+    ),
+    "scheduler": ParameterSpec(
+        "economic",
+        str,
+        None,
+        None,
+        "economic (V1.1 immediate) or amortized_batch (V1.2 bounded batch)",
+        choices=("economic", "amortized_batch"),
+    ),
+    "hot_tail_max_inferences": ParameterSpec(
+        4,
         int,
         1,
         None,
-        "maximum recent Deltas retained raw",
+        "V1.2 maximum inference crossings retained in the bounded Hot Tail",
     ),
-    "hot_tail_token_budget_ratio": ParameterSpec(
-        0.25,
+    "hot_tail_max_tokens": ParameterSpec(
+        12800,
+        int,
+        1,
+        None,
+        "V1.2 maximum raw tokens retained in the bounded Hot Tail",
+    ),
+    "amortized_cache_read_weight": ParameterSpec(
+        0.10,
         float,
-        0.01,
+        0.0,
         1.0,
-        "fraction of model context available to the raw Hot Tail",
+        "V1.2 repeated-read cost weight used by amortized batch scoring",
     ),
-    "context_soft_limit_ratio": ParameterSpec(
-        0.75,
+    "batch_policy": ParameterSpec(
+        DYNAMIC_BATCH_POLICY,
+        str,
+        None,
+        None,
+        "V1.2 dynamic W/Q flush-all or fixed-count comparison policy",
+        choices=(DYNAMIC_BATCH_POLICY, FIXED_BATCH_POLICY),
+    ),
+    "fixed_batch_size": ParameterSpec(
+        4,
+        int,
+        1,
+        None,
+        "eligible Pending Deltas selected by an ordinary fixed-policy flush",
+    ),
+    "min_raw_exposures": ParameterSpec(
+        1,
+        int,
+        1,
+        None,
+        "successful raw request exposures required before projection",
+    ),
+    "economic_min_net_saving_tokens": ParameterSpec(
+        1000,
+        int,
+        0,
+        None,
+        "V1.1 required immediate net saving; V1.2 comparison telemetry only",
+    ),
+    "economic_min_net_saving_usd": ParameterSpec(
+        None,
+        float,
+        0.0,
+        None,
+        "optional V1.1 USD gate; never a V1.2 flush trigger",
+        nullable=True,
+    ),
+    "economic_cache_read_ratio_fallback": ParameterSpec(
+        0.10,
+        float,
+        0.0,
+        1.0,
+        "V1.1/cache-comparison read weight when route pricing is unavailable",
+    ),
+    "economic_cache_write_ratio_fallback": ParameterSpec(
+        1.00,
+        float,
+        0.0,
+        None,
+        "V1.1/cache-comparison write weight when route pricing is unavailable",
+    ),
+    "emergency_context_ratio": ParameterSpec(
+        0.90,
         float,
         0.10,
         1.0,
-        "prompt pressure point that can cool older Deltas early",
+        "separate request-viability pressure threshold",
     ),
     "object_prefilter_min_tokens": ParameterSpec(
         256,
@@ -85,6 +170,13 @@ PARAMETER_SPECS: dict[str, ParameterSpec] = {
         0.0,
         1.0,
         "minimum proportional raw-minus-Card saving",
+    ),
+    "card_summary_enabled": ParameterSpec(
+        False,
+        bool,
+        None,
+        None,
+        "generate an LLM semantic summary for each accepted Card",
     ),
     "summary_max_tokens": ParameterSpec(
         64,
@@ -117,6 +209,11 @@ PARAMETER_SPECS: dict[str, ParameterSpec] = {
 }
 
 LEGACY_V0_KEYS = frozenset({"min_code_chars", "max_read_lines"})
+DEPRECATED_V1_KEYS = frozenset({
+    "hot_tail_max_deltas",
+    "hot_tail_token_budget_ratio",
+    "context_soft_limit_ratio",
+})
 _BOOLEAN_WORDS = frozenset(
     {"true", "false", "yes", "no", "on", "off", "enable", "disable"}
 )
@@ -140,10 +237,50 @@ def _mapping(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _format_value(value: int | float) -> str:
+def _format_value(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
     if isinstance(value, float):
         return f"{value:g}"
     return str(value)
+
+
+def _normalized_scheduler(value: Any) -> str:
+    normalized = str(value or "").strip().casefold()
+    choices = PARAMETER_SPECS["scheduler"].choices
+    return normalized if normalized in choices else ECONOMIC_SCHEDULER
+
+
+def _reported_scheduler(engine_status: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(engine_status, Mapping):
+        return None
+    for name in ("effective_scheduler", "scheduler"):
+        value = str(engine_status.get(name) or "").strip().casefold()
+        if value in PARAMETER_SPECS["scheduler"].choices:
+            return value
+    return None
+
+
+def _normalized_batch_policy(value: Any) -> str:
+    normalized = str(value or "").strip().casefold()
+    choices = PARAMETER_SPECS["batch_policy"].choices
+    return normalized if normalized in choices else DYNAMIC_BATCH_POLICY
+
+
+def _positive_int(value: Any, default: int) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed >= 1 else default
+
+
+def _scheduler_version(scheduler: str) -> str:
+    return "V1.2" if scheduler == AMORTIZED_BATCH_SCHEDULER else "V1.1"
 
 
 def _metric_value(metrics: Mapping[str, Any], name: str) -> float:
@@ -185,16 +322,40 @@ def _saving_percent(raw_tokens: float, saved_tokens: float) -> float:
     return max(0.0, min(100.0, saved_tokens / raw_tokens * 100.0))
 
 
-def parse_parameter_value(name: str, raw_value: str) -> int | float:
+def parse_parameter_value(name: str, raw_value: str) -> Any:
     """Parse one parameter strictly and enforce the engine's real range."""
 
     spec = PARAMETER_SPECS.get(name)
     if spec is None:
+        if name in DEPRECATED_V1_KEYS:
+            raise ObjectContextCommandError(
+                f"{name} is a deprecated V1 Hot Tail setting and does not control "
+                "either supported scheduler. Use /object_context help."
+            )
         raise ObjectContextCommandError(
-            f"Unknown V1 parameter: {name}. Use /object_context help to list valid names."
+            "Unknown Object Context parameter: "
+            f"{name}. Use /object_context help to list valid names."
         )
 
     text = str(raw_value or "").strip()
+    if spec.nullable and text.casefold() in {"null", "none"}:
+        return None
+    if spec.value_type is str:
+        normalized = text.casefold()
+        if normalized and (not spec.choices or normalized in spec.choices):
+            return normalized
+        raise ObjectContextCommandError(
+            f"{name} requires {spec.range_label}; received {raw_value!r}."
+        )
+    if spec.value_type is bool:
+        normalized = text.casefold()
+        if normalized in {"true", "yes", "on", "enable"}:
+            return True
+        if normalized in {"false", "no", "off", "disable"}:
+            return False
+        raise ObjectContextCommandError(
+            f"{name} requires true or false; received {raw_value!r}."
+        )
     if not text or text.casefold() in _BOOLEAN_WORDS:
         raise ObjectContextCommandError(
             f"{name} requires a numeric value, not {raw_value!r}."
@@ -215,6 +376,7 @@ def parse_parameter_value(name: str, raw_value: str) -> int | float:
             f"{name} requires a finite {kind}; received {raw_value!r}."
         ) from exc
 
+    assert spec.minimum is not None
     if value < spec.minimum or (
         spec.maximum is not None and value > spec.maximum
     ):
@@ -296,24 +458,31 @@ def _save_raw_config(raw: dict[str, Any]) -> None:
 
 
 def _set_engine(engine_name: str) -> bool:
-    _assert_paths_writable("context.engine")
+    _assert_paths_writable("context.engine", "context.object_context.enabled")
     raw = _raw_config_for_write()
     context = _context_mapping(raw, create=True)
     current = str(context.get("engine") or BUILTIN_ENGINE)
-    if current == engine_name:
+    object_cfg = _object_mapping(context, create=True)
+    enabled = engine_name == OBJECT_CONTEXT_ENGINE
+    if current == engine_name and object_cfg.get("enabled", True) is enabled:
         return False
     context["engine"] = engine_name
+    object_cfg["enabled"] = enabled
     _save_raw_config(raw)
     return True
 
 
-def _set_parameter(name: str, value: int | float) -> bool:
+def _set_parameter(name: str, value: Any) -> bool:
     path = f"context.object_context.{name}"
     _assert_paths_writable(path)
     raw = _raw_config_for_write()
     context = _context_mapping(raw, create=True)
     object_cfg = _object_mapping(context, create=True)
-    if object_cfg.get(name) == value and type(object_cfg.get(name)) is type(value):
+    if (
+        name in object_cfg
+        and object_cfg.get(name) == value
+        and type(object_cfg.get(name)) is type(value)
+    ):
         return False
     object_cfg[name] = value
     _save_raw_config(raw)
@@ -321,13 +490,19 @@ def _set_parameter(name: str, value: int | float) -> bool:
 
 
 def _reset_parameters(name: str) -> tuple[bool, tuple[str, ...]]:
-    if name not in PARAMETER_SPECS and name not in LEGACY_V0_KEYS and name != "all":
+    if (
+        name not in PARAMETER_SPECS
+        and name not in LEGACY_V0_KEYS
+        and name not in DEPRECATED_V1_KEYS
+        and name != "all"
+    ):
         raise ObjectContextCommandError(
-            f"Unknown V1 parameter: {name}. Use /object_context help to list valid names."
+            "Unknown Object Context parameter: "
+            f"{name}. Use /object_context help to list valid names."
         )
 
     targets = (
-        set(PARAMETER_SPECS) | set(LEGACY_V0_KEYS)
+        set(PARAMETER_SPECS) | set(LEGACY_V0_KEYS) | set(DEPRECATED_V1_KEYS)
         if name == "all"
         else {name}
     )
@@ -367,9 +542,13 @@ def _savings_summary_lines(
     if active_engine != OBJECT_CONTEXT_ENGINE:
         return []
     if not isinstance(engine_status, Mapping):
-        return ["", "Live V1 savings: unavailable until an agent is active."]
+        return ["", "Live Object Context savings: unavailable until an agent is active."]
     if engine_status.get("object_context_available") is False:
-        return ["", "Live V1 savings: V1 storage is unavailable for this session."]
+        return ["", "Live Object Context savings: storage is unavailable for this session."]
+
+    version = _scheduler_version(
+        _reported_scheduler(engine_status) or ECONOMIC_SCHEDULER
+    )
 
     latest = _mapping(engine_status.get("last_request_metrics"))
     totals = _mapping(engine_status.get("request_metric_totals"))
@@ -380,18 +559,37 @@ def _savings_summary_lines(
     if count == 0:
         return [
             "",
-            "Live V1 savings: no request projection has been recorded yet.",
+            f"Live {version} savings: no request projection has been recorded yet.",
             "Details: /object_context stats",
         ]
 
-    last_raw = _metric_value(latest, "raw_context_tokens")
-    last_saved = _metric_value(latest, "tokens_saved")
-    total_raw = _metric_value(totals, "raw_context_tokens")
-    total_saved = _metric_value(totals, "tokens_saved")
+    conversation_metrics_available = all(
+        name in latest and name in totals
+        for name in ("raw_conversation_tokens", "conversation_tokens_saved")
+    )
+    raw_name = (
+        "raw_conversation_tokens"
+        if conversation_metrics_available
+        else "raw_context_tokens"
+    )
+    saved_name = (
+        "conversation_tokens_saved"
+        if conversation_metrics_available
+        else "tokens_saved"
+    )
+    last_raw = _metric_value(latest, raw_name)
+    last_saved = _metric_value(latest, saved_name)
+    total_raw = _metric_value(totals, raw_name)
+    total_saved = _metric_value(totals, saved_name)
     request_word = "request" if count == 1 else "requests"
+    scope_label = (
+        "persisted conversation-record tokens"
+        if conversation_metrics_available
+        else "legacy assembled-message tokens"
+    )
     return [
         "",
-        "Live V1 savings (estimated conversation-view tokens):",
+        f"Live {version} savings (estimated {scope_label}):",
         (
             f"  Last projection: {_format_tokens(last_saved)} avoided "
             f"({_saving_percent(last_raw, last_saved):.1f}%)"
@@ -409,7 +607,10 @@ def _stats_result(
     active_engine: str,
     engine_status: Mapping[str, Any] | None,
 ) -> ObjectContextCommandResult:
-    lines = ["Object Context V1 Token Savings", "─" * 72]
+    version = _scheduler_version(
+        _reported_scheduler(engine_status) or ECONOMIC_SCHEDULER
+    )
+    lines = [f"Object Context {version} Token Savings", "─" * 72]
     if active_engine != OBJECT_CONTEXT_ENGINE:
         lines.extend(
             [
@@ -452,13 +653,34 @@ def _stats_result(
         )
         return ObjectContextCommandResult(tuple(lines))
 
-    last_raw = _metric_value(latest, "raw_context_tokens")
-    last_rendered = _metric_value(latest, "rendered_context_tokens")
-    last_saved = _metric_value(latest, "tokens_saved")
-    last_hot_tail = _metric_value(latest, "hot_tail_tokens")
-    total_raw = _metric_value(totals, "raw_context_tokens")
-    total_rendered = _metric_value(totals, "rendered_context_tokens")
-    total_saved = _metric_value(totals, "tokens_saved")
+    last_request_raw = _metric_value(latest, "raw_context_tokens")
+    last_request_rendered = _metric_value(latest, "rendered_context_tokens")
+    last_request_saved = _metric_value(latest, "tokens_saved")
+    total_request_raw = _metric_value(totals, "raw_context_tokens")
+    total_request_rendered = _metric_value(totals, "rendered_context_tokens")
+    total_request_saved = _metric_value(totals, "tokens_saved")
+    conversation_metrics_available = all(
+        name in latest and name in totals
+        for name in (
+            "raw_conversation_tokens",
+            "rendered_conversation_tokens",
+            "conversation_tokens_saved",
+        )
+    )
+    last_conversation_raw = _metric_value(latest, "raw_conversation_tokens")
+    last_conversation_rendered = _metric_value(
+        latest, "rendered_conversation_tokens"
+    )
+    last_conversation_saved = _metric_value(
+        latest, "conversation_tokens_saved"
+    )
+    total_conversation_raw = _metric_value(totals, "raw_conversation_tokens")
+    total_conversation_rendered = _metric_value(
+        totals, "rendered_conversation_tokens"
+    )
+    total_conversation_saved = _metric_value(
+        totals, "conversation_tokens_saved"
+    )
     retrieved_tokens = _metric_value(all_totals, "retrieved_tokens")
     try:
         retrieval_count = max(0, int(engine_status.get("retrieval_count", 0) or 0))
@@ -469,24 +691,43 @@ def _stats_result(
         retrieval_count = 0
         working_objects = 0
 
+    lines.extend(["Scope: active conversation", ""])
+    if conversation_metrics_available:
+        lines.extend(
+            [
+                f"Conversation records only ({version} evaluation scope):",
+                f"  Last raw conversation             {_format_tokens(last_conversation_raw):>14}",
+                f"  Last rendered conversation        {_format_tokens(last_conversation_rendered):>14}",
+                f"  Last tokens avoided               {_format_tokens(last_conversation_saved):>14}",
+                f"  Last reduction                    {_saving_percent(last_conversation_raw, last_conversation_saved):>13.1f}%",
+                f"  Cumulative raw conversation       {_format_tokens(total_conversation_raw):>14}",
+                f"  Cumulative rendered conversation  {_format_tokens(total_conversation_rendered):>14}",
+                f"  Cumulative tokens avoided         {_format_tokens(total_conversation_saved):>14}",
+                f"  Cumulative reduction              {_saving_percent(total_conversation_raw, total_conversation_saved):>13.1f}%",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                f"Conversation records only ({version} evaluation scope):",
+                "  Unavailable for this legacy session; send one new model request",
+                "  to begin recording the system/prefill-free denominator.",
+            ]
+        )
     lines.extend(
         [
-            "Scope: active conversation",
             "",
-            "Last model-request projection:",
-            f"  Raw conversation view             {_format_tokens(last_raw):>14}",
-            f"  Rendered V1 conversation view     {_format_tokens(last_rendered):>14}",
-            f"  Tokens avoided                    {_format_tokens(last_saved):>14}",
-            f"  Reduction                         {_saving_percent(last_raw, last_saved):>13.1f}%",
-            f"  Hot Tail                          {_format_tokens(last_hot_tail):>14}",
-            "",
-            "Cumulative request projections:",
+            "Assembled request-message view (diagnostic):",
+            f"  Last raw message view             {_format_tokens(last_request_raw):>14}",
+            f"  Last rendered message view        {_format_tokens(last_request_rendered):>14}",
+            f"  Last tokens avoided               {_format_tokens(last_request_saved):>14}",
+            f"  Last reduction                    {_saving_percent(last_request_raw, last_request_saved):>13.1f}%",
             f"  Projected requests                {count:>14,}",
-            f"  Raw conversation-view tokens      {_format_tokens(total_raw):>14}",
-            f"  Rendered V1-view tokens           {_format_tokens(total_rendered):>14}",
-            f"  Tokens avoided                    {_format_tokens(total_saved):>14}",
-            f"  Average avoided / request         {_format_tokens(total_saved / count):>14}",
-            f"  Reduction                         {_saving_percent(total_raw, total_saved):>13.1f}%",
+            f"  Cumulative raw message view       {_format_tokens(total_request_raw):>14}",
+            f"  Cumulative rendered message view  {_format_tokens(total_request_rendered):>14}",
+            f"  Cumulative tokens avoided         {_format_tokens(total_request_saved):>14}",
+            f"  Average avoided / request         {_format_tokens(total_request_saved / count):>14}",
+            f"  Cumulative reduction              {_saving_percent(total_request_raw, total_request_saved):>13.1f}%",
             "",
             "Retrieval and Working Memory:",
             f"  Successful retrievals             {retrieval_count:>14,}",
@@ -497,8 +738,10 @@ def _stats_result(
                 f"{_format_bytes(engine_status.get('working_memory_bytes', 0)):>14}"
             ),
             "",
-            "Savings are rough-token estimates for conversation messages only;",
-            "provider tokenizer, system prompt, tool schemas, caching, and retries differ.",
+            "Conversation-only metrics use persisted user/assistant/tool history and",
+            "exclude system prompt, tool schemas, prefills, and request-only injections.",
+            "The assembled message view includes system/prefill but not tool schemas;",
+            "provider tokenizer, caching, transport retries, and billing can still differ.",
             "The avoided totals already reflect retrieval projection; retrieved payload",
             "is shown separately and is not subtracted a second time.",
         ]
@@ -511,7 +754,7 @@ def _monitor_result(
     engine_status: Mapping[str, Any] | None,
     monitor_timeline: Mapping[str, Any] | None,
 ) -> ObjectContextCommandResult:
-    lines = ["Object Context V1 Session Dynamics Monitor", "─" * 72]
+    lines = ["Object Context Session Dynamics Monitor", "─" * 72]
     session_timelines = (
         monitor_timeline.get("sessions")
         if isinstance(monitor_timeline, Mapping)
@@ -611,7 +854,6 @@ def _monitor_result(
             f"Turns:    {int(selected.get('turn_count', 0)):,} selected",
             "Dashboard: " + str(path),
             "Opening the private local HTML dashboard in your browser…",
-            "Run /object_context monitor again to refresh the snapshot.",
         ]
     )
     project_count = int(selected.get("project_count", 0) or 0)
@@ -648,17 +890,171 @@ def _status_result(
     effective_object = _mapping(effective_context.get("object_context"))
     raw_object = _mapping(raw_context.get("object_context"))
     configured_engine = str(effective_context.get("engine") or BUILTIN_ENGINE)
-    configured_on = configured_engine == OBJECT_CONTEXT_ENGINE
+    configured_enabled = effective_object.get("enabled", True) is not False
+    configured_on = (
+        configured_engine == OBJECT_CONTEXT_ENGINE and configured_enabled
+    )
+    configured_scheduler = _normalized_scheduler(
+        effective_object.get(
+            "scheduler", PARAMETER_SPECS["scheduler"].default
+        )
+    )
+    active_scheduler = (
+        _reported_scheduler(engine_status)
+        if active_engine == OBJECT_CONTEXT_ENGINE
+        else None
+    )
+    effective_scheduler = active_scheduler or configured_scheduler
+    scheduler_source = (
+        "active runtime"
+        if active_scheduler is not None
+        else (
+            "configured fallback; runtime did not report scheduler"
+            if active_engine == OBJECT_CONTEXT_ENGINE
+            else "configured next launch"
+        )
+    )
+
+    configured_hot_inferences = _positive_int(
+        effective_object.get("hot_tail_max_inferences"),
+        PARAMETER_SPECS["hot_tail_max_inferences"].default,
+    )
+    configured_hot_tokens = _positive_int(
+        effective_object.get("hot_tail_max_tokens"),
+        PARAMETER_SPECS["hot_tail_max_tokens"].default,
+    )
+    active_status = engine_status if isinstance(engine_status, Mapping) else {}
+    hot_inferences = _positive_int(
+        active_status.get("hot_tail_max_inferences"),
+        configured_hot_inferences,
+    )
+    hot_tokens = _positive_int(
+        active_status.get("hot_tail_max_tokens"),
+        configured_hot_tokens,
+    )
+    pending_inferences = _positive_int(
+        active_status.get("pending_max_inferences"),
+        hot_inferences * 2,
+    )
+    pending_tokens = _positive_int(
+        active_status.get("pending_max_tokens"),
+        hot_tokens * 2,
+    )
+    configured_batch_policy = _normalized_batch_policy(
+        effective_object.get(
+            "batch_policy", PARAMETER_SPECS["batch_policy"].default
+        )
+    )
+    active_batch_policy = (
+        _normalized_batch_policy(active_status.get("batch_policy"))
+        if active_engine == OBJECT_CONTEXT_ENGINE
+        and active_status.get("batch_policy") is not None
+        else None
+    )
+    effective_batch_policy = active_batch_policy or configured_batch_policy
+    configured_fixed_batch_size = _positive_int(
+        effective_object.get("fixed_batch_size"),
+        PARAMETER_SPECS["fixed_batch_size"].default,
+    )
+    fixed_batch_size = _positive_int(
+        active_status.get("fixed_batch_size"),
+        configured_fixed_batch_size,
+    )
+    version = _scheduler_version(effective_scheduler)
 
     lines = [
-        "Object Context V1",
+        "Object Context V1.1 / V1.2",
         "─" * 72,
         f"Configured: {'ON' if configured_on else 'OFF'} ({configured_engine})",
         f"Active session: {_active_label(active_engine)}",
+        f"Effective scheduler: {effective_scheduler} ({version}; {scheduler_source})",
+        (
+            "Algorithm: immediate next-request economic; no fixed Hot Tail"
+            if effective_scheduler == ECONOMIC_SCHEDULER
+            else (
+                "Algorithm: bounded Hot Tail/pending; fixed oldest-"
+                f"{fixed_batch_size} eligible Deltas"
+                if effective_batch_policy == FIXED_BATCH_POLICY
+                else "Algorithm: bounded Hot Tail/pending amortized batch crossing"
+            )
+        ),
+        (
+            "V1.2 batch policy: "
+            f"{effective_batch_policy}"
+            + (
+                f" (ordinary batch={fixed_batch_size:,} Deltas)"
+                if effective_batch_policy == FIXED_BATCH_POLICY
+                else " (W/Q crossing, flush-all)"
+            )
+        ),
+        (
+            "V1.2 Hot Tail caps: "
+            f"{hot_inferences:,} inferences / {hot_tokens:,} tokens"
+        ),
+        (
+            "V1.2 pending caps: "
+            f"{pending_inferences:,} inferences / {pending_tokens:,} tokens "
+            "(fixed 2x Hot Tail)"
+        ),
         f"Config: {display_hermes_home()}/config.yaml",
     ]
     if active_engine and active_engine != configured_engine:
         lines.append("Restart pending: configured and active engines differ.")
+    if (
+        active_scheduler is not None
+        and active_scheduler != configured_scheduler
+    ):
+        lines.append("Restart pending: configured and active schedulers differ.")
+    if (
+        active_batch_policy is not None
+        and active_batch_policy != configured_batch_policy
+    ):
+        lines.append("Restart pending: configured and active batch policies differ.")
+    if (
+        active_engine == OBJECT_CONTEXT_ENGINE
+        and active_status.get("fixed_batch_size") is not None
+        and fixed_batch_size != configured_fixed_batch_size
+    ):
+        lines.append("Restart pending: configured and active fixed batch sizes differ.")
+    if (
+        active_engine == OBJECT_CONTEXT_ENGINE
+        and effective_scheduler == AMORTIZED_BATCH_SCHEDULER
+        and not all(
+            name in active_status
+            for name in (
+                "hot_tail_max_inferences",
+                "hot_tail_max_tokens",
+                "pending_max_inferences",
+                "pending_max_tokens",
+            )
+        )
+    ):
+        lines.append(
+            "Runtime cap fields unavailable; V1.2 caps above use configured/2x values."
+        )
+    active_card_summary = (
+        engine_status.get("card_summary_enabled")
+        if active_engine == OBJECT_CONTEXT_ENGINE
+        and isinstance(engine_status, Mapping)
+        else None
+    )
+    if isinstance(active_card_summary, bool):
+        lines.append(
+            "Active Card summaries: "
+            + ("ON" if active_card_summary else "OFF")
+        )
+        configured_card_summary = effective_object.get(
+            "card_summary_enabled",
+            PARAMETER_SPECS["card_summary_enabled"].default,
+        )
+        if (
+            configured_on
+            and isinstance(configured_card_summary, bool)
+            and configured_card_summary is not active_card_summary
+        ):
+            lines.append(
+                "Restart pending: configured and active Card-summary settings differ."
+            )
     lines.extend(_savings_summary_lines(active_engine, engine_status))
     lines.extend(["", "Parameters:"])
     for name, spec in PARAMETER_SPECS.items():
@@ -668,6 +1064,16 @@ def _status_result(
             f"  {name:<36} {_format_value(value):>8}  [{source}]"
         )
 
+    deprecated = sorted(key for key in DEPRECATED_V1_KEYS if key in raw_object)
+    if deprecated:
+        lines.extend(
+            [
+                "",
+                "Deprecated inactive V1 scheduler settings: "
+                + ", ".join(deprecated),
+                "They remain ignored and are not mapped to either supported scheduler.",
+            ]
+        )
     legacy = sorted(key for key in LEGACY_V0_KEYS if key in raw_object)
     if legacy:
         lines.extend(
@@ -694,14 +1100,14 @@ def _status_result(
 
 def _help_result() -> ObjectContextCommandResult:
     lines = [
-        "Object Context V1 command",
+        "Object Context V1.1 / V1.2 command",
         "─" * 72,
         "  /object_context                 show status and effective values",
-        "  /object_context stats           show live V1 token savings",
+        "  /object_context stats           show live Object Context token savings",
         "  /object_context monitor         open the session dynamics webpage",
         "  /object_context on              select object_context for next launch",
         "  /object_context off             select the built-in compressor",
-        "  /object_context set KEY VALUE   persist one validated V1 override",
+        "  /object_context set KEY VALUE   persist one validated override",
         "  /object_context reset [KEY|all] remove explicit overrides",
         "",
         "Supported parameters:",
@@ -718,10 +1124,21 @@ def _help_result() -> ObjectContextCommandResult:
             "Examples:",
             "  /object_context stats",
             "  /object_context monitor",
-            "  /object_context set hot_tail_max_deltas 4",
-            "  /object_context set hot_tail_token_budget_ratio 0.15",
-            "  /object_context reset hot_tail_max_deltas",
+            "  /object_context set scheduler amortized_batch",
+            "  /object_context set batch_policy fixed",
+            "  /object_context set fixed_batch_size 4",
+            "  /object_context set hot_tail_max_inferences 4",
+            "  /object_context set hot_tail_max_tokens 12800",
+            "  /object_context set economic_min_net_saving_tokens 1500",
+            "  /object_context set emergency_context_ratio 0.92",
+            "  /object_context set economic_min_net_saving_usd null",
+            "  /object_context set card_summary_enabled true",
+            "  /object_context reset economic_min_net_saving_tokens",
             "",
+            "V1.2 pending caps are fixed at 2x the configured Hot Tail caps.",
+            "Fixed policy batches count eligible Pending Deltas, not Cards.",
+            "Capacity/emergency safety actions may override ordinary fixed-N batching.",
+            "Changing scheduler never rewrites historical V1.1 telemetry.",
             "Changes are profile-scoped and require a CLI restart.",
         ]
     )
@@ -770,7 +1187,7 @@ def run_object_context_command(
         state = "enabled" if changed else "already enabled"
         return ObjectContextCommandResult(
             (
-                f"Object Context V1 is {state} in config.yaml.",
+                f"Object Context is {state} in config.yaml.",
                 "The live conversation was not changed; restart the CLI to apply it.",
             ),
             changed=changed,
@@ -783,7 +1200,7 @@ def run_object_context_command(
         state = "disabled" if changed else "already disabled"
         return ObjectContextCommandResult(
             (
-                f"Object Context V1 is {state} in config.yaml.",
+                f"Object Context is {state} in config.yaml.",
                 "The live conversation was not changed; restart the CLI to apply it.",
             ),
             changed=changed,
@@ -801,7 +1218,7 @@ def run_object_context_command(
         return ObjectContextCommandResult(
             (
                 f"{state}: context.object_context.{name} = {_format_value(value)}",
-                "This does not toggle V1. Use /object_context on if needed.",
+                "This does not toggle Object Context. Use /object_context on if needed.",
                 "Restart the CLI to apply the parameter to a live agent.",
             ),
             changed=changed,
@@ -824,6 +1241,8 @@ def run_object_context_command(
             message = "Reset Object Context overrides: " + ", ".join(removed)
         elif name in LEGACY_V0_KEYS:
             message = f"Removed ignored V0 setting: {name}"
+        elif name in DEPRECATED_V1_KEYS:
+            message = f"Removed deprecated inactive V1 setting: {name}"
         else:
             default = PARAMETER_SPECS[name].default
             message = f"Reset {name}; effective default is {_format_value(default)}."
@@ -878,7 +1297,25 @@ def active_context_engine_monitor(agent: Any) -> dict[str, Any] | None:
         timeline = get_timeline()
     except Exception:
         return None
-    return dict(timeline) if isinstance(timeline, Mapping) else None
+    if not isinstance(timeline, Mapping):
+        return None
+    result = dict(timeline)
+    status = active_context_engine_status(agent) or {}
+    object_metrics = dict(_mapping(status.get("metric_totals")))
+    object_metrics["retrieval_count"] = _safe_nonnegative_int(
+        status.get("retrieval_count")
+    )
+    result["object_context_metrics"] = object_metrics
+    result["retrieve_object_schema_tokens_per_request"] = (
+        _retrieve_object_schema_tokens_rough()
+    )
+    session_db = getattr(agent, "_session_db", None)
+    session_id = str(getattr(agent, "session_id", "") or "")
+    lineage = _compression_lineage(session_db, session_id)
+    result["auxiliary_usage"] = _auxiliary_usage_for(
+        session_db, lineage or [session_id]
+    )
+    return result
 
 
 def _stored_session_title(
@@ -943,6 +1380,86 @@ def _safe_nonnegative_float(value: Any) -> float:
     except (TypeError, ValueError, OverflowError):
         return 0.0
     return max(0.0, number) if math.isfinite(number) else 0.0
+
+
+def _compression_lineage(session_db: Any, session_id: str) -> list[str]:
+    normalized = str(session_id or "").strip()
+    if not normalized:
+        return []
+    getter = getattr(session_db, "get_compression_lineage", None)
+    if callable(getter):
+        try:
+            lineage = getter(normalized)
+            if isinstance(lineage, list) and lineage:
+                return [str(value) for value in lineage if str(value or "").strip()]
+        except Exception:
+            pass
+    return [normalized]
+
+
+def _auxiliary_usage_for(
+    session_db: Any, session_ids: list[str]
+) -> list[dict[str, Any]]:
+    getter = getattr(session_db, "auxiliary_usage_breakdown", None)
+    if not callable(getter):
+        return []
+    try:
+        rows = getter(session_ids)
+    except Exception:
+        return []
+    return [dict(row) for row in rows or [] if isinstance(row, Mapping)]
+
+
+def _main_request_turn_ids(timeline: Mapping[str, Any]) -> set[str]:
+    """Return durable main-loop turn identities available to the monitor."""
+
+    return {
+        str(event.get("turn_id") or "").strip()
+        for event in timeline.get("requests") or []
+        if isinstance(event, Mapping)
+        and str(event.get("turn_id") or "").strip()
+    }
+
+
+def _scope_monitor_retrieval_metrics(
+    store: Any,
+    conversation_id: str,
+    timeline: Mapping[str, Any],
+    metrics: dict[str, Any],
+) -> None:
+    """Replace conversation-wide retrieval totals with main-turn totals."""
+
+    turn_ids = _main_request_turn_ids(timeline)
+    getter = getattr(store, "retrieval_totals_for_turns", None)
+    if not turn_ids or not callable(getter):
+        return
+    try:
+        scoped = getter(conversation_id, turn_ids)
+    except Exception:
+        return
+    if isinstance(scoped, Mapping):
+        metrics["retrieval_count"] = _safe_nonnegative_int(
+            scoped.get("retrieval_count")
+        )
+        metrics["retrieved_tokens"] = _safe_nonnegative_int(
+            scoped.get("retrieved_tokens")
+        )
+
+
+def _retrieve_object_schema_tokens_rough() -> int:
+    """Estimate the per-request OC retrieval schema using the live schema."""
+
+    try:
+        from agent.model_metadata import _estimate_tools_tokens_rough
+        from plugins.context_engine.object_context.engine import ObjectContextEngine
+
+        tools = [
+            {"type": "function", "function": schema}
+            for schema in ObjectContextEngine.get_tool_schemas()
+        ]
+        return _safe_nonnegative_int(_estimate_tools_tokens_rough(tools))
+    except Exception:
+        return 0
 
 
 def _session_usage_summary(rows: list[Mapping[str, Any]]) -> dict[str, Any]:
@@ -1293,6 +1810,10 @@ def _monitor_session_metadata(session_db: Any) -> list[dict[str, Any]]:
                         "turn_boundaries": boundaries,
                     }
                 )
+            auxiliary_usage = _auxiliary_usage_for(
+                session_db,
+                [str(item.get("id") or "") for item in physical_sessions],
+            )
             requests: list[dict[str, Any]] = []
             if callable(request_getter):
                 try:
@@ -1319,6 +1840,7 @@ def _monitor_session_metadata(session_db: Any) -> list[dict[str, Any]]:
                     "usage_aggregate": _session_usage_summary(
                         physical_sessions
                     ),
+                    "auxiliary_usage": auxiliary_usage,
                     "_physical_sessions": physical_sessions,
                 }
             )
@@ -1378,7 +1900,18 @@ def persisted_context_engine_telemetry(
             store.request_projection_timeline(conversation_id) if store else []
         )
         cache_requests = store.cache_usage_timeline(conversation_id) if store else []
-        if not projections and not include_all_sessions:
+        economic_decisions = (
+            store.projection_decisions(conversation_id) if store else []
+        )
+        request_observations = (
+            store.request_observation_timeline(conversation_id) if store else []
+        )
+        if (
+            not projections
+            and not economic_decisions
+            and not request_observations
+            and not include_all_sessions
+        ):
             return None
         status = (
             store.aggregate_status(conversation_id)
@@ -1413,11 +1946,32 @@ def persisted_context_engine_telemetry(
                     "last_activity_at": 0,
                     "projections": [],
                     "cache_requests": [],
+                    "economic_decisions": [],
+                    "request_observations": [],
                 }
                 session_timelines.insert(0, current_item)
                 session_by_conversation[conversation_id] = current_item
 
-            summaries = store.request_projection_conversations() if store else []
+            summary_by_conversation = {
+                str(summary.get("conversation_id") or ""): dict(summary)
+                for summary in (
+                    store.request_projection_conversations() if store else []
+                )
+                if str(summary.get("conversation_id") or "")
+            }
+            for decision_summary in (
+                store.projection_decision_conversations() if store else []
+            ):
+                decision_conversation_id = str(
+                    decision_summary.get("conversation_id") or ""
+                )
+                if not decision_conversation_id:
+                    continue
+                summary_by_conversation.setdefault(
+                    decision_conversation_id,
+                    {"conversation_id": decision_conversation_id},
+                ).update(decision_summary)
+            summaries = list(summary_by_conversation.values())
             for summary in summaries:
                 stored_conversation_id = str(summary.get("conversation_id") or "")
                 stored_projections = store.request_projection_timeline(
@@ -1425,6 +1979,12 @@ def persisted_context_engine_telemetry(
                 )
                 stored_cache_requests = store.cache_usage_timeline(
                     stored_conversation_id
+                )
+                stored_economic_decisions = store.projection_decisions(
+                    stored_conversation_id
+                )
+                stored_request_observations = (
+                    store.request_observation_timeline(stored_conversation_id)
                 )
                 title = _stored_session_title(
                     session_db,
@@ -1447,6 +2007,8 @@ def persisted_context_engine_telemetry(
                         "last_activity_at": summary.get("last_projection_at", 0),
                         "projections": [],
                         "cache_requests": [],
+                        "economic_decisions": [],
+                        "request_observations": [],
                     }
                     session_timelines.append(stored_item)
                     session_by_conversation[stored_conversation_id] = stored_item
@@ -1462,7 +2024,38 @@ def persisted_context_engine_telemetry(
                         ),
                         "projections": stored_projections,
                         "cache_requests": stored_cache_requests,
+                        "economic_decisions": stored_economic_decisions,
+                        "request_observations": stored_request_observations,
+                        "retrieve_object_schema_tokens_per_request": (
+                            _retrieve_object_schema_tokens_rough()
+                        ),
                     }
+                )
+                stored_status = store.aggregate_status(stored_conversation_id)
+                stored_metrics = dict(
+                    _mapping(stored_status.get("metric_totals"))
+                )
+                stored_metrics["retrieval_count"] = _safe_nonnegative_int(
+                    stored_status.get("retrieval_count")
+                )
+                _scope_monitor_retrieval_metrics(
+                    store,
+                    stored_conversation_id,
+                    stored_item,
+                    stored_metrics,
+                )
+                stored_item["object_context_metrics"] = stored_metrics
+                stored_item.setdefault(
+                    "auxiliary_usage",
+                    _auxiliary_usage_for(
+                        session_db,
+                        [
+                            str(
+                                stored_item.get("session_id")
+                                or stored_conversation_id
+                            )
+                        ],
+                    ),
                 )
             if not session_timelines:
                 return None
@@ -1471,12 +2064,19 @@ def persisted_context_engine_telemetry(
 
     status.update(
         {
-            "object_context_version": 1,
+            "object_context_version": (
+                "1.2"
+                if any(
+                    decision.get("policy_version") == "1.2"
+                    for decision in economic_decisions
+                )
+                else "1.1"
+            ),
             "object_context_available": store is not None,
         }
     )
     timeline: dict[str, Any] = {
-        "schema_version": 2 if include_all_sessions else 1,
+        "schema_version": 4,
         "conversation_id": conversation_id,
         "session_id": current_session_id,
         "title": _stored_session_title(
@@ -1488,6 +2088,21 @@ def persisted_context_engine_telemetry(
         "source": "persisted",
         "projections": projections,
         "cache_requests": cache_requests,
+        "economic_decisions": economic_decisions,
+        "request_observations": request_observations,
+        "object_context_metrics": {
+            **dict(_mapping(status.get("metric_totals"))),
+            "retrieval_count": _safe_nonnegative_int(
+                status.get("retrieval_count")
+            ),
+        },
+        "retrieve_object_schema_tokens_per_request": (
+            _retrieve_object_schema_tokens_rough()
+        ),
+        "auxiliary_usage": _auxiliary_usage_for(
+            session_db,
+            _compression_lineage(session_db, current_session_id),
+        ),
     }
     if include_all_sessions:
         active_item = next(

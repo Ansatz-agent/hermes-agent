@@ -7799,6 +7799,60 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             )
         self._execute_write(_do)
 
+    def auxiliary_usage_breakdown(
+        self, session_ids: "Iterable[str]"
+    ) -> List[Dict[str, Any]]:
+        """Return content-free auxiliary LLM usage grouped by task.
+
+        ``session_ids`` may contain every physical continuation in one logical
+        conversation.  Main-loop rows (``task = ''``) are intentionally
+        excluded because the Object Context monitor obtains those totals from
+        the canonical session/request usage paths.
+        """
+
+        normalized = list(
+            dict.fromkeys(
+                str(session_id or "").strip()
+                for session_id in session_ids
+                if str(session_id or "").strip()
+            )
+        )
+        if not normalized:
+            return []
+        placeholders = ", ".join("?" for _ in normalized)
+        with self._read_ctx() as conn:
+            rows = conn.execute(
+                f"""SELECT task,
+                           SUM(api_call_count) AS api_call_count,
+                           SUM(input_tokens) AS input_tokens,
+                           SUM(output_tokens) AS output_tokens,
+                           SUM(cache_read_tokens) AS cache_read_tokens,
+                           SUM(cache_write_tokens) AS cache_write_tokens,
+                           SUM(reasoning_tokens) AS reasoning_tokens,
+                           SUM(estimated_cost_usd) AS estimated_cost_usd,
+                           MIN(first_seen) AS first_seen,
+                           MAX(last_seen) AS last_seen
+                      FROM session_model_usage
+                     WHERE session_id IN ({placeholders})
+                       AND COALESCE(task, '') <> ''
+                     GROUP BY task
+                     ORDER BY task""",
+                normalized,
+            ).fetchall()
+        result: List[Dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["prompt_tokens"] = (
+                int(item.get("input_tokens") or 0)
+                + int(item.get("cache_read_tokens") or 0)
+                + int(item.get("cache_write_tokens") or 0)
+            )
+            item["total_tokens"] = (
+                item["prompt_tokens"] + int(item.get("output_tokens") or 0)
+            )
+            result.append(item)
+        return result
+
     def prune_empty_ghost_sessions(self, sessions_dir: "Optional[Path]" = None) -> int:
         """Remove empty TUI ghost sessions (no messages, no title, >24hr old)."""
         cutoff = time.time() - 86400  # Only sessions older than 24 hours
