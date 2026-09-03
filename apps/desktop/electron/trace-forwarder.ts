@@ -2,7 +2,6 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import http, { type IncomingMessage, type ServerResponse } from 'node:http'
 
 import type { TraceCredential } from './auth-bridge'
-import { deriveOtlpCorrelation } from './otlp-correlation'
 import { splitOtlpExportTraceRequest } from './otlp-split'
 import type { TraceCredentialProvider } from './trace-credential-provider'
 import { respondTraceUnavailable } from './trace-ingress-facade'
@@ -140,6 +139,7 @@ export class TraceForwarder {
   private generation = 0
   private localBearer = ''
   private owner: TraceOwner | null = null
+  private recoveryOpen = false
   private recoveryPump: Promise<void> | null = null
   private readonly retryByBatch = new Map<string, { attempt: number; nextRetryAt: number }>()
   private server: http.Server | null = null
@@ -163,25 +163,13 @@ export class TraceForwarder {
   }
 
   async start(owner: TraceOwner | number): Promise<{ endpoint: string; localBearer: string }> {
-    if (this.server) {
+    if (this.server || this.owner !== null) {
       throw new Error('trace_forwarder_already_started')
     }
 
-    if (this.store === null) {
-      throw new Error('trace_outbox_required')
-    }
-
-    if (typeof owner === 'number') {
-      throw new TypeError('invalid_trace_owner')
-    }
-
-    this.owner = validateTraceOwner(owner).owner
-    this.generation += 1
-    this.authorizationGeneration += 1
-    this.terminalRevoked = false
+    this.activateOwner(owner)
     this.localBearer = randomBytes(32).toString('base64url')
     this.admissionOpen = true
-    this.stopping = false
 
     const server = http.createServer((request, response) => {
       // A loopback socket error must never escape the listener: a thrown
@@ -217,6 +205,16 @@ export class TraceForwarder {
     return { endpoint: `http://127.0.0.1:${address.port}/v1/traces`, localBearer: this.localBearer }
   }
 
+  async startRecovery(owner: TraceOwner | number): Promise<void> {
+    if (this.server || this.owner !== null) {
+      throw new Error('trace_forwarder_already_started')
+    }
+
+    this.activateOwner(owner)
+    this.localBearer = ''
+    this.admissionOpen = false
+  }
+
   ingress(): { endpoint: string; localBearer: string } | null {
     const address = this.server?.address()
 
@@ -229,7 +227,7 @@ export class TraceForwarder {
     const next = validateTraceOwner(owner).owner
     const current = this.owner
 
-    if (!this.admissionOpen || current === null) {
+    if (current === null) {
       throw new Error('trace_forwarder_unavailable')
     }
 
@@ -247,6 +245,7 @@ export class TraceForwarder {
   async stop({ flushMs: _flushMs }: { flushMs: number }): Promise<TraceForwarderSummary> {
     this.stopping = true
     this.admissionOpen = false
+    this.recoveryOpen = false
     this.generation += 1
     this.authorizationGeneration += 1
     const server = this.server
@@ -314,6 +313,23 @@ export class TraceForwarder {
     }
   }
 
+  private activateOwner(owner: TraceOwner | number): void {
+    if (this.store === null) {
+      throw new Error('trace_outbox_required')
+    }
+
+    if (typeof owner === 'number') {
+      throw new TypeError('invalid_trace_owner')
+    }
+
+    this.owner = validateTraceOwner(owner).owner
+    this.recoveryOpen = true
+    this.generation += 1
+    this.authorizationGeneration += 1
+    this.terminalRevoked = false
+    this.stopping = false
+  }
+
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     try {
       if (!this.admissionOpen || this.owner === null || this.store === null) {
@@ -354,7 +370,7 @@ export class TraceForwarder {
         return respond(response, 413)
       }
 
-      const metadata = traceMetadata(request, body)
+      const metadata = traceMetadata(request)
 
       if (!metadata) {
         return respond(response, 400)
@@ -485,7 +501,7 @@ export class TraceForwarder {
   }
 
   private async pumpUntilBlocked(): Promise<void> {
-    if (!this.admissionOpen || this.owner === null || this.store === null) {
+    if (!this.recoveryOpen || this.owner === null || this.store === null) {
       return
     }
 
@@ -498,7 +514,7 @@ export class TraceForwarder {
     await this.uploadBarrier?.()
     this.requireActiveOwner(owner, generation)
 
-    while (this.admissionOpen && this.owner !== null && this.store !== null) {
+    while (this.recoveryOpen && this.owner !== null && this.store !== null) {
       const now = this.clock()
       const batch = await this.store.peekEligible(now)
       this.requireActiveOwner(owner, generation)
@@ -730,7 +746,7 @@ export class TraceForwarder {
   }
 
   private requireActiveOwner(owner: TraceOwner, generation: number): void {
-    if (!this.admissionOpen || this.generation !== generation || this.owner?.accountKey !== owner.accountKey) {
+    if (!this.recoveryOpen || this.generation !== generation || this.owner?.accountKey !== owner.accountKey) {
       throw new UpstreamFailure(null)
     }
   }
@@ -811,7 +827,7 @@ export class TraceForwarder {
   }
 }
 
-function traceMetadata(request: IncomingMessage, body: Buffer): TraceMetadata | null {
+function traceMetadata(request: IncomingMessage): TraceMetadata | null {
   const hermesSessionId = singleHeader(request.headers['x-hermes-session-id'])
   const entrypoint = singleHeader(request.headers['x-trace-entrypoint'])
   const runId = singleHeader(request.headers['x-trace-run-id'])
@@ -819,16 +835,7 @@ function traceMetadata(request: IncomingMessage, body: Buffer): TraceMetadata | 
   const supplied = [hermesSessionId, entrypoint, runId, telemetrySchemaVersion].filter(Boolean).length
 
   if (supplied === 0) {
-    const derived = deriveOtlpCorrelation(body)
-
-    return derived
-      ? {
-          entrypoint: 'desktop',
-          hermesSessionId: derived.sessionId,
-          runId: derived.runId,
-          telemetrySchemaVersion: '1'
-        }
-      : null
+    return null
   }
 
   if (

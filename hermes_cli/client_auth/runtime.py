@@ -83,6 +83,8 @@ _AUTH_KEYRING_SERVICE_PATTERN = re.compile(
     flags=re.ASCII,
 )
 _DEFAULT_AUTH_KEYRING_SERVICE = "cn.c2sml.hermes.remote-auth"
+_TRACE_KEYRING_SERVICE = "cn.c2sml.hermes.trace-data-keys"
+_TRACE_KEY_NAME_PATTERN = re.compile(r"account-[a-f0-9]{64}", flags=re.ASCII)
 _EXPLICIT_TERMINAL_REASONS = frozenset(
     {"account_disabled", "account_revoked", "session_revoked"}
 )
@@ -259,7 +261,7 @@ class TraceTransportRegistration:
     endpoint: str
     authorization: str = field(repr=False)
     installation_id: str = ""
-    entrypoint: str = "desktop"
+    entrypoint: str = ""
     plugins_toml: str = ""
 
 
@@ -925,7 +927,7 @@ def parse_trace_transport_registration(value: object) -> TraceTransportRegistrat
         and re.fullmatch(r"Bearer [A-Za-z0-9_-]{43}", authorization)
         and identity.version == 4
         and str(identity) == installation_id.lower()
-        and entrypoint == "desktop"
+        and entrypoint in {"cli", "dashboard", "desktop", "voice"}
         and plugins_toml.replace("\\", "/").endswith(
             "/ansatz-voice-trace/plugins.toml"
         )
@@ -1943,6 +1945,47 @@ class _KeyringSecretBackend:
             return
 
 
+class KeyringTraceSecretStore:
+    """Narrow byte storage for account-bound Trace data keys."""
+
+    def available(self) -> bool:
+        try:
+            import keyring
+
+            return float(keyring.get_keyring().priority) > 0
+        except Exception:
+            return False
+
+    def read(self, name: str) -> bytes | None:
+        self._validate_name(name)
+        import keyring
+
+        raw = keyring.get_password(_TRACE_KEYRING_SERVICE, name)
+        if raw is None:
+            return None
+        try:
+            return base64.b64decode(raw, validate=True)
+        except (ValueError, TypeError) as exc:
+            raise RuntimeError("protected Trace key is invalid") from exc
+
+    def write(self, name: str, value: bytes) -> None:
+        self._validate_name(name)
+        if not isinstance(value, bytes):
+            raise TypeError("protected Trace key must be bytes")
+        import keyring
+
+        keyring.set_password(
+            _TRACE_KEYRING_SERVICE,
+            name,
+            base64.b64encode(value).decode("ascii"),
+        )
+
+    @staticmethod
+    def _validate_name(name: str) -> None:
+        if _TRACE_KEY_NAME_PATTERN.fullmatch(name) is None:
+            raise ValueError("invalid protected Trace key name")
+
+
 class ProcessHardener:
     def apply_required(self) -> None:
         if sys.platform.startswith("linux"):
@@ -2097,6 +2140,8 @@ class _OwnerCore:
         self._validation_failures = 0
         self._failed_login_attempts: list[float] = []
         self._last_authenticated_activity = self._clock()
+        self._trace_service: Any | None = None
+        self._trace_service_identity: tuple[str, str, str] | None = None
         if self._on_transition is not None:
             self._on_transition(self._snapshot)
 
@@ -2364,6 +2409,111 @@ class _OwnerCore:
                     raise AuthRequired("signed_out")
             return credential
 
+    def trace_ingress_open(
+        self,
+        *,
+        entrypoint: str,
+        consumer_id: str,
+    ) -> TraceTransportRegistration:
+        from hermes_cli.client_auth.trace.identity import TraceEntrypoint
+
+        parsed_entrypoint = TraceEntrypoint.parse(entrypoint)
+        if not isinstance(consumer_id, str) or not 0 < len(consumer_id) <= 128:
+            raise AuthRequired("runtime_unavailable")
+        with self._refresh_lock:
+            record = self._load_record()
+            with self._lock:
+                if (
+                    not isinstance(record, NativeCredentialRecord)
+                    or self._record is not record
+                    or self._snapshot.state is not AuthState.AUTHENTICATED
+                ):
+                    raise AuthRequired("signed_out")
+                credential = record.credential
+                identity = (
+                    credential.account_id,
+                    credential.session_id,
+                    credential.installation_id,
+                )
+                service = self._trace_service
+                if service is not None and self._trace_service_identity != identity:
+                    self._trace_service = None
+                    self._trace_service_identity = None
+                else:
+                    service = self._trace_service
+                self._last_authenticated_activity = self._clock()
+            if service is None:
+                service = self._create_trace_service(*identity)
+                with self._lock:
+                    self._trace_service = service
+                    self._trace_service_identity = identity
+            lease = service.open_ingress(parsed_entrypoint, consumer_id)
+        return TraceTransportRegistration(
+            endpoint=lease.endpoint,
+            authorization=lease.local_authorization,
+            installation_id=lease.installation_id,
+            entrypoint=lease.entrypoint.value,
+            plugins_toml=lease.plugins_toml,
+        )
+
+    def _create_trace_service(
+        self,
+        account_id: str,
+        session_id: str,
+        installation_id: str,
+    ) -> Any:
+        from hermes_cli.client_auth.trace.crypto import TraceKeyProtector
+        from hermes_cli.client_auth.trace.gateway import GatewayUploader, TraceCredentialProvider
+        from hermes_cli.client_auth.trace.outbox import TraceOutbox, TraceOwner
+        from hermes_cli.client_auth.trace.service import TraceService
+
+        plugins_toml = Path(__file__).resolve().parents[2] / "config" / "ansatz-voice-trace" / "plugins.toml"
+        if not plugins_toml.is_file():
+            raise AuthRequired("runtime_unavailable")
+        owner = TraceOwner(
+            account_id=account_id,
+            session_id=session_id,
+            installation_id=installation_id,
+        )
+        hermes_home = Path(os.environ.get("HERMES_HOME", str(Path.home() / ".hermes")))
+        namespace = hashlib.sha256(account_id.encode("utf-8")).hexdigest()
+        try:
+            outbox = TraceOutbox.open(
+                hermes_home / "trace-outbox" / namespace,
+                owner=owner,
+                key_protector=TraceKeyProtector(KeyringTraceSecretStore()),
+            )
+        except Exception as exc:
+            raise AuthRequired("runtime_unavailable") from exc
+        provider = TraceCredentialProvider(
+            lambda _force: self.trace_token(
+                installation_id=installation_id,
+                client_version="ansatz-trace-owner",
+                telemetry_schema_version="1",
+            )
+        )
+        uploader = GatewayUploader(
+            url="https://c2sml.cn/trace-ingest/v1/traces",
+            credential_provider=provider,
+        )
+        return TraceService(
+            owner=owner,
+            outbox=outbox,
+            uploader=uploader,
+            plugins_toml=str(plugins_toml),
+        )
+
+    def _stop_trace_service(self) -> None:
+        with self._lock:
+            service = self._trace_service
+            self._trace_service = None
+            self._trace_service_identity = None
+        if service is not None:
+            try:
+                service.close()
+            except Exception:
+                pass
+
     def _refresh_once(self) -> RuntimeSnapshot:
         record = self._load_record()
         if record is None:
@@ -2445,6 +2595,7 @@ class _OwnerCore:
             return snapshot
 
     def logout(self) -> RuntimeSnapshot:
+        self._stop_trace_service()
         with self._lock:
             record = self._record
             current = self._snapshot
@@ -2466,6 +2617,7 @@ class _OwnerCore:
         return signed_out
 
     def close(self) -> None:
+        self._stop_trace_service()
         now = self._clock()
         with self._lock:
             if not self._alive:
@@ -2477,9 +2629,18 @@ class _OwnerCore:
     def maintenance(self) -> bool:
         now = self._clock()
         with self._lock:
+            trace_service = self._trace_service
+        trace_pending = False
+        if trace_service is not None:
+            try:
+                trace_service.pump()
+                trace_pending = trace_service.diagnostics().pending > 0
+            except Exception:
+                trace_pending = True
+        with self._lock:
             if not self._alive:
                 return False
-            if now - self._last_authenticated_activity >= OWNER_IDLE_SECONDS:
+            if not trace_pending and now - self._last_authenticated_activity >= OWNER_IDLE_SECONDS:
                 self.close()
                 return False
             refresh_due = (
@@ -2928,6 +3089,13 @@ class _EntryPointOwner(Protocol):
         telemetry_schema_version: str,
     ) -> TraceCredential: ...
 
+    def trace_ingress_open(
+        self,
+        *,
+        entrypoint: str,
+        consumer_id: str,
+    ) -> TraceTransportRegistration: ...
+
     def snapshot(self) -> RuntimeSnapshot: ...
 
     def enable_desktop_local_continuity(self) -> RuntimeSnapshot: ...
@@ -2941,8 +3109,8 @@ class _EntryPointOwner(Protocol):
 
 
 _RUNTIME_FRAME_LIMIT = 65_536
-_RUNTIME_PROTOCOL_VERSION = 3
-_RUNTIME_SUPPORTED_PROTOCOL_VERSIONS = (1, 2, 3)
+_RUNTIME_PROTOCOL_VERSION = 4
+_RUNTIME_SUPPORTED_PROTOCOL_VERSIONS = (1, 2, 3, 4)
 _TRACE_INSTALLATION_ID = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
     re.IGNORECASE,
@@ -3118,6 +3286,33 @@ class RemoteRuntimeOwner:
         return _trace_credential_from_wire(
             response.get("credential"),
             expected_installation_id=installation_id,
+        )
+
+    def trace_ingress_open(
+        self,
+        *,
+        entrypoint: str,
+        consumer_id: str,
+    ) -> TraceTransportRegistration:
+        if self._protocol_version < 4:
+            raise AuthRequired("runtime_unavailable")
+        response = self._exchange_response(
+            self._encode_request(
+                {
+                    "operation": "trace_ingress_open",
+                    "entrypoint": entrypoint,
+                    "consumer_id": consumer_id,
+                }
+            ),
+            timeout=_RUNTIME_REQUEST_TIMEOUT_SECONDS,
+        )
+        if set(response) != {"version", "ok", "lease"}:
+            raise AuthRequired("runtime_unavailable")
+        lease = response.get("lease")
+        if not isinstance(lease, dict):
+            raise AuthRequired("runtime_unavailable")
+        return parse_trace_transport_registration(
+            {"version": 1, "operation": "register_trace_transport", **lease}
         )
 
     def connect_consumer(
@@ -3468,11 +3663,11 @@ class OwnerBroker:
         operation_locked = False
         if (
             isinstance(self._endpoint, UnixEndpoint)
-            and operation in {"login", "logout", "trace_token"}
+            and operation in {"login", "logout", "trace_token", "trace_ingress_open"}
         ):
             wait_seconds = (
                 _RUNTIME_LOGIN_OPERATION_WAIT_SECONDS
-                if operation in {"login", "trace_token"}
+                if operation in {"login", "trace_token", "trace_ingress_open"}
                 else _RUNTIME_LOGOUT_OPERATION_WAIT_SECONDS
             )
             operation_locked = self._operation_lock.acquire(timeout=wait_seconds)
@@ -3613,6 +3808,35 @@ class OwnerBroker:
                     "version": version,
                     "ok": True,
                     "credential": _trace_credential_to_wire(credential),
+                }
+            elif version >= 4 and operation == "trace_ingress_open" and set(request) == {
+                "version",
+                "operation",
+                "entrypoint",
+                "consumer_id",
+            }:
+                entrypoint = request.get("entrypoint")
+                consumer_id = request.get("consumer_id")
+                if (
+                    entrypoint not in {"cli", "dashboard", "desktop", "voice"}
+                    or not isinstance(consumer_id, str)
+                    or re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._:-]{0,127}", consumer_id) is None
+                ):
+                    raise AuthRequired("runtime_unavailable")
+                registration = self._owner.trace_ingress_open(
+                    entrypoint=entrypoint,
+                    consumer_id=consumer_id,
+                )
+                return {
+                    "version": version,
+                    "ok": True,
+                    "lease": {
+                        "endpoint": registration.endpoint,
+                        "authorization": registration.authorization,
+                        "installation_id": registration.installation_id,
+                        "entrypoint": registration.entrypoint,
+                        "plugins_toml": registration.plugins_toml,
+                    },
                 }
             else:
                 raise AuthRequired("runtime_unavailable")
@@ -4443,6 +4667,22 @@ def account_trace_token(
         client_version=client_version,
         telemetry_schema_version=telemetry_schema_version,
     )
+
+
+def account_trace_ingress_open(
+    *,
+    entrypoint: str,
+    consumer_id: str,
+) -> TraceTransportRegistration:
+    with _entrypoint_owner_lock:
+        owner = _entrypoint_owner
+    if owner is None:
+        try:
+            owner = connect_runtime_owner(timeout=_RUNTIME_RECOVERY_PROBE_SECONDS)
+        except AuthRequired as error:
+            raise AuthRequired(error.reason or "signed_out") from None
+        owner = _adopt_entrypoint_owner(owner)
+    return owner.trace_ingress_open(entrypoint=entrypoint, consumer_id=consumer_id)
 
 
 @dataclass(frozen=True)

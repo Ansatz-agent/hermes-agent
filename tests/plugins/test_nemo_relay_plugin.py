@@ -433,9 +433,10 @@ def test_product_auto_activation_shares_one_desktop_voice_coordinator(
     assert otel_config.headers == {"Authorization": "Bearer " + "a" * 43}
     assert otel_config.resource_attributes == {
         "ansatz.product": "voice-trace-client",
-        "ansatz.telemetry.schema_version": "1",
-        "ansatz.installation.id": "11111111-1111-4111-8111-111111111111",
-    }
+            "ansatz.telemetry.schema_version": "1",
+            "ansatz.installation.id": "11111111-1111-4111-8111-111111111111",
+            "hermes.entrypoint": "desktop",
+        }
     assert plugin._get_runtime() is not None
 
     coordinator.release_conversation(desktop)

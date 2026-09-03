@@ -10787,6 +10787,12 @@ def cmd_dashboard(args):
 
     apply_nofile_soft_limit()
 
+    if not _headless_backend and os.environ.get("HERMES_DESKTOP") != "1":
+        from hermes_cli.client_auth.trace.bootstrap import bootstrap_trace
+        from hermes_cli.client_auth.trace.identity import TraceEntrypoint
+
+        bootstrap_trace(TraceEntrypoint.DASHBOARD)
+
     if _token_file:
         _ssh_session_token = _read_ssh_session_token_file(_token_file)
 
@@ -13150,6 +13156,15 @@ def _main():
     if args.version:
         cmd_version(args)
         return
+
+    # Authenticated non-Dashboard commands are explicit CLI producers.
+    # Dashboard waits until profile routing settles; `serve` never guesses
+    # whether its external owner is Dashboard or Desktop.
+    if args.command not in {"dashboard", "serve"}:
+        from hermes_cli.client_auth.trace.bootstrap import bootstrap_trace
+        from hermes_cli.client_auth.trace.identity import TraceEntrypoint
+
+        bootstrap_trace(TraceEntrypoint.CLI)
 
     # --yolo: set HERMES_YOLO_MODE *before* plugin discovery.  The call to
     # _prepare_agent_startup() below triggers discover_plugins() → tool

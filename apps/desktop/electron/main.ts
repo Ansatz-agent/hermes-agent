@@ -43,7 +43,8 @@ import {
   type ConnectionScope,
   DesktopAuthBridge,
   sameConnectionScope,
-  type TraceCredential
+  type TraceCredential,
+  type TraceIngressLease
 } from './auth-bridge'
 import { AuthCoordinator } from './auth-coordinator'
 import { resolveNoConsoleAuthPython } from './auth-python'
@@ -754,12 +755,10 @@ const desktopLocalCapabilities = new LocalBackendCapabilityLifecycle(
 )
 
 async function writeBackendTraceTransport(child, root) {
-  const trace = desktopTraceRuntime.current()
+  const trace = desktopSharedTraceLease
 
   if (
-    !desktopTraceFacadeReady ||
     !trace ||
-    !desktopTraceIngress ||
     !child?.stdin ||
     child.stdin.destroyed ||
     !child.stdin.writable
@@ -769,10 +768,11 @@ async function writeBackendTraceTransport(child, root) {
 
   try {
     const frame = encodeTraceTransportRegistration({
-      endpoint: desktopTraceIngress.endpoint,
-      installationId: trace.owner.installationId,
-      localBearer: desktopTraceIngress.localBearer,
-      pluginsToml: path.join(root, 'config', 'ansatz-voice-trace', 'plugins.toml')
+      endpoint: trace.endpoint,
+      entrypoint: trace.entrypoint,
+      installationId: trace.installation_id,
+      localBearer: trace.authorization.slice('Bearer '.length),
+      pluginsToml: trace.plugins_toml
     })
 
     await new Promise<void>((resolve, reject) => {
@@ -9019,21 +9019,25 @@ let desktopTraceFacadeReady = false
 let desktopTraceFacadeStartupPromise = null
 let desktopTraceAttachRetryTimer = null
 let desktopTraceAttachRetryAttempt = 0
+let desktopSharedTraceLease: TraceIngressLease | null = null
+let desktopSharedTraceScope: ConnectionScope | null = null
+let desktopSharedTraceGeneration = 0
 const desktopTraceBackends = new TraceBackendRegistry<any>()
 const desktopTraceRuntime = new TraceDurabilityRuntime(event => rememberLog(`[trace] ${JSON.stringify(event)}`))
 
 function traceContextForBackendRoot(root) {
-  const trace = desktopTraceRuntime.current()
+  const trace = desktopSharedTraceLease
 
-  if (!desktopTraceFacadeReady || !trace || !desktopTraceIngress || !root) {
+  if (!trace || !root) {
     return null
   }
 
   return {
-    endpoint: desktopTraceIngress.endpoint,
-    installationId: trace.owner.installationId,
-    localAuthorization: `Bearer ${desktopTraceIngress.localBearer}`,
-    pluginsToml: path.join(root, 'config', 'ansatz-voice-trace', 'plugins.toml')
+    endpoint: trace.endpoint,
+    entrypoint: trace.entrypoint,
+    installationId: trace.installation_id,
+    localAuthorization: trace.authorization,
+    pluginsToml: trace.plugins_toml
   }
 }
 
@@ -9061,7 +9065,7 @@ function applyDesktopTraceEnvironment(environment, root) {
     result.ANSATZ_TRACE_LOCAL_ENDPOINT = trace.endpoint
     result.ANSATZ_TRACE_LOCAL_AUTHORIZATION = trace.localAuthorization
     result.ANSATZ_TRACE_INSTALLATION_ID = trace.installationId
-    result.ANSATZ_TRACE_ENTRYPOINT = 'desktop'
+    result.ANSATZ_TRACE_ENTRYPOINT = trace.entrypoint
   }
 
   return result
@@ -9090,9 +9094,7 @@ async function attachDesktopTraceTransportToRunningBackends() {
 function scheduleDesktopTraceTransportAttachRetry(delayOverride = null) {
   if (
     desktopTraceAttachRetryTimer ||
-    !desktopTraceFacadeReady ||
-    !desktopTraceRuntime.current() ||
-    !desktopTraceIngress ||
+    !desktopSharedTraceLease ||
     desktopTraceBackends.active().length === 0
   ) {
     return
@@ -9236,7 +9238,7 @@ async function loadCurrentDesktopTraceCredential(
   return credential
 }
 
-async function createDesktopTraceSession(
+async function createDesktopLegacyTraceRecoverySession(
   scope: ConnectionScope,
   requestedOwner: TraceOwner
 ): Promise<TraceDurabilitySession> {
@@ -9375,10 +9377,13 @@ async function createDesktopTraceSession(
     uploadBarrier: migrationBarrier === null ? undefined : () => migrationBarrier
   })
 
-  let started
+  const started = {
+    endpoint: 'disabled://legacy-trace-recovery',
+    localBearer: ''
+  }
 
   try {
-    started = await forwarder.start(owner)
+    await forwarder.startRecovery(owner)
   } catch (error) {
     await forwarder.stop({ flushMs: 0 }).catch(() => {})
     await store.close().catch(() => {})
@@ -9444,22 +9449,16 @@ async function createDesktopTraceSession(
 }
 
 const desktopTraceCoordinator = new TraceDurabilityCoordinator({
-  createSession: (owner, scope) => createDesktopTraceSession(scope, owner),
+  createSession: (owner, scope) => createDesktopLegacyTraceRecoverySession(scope, owner),
   facade: {
     detach() {
-      desktopTraceFacadeReady = false
-      desktopTraceFacade?.detach()
+      // Legacy ciphertext recovery never publishes a local admission socket.
     },
-    install(ingress) {
-      if (desktopTraceFacade === null) {
-        throw new Error('trace_ingress_facade_unavailable')
-      }
-
-      desktopTraceFacade.install(ingress)
-      desktopTraceFacadeReady = true
+    install(_ingress) {
+      // New OTLP is admitted only by the shared auth-owner ingress lease.
     },
     rotateBearer() {
-      rotateDesktopTraceIngressBearer({ reattach: false })
+      // There is no Electron-owned admission bearer in recovery-only mode.
     }
   },
   async onAdmissionReady() {
@@ -9476,32 +9475,49 @@ const desktopTraceCoordinator = new TraceDurabilityCoordinator({
 
 async function ensureDesktopTraceForwarder(scope: ConnectionScope, requestedOwner: TraceOwner) {
   try {
-    await ensureDesktopTraceFacade()
+    const bridge = desktopAuthBridge
+    const currentOwner = traceOwnerForScope(scope)
 
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      try {
-        const activation = await desktopTraceCoordinator.activate({ owner: requestedOwner, scope })
-
-        return activation.context
-      } catch (error) {
-        if ((error as Error)?.message !== 'trace_activation_superseded' || attempt === 2) {
-          throw error
-        }
-
-        const status = desktopAuthCoordinator?.status('local')
-
-        const currentOwner =
-          status?.state === 'authenticated' && sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope)
-            ? traceOwnerFromScope(status, scope, desktopInstallationId)
-            : null
-
-        if (currentOwner === null || !sameTraceOwnerIdentity(currentOwner, requestedOwner)) {
-          throw error
-        }
-      }
+    if (!bridge || !sameTraceOwnerIdentity(currentOwner, requestedOwner)) {
+      throw new AuthBridgeError('runtime_unavailable', 'runtime_unavailable')
     }
 
-    throw new Error('trace_activation_superseded')
+    if (
+      desktopSharedTraceLease &&
+      sameConnectionScope(desktopSharedTraceScope, scope) &&
+      desktopSharedTraceLease.installation_id === requestedOwner.installationId
+    ) {
+      return desktopSharedTraceLease
+    }
+
+    const generation = ++desktopSharedTraceGeneration
+    const lease = await bridge.traceIngress({ entrypoint: 'desktop', consumer_id: 'desktop-local' })
+    const validatedOwner = traceOwnerForScope(scope)
+
+    if (
+      generation !== desktopSharedTraceGeneration ||
+      !sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope) ||
+      !sameTraceOwnerIdentity(validatedOwner, requestedOwner) ||
+      lease.installation_id !== requestedOwner.installationId
+    ) {
+      throw new AuthBridgeError('runtime_unavailable', 'runtime_unavailable')
+    }
+
+    desktopSharedTraceLease = lease
+    desktopSharedTraceScope = scope
+
+    void desktopTraceCoordinator.activate({ owner: requestedOwner, scope }).catch(error => {
+      rememberLog(`[trace] legacy outbox recovery unavailable: ${safeTraceFailureCode(error)}`)
+    })
+
+    try {
+      await attachDesktopTraceTransportToRunningBackends()
+    } catch (error) {
+      rememberLog(`[trace] transport attach deferred: ${String((error as Error)?.message || error)}`)
+      scheduleDesktopTraceTransportAttachRetry()
+    }
+
+    return lease
   } catch (error) {
     throw isTraceDurabilityStartupError(error) ? error : new TraceDurabilityStartupError(error)
   }
@@ -9512,6 +9528,9 @@ async function prepareDesktopTraceForwarder(scope: ConnectionScope, owner: Trace
 }
 
 async function stopDesktopTraceForwarder(flushMs = 3_000) {
+  desktopSharedTraceGeneration += 1
+  desktopSharedTraceLease = null
+  desktopSharedTraceScope = null
   await desktopTraceCoordinator.lock('signed_out', flushMs)
 }
 
@@ -10919,7 +10938,7 @@ async function spawnPoolBackend(profile, entry) {
 
   const traceBackendRegistered = registerDesktopTraceBackend(child, backend, traceBackendGeneration)
 
-  if (desktopTraceIngress && traceBackendRegistered) {
+  if (desktopSharedTraceLease && traceBackendRegistered) {
     await writeBackendTraceTransport(child, backend.root).catch(() => {
       scheduleDesktopTraceTransportAttachRetry()
     })
@@ -11298,7 +11317,7 @@ async function startHermes() {
 
     const traceBackendRegistered = registerDesktopTraceBackend(hermesProcess, backend, traceBackendGeneration)
 
-    if (desktopTraceIngress && traceBackendRegistered) {
+    if (desktopSharedTraceLease && traceBackendRegistered) {
       await writeBackendTraceTransport(hermesProcess, backend.root).catch(() => {
         scheduleDesktopTraceTransportAttachRetry()
       })

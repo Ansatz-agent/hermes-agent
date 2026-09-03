@@ -21,9 +21,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from hermes_cli.client_auth.trace.identity import TraceEntrypoint
+
 
 PRODUCT_CONFIG_SHA256 = (
-    "adfdb62a5242d85ac6b5c19062cda4d511f2f46152758a6ffcbc40aafa34e741"
+    "88a68b45703853f51a9e354a385cece2ffdd7b979d3ee80efbd3ada3ac6e417d"
 )
 PRODUCT_RUNTIME_MARKER = "ansatz-voice-trace-client/v1"
 PRODUCT_CONFIG_RELATIVE = ("ansatz-voice-trace", "plugins.toml")
@@ -54,7 +56,7 @@ class _ProductTraceTransport:
     endpoint: str
     authorization: str = field(repr=False)
     installation_id: str = ""
-    entrypoint: str = "desktop"
+    entrypoint: str = ""
     plugins_toml: str = ""
 
 
@@ -221,8 +223,16 @@ def ansatz_product_trace_enabled() -> bool:
         _valid_loopback_endpoint(endpoint)
         and _LOCAL_BEARER_RE.fullmatch(authorization)
         and _valid_installation_id(installation_id)
-        and entrypoint in {"desktop", "voice"}
+        and _valid_entrypoint(entrypoint)
     )
+
+
+def _valid_entrypoint(raw: str) -> bool:
+    try:
+        TraceEntrypoint.parse(raw)
+    except ValueError:
+        return False
+    return True
 
 
 def product_plugins_config() -> dict[str, Any]:
@@ -246,8 +256,13 @@ def product_plugins_config() -> dict[str, Any]:
     ):
         raise RuntimeError("Ansatz product Relay endpoint contract is invalid")
     endpoints[0]["endpoint"] = _transport_value("endpoint", "ANSATZ_TRACE_LOCAL_ENDPOINT")
+    if endpoints[0]["resource_attributes"].get("hermes.entrypoint") != "validated-at-runtime":
+        raise RuntimeError("Ansatz product Relay entrypoint contract is invalid")
     endpoints[0]["resource_attributes"]["ansatz.installation.id"] = _transport_value(
         "installation_id", "ANSATZ_TRACE_INSTALLATION_ID"
+    )
+    endpoints[0]["resource_attributes"]["hermes.entrypoint"] = _transport_value(
+        "entrypoint", "ANSATZ_TRACE_ENTRYPOINT"
     )
     return config
 

@@ -36,6 +36,31 @@ def test_product_trace_requires_hash_verified_marker_and_loopback_forwarder(
     )
     assert not ansatz_product_trace_enabled()
 
+
+def test_product_trace_accepts_every_explicit_product_entrypoint(monkeypatch):
+    from agent.ansatz_trace_policy import (
+        ansatz_product_trace_enabled,
+        product_plugins_config,
+    )
+
+    for entrypoint in ("cli", "dashboard", "desktop", "voice"):
+        _product_env(monkeypatch, ANSATZ_TRACE_ENTRYPOINT=entrypoint)
+
+        assert ansatz_product_trace_enabled()
+        endpoint = product_plugins_config()["components"][0]["config"][
+            "opentelemetry"
+        ]["endpoints"][0]
+        assert endpoint["resource_attributes"]["hermes.entrypoint"] == entrypoint
+
+
+def test_product_trace_never_defaults_missing_entrypoint_to_desktop(monkeypatch):
+    from agent.ansatz_trace_policy import ansatz_product_trace_enabled
+
+    _product_env(monkeypatch)
+    monkeypatch.delenv("ANSATZ_TRACE_ENTRYPOINT")
+
+    assert not ansatz_product_trace_enabled()
+
     _product_env(
         monkeypatch,
         ANSATZ_TRACE_LOCAL_ENDPOINT="http://localhost:49152/v1/traces",
