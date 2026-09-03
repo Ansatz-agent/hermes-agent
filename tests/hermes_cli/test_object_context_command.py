@@ -4,13 +4,16 @@ from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from urllib.request import urlopen
 
 import pytest
 import yaml
 
 from cli import HermesCLI
 from hermes_cli.commands import resolve_command
+from hermes_cli.config_defaults import DEFAULT_CONFIG
 from hermes_cli.object_context_command import (
+    DEPRECATED_V1_KEYS,
     LEGACY_V0_KEYS,
     OBJECT_CONTEXT_ENGINE,
     PARAMETER_SPECS,
@@ -34,6 +37,19 @@ def _read_config(tmp_path) -> dict:
     return yaml.safe_load((tmp_path / "config.yaml").read_text(encoding="utf-8"))
 
 
+@pytest.fixture
+def monitor_server_stub(monkeypatch):
+    server = SimpleNamespace(
+        url="http://127.0.0.1:43123/private-monitor/",
+        is_running=True,
+    )
+    monkeypatch.setattr(
+        "hermes_cli.object_context_monitor.start_monitor_server",
+        lambda **_kwargs: server,
+    )
+    return server
+
+
 def test_registry_exposes_cli_only_command_and_aliases():
     command = resolve_command("object_context")
     assert command is not None
@@ -52,14 +68,43 @@ def test_registry_exposes_cli_only_command_and_aliases():
     assert resolve_command("oc") is command
 
 
+def test_v12_defaults_are_compatible_and_pending_caps_are_derived():
+    config = DEFAULT_CONFIG["context"]["object_context"]
+
+    assert config["scheduler"] == "economic"
+    assert config["hot_tail_max_inferences"] == 4
+    assert config["hot_tail_max_tokens"] == 12_800
+    assert config["amortized_cache_read_weight"] == 0.10
+    assert config["batch_policy"] == "dynamic"
+    assert config["fixed_batch_size"] == 4
+    assert "pending_max_inferences" not in config
+    assert "pending_max_tokens" not in config
+    assert "amortized_fixed_cost" not in config
+
+
 @pytest.mark.parametrize(
     ("name", "raw", "expected"),
     [
-        ("hot_tail_max_deltas", "4", 4),
+        ("scheduler", "ECONOMIC", "economic"),
+        ("scheduler", "AMORTIZED_BATCH", "amortized_batch"),
+        ("batch_policy", "DYNAMIC", "dynamic"),
+        ("batch_policy", "FIXED", "fixed"),
+        ("fixed_batch_size", "4", 4),
+        ("hot_tail_max_inferences", "4", 4),
+        ("hot_tail_max_tokens", "12800", 12800),
+        ("amortized_cache_read_weight", "0.1", 0.1),
+        ("min_raw_exposures", "2", 2),
+        ("economic_min_net_saving_tokens", "1500", 1500),
+        ("economic_min_net_saving_usd", "null", None),
+        ("economic_min_net_saving_usd", "0.25", 0.25),
+        ("economic_cache_read_ratio_fallback", "0.15", 0.15),
+        ("economic_cache_write_ratio_fallback", "1", 1.0),
+        ("emergency_context_ratio", "0.92", 0.92),
         ("object_prefilter_min_tokens", "+128", 128),
-        ("hot_tail_token_budget_ratio", "0.15", 0.15),
         ("min_relative_saving_ratio", "0", 0.0),
         ("retrieval_max_tokens_ratio", "1", 1.0),
+        ("card_summary_enabled", "false", False),
+        ("card_summary_enabled", "on", True),
     ],
 )
 def test_parameter_parser_accepts_supported_values(name, raw, expected):
@@ -69,17 +114,27 @@ def test_parameter_parser_accepts_supported_values(name, raw, expected):
 
 
 @pytest.mark.parametrize(
-    ("name", "raw"),
+        ("name", "raw"),
     [
         ("unknown", "1"),
-        ("hot_tail_max_deltas", "1.5"),
-        ("hot_tail_max_deltas", "true"),
-        ("hot_tail_max_deltas", "0"),
+        ("scheduler", "fixed"),
+        ("scheduler", "amortized"),
+        ("batch_policy", "adaptive"),
+        ("fixed_batch_size", "0"),
+        ("hot_tail_max_inferences", "0"),
+        ("hot_tail_max_tokens", "1.5"),
+        ("amortized_cache_read_weight", "-0.01"),
+        ("amortized_cache_read_weight", "1.01"),
+        ("min_raw_exposures", "0"),
+        ("economic_min_net_saving_tokens", "1.5"),
+        ("economic_min_net_saving_usd", "-0.01"),
+        ("economic_cache_read_ratio_fallback", "1.1"),
+        ("emergency_context_ratio", "0.09"),
+        ("hot_tail_max_deltas", "4"),
         ("summary_max_tokens", "7"),
-        ("hot_tail_token_budget_ratio", "0.009"),
-        ("context_soft_limit_ratio", "1.1"),
         ("min_relative_saving_ratio", "nan"),
         ("retrieval_max_tokens_ratio", "inf"),
+        ("card_summary_enabled", "sometimes"),
     ],
 )
 def test_parameter_parser_rejects_unknown_wrong_type_and_out_of_range(name, raw):
@@ -96,6 +151,9 @@ def test_status_shows_effective_defaults_active_mismatch_and_v0_warning(
         "context:\n"
         "  engine: object_context\n"
         "  object_context:\n"
+        "    hot_tail_max_deltas: 4\n"
+        "    hot_tail_token_budget_ratio: 0.2\n"
+        "    context_soft_limit_ratio: 0.8\n"
         "    min_code_chars: 160\n"
         "    max_read_lines: 300\n",
     )
@@ -108,27 +166,159 @@ def test_status_shows_effective_defaults_active_mismatch_and_v0_warning(
     assert "Restart pending" in text
     for name, spec in PARAMETER_SPECS.items():
         assert name in text
-        assert str(spec.default) in text
+        expected = (
+            str(spec.default).lower()
+            if isinstance(spec.default, bool)
+            else "null"
+            if spec.default is None
+            else f"{spec.default:g}"
+            if isinstance(spec.default, float)
+            else str(spec.default)
+        )
+        assert expected in text
     for key in LEGACY_V0_KEYS:
         assert key in text
     assert "Ignored V0 settings" in text
+    assert "Effective scheduler: economic" in text
+    assert "no fixed Hot Tail" in text
+    assert "Deprecated inactive V1 scheduler settings" in text
+    for key in DEPRECATED_V1_KEYS:
+        assert key in text
+
+
+def test_status_shows_live_v12_scheduler_and_derived_caps(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _write_config(
+        tmp_path,
+        "context:\n"
+        "  engine: object_context\n"
+        "  object_context:\n"
+        "    scheduler: amortized_batch\n"
+        "    hot_tail_max_inferences: 5\n"
+        "    hot_tail_max_tokens: 14000\n",
+    )
+
+    result = run_object_context_command(
+        "status",
+        active_engine=OBJECT_CONTEXT_ENGINE,
+        engine_status={
+            "effective_scheduler": "amortized_batch",
+            "hot_tail_max_inferences": 5,
+            "hot_tail_max_tokens": 14000,
+            "pending_max_inferences": 10,
+            "pending_max_tokens": 28000,
+            "batch_policy": "dynamic",
+            "fixed_batch_size": 4,
+        },
+    )
+    text = "\n".join(result.lines)
+
+    assert "Effective scheduler: amortized_batch (V1.2; active runtime)" in text
+    assert "bounded Hot Tail/pending amortized batch crossing" in text
+    assert "V1.2 batch policy: dynamic (W/Q crossing, flush-all)" in text
+    assert "V1.2 Hot Tail caps: 5 inferences / 14,000 tokens" in text
+    assert "V1.2 pending caps: 10 inferences / 28,000 tokens" in text
+    assert "fixed 2x Hot Tail" in text
+    assert "Runtime cap fields unavailable" not in text
+
+
+def test_status_marks_config_fallback_when_v12_runtime_omits_caps(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _write_config(
+        tmp_path,
+        "context:\n"
+        "  engine: object_context\n"
+        "  object_context:\n"
+        "    scheduler: amortized_batch\n",
+    )
+
+    result = run_object_context_command(
+        "status",
+        active_engine=OBJECT_CONTEXT_ENGINE,
+        engine_status={"effective_scheduler": "amortized_batch"},
+    )
+    text = "\n".join(result.lines)
+
+    assert "V1.2 Hot Tail caps: 4 inferences / 12,800 tokens" in text
+    assert "V1.2 pending caps: 8 inferences / 25,600 tokens" in text
+    assert "Runtime cap fields unavailable" in text
+
+
+def test_status_reports_live_fixed_batch_policy(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _write_config(
+        tmp_path,
+        "context:\n"
+        "  engine: object_context\n"
+        "  object_context:\n"
+        "    scheduler: amortized_batch\n"
+        "    batch_policy: fixed\n"
+        "    fixed_batch_size: 3\n",
+    )
+
+    result = run_object_context_command(
+        "status",
+        active_engine=OBJECT_CONTEXT_ENGINE,
+        engine_status={
+            "effective_scheduler": "amortized_batch",
+            "batch_policy": "fixed",
+            "fixed_batch_size": 3,
+        },
+    )
+    text = "\n".join(result.lines)
+
+    assert "fixed oldest-3 eligible Deltas" in text
+    assert "V1.2 batch policy: fixed (ordinary batch=3 Deltas)" in text
+
+
+def test_status_distinguishes_configured_and_active_card_summary_setting(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _write_config(
+        tmp_path,
+        "context:\n"
+        "  engine: object_context\n"
+        "  object_context:\n"
+        "    card_summary_enabled: false\n",
+    )
+
+    result = run_object_context_command(
+        "status",
+        active_engine=OBJECT_CONTEXT_ENGINE,
+        engine_status={"card_summary_enabled": True},
+    )
+    text = "\n".join(result.lines)
+
+    assert "Active Card summaries: ON" in text
+    assert "configured and active Card-summary settings differ" in text
+    assert "card_summary_enabled" in text
+    assert "false" in text
 
 
 def _live_v1_status() -> dict:
     return {
-        "object_context_version": 1,
+        "object_context_version": "1.1",
         "object_context_available": True,
         "request_projection_count": 2,
         "last_request_metrics": {
             "raw_context_tokens": 10_000,
             "rendered_context_tokens": 3_000,
             "tokens_saved": 7_000,
+            "raw_conversation_tokens": 8_000,
+            "rendered_conversation_tokens": 1_000,
+            "conversation_tokens_saved": 7_000,
             "hot_tail_tokens": 1_250,
         },
         "request_metric_totals": {
             "raw_context_tokens": 25_000,
             "rendered_context_tokens": 7_000,
             "tokens_saved": 18_000,
+            "raw_conversation_tokens": 22_000,
+            "rendered_conversation_tokens": 4_000,
+            "conversation_tokens_saved": 18_000,
             "hot_tail_tokens": 2_500,
         },
         "metric_totals": {"retrieved_tokens": 1_200},
@@ -154,6 +344,9 @@ def _live_timeline() -> dict:
                     "raw_context_tokens": 100,
                     "rendered_context_tokens": 40,
                     "tokens_saved": 60,
+                    "raw_conversation_tokens": 90,
+                    "rendered_conversation_tokens": 30,
+                    "conversation_tokens_saved": 60,
                     "projection_latency_ms": 1.5,
                 },
             }
@@ -186,6 +379,9 @@ def _seed_persisted_timeline(tmp_path) -> None:
             "raw_context_tokens": 100,
             "rendered_context_tokens": 40,
             "tokens_saved": 60,
+            "raw_conversation_tokens": 90,
+            "rendered_conversation_tokens": 30,
+            "conversation_tokens_saved": 60,
             "projection_latency_ms": 1.5,
         },
         metadata={
@@ -226,8 +422,9 @@ def test_status_directly_summarizes_live_v1_savings(tmp_path, monkeypatch):
     )
     text = "\n".join(result.lines)
 
-    assert "Last projection: ~7,000 avoided (70.0%)" in text
+    assert "Last projection: ~7,000 avoided (87.5%)" in text
     assert "Session:         ~18,000 avoided across 2 projected requests" in text
+    assert "persisted conversation-record tokens" in text
     assert "Details: /object_context stats" in text
 
 
@@ -239,15 +436,18 @@ def test_stats_displays_request_only_savings_retrieval_and_memory():
     )
     text = "\n".join(result.lines)
 
-    assert "Raw conversation view" in text and "~10,000" in text
-    assert "Rendered V1 conversation view" in text and "~3,000" in text
-    assert "Tokens avoided" in text and "~18,000" in text
+    assert "Conversation records only" in text
+    assert "Last raw conversation" in text and "~8,000" in text
+    assert "Last rendered conversation" in text and "~1,000" in text
+    assert "Cumulative tokens avoided" in text and "~18,000" in text
+    assert "Last raw message view" in text and "~10,000" in text
     assert "Average avoided / request" in text and "~9,000" in text
     assert "Successful retrievals" in text and "1" in text
     assert "Retrieved payload tokens" in text and "~1,200" in text
     assert "Working Memory objects" in text and "3" in text
     assert "2.0 KiB" in text
     assert "already reflect retrieval projection" in text
+    assert "exclude system prompt, tool schemas, prefills" in text
     assert result.changed is False
 
 
@@ -311,6 +511,7 @@ def test_on_and_off_persist_engine_without_dropping_unrelated_config(
     assert enabled.changed is True
     saved = _read_config(tmp_path)
     assert saved["context"]["engine"] == OBJECT_CONTEXT_ENGINE
+    assert saved["context"]["object_context"]["enabled"] is True
     assert saved["context"]["object_context"]["min_code_chars"] == 160
     assert saved["model"]["default"] == "test-model"
 
@@ -320,6 +521,7 @@ def test_on_and_off_persist_engine_without_dropping_unrelated_config(
     disabled = run_object_context_command("off", active_engine=OBJECT_CONTEXT_ENGINE)
     assert disabled.changed is True
     assert _read_config(tmp_path)["context"]["engine"] == "compressor"
+    assert _read_config(tmp_path)["context"]["object_context"]["enabled"] is False
 
 
 def test_set_persists_typed_override_without_implicitly_enabling_engine(
@@ -329,19 +531,59 @@ def test_set_persists_typed_override_without_implicitly_enabling_engine(
     _write_config(tmp_path, "context:\n  engine: compressor\n")
 
     first = run_object_context_command(
-        "set hot_tail_max_deltas 4", active_engine="compressor"
+        "set economic_min_net_saving_tokens 1500", active_engine="compressor"
     )
     second = run_object_context_command(
-        "set hot_tail_token_budget_ratio 0.15", active_engine="compressor"
+        "set emergency_context_ratio 0.92", active_engine="compressor"
+    )
+    third = run_object_context_command(
+        "set card_summary_enabled true", active_engine="compressor"
+    )
+    fourth = run_object_context_command(
+        "set economic_min_net_saving_usd null", active_engine="compressor"
     )
     saved = _read_config(tmp_path)
 
     assert first.changed is True
     assert second.changed is True
+    assert third.changed is True
+    assert fourth.changed is True
     assert saved["context"]["engine"] == "compressor"
-    assert saved["context"]["object_context"]["hot_tail_max_deltas"] == 4
-    assert saved["context"]["object_context"]["hot_tail_token_budget_ratio"] == 0.15
-    assert any("does not toggle V1" in line for line in second.lines)
+    assert saved["context"]["object_context"][
+        "economic_min_net_saving_tokens"
+    ] == 1500
+    assert saved["context"]["object_context"]["emergency_context_ratio"] == 0.92
+    assert saved["context"]["object_context"]["card_summary_enabled"] is True
+    assert saved["context"]["object_context"]["economic_min_net_saving_usd"] is None
+    assert any("does not toggle Object Context" in line for line in third.lines)
+
+
+def test_set_persists_v12_scheduler_and_bounds_without_pending_overrides(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _write_config(tmp_path, "context:\n  engine: object_context\n")
+
+    scheduler = run_object_context_command("set scheduler AMORTIZED_BATCH")
+    inferences = run_object_context_command("set hot_tail_max_inferences 6")
+    tokens = run_object_context_command("set hot_tail_max_tokens 16000")
+    weight = run_object_context_command("set amortized_cache_read_weight 0.2")
+    policy = run_object_context_command("set batch_policy FIXED")
+    batch_size = run_object_context_command("set fixed_batch_size 3")
+    saved = _read_config(tmp_path)["context"]["object_context"]
+
+    assert all(
+        item.changed
+        for item in (scheduler, inferences, tokens, weight, policy, batch_size)
+    )
+    assert saved["scheduler"] == "amortized_batch"
+    assert saved["hot_tail_max_inferences"] == 6
+    assert saved["hot_tail_max_tokens"] == 16000
+    assert saved["amortized_cache_read_weight"] == 0.2
+    assert saved["batch_policy"] == "fixed"
+    assert saved["fixed_batch_size"] == 3
+    assert "pending_max_inferences" not in saved
+    assert "pending_max_tokens" not in saved
 
 
 def test_invalid_set_never_mutates_config(tmp_path, monkeypatch):
@@ -350,7 +592,7 @@ def test_invalid_set_never_mutates_config(tmp_path, monkeypatch):
     _write_config(tmp_path, original)
 
     with pytest.raises(ObjectContextCommandError):
-        run_object_context_command("set hot_tail_max_deltas 0")
+        run_object_context_command("set min_raw_exposures 0")
     with pytest.raises(ObjectContextCommandError):
         run_object_context_command("set typo_parameter 1")
 
@@ -443,7 +685,13 @@ def test_active_engine_monitor_uses_content_free_public_contract_and_fails_close
         )
     )
 
-    assert active_context_engine_monitor(agent) == expected
+    result = active_context_engine_monitor(agent)
+    assert result is not None
+    assert result["projections"] == expected["projections"]
+    assert result["cache_requests"] == expected["cache_requests"]
+    assert result["object_context_metrics"] == {"retrieval_count": 0}
+    assert result["retrieve_object_schema_tokens_per_request"] > 0
+    assert result["auxiliary_usage"] == []
     assert active_context_engine_monitor(None) is None
     assert active_context_engine_monitor(broken) is None
 
@@ -529,7 +777,8 @@ def test_persisted_monitor_telemetry_contains_every_projection_session(
 
     assert persisted is not None
     _status, timeline = persisted
-    assert timeline["schema_version"] == 2
+    assert timeline["schema_version"] == 4
+    assert timeline["request_observations"] == []
     assert timeline["active_conversation_id"] == "conversation-a"
     assert timeline["session_id"] == "resumed-session"
     assert {item["conversation_id"] for item in timeline["sessions"]} == {
@@ -538,6 +787,10 @@ def test_persisted_monitor_telemetry_contains_every_projection_session(
     }
     assert sum(len(item["projections"]) for item in timeline["sessions"]) == 2
     assert sum(len(item["cache_requests"]) for item in timeline["sessions"]) == 1
+    assert sum(
+        len(item.get("economic_decisions") or [])
+        for item in timeline["sessions"]
+    ) == 0
     assert {
         item["conversation_id"]: item["title"] for item in timeline["sessions"]
     } == {
@@ -585,6 +838,13 @@ def test_persisted_monitor_unions_real_session_db_with_projection_store(
         session_db.set_session_title("plain-session", "No Object Context")
         session_db.create_session("projected-session", "cli")
         session_db.set_session_title("projected-session", "Projected session")
+        session_db.record_auxiliary_usage(
+            "projected-session",
+            "object_context_card_summary",
+            model="summary-model",
+            input_tokens=100,
+            output_tokens=10,
+        )
 
         store = ObjectContextStore(
             tmp_path / "context" / "object_context_v1.sqlite3"
@@ -595,6 +855,8 @@ def test_persisted_monitor_unions_real_session_db_with_projection_store(
                 "raw_context_tokens": 100,
                 "rendered_context_tokens": 40,
                 "tokens_saved": 60,
+                "card_tokens": 12,
+                "card_summary_attempts": 1,
             },
             metadata={
                 "event": "request_projection",
@@ -625,6 +887,16 @@ def test_persisted_monitor_unions_real_session_db_with_projection_store(
     assert by_id["plain-session"]["projections"] == []
     assert by_id["plain-session"]["cache_requests"] == []
     assert len(by_id["projected-session"]["projections"]) == 1
+    assert by_id["projected-session"]["object_context_metrics"][
+        "card_tokens"
+    ] == 12
+    assert by_id["projected-session"]["retrieve_object_schema_tokens_per_request"] > 0
+    assert by_id["projected-session"]["auxiliary_usage"][0]["task"] == (
+        "object_context_card_summary"
+    )
+    assert by_id["projected-session"]["auxiliary_usage"][0][
+        "total_tokens"
+    ] == 110
 
 
 def test_persisted_monitor_paginates_every_user_visible_session(
@@ -666,7 +938,7 @@ def test_persisted_monitor_paginates_every_user_visible_session(
 
 
 def test_cli_monitor_opens_for_real_session_without_object_context_store(
-    tmp_path, monkeypatch, capsys
+    tmp_path, monkeypatch, capsys, monitor_server_stub
 ):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     session_db = SessionDB(db_path=tmp_path / "state.db")
@@ -800,10 +1072,12 @@ def test_process_command_dispatches_original_arguments_to_handler():
 
     with patch.object(cli_obj, "_handle_object_context_command") as handler:
         assert cli_obj.process_command(
-            "/object_context set hot_tail_max_deltas 4"
+            "/object_context set economic_min_net_saving_tokens 1500"
         ) is True
 
-    handler.assert_called_once_with("/object_context set hot_tail_max_deltas 4")
+    handler.assert_called_once_with(
+        "/object_context set economic_min_net_saving_tokens 1500"
+    )
 
 
 def test_cli_handler_prints_safe_validation_error(tmp_path, monkeypatch, capsys):
@@ -813,7 +1087,7 @@ def test_cli_handler_prints_safe_validation_error(tmp_path, monkeypatch, capsys)
     cli_obj.agent = None
 
     cli_obj._handle_object_context_command(
-        "/object_context set hot_tail_max_deltas nope"
+        "/object_context set economic_min_net_saving_tokens nope"
     )
 
     output = capsys.readouterr().out
@@ -833,11 +1107,11 @@ def test_cli_handler_prints_live_stats_from_active_engine(capsys):
     cli_obj._handle_object_context_command("/object_context stats")
 
     output = capsys.readouterr().out
-    assert "Object Context V1 Token Savings" in output
+    assert "Object Context V1.1 Token Savings" in output
     assert "~18,000" in output
 
 
-def test_cli_handler_opens_monitor_webpage_with_local_file_uri(
+def test_cli_handler_opens_live_monitor_and_wires_refresh_loader(
     tmp_path, monkeypatch, capsys
 ):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
@@ -850,16 +1124,112 @@ def test_cli_handler_opens_monitor_webpage_with_local_file_uri(
         )
     )
 
-    with patch("webbrowser.open", return_value=True) as browser_open:
+    live_server = SimpleNamespace(
+        url="http://127.0.0.1:43123/private-monitor/",
+        is_running=True,
+    )
+    with (
+        patch(
+            "hermes_cli.object_context_monitor.start_monitor_server",
+            return_value=live_server,
+        ) as start_server,
+        patch("webbrowser.open", return_value=True) as browser_open,
+    ):
         cli_obj._handle_object_context_command("/object_context monitor")
 
     output = capsys.readouterr().out
     assert "Session Dynamics Monitor" in output
     assert "Browser launch was unavailable" not in output
-    uri = browser_open.call_args.args[0]
-    assert uri.startswith("file://")
-    assert uri.endswith(".html")
-    browser_open.assert_called_once_with(uri, new=2)
+    assert "Refresh the browser page to load current persisted data" in output
+    browser_open.assert_called_once_with(live_server.url, new=2)
+    assert cli_obj._object_context_monitor_server is live_server
+    start_server.assert_called_once()
+    refresh_loader = start_server.call_args.kwargs["timeline_loader"]
+    assert refresh_loader()["conversation_id"] == "conversation-a"
+
+
+def test_cli_live_monitor_refresh_reads_new_persisted_projection(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _seed_persisted_timeline(tmp_path)
+    cli_obj = HermesCLI.__new__(HermesCLI)
+    cli_obj.agent = None
+    cli_obj.session_id = "resumed-session"
+    cli_obj._session_db = SimpleNamespace(
+        get_conversation_root=lambda _session_id: "conversation-a",
+        get_session_title=lambda _session_id: "Live refresh session",
+    )
+
+    with patch("webbrowser.open", return_value=True) as browser_open:
+        cli_obj._handle_object_context_command("/oc monitor")
+
+    server = cli_obj._object_context_monitor_server
+    try:
+        with urlopen(server.url, timeout=3) as response:
+            first_html = response.read().decode("utf-8")
+
+        store = ObjectContextStore(
+            tmp_path / "context" / "object_context_v1.sqlite3"
+        )
+        store.record_metrics(
+            "conversation-a",
+            {
+                "raw_context_tokens": 75,
+                "rendered_context_tokens": 30,
+                "tokens_saved": 45,
+                "raw_conversation_tokens": 70,
+                "rendered_conversation_tokens": 25,
+                "conversation_tokens_saved": 45,
+                "projection_latency_ms": 2.0,
+            },
+            metadata={
+                "event": "request_projection",
+                "projection_id": "persisted-projection-2",
+                "projection_sequence": 2,
+                "turn_id": "turn-b",
+                "session_id": "session-a",
+            },
+        )
+
+        with urlopen(server.url, timeout=3) as response:
+            refreshed_html = response.read().decode("utf-8")
+    finally:
+        server.close()
+
+    capsys.readouterr()
+    browser_open.assert_called_once_with(server.url, new=2)
+    assert '"project_count":1' in first_html
+    assert '"project_count":2' in refreshed_html
+    assert "persisted-projection-2" in refreshed_html
+
+
+def test_cli_reuses_running_live_monitor_server(tmp_path, monkeypatch):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    cli_obj = HermesCLI.__new__(HermesCLI)
+    cli_obj.agent = SimpleNamespace(
+        context_compressor=SimpleNamespace(
+            name="object_context",
+            get_status=_live_v1_status,
+            get_projection_timeline=_live_timeline,
+        )
+    )
+    existing = SimpleNamespace(
+        url="http://127.0.0.1:43123/already-running/",
+        is_running=True,
+    )
+    cli_obj._object_context_monitor_server = existing
+
+    with (
+        patch(
+            "hermes_cli.object_context_monitor.start_monitor_server"
+        ) as start_server,
+        patch("webbrowser.open", return_value=True) as browser_open,
+    ):
+        cli_obj._handle_object_context_command("/oc monitor")
+
+    start_server.assert_not_called()
+    browser_open.assert_called_once_with(existing.url, new=2)
 
 
 def test_cli_handler_prints_dashboard_path_fallback_when_browser_is_unavailable(
@@ -875,16 +1245,24 @@ def test_cli_handler_prints_dashboard_path_fallback_when_browser_is_unavailable(
         )
     )
 
-    with patch("webbrowser.open", return_value=False):
+    with (
+        patch(
+            "hermes_cli.object_context_monitor.start_monitor_server",
+            side_effect=OSError("loopback unavailable"),
+        ),
+        patch("webbrowser.open", return_value=False) as browser_open,
+    ):
         cli_obj._handle_object_context_command("/object_context monitor")
 
     output = capsys.readouterr().out
     assert "Dashboard:" in output
+    assert "Live refresh was unavailable" in output
     assert "Browser launch was unavailable" in output
+    assert browser_open.call_args.args[0].startswith("file://")
 
 
 def test_cli_handler_monitors_resumed_session_before_lazy_agent_startup(
-    tmp_path, monkeypatch, capsys
+    tmp_path, monkeypatch, capsys, monitor_server_stub
 ):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     _seed_persisted_timeline(tmp_path)
@@ -910,7 +1288,7 @@ def test_cli_handler_monitors_resumed_session_before_lazy_agent_startup(
 
 
 def test_cli_monitor_lists_all_sessions_and_writes_stable_dashboard(
-    tmp_path, monkeypatch, capsys
+    tmp_path, monkeypatch, capsys, monitor_server_stub
 ):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     _seed_persisted_timeline(tmp_path)
@@ -976,13 +1354,13 @@ def test_cli_handler_reads_resumed_session_stats_before_lazy_agent_startup(
     cli_obj._handle_object_context_command("/object_context stats")
 
     output = capsys.readouterr().out
-    assert "Object Context V1 Token Savings" in output
+    assert "Object Context V1.1 Token Savings" in output
     assert "Projected requests" in output
     assert "1" in output
 
 
 def test_slash_worker_shape_monitors_resumed_session_without_live_agent(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, monitor_server_stub
 ):
     from tui_gateway.slash_worker import _run
 

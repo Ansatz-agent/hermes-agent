@@ -3346,16 +3346,15 @@ class CLICommandsMixin:
 
         parts = str(cmd_original or "/object_context").strip().split(None, 1)
         args_raw = parts[1] if len(parts) > 1 else ""
-        agent = getattr(self, "agent", None)
         action = (
             args_raw.strip().split(None, 1)[0].casefold() if args_raw.strip() else ""
         )
-        active_engine = active_context_engine_name(agent)
-        engine_status = active_context_engine_status(agent)
-        monitor_timeline = (
-            active_context_engine_monitor(agent) if action == "monitor" else None
-        )
-        if action == "monitor":
+
+        def resolve_monitor_state():
+            agent = getattr(self, "agent", None)
+            resolved_engine = active_context_engine_name(agent)
+            resolved_status = active_context_engine_status(agent)
+            resolved_timeline = active_context_engine_monitor(agent)
             persisted = persisted_context_engine_telemetry(
                 getattr(self, "_session_db", None),
                 str(getattr(self, "session_id", "") or ""),
@@ -3363,10 +3362,20 @@ class CLICommandsMixin:
             )
             if persisted is not None:
                 persisted_status, persisted_timeline = persisted
-                if engine_status is None:
-                    engine_status = persisted_status
-                active_engine = OBJECT_CONTEXT_ENGINE
-                monitor_timeline = persisted_timeline
+                if resolved_status is None:
+                    resolved_status = persisted_status
+                resolved_engine = OBJECT_CONTEXT_ENGINE
+                resolved_timeline = persisted_timeline
+            return resolved_engine, resolved_status, resolved_timeline
+
+        agent = getattr(self, "agent", None)
+        active_engine = active_context_engine_name(agent)
+        engine_status = active_context_engine_status(agent)
+        monitor_timeline = None
+        if action == "monitor":
+            active_engine, engine_status, monitor_timeline = (
+                resolve_monitor_state()
+            )
         elif agent is None and action == "stats":
             persisted = persisted_context_engine_telemetry(
                 getattr(self, "_session_db", None),
@@ -3383,8 +3392,27 @@ class CLICommandsMixin:
                 monitor_timeline=monitor_timeline,
             )
         except ObjectContextCommandError as exc:
-            print(f"  Object Context V1: {exc}")
+            print(f"  Object Context V1.1: {exc}")
             return
+
+        monitor_live_url = ""
+        monitor_live_failed = False
+        if action == "monitor" and result.artifact_path and monitor_timeline:
+            try:
+                from hermes_cli.object_context_monitor import start_monitor_server
+
+                monitor_server = getattr(
+                    self, "_object_context_monitor_server", None
+                )
+                if not bool(getattr(monitor_server, "is_running", False)):
+                    monitor_server = start_monitor_server(
+                        timeline_loader=lambda: resolve_monitor_state()[2],
+                        initial_timeline=monitor_timeline,
+                    )
+                    self._object_context_monitor_server = monitor_server
+                monitor_live_url = str(monitor_server.url)
+            except Exception:
+                monitor_live_failed = True
 
         browser_opened: bool | None = None
         if result.artifact_path:
@@ -3392,10 +3420,11 @@ class CLICommandsMixin:
                 import webbrowser
                 from pathlib import Path
 
+                browser_target = monitor_live_url or Path(
+                    result.artifact_path
+                ).resolve().as_uri()
                 browser_opened = bool(
-                    webbrowser.open(
-                        Path(result.artifact_path).resolve().as_uri(), new=2
-                    )
+                    webbrowser.open(browser_target, new=2)
                 )
             except Exception:
                 browser_opened = False
@@ -3403,8 +3432,20 @@ class CLICommandsMixin:
         print()
         for line in result.lines:
             print(f"  {line}" if line else "")
+        if monitor_live_url:
+            print(f"  Live dashboard: {monitor_live_url}")
+            print("  Refresh the browser page to load current persisted data.")
+        elif monitor_live_failed:
+            print(
+                "  Live refresh was unavailable; the browser is using the static "
+                "Dashboard snapshot."
+            )
+            print("  Run /object_context monitor again to rebuild that snapshot.")
         if browser_opened is False:
-            print("  Browser launch was unavailable; open the Dashboard path above.")
+            target_label = (
+                "Live dashboard URL" if monitor_live_url else "Dashboard path"
+            )
+            print(f"  Browser launch was unavailable; open the {target_label} above.")
         print()
 
     def _handle_reasoning_command(self, cmd: str):
