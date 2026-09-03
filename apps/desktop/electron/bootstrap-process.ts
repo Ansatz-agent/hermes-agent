@@ -6,10 +6,7 @@ import {
   normalizeBootstrapProgress,
   reduceBootstrapState
 } from './bootstrap-progress'
-import {
-  buildManagedDownloadEnvironment,
-  MANAGED_DOMESTIC_DOWNLOADS
-} from './runtime-download-policy'
+import { buildManagedDownloadEnvironment, MANAGED_DOMESTIC_DOWNLOADS } from './runtime-download-policy'
 
 const DEFAULT_CAPTURE_LIMIT_BYTES = 256 * 1024
 const DEFAULT_HARD_TIMEOUT_MS = 10 * 60_000
@@ -326,22 +323,25 @@ export function runBootstrapProcess(options: RunBootstrapProcessOptions): Promis
     resetIdleTimer()
 
     if (progressHeartbeatMs && progressHeartbeatMs > 0 && stageName) {
-      progressTimer = setInterval(() => {
-        if (settled || termination) {
-          return
-        }
+      progressTimer = setInterval(
+        () => {
+          if (settled || termination) {
+            return
+          }
 
-        emit?.({
-          type: 'progress',
-          stage: stageName,
-          completed: 0,
-          total: null,
-          unit: 'items',
-          label: stageName,
-          updatedAt: Date.now()
-        })
-        resetIdleTimer()
-      }, Math.max(1, progressHeartbeatMs))
+          emit?.({
+            type: 'progress',
+            stage: stageName,
+            completed: 0,
+            total: null,
+            unit: 'items',
+            label: stageName,
+            updatedAt: Date.now()
+          })
+          resetIdleTimer()
+        },
+        Math.max(1, progressHeartbeatMs)
+      )
     }
 
     child.stdout.on('data', (value: Buffer | string) => {
@@ -367,11 +367,17 @@ export function runBootstrapProcess(options: RunBootstrapProcessOptions): Promis
       settled = true
       clearTimeout(hardTimer)
 
-      if (idleTimer) {clearTimeout(idleTimer)}
+      if (idleTimer) {
+        clearTimeout(idleTimer)
+      }
 
-      if (killTimer) {clearTimeout(killTimer)}
+      if (killTimer) {
+        clearTimeout(killTimer)
+      }
 
-      if (progressTimer) {clearInterval(progressTimer)}
+      if (progressTimer) {
+        clearInterval(progressTimer)
+      }
 
       abortSignal?.removeEventListener('abort', onAbort)
       reject(error)
@@ -385,11 +391,17 @@ export function runBootstrapProcess(options: RunBootstrapProcessOptions): Promis
       settled = true
       clearTimeout(hardTimer)
 
-      if (idleTimer) {clearTimeout(idleTimer)}
+      if (idleTimer) {
+        clearTimeout(idleTimer)
+      }
 
-      if (killTimer) {clearTimeout(killTimer)}
+      if (killTimer) {
+        clearTimeout(killTimer)
+      }
 
-      if (progressTimer) {clearInterval(progressTimer)}
+      if (progressTimer) {
+        clearInterval(progressTimer)
+      }
 
       abortSignal?.removeEventListener('abort', onAbort)
       emitLine(stdoutLine, 'stdout')

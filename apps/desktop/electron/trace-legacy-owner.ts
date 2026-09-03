@@ -109,6 +109,7 @@ export function traceOwnerFromScope(
 ): TraceOwner {
   const nativePrincipal =
     typeof status.principal_key === 'string' ? ACCOUNT_PRINCIPAL_KEY.exec(status.principal_key) : null
+
   // The native auth runtime is the authority for the installation binding used
   // by trace_token. The desktop installation id can be regenerated when the
   // app cache is repaired/reinstalled, while the encrypted native credential
@@ -116,6 +117,7 @@ export function traceOwnerFromScope(
   // binding instead of silently downgrading an otherwise authenticated account
   // to a local-only outbox.
   const nativeInstallationId = isCanonicalUuidV4(status.installation_id) ? status.installation_id : null
+
   const exactNative =
     status.state === 'authenticated' &&
     status.legacy === false &&

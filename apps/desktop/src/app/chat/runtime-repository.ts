@@ -53,6 +53,7 @@ export function useRuntimeMessageRepository(messages: ChatMessage[]): ExportedMe
     }
 
     previousMessagesRef.current = messages
+
     return messages
   }, [messages])
 

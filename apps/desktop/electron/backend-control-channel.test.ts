@@ -121,15 +121,9 @@ test('ignores duplicate, malformed, or unmatched ACKs and times out a specific w
   child.stdout.write('ANSATZ_SCOPE_CONTROL_V2\t{"bearer":"must-not-log"}\n')
   child.stdout.write('ANSATZ_SCOPE_CONTROL_V2{"bearer":"must-not-log"}\n')
   child.stdout.write('ANSATZ_SCOPE_CONTROL_V2 []\n')
-  child.stdout.write(
-    'ANSATZ_SCOPE_CONTROL_V2 {"__proto__":{"polluted":true},"bearer":"must-not-log"}\n'
-  )
-  child.stdout.write(
-    `ANSATZ_SCOPE_CONTROL_V2 ${JSON.stringify({ ...promotedAck(), bearer: 'must-not-log' })}\n`
-  )
-  child.stdout.write(
-    `ANSATZ_SCOPE_CONTROL_V2 ${JSON.stringify(promotedAck('VVVVVVVVVVVVVVVVVVVVVQ'))}\n`
-  )
+  child.stdout.write('ANSATZ_SCOPE_CONTROL_V2 {"__proto__":{"polluted":true},"bearer":"must-not-log"}\n')
+  child.stdout.write(`ANSATZ_SCOPE_CONTROL_V2 ${JSON.stringify({ ...promotedAck(), bearer: 'must-not-log' })}\n`)
+  child.stdout.write(`ANSATZ_SCOPE_CONTROL_V2 ${JSON.stringify(promotedAck('VVVVVVVVVVVVVVVVVVVVVQ'))}\n`)
   child.stdout.write('normal log\n')
   const rejected = assert.rejects(wait, /scope control ACK timeout/)
   await vi.advanceTimersByTimeAsync(501)
@@ -161,10 +155,7 @@ test('closes the control channel when an unterminated stdout line exceeds its bo
   child.stdout.write('x'.repeat(1_048_577))
 
   await assert.rejects(ack, /stdout line exceeded the size limit/i)
-  await assert.rejects(
-    channel.waitForReady({ timeoutMs: 1_000 }),
-    /stdout line exceeded the size limit/i
-  )
+  await assert.rejects(channel.waitForReady({ timeoutMs: 1_000 }), /stdout line exceeded the size limit/i)
 })
 
 test('reads protocol v2 readiness from the ready-file side channel', async () => {
@@ -229,7 +220,10 @@ test('rejects the request and closes the channel when stdin is not writable', as
     channel.request('{}\n', () => true, 1_000),
     /backend control stdin is not writable/i
   )
-  await assert.rejects(channel.expectAck(() => true, 1_000), /backend control stdin is not writable/i)
+  await assert.rejects(
+    channel.expectAck(() => true, 1_000),
+    /backend control stdin is not writable/i
+  )
 })
 
 test('rejects all waiters when the stdin write callback reports failure', async () => {
@@ -270,11 +264,13 @@ test('one ACK resolves only the first matching waiter', async () => {
   let secondSettled = false
   const first = channel.expectAck(() => true, 1_000)
 
-  const second = channel.expectAck(() => true, 1_000).then(value => {
-    secondSettled = true
+  const second = channel
+    .expectAck(() => true, 1_000)
+    .then(value => {
+      secondSettled = true
 
-    return value
-  })
+      return value
+    })
 
   child.stdout.write(`ANSATZ_SCOPE_CONTROL_V2 ${JSON.stringify(registeredAck())}\n`)
   assert.deepEqual(await first, registeredAck())

@@ -117,6 +117,7 @@ class FakeTraceFileSystem implements TraceFileSystem {
     if (value === undefined) {
       throw new Error('missing_file')
     }
+
     this.files.set(path, value.subarray(0, length))
   }
 
@@ -358,6 +359,7 @@ test('close waits for a registered inflight receipt mutation and remains concurr
   const blocked = deferred<void>()
   const release = deferred<void>()
   let holdJournalSync = false
+
   const fs = new FakeTraceFileSystem({
     'journal.sync': async () => {
       if (holdJournalSync) {
@@ -366,6 +368,7 @@ test('close waits for a registered inflight receipt mutation and remains concurr
       }
     }
   })
+
   const store = await TraceOutboxStore.open(options({ fs, groupCommitMs: 1 }))
   const batch = await store.enqueue(envelope('inflight-close-receipt'))
   holdJournalSync = true
@@ -375,6 +378,7 @@ test('close waits for a registered inflight receipt mutation and remains concurr
   const rawFirstClose = store.close()
   const concurrentClose = store.close()
   assert.strictEqual(rawFirstClose, concurrentClose)
+
   const firstClose = rawFirstClose.then(() => {
     closeSettled = true
   })
@@ -442,6 +446,7 @@ test('migrates a legacy key only after recovering the matching account and then 
       keyProtector: protector(),
       root
     })
+
     await first.enqueue(envelope('legacy-migration'))
     await first.close()
     await downgradeBoundKeyToLegacy(root)
@@ -452,6 +457,7 @@ test('migrates a legacy key only after recovering the matching account and then 
       keyProtector: protector(),
       root
     })
+
     assert.equal((await migrated.peekEligible(Number.MAX_SAFE_INTEGER))?.body.toString(), 'trace:legacy-migration')
     await migrated.close()
 
@@ -459,6 +465,7 @@ test('migrates a legacy key only after recovering the matching account and then 
       accountKey: string
       version: number
     }
+
     assert.deepEqual(
       { accountKey: key.accountKey, version: key.version },
       { accountKey: expectedOwner.accountKey, version: 2 }
@@ -500,7 +507,9 @@ test('writes key.json through a synced temporary file before accepting the first
       keyProtector: protector(),
       root
     })
+
     const batch = await store.enqueue(envelope('disk'))
+
     const key = JSON.parse(await readFile(join(root, 'key.json'), 'utf8')) as {
       accountKey: string
       wrappedKey: string
@@ -700,6 +709,7 @@ async function buildCrashFixture(root: string, crashPoint: CrashPoint): Promise<
     keyProtector: protector(),
     root
   })
+
   const commits = [store.beginEnqueue(envelope('one')), store.beginEnqueue(envelope('two'))]
   const batches = await Promise.all(commits.map(commit => commit.durable))
   const segmentPath = join(root, 'segments', 'active.segment')
@@ -738,18 +748,21 @@ test.each<CrashPoint>(['segment-tail', 'journal-tail', 'after-segment-sync', 'du
 
     try {
       const fixture = await buildCrashFixture(root, crashPoint)
+
       const recovered = await TraceOutboxStore.open({
         expectedOwner: envelope('root-owner').owner,
         groupCommitMs: 1,
         keyProtector: protector(),
         root
       })
+
       const diagnostics = await recovered.diagnostics()
       const eligible = await recovered.peekEligible(Number.MAX_SAFE_INTEGER)
 
       assert.equal(eligible?.body.toString('utf8'), fixture.expectedPendingBodies[0])
       const drained: string[] = []
       let current = recovered
+
       while (drained.length < fixture.expectedPendingIds.length) {
         const head = await current.peekEligible(Number.MAX_SAFE_INTEGER)
         assert.notEqual(head, undefined)
@@ -766,6 +779,7 @@ test.each<CrashPoint>(['segment-tail', 'journal-tail', 'after-segment-sync', 'du
           root
         })
       }
+
       assert.deepEqual(drained, fixture.expectedPendingIds)
       assert.equal(new Set(drained).size, drained.length)
       assert.equal(await current.peekEligible(Number.MAX_SAFE_INTEGER), undefined)
@@ -846,6 +860,7 @@ test('quarantines a sparse segment above capacity without reading its reported c
 
 test('does not truncate a corrupt oversize prefix or scan past it', async () => {
   const root = await temporaryOutboxDirectory()
+
   try {
     await buildCrashFixture(root, 'during-send')
     const path = join(root, 'segments', 'active.segment')
@@ -863,6 +878,7 @@ test('does not truncate a corrupt oversize prefix or scan past it', async () => 
       keyProtector: protector(),
       root
     })
+
     assert.deepEqual(await readFile(path), fixture)
     assert.equal((await recovered.diagnostics()).quarantined, 1)
     assert.equal(await recovered.peekEligible(Number.MAX_SAFE_INTEGER), undefined)
@@ -884,6 +900,7 @@ test('evicts oldest telemetry at hard limits, dedupes locally, and never touches
         root
       })
     )
+
     const one = await store.enqueue(envelope('one'))
     const two = await store.enqueue(envelope('two'))
 
@@ -917,11 +934,13 @@ test('refreshes free space after deleting a fully terminal segment before admitt
       capacityBytes: 900,
       freeSpace: () => {
         freeSpaceCalls += 1
+
         return { available, total: 20 * 1024 ** 3 }
       },
       fs
     })
   )
+
   await store.enqueue(envelope('first'))
   available = 1024 ** 3
   await store.enqueue(envelope('second'))
@@ -946,6 +965,7 @@ test('durably quarantines an oversize diagnostic input while normal admission re
 test('makes a receipt terminal only after its journal sync and bounds expired tombstones', async () => {
   const gate = deferred<void>()
   let blockReceiptSync = false
+
   const fs = new FakeTraceFileSystem({
     'journal.sync': async () => {
       if (blockReceiptSync) {
@@ -953,6 +973,7 @@ test('makes a receipt terminal only after its journal sync and bounds expired to
       }
     }
   })
+
   let now = 1_798_000_000_000
   const store = await TraceOutboxStore.open(options({ fs, now: () => now, retentionMs: 10 }))
   const batch = await store.enqueue(envelope('receipt-boundary'))
@@ -974,6 +995,7 @@ test('physically bounds tombstones and reclaims fully-terminal payloads during a
   const root = await temporaryOutboxDirectory()
   let now = 1_798_000_000_000
   const receiptCapacityBytes = 2_048
+
   const streamingOptions = {
     expectedOwner: envelope('stream-owner').owner,
     groupCommitMs: 1,
@@ -1031,6 +1053,7 @@ test('physically bounds tombstones and reclaims fully-terminal payloads during a
 test('caps the durable encoded receipt lines by bytes independently of the entry limit', async () => {
   const root = await temporaryOutboxDirectory()
   const receiptCapacityBytes = 700
+
   const optionsForRoot = {
     expectedOwner: envelope('receipt-owner').owner,
     groupCommitMs: 1,
@@ -1043,6 +1066,7 @@ test('caps the durable encoded receipt lines by bytes independently of the entry
 
   try {
     const store = await TraceOutboxStore.open(optionsForRoot)
+
     for (let index = 0; index < 8; index += 1) {
       const batch = await store.enqueue(envelope(`byte-capped-receipt-${index}`))
       await store.acknowledge(batch.batchId, receipt(batch.batchId, 'accepted'))
@@ -1052,9 +1076,11 @@ test('caps the durable encoded receipt lines by bytes independently of the entry
     const operations = (await journal.recover()).operations
     const receipts = operations.filter(operation => operation.op === 'receipt')
     const receiptBytes = receipts.reduce((total, operation) => total + traceJournalOperationBytes(operation), 0)
+
     const nonReceiptBytes = operations
       .filter(operation => operation.op !== 'receipt')
       .reduce((total, operation) => total + traceJournalOperationBytes(operation), 0)
+
     const journalBytes = (await readFile(join(root, 'index.journal'))).length
 
     assert.ok(receipts.length < 8)
@@ -1072,6 +1098,7 @@ test('quarantines encrypted records and reports diagnostics when the persisted k
   const fs = new FakeTraceFileSystem()
   const first = await TraceOutboxStore.open(options({ fs }))
   await first.enqueue(envelope('key-loss'))
+
   const lostProtector = createSafeStorageTraceKeyProtector({
     decryptString: () => {
       throw new Error('lost_key')
@@ -1098,8 +1125,10 @@ test('replays durable quarantine and eviction terminal states after restart', as
       keyProtector: protector(),
       root
     })
+
     const quarantined = await store.enqueue(envelope('restart-quarantine'))
     await store.quarantine(quarantined.batchId, 'payload_too_large')
+
     const recoveredQuarantine = await TraceOutboxStore.open({
       expectedOwner: envelope('root-owner').owner,
       groupCommitMs: 1,
@@ -1118,8 +1147,10 @@ test('replays durable quarantine and eviction terminal states after restart', as
       keyProtector: protector(),
       root: evictionRoot
     })
+
     await evicting.enqueue(envelope('restart-evicted-one'))
     const live = await evicting.enqueue(envelope('restart-evicted-two'))
+
     const reopened = await TraceOutboxStore.open({
       capacityBytes: 900,
       expectedOwner: envelope('eviction-owner').owner,
@@ -1174,16 +1205,20 @@ test('restart maintenance avoids segment reads while streaming and compacts the 
   const compactAppends: number[] = []
   const originalWriteFile = fs.writeFile.bind(fs)
   const originalAppendFile = fs.appendFile.bind(fs)
+
   fs.writeFile = async (path, data, writeOptions) => {
     if (path.includes('active.segment.compact')) {
       compactWrites.push(data.length)
     }
+
     await originalWriteFile(path, data, writeOptions)
   }
+
   fs.appendFile = async (path, data) => {
     if (path.includes('active.segment.compact')) {
       compactAppends.push(data.length)
     }
+
     await originalAppendFile(path, data)
   }
 
@@ -1236,10 +1271,13 @@ test('rejects malformed acknowledgements without writing a receipt and binds a r
 test('uses the filesystem free-space seam by default and enforces its reserve', async () => {
   const fs = new FakeTraceFileSystem()
   let calls = 0
+
   fs.freeSpace = async () => {
     calls += 1
+
     return { available: 1024 ** 3, total: 20 * 1024 ** 3 }
   }
+
   const store = await TraceOutboxStore.open(options({ fs }))
 
   await assert.rejects(store.enqueue(envelope('reserve')), /storage_unavailable/)
@@ -1248,6 +1286,7 @@ test('uses the filesystem free-space seam by default and enforces its reserve', 
 
 test('reuses a reclaimed receipt batch without rewriting payload bytes across restart', async () => {
   const root = await temporaryOutboxDirectory()
+
   try {
     const first = await TraceOutboxStore.open({
       expectedOwner: envelope('root-owner').owner,
@@ -1255,14 +1294,17 @@ test('reuses a reclaimed receipt batch without rewriting payload bytes across re
       keyProtector: protector(),
       root
     })
+
     const batch = await first.enqueue(envelope('receipt-safe'))
     await first.acknowledge(batch.batchId, receipt(batch.batchId, 'accepted'))
+
     const reopened = await TraceOutboxStore.open({
       expectedOwner: envelope('root-owner').owner,
       groupCommitMs: 1,
       keyProtector: protector(),
       root
     })
+
     const duplicate = reopened.beginEnqueue(envelope('receipt-safe'))
     await duplicate.cancelForGatewayReceipt(receipt(batch.batchId, 'duplicate'))
     const next = await duplicate.durable
@@ -1280,6 +1322,7 @@ test('reuses a reclaimed receipt batch without rewriting payload bytes across re
 test('persists root ownership after every payload and receipt tombstone is reclaimed or expired', async () => {
   const root = await temporaryOutboxDirectory()
   let now = 1_798_000_000_000
+
   try {
     const first = await TraceOutboxStore.open({
       expectedOwner: envelope('owner-only').owner,
@@ -1289,6 +1332,7 @@ test('persists root ownership after every payload and receipt tombstone is recla
       retentionMs: 10,
       root
     })
+
     const batch = await first.enqueue(envelope('owner-only'))
     await first.acknowledge(batch.batchId, receipt(batch.batchId, 'accepted'))
     now += 11
@@ -1303,6 +1347,7 @@ test('persists root ownership after every payload and receipt tombstone is recla
       retentionMs: 10,
       root
     })
+
     const other = envelope('other-owner-after-reclaim')
     other.owner = {
       ...other.owner,
@@ -1318,6 +1363,7 @@ test('persists root ownership after every payload and receipt tombstone is recla
 
 test('deduplicates a Gateway-first receipt after restart without creating a segment', async () => {
   const root = await temporaryOutboxDirectory()
+
   try {
     const first = await TraceOutboxStore.open({
       expectedOwner: envelope('root-owner').owner,
@@ -1325,6 +1371,7 @@ test('deduplicates a Gateway-first receipt after restart without creating a segm
       keyProtector: protector(),
       root
     })
+
     const pending = first.beginEnqueue(envelope('gateway-first-restart'))
     await pending.cancelForGatewayReceipt(receipt(pending.batchId, 'accepted'))
     await assert.rejects(pending.durable, /local_commit_cancelled/)
@@ -1335,6 +1382,7 @@ test('deduplicates a Gateway-first receipt after restart without creating a segm
       keyProtector: protector(),
       root
     })
+
     const duplicate = await reopened.enqueue(envelope('gateway-first-restart'))
 
     assert.equal(duplicate.batchId, pending.batchId)
@@ -1347,6 +1395,7 @@ test('deduplicates a Gateway-first receipt after restart without creating a segm
 
 test('upgrades a legacy receipt by recovering its identity from the retained encrypted record', async () => {
   const root = await temporaryOutboxDirectory()
+
   try {
     const first = await TraceOutboxStore.open({
       expectedOwner: envelope('root-owner').owner,
@@ -1354,6 +1403,7 @@ test('upgrades a legacy receipt by recovering its identity from the retained enc
       keyProtector: protector(),
       root
     })
+
     const batch = await first.enqueue(envelope('legacy-receipt'))
     const journal = await TraceJournal.open({ fs: nodeTraceFileSystem, path: join(root, 'index.journal') })
     const recovered = await journal.recover()
@@ -1368,14 +1418,17 @@ test('upgrades a legacy receipt by recovering its identity from the retained enc
       keyProtector: protector(),
       root
     })
+
     assert.equal((await upgraded.lookupReceipt(batch.batchId))?.outcome, 'accepted')
     await upgraded.compactIfIdle()
+
     const reopened = await TraceOutboxStore.open({
       expectedOwner: envelope('root-owner').owner,
       groupCommitMs: 1,
       keyProtector: protector(),
       root
     })
+
     const duplicate = await reopened.enqueue(envelope('legacy-receipt'))
 
     assert.equal(duplicate.batchId, batch.batchId)
@@ -1388,6 +1441,7 @@ test('upgrades a legacy receipt by recovering its identity from the retained enc
 test('reads an ownerless legacy receipt but fails closed for new account admission', async () => {
   const root = await temporaryOutboxDirectory()
   let now = 1_798_000_000_000
+
   try {
     const initial = await TraceOutboxStore.open({
       expectedOwner: envelope('legacy-owner').owner,
@@ -1397,6 +1451,7 @@ test('reads an ownerless legacy receipt but fails closed for new account admissi
       retentionMs: 10,
       root
     })
+
     await initial.close()
     await downgradeBoundKeyToLegacy(root)
     const journal = await TraceJournal.open({ fs: nodeTraceFileSystem, path: join(root, 'index.journal') })
@@ -1411,11 +1466,13 @@ test('reads an ownerless legacy receipt but fails closed for new account admissi
       retentionMs: 10,
       root
     })
+
     assert.equal((await reopened.lookupReceipt('legacy-ownerless'))?.outcome, 'accepted')
     await assert.rejects(reopened.enqueue(envelope('unsafe-owner-guess')), /trace_outbox_account_unknown/)
     now += 11
     await reopened.compactIfIdle()
     assert.equal(await reopened.lookupReceipt('legacy-ownerless'), undefined)
+
     const afterGc = await TraceOutboxStore.open({
       expectedOwner: envelope('legacy-owner').owner,
       groupCommitMs: 1,
@@ -1424,6 +1481,7 @@ test('reads an ownerless legacy receipt but fails closed for new account admissi
       retentionMs: 10,
       root
     })
+
     await assert.rejects(afterGc.enqueue(envelope('unsafe-after-gc')), /trace_outbox_account_unknown/)
   } finally {
     await rm(root, { force: true, recursive: true })
@@ -1432,6 +1490,7 @@ test('reads an ownerless legacy receipt but fails closed for new account admissi
 
 test('keeps repeated eviction journal state bounded across reopen', async () => {
   const root = await temporaryOutboxDirectory()
+
   try {
     const optionsForRoot = {
       capacityBytes: 900,
@@ -1441,11 +1500,14 @@ test('keeps repeated eviction journal state bounded across reopen', async () => 
       keyProtector: protector(),
       root
     }
+
     let store = await TraceOutboxStore.open(optionsForRoot)
+
     for (let index = 0; index < 5; index += 1) {
       await store.enqueue(envelope(`evict-bound-${index}`))
       store = await TraceOutboxStore.open(optionsForRoot)
     }
+
     const journal = await readFile(join(root, 'index.journal'), 'utf8')
     assert.ok(journal.length < 4_096)
     assert.notEqual(await store.peekEligible(Number.MAX_SAFE_INTEGER), undefined)
@@ -1460,13 +1522,16 @@ test('serializes a gated compaction before a concurrent enqueue and preserves bo
   const gate = deferred<void>()
   const entered = deferred<void>()
   const originalReplace = fs.replaceFile.bind(fs)
+
   fs.replaceFile = async (from, to) => {
     if (to.endsWith('active.segment')) {
       entered.resolve()
       await gate.promise
     }
+
     await originalReplace(from, to)
   }
+
   const store = await TraceOutboxStore.open(options({ fs, isConversationStreaming: () => streaming }))
   const first = await store.enqueue(envelope('lock-first'))
   const second = await store.enqueue(envelope('lock-second'))
@@ -1708,9 +1773,7 @@ test('draining many acknowledgements performs a bounded number of segment and jo
     event => event.startsWith('replace:') && event.endsWith('active.segment')
   ).length
 
-  const journalRewrites = during.filter(
-    event => event.startsWith('replace:') && event.endsWith('index.journal')
-  ).length
+  const journalRewrites = during.filter(event => event.startsWith('replace:') && event.endsWith('index.journal')).length
 
   assert.ok(segmentRewrites <= 6, `expected bounded segment rewrites, saw ${segmentRewrites}`)
   assert.ok(journalRewrites <= 8, `expected bounded journal rewrites, saw ${journalRewrites}`)
@@ -1971,7 +2034,6 @@ test('fails the store closed when the journal rollback cannot be proven durable'
     await rm(root, { force: true, recursive: true })
   }
 })
-
 
 test('stale compaction scratch files are removed when the store opens', async () => {
   const fs = new FakeTraceFileSystem()

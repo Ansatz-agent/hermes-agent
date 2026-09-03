@@ -50,6 +50,7 @@ const authenticated: BridgeStatus = {
 
 function bridgeFixture() {
   const child = new FakeChild()
+
   const bridge = new DesktopAuthBridge({
     cwd: '/opt/hermes-agent',
     nativeClientContext: {
@@ -70,6 +71,7 @@ afterEach(() => {
 test('Task 4 bridge HTTP timeout occurs before process teardown timeout', async () => {
   vi.useFakeTimers()
   const { bridge, child } = bridgeFixture()
+
   const rejected = assert.rejects(
     bridge.status(),
     error => error instanceof AuthBridgeError && error.code === 'runtime_unavailable'
@@ -91,12 +93,15 @@ test('Task 4 explicit Retry can rebuild one dead local auth bridge', async () =>
     login: vi.fn(async () => signedOut),
     logout: vi.fn(async () => signedOut)
   }
+
   const replacement = {
     status: vi.fn(async () => authenticated),
     login: vi.fn(async () => authenticated),
     logout: vi.fn(async () => signedOut)
   }
+
   const recoverBridge = vi.fn(async () => replacement)
+
   const coordinator = new AuthCoordinator(deadBridge, {
     clock: () => 1,
     pollIntervalMs: 0,

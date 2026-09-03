@@ -18,7 +18,6 @@ test('canonical CLI path wins and the legacy path is only a compatibility fallba
   const checked: string[] = []
 
   const exists = (candidate: string) => {
-
     checked.push(candidate)
 
     return candidate.endsWith('/ansatz')
@@ -26,7 +25,10 @@ test('canonical CLI path wins and the legacy path is only a compatibility fallba
 
   assert.equal(resolveAnsatzCliPath('/bin/ansatz', '/bin/hermes', exists), '/bin/ansatz')
   assert.deepEqual(checked, ['/bin/ansatz'])
-  assert.equal(resolveAnsatzCliPath('/missing/ansatz', '/bin/hermes', () => false), '/bin/hermes')
+  assert.equal(
+    resolveAnsatzCliPath('/missing/ansatz', '/bin/hermes', () => false),
+    '/bin/hermes'
+  )
 })
 
 test('Ansatz desktop identity cannot collide with an existing Hermes installation', () => {
@@ -43,25 +45,14 @@ test('Ansatz desktop identity cannot collide with an existing Hermes installatio
   assert.equal(ANSATZ_PRODUCT.remoteOauthSessionPartition, 'persist:ansatz-voice-trace-remote-oauth')
   assert.equal(ANSATZ_PRODUCT.linkTitleSession, 'ansatz:link-titles')
   assert.equal(ANSATZ_PRODUCT.desktopProduct, 'ansatz-voice-trace')
-  assert.equal(
-    ANSATZ_PRODUCT.runtimeHomeOverrideEnvironmentVariable,
-    'ANSATZ_VOICE_TRACE_CLIENT_HOME'
-  )
+  assert.equal(ANSATZ_PRODUCT.runtimeHomeOverrideEnvironmentVariable, 'ANSATZ_VOICE_TRACE_CLIENT_HOME')
   assert.deepEqual(ANSATZ_PRODUCT.posixLaunchers, [
     'ansatz-voice-trace',
     'ansatz-voice-trace-agent',
     'ansatz-voice-trace-acp'
   ])
-  assert.deepEqual(ANSATZ_PRODUCT.canonicalCliLaunchers, [
-    'ansatz',
-    'ansatz-agent',
-    'ansatz-acp'
-  ])
-  assert.deepEqual(ANSATZ_PRODUCT.legacyCliLaunchers, [
-    'hermes',
-    'hermes-agent',
-    'hermes-acp'
-  ])
+  assert.deepEqual(ANSATZ_PRODUCT.canonicalCliLaunchers, ['ansatz', 'ansatz-agent', 'ansatz-acp'])
+  assert.deepEqual(ANSATZ_PRODUCT.legacyCliLaunchers, ['hermes', 'hermes-agent', 'hermes-acp'])
 })
 
 test('desktop auth rolls to a new owner namespace without moving Keychain credentials', () => {
@@ -70,10 +61,7 @@ test('desktop auth rolls to a new owner namespace without moving Keychain creden
 })
 
 test('resolveAnsatzRuntimeRoot isolates macOS and Windows user data from Hermes', () => {
-  assert.equal(
-    resolveAnsatzRuntimeRoot('darwin', '/Users/a', ''),
-    '/Users/a/.ansatz-voice-trace-client'
-  )
+  assert.equal(resolveAnsatzRuntimeRoot('darwin', '/Users/a', ''), '/Users/a/.ansatz-voice-trace-client')
   assert.equal(
     resolveAnsatzRuntimeRoot('win32', 'C:\\Users\\a', 'C:\\Users\\a\\AppData\\Local'),
     'C:\\Users\\a\\AppData\\Local\\AnsatzVoiceTraceClient'
@@ -82,10 +70,7 @@ test('resolveAnsatzRuntimeRoot isolates macOS and Windows user data from Hermes'
 })
 
 test('resolveAnsatzRuntimeRoot requires LOCALAPPDATA on Windows', () => {
-  assert.throws(
-    () => resolveAnsatzRuntimeRoot('win32', 'C:\\Users\\a', ''),
-    /LOCALAPPDATA/
-  )
+  assert.throws(() => resolveAnsatzRuntimeRoot('win32', 'C:\\Users\\a', ''), /LOCALAPPDATA/)
 })
 
 test('packaged Ansatz desktop ignores an inherited generic HERMES_HOME', () => {
@@ -205,32 +190,25 @@ test('bundled runtime validation overrides ambient legacy state with the selecte
       HERMES_AUTH_RUNTIME_NAMESPACE: ANSATZ_PRODUCT.authRuntimeNamespace,
       HERMES_HOME: '/Users/a/.ansatz-voice-trace-client',
       PATH: '/usr/bin',
-      PYTHONPATH: [
-        '/Users/a/.ansatz-voice-trace-client/hermes-agent',
-        '/ambient/python'
-      ].join(path.delimiter)
+      PYTHONPATH: ['/Users/a/.ansatz-voice-trace-client/hermes-agent', '/ambient/python'].join(path.delimiter)
     }
   )
   assert.equal(source.HERMES_HOME, '/Users/a/.hermes')
 })
 
 test('embedded terminal environment pins the selected home and canonical Ansatz identity', () => {
-  const result = buildAnsatzTerminalEnvironment(
-    '/Users/a/.ansatz-voice-trace-client',
-    '0.17.0',
-    {
-      HERMES_AUTH_KEYRING_SERVICE: 'stale.remote-auth',
-      HERMES_AUTH_LEGACY_KEYRING_SERVICE: 'legacy.remote-auth',
-      HERMES_AUTH_RUNTIME_NAMESPACE: 'stale-auth-v0',
-      HERMES_HOME: '/Users/a/.hermes',
-      LC_CTYPE: 'zh_CN.UTF-8',
-      NO_COLOR: '1',
-      FORCE_COLOR: '0',
-      COLORFGBG: '0;15',
-      npm_config_prefix: '/tmp/npm',
-      npm_package_name: 'desktop'
-    }
-  )
+  const result = buildAnsatzTerminalEnvironment('/Users/a/.ansatz-voice-trace-client', '0.17.0', {
+    HERMES_AUTH_KEYRING_SERVICE: 'stale.remote-auth',
+    HERMES_AUTH_LEGACY_KEYRING_SERVICE: 'legacy.remote-auth',
+    HERMES_AUTH_RUNTIME_NAMESPACE: 'stale-auth-v0',
+    HERMES_HOME: '/Users/a/.hermes',
+    LC_CTYPE: 'zh_CN.UTF-8',
+    NO_COLOR: '1',
+    FORCE_COLOR: '0',
+    COLORFGBG: '0;15',
+    npm_config_prefix: '/tmp/npm',
+    npm_package_name: 'desktop'
+  })
 
   assert.equal(result.HERMES_HOME, '/Users/a/.ansatz-voice-trace-client')
   assert.equal(result.HERMES_AUTH_RUNTIME_NAMESPACE, ANSATZ_PRODUCT.authRuntimeNamespace)
@@ -260,19 +238,22 @@ function worstCaseOpenSshSocketPath(controlDirectory: string) {
   return path.posix.join(controlDirectory, `${'0'.repeat(16)}.sock`) + `.${'x'.repeat(16)}`
 }
 
-test.skipIf(process.platform === 'win32')('long POSIX runtime homes use a short per-user isolated SSH directory', () => {
-  const firstHome = `/Users/${'a'.repeat(120)}/.ansatz-voice-trace-client`
-  const secondHome = `/Users/${'b'.repeat(120)}/.ansatz-voice-trace-client`
-  const first = resolveAnsatzSshControlDirectory(firstHome)
-  const second = resolveAnsatzSshControlDirectory(secondHome)
-  const uid = process.getuid!()
+test.skipIf(process.platform === 'win32')(
+  'long POSIX runtime homes use a short per-user isolated SSH directory',
+  () => {
+    const firstHome = `/Users/${'a'.repeat(120)}/.ansatz-voice-trace-client`
+    const secondHome = `/Users/${'b'.repeat(120)}/.ansatz-voice-trace-client`
+    const first = resolveAnsatzSshControlDirectory(firstHome)
+    const second = resolveAnsatzSshControlDirectory(secondHome)
+    const uid = process.getuid!()
 
-  assert.match(first, new RegExp(`^/tmp/ansatz-vtc-ssh-${uid}-[0-9a-f]{16}$`))
-  assert.match(second, new RegExp(`^/tmp/ansatz-vtc-ssh-${uid}-[0-9a-f]{16}$`))
-  assert.notEqual(first, second)
-  assert.ok(Buffer.byteLength(worstCaseOpenSshSocketPath(first)) < 104)
-  assert.ok(Buffer.byteLength(worstCaseOpenSshSocketPath(second)) < 104)
-})
+    assert.match(first, new RegExp(`^/tmp/ansatz-vtc-ssh-${uid}-[0-9a-f]{16}$`))
+    assert.match(second, new RegExp(`^/tmp/ansatz-vtc-ssh-${uid}-[0-9a-f]{16}$`))
+    assert.notEqual(first, second)
+    assert.ok(Buffer.byteLength(worstCaseOpenSshSocketPath(first)) < 104)
+    assert.ok(Buffer.byteLength(worstCaseOpenSshSocketPath(second)) < 104)
+  }
+)
 
 test.skipIf(process.platform === 'win32')('POSIX SSH path budgeting counts Unicode bytes, not characters', () => {
   const unicodeHome = `/Users/${'用户'.repeat(30)}/.ansatz-voice-trace-client`

@@ -83,14 +83,8 @@ test('sameTraceOwnerIdentity compares the full owner identity', () => {
   const owner = validOwner()
 
   assert.equal(sameTraceOwnerIdentity(owner, { ...owner }), true)
-  assert.equal(
-    sameTraceOwnerIdentity(owner, { ...owner, sessionId: '99999999-9999-4999-8999-999999999999' }),
-    false
-  )
-  assert.equal(
-    sameTraceOwnerIdentity(owner, { ...owner, accountId: '99999999-9999-4999-8999-999999999999' }),
-    false
-  )
+  assert.equal(sameTraceOwnerIdentity(owner, { ...owner, sessionId: '99999999-9999-4999-8999-999999999999' }), false)
+  assert.equal(sameTraceOwnerIdentity(owner, { ...owner, accountId: '99999999-9999-4999-8999-999999999999' }), false)
   assert.equal(
     sameTraceOwnerIdentity(owner, {
       ...owner,

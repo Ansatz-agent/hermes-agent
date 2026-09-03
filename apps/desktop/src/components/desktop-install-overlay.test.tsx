@@ -155,11 +155,7 @@ describe('DesktopInstallOverlay first-run setup', () => {
     const install = (await screen.findByText('Install Hermes locally')).closest('button') as HTMLButtonElement
     fireEvent.click(install)
 
-    expect(
-      await screen.findByText(
-        'Local installation could not start. Restart Ansatz and try again.'
-      )
-    ).toBeTruthy()
+    expect(await screen.findByText('Local installation could not start. Restart Ansatz and try again.')).toBeTruthy()
     expect(install.disabled).toBe(false)
   })
 
@@ -183,11 +179,7 @@ describe('DesktopInstallOverlay first-run setup', () => {
       await Promise.resolve()
     })
 
-    expect(
-      screen.queryByText(
-        'Local installation could not start. Restart Ansatz and try again.'
-      )
-    ).toBeTruthy()
+    expect(screen.queryByText('Local installation could not start. Restart Ansatz and try again.')).toBeTruthy()
   })
 
   it('clears a stale local-start error when a repair presents a different root', async () => {
@@ -201,11 +193,7 @@ describe('DesktopInstallOverlay first-run setup', () => {
     render(<DesktopInstallOverlay />)
 
     fireEvent.click((await screen.findByText('Install Hermes locally')).closest('button') as HTMLButtonElement)
-    expect(
-      await screen.findByText(
-        'Local installation could not start. Restart Ansatz and try again.'
-      )
-    ).toBeTruthy()
+    expect(await screen.findByText('Local installation could not start. Restart Ansatz and try again.')).toBeTruthy()
 
     act(() => {
       desktop.emitBootstrapEvent({
@@ -216,11 +204,7 @@ describe('DesktopInstallOverlay first-run setup', () => {
       })
     })
 
-    expect(
-      screen.queryByText(
-        'Local installation could not start. Restart Ansatz and try again.'
-      )
-    ).toBeNull()
+    expect(screen.queryByText('Local installation could not start. Restart Ansatz and try again.')).toBeNull()
   })
 
   it('opens the remote connection form from the first-run choice', async () => {

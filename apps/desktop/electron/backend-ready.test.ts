@@ -88,10 +88,10 @@ test('falls back to the default for malformed / non-positive overrides', () => {
 // ---------------------------------------------------------------------------
 
 test('parses v2 and legacy ready lines without assuming protocol support', () => {
-  assert.deepEqual(
-    parseBackendReadyLine('HERMES_BACKEND_READY port=54321 desktop_scope_protocol=2'),
-    { port: 54_321, desktopScopeProtocol: 2 }
-  )
+  assert.deepEqual(parseBackendReadyLine('HERMES_BACKEND_READY port=54321 desktop_scope_protocol=2'), {
+    port: 54_321,
+    desktopScopeProtocol: 2
+  })
   assert.deepEqual(parseBackendReadyLine('HERMES_DASHBOARD_READY port=43210'), {
     port: 43_210,
     desktopScopeProtocol: null

@@ -52,6 +52,7 @@ function makePayloadFixture({
   const gitRuntimePath = path.join(bootstrapRoot, 'git-bash-runtime.tar.xz')
   execFileSync('tar', ['-czf', archivePath, '-C', path.join(tempRoot, 'source'), 'hermes-agent'])
   fs.writeFileSync(installerPath, platform === 'win32' ? 'exit 0\r\n' : '#!/bin/sh\nexit 0\n')
+
   if (platform === 'win32') {
     fs.writeFileSync(gitRuntimePath, 'fixture Git Bash runtime')
   }
@@ -100,6 +101,7 @@ test('verified Windows payload requires and stages install.ps1', async () => {
       installStamp: { commit: COMMIT },
       targetPlatform: 'win32'
     })
+
     const hermesHome = path.join(fixture.tempRoot, 'home')
     const activeRoot = path.join(hermesHome, 'hermes-agent')
     const prepared = await prepareBundledSource({ payload, activeRoot, hermesHome })
@@ -117,7 +119,10 @@ test('verified payload resolves and stages a complete managed source transaction
   const fixture = makePayloadFixture()
 
   try {
-    const payload = await resolveBundledPayload({ bootstrapRoot: fixture.bootstrapRoot, installStamp: { commit: COMMIT } })
+    const payload = await resolveBundledPayload({
+      bootstrapRoot: fixture.bootstrapRoot,
+      installStamp: { commit: COMMIT }
+    })
     const hermesHome = path.join(fixture.tempRoot, 'home')
     const activeRoot = path.join(hermesHome, 'hermes-agent')
     const prepared = await prepareBundledSource({ payload, activeRoot, hermesHome })

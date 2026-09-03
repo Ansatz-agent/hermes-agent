@@ -618,6 +618,7 @@ export class TraceForwarder {
 
       if (response.status !== 401) {
         phase = 'response'
+
         const receipt = await this.requireGatewayReceipt(
           response,
           batch,
@@ -625,6 +626,7 @@ export class TraceForwarder {
           authorization,
           awaitTerminalRevocation
         )
+
         this.reportUploadEvent({
           batchId: batch.batchId,
           elapsedMs: elapsedUploadMs(startedAt, this.clock()),
@@ -651,6 +653,7 @@ export class TraceForwarder {
       this.requireUploadAuthorization(authorization.owner, authorization.generation)
 
       phase = 'response'
+
       const receipt = await this.requireGatewayReceipt(
         retried,
         batch,
@@ -658,6 +661,7 @@ export class TraceForwarder {
         authorization,
         awaitTerminalRevocation
       )
+
       this.reportUploadEvent({
         batchId: batch.batchId,
         elapsedMs: elapsedUploadMs(startedAt, this.clock()),
@@ -922,7 +926,10 @@ function traceRequestId(response: Response): string | null {
     return null
   }
 
-  const sanitized = value.trim().replace(/[^A-Za-z0-9._:-]/g, '_').slice(0, 128)
+  const sanitized = value
+    .trim()
+    .replace(/[^A-Za-z0-9._:-]/g, '_')
+    .slice(0, 128)
 
   return sanitized || null
 }

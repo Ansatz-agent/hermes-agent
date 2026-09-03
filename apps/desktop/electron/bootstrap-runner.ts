@@ -677,14 +677,7 @@ function buildPosixPinArgs({
   bundledToolchainRoot = null,
   bootstrapScope = null
 }) {
-  const args = [
-    '--dir',
-    activeRoot,
-    '--hermes-home',
-    hermesHome,
-    '--desktop-product',
-    ANSATZ_PRODUCT.desktopProduct
-  ]
+  const args = ['--dir', activeRoot, '--hermes-home', hermesHome, '--desktop-product', ANSATZ_PRODUCT.desktopProduct]
 
   if (installStamp && installStamp.branch) {
     args.push('--branch', installStamp.branch)
@@ -1252,8 +1245,18 @@ async function runBootstrap(opts) {
       })
     ) {
       const stages = [
-        { name: 'auth-prerequisites', title: 'Prepare authentication runtime', category: 'auth', needs_user_input: false },
-        { name: 'python-auth-deps', title: 'Install authentication dependencies', category: 'auth', needs_user_input: false },
+        {
+          name: 'auth-prerequisites',
+          title: 'Prepare authentication runtime',
+          category: 'auth',
+          needs_user_input: false
+        },
+        {
+          name: 'python-auth-deps',
+          title: 'Install authentication dependencies',
+          category: 'auth',
+          needs_user_input: false
+        },
         { name: 'auth-complete', title: 'Verify authentication runtime', category: 'auth', needs_user_input: false }
       ]
 

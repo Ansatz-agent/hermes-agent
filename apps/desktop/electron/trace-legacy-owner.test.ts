@@ -48,6 +48,7 @@ test('native auth principals keep a stable deterministic local-only outbox seam'
 test('authenticated native status maps the deterministic local-only owner for recovery', () => {
   const accountId = '22222222-2222-4222-8222-222222222222'
   const nativeInstallationId = '44444444-4444-4444-8444-444444444444'
+
   const status = {
     account_id: accountId,
     epoch: 7,
@@ -71,6 +72,7 @@ test('exact native cached authorization produces a trusted uploadable owner with
   const accountId = '22222222-2222-4222-8222-222222222222'
   const sessionId = '33333333-3333-4333-8333-333333333333'
   const scope = { connection_id: 'local', epoch: 7, runtime_instance_id: 'runtime-native' }
+
   const status = {
     account_id: accountId,
     epoch: scope.epoch,
@@ -94,6 +96,7 @@ test('exact native cached authorization produces a trusted uploadable owner with
 test('legacy, missing, or malformed cached identity remains stable local-only', () => {
   const scope = { connection_id: 'local', epoch: 7, runtime_instance_id: 'runtime-native' }
   const accountId = '22222222-2222-4222-8222-222222222222'
+
   const base = {
     account_id: accountId,
     epoch: scope.epoch,
@@ -129,6 +132,7 @@ test('native auth keeps the server-issued installation binding after desktop id 
   const desktopInstallationId = installationId
   const sessionId = '33333333-3333-4333-8333-333333333333'
   const scope = { connection_id: 'local', epoch: 7, runtime_instance_id: 'runtime-native' }
+
   const owner = traceOwnerFromScope(
     {
       account_id: accountId,
@@ -177,6 +181,7 @@ test('the exact previous scope namespace is atomically retained under the stable
 
 test('restarted native authorization discovers the durable legacy predecessor without in-memory transition state', () => {
   const scope = { connection_id: 'local', epoch: 7, runtime_instance_id: 'runtime-transition' }
+
   const legacyStatus = {
     account_id: null,
     epoch: scope.epoch,
@@ -187,7 +192,9 @@ test('restarted native authorization discovers the durable legacy predecessor wi
     session_id: null,
     state: 'authenticated'
   }
+
   const accountId = '22222222-2222-4222-8222-222222222222'
+
   const nativeStatus = {
     ...legacyStatus,
     account_id: accountId,

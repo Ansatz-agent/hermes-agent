@@ -228,10 +228,7 @@ function appendKnownHostKeyAtomic(entry, deps: any = {}) {
   const lines = existing.split(/\r?\n/).filter(Boolean)
   const next = lines.includes(entry) ? `${lines.join('\n')}\n` : `${lines.concat(entry).join('\n')}\n`
 
-  const temporaryPath = path.join(
-    sshDir,
-    `.known_hosts.hermes-${process.pid}-${crypto.randomBytes(8).toString('hex')}`
-  )
+  const temporaryPath = path.join(sshDir, `.known_hosts.hermes-${process.pid}-${crypto.randomBytes(8).toString('hex')}`)
 
   let descriptor: number | null = null
 

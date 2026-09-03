@@ -100,6 +100,7 @@ function respond(child: FakeChild, payload: unknown) {
 
 test('status carries native context and accepts degraded health without secrets', async () => {
   const child = new FakeChild()
+
   const bridge = new DesktopAuthBridge({
     cwd: '/repo',
     pythonExecutable: '/python',
@@ -109,6 +110,7 @@ test('status carries native context and accepts degraded health without secrets'
     },
     spawnChild: () => child as any
   })
+
   const pending = bridge.status()
   const request = await readRequest(child)
 
@@ -177,6 +179,7 @@ test.each(['account_disabled', 'account_revoked', 'session_revoked'])(
       validation_reason: reason,
       reason
     }
+
     respond(child, { version: 2, id: request.id, result: terminal })
 
     assert.deepEqual(await pending, terminal)
@@ -327,6 +330,7 @@ test('requests one exact Desktop ingress lease without a cloud credential', asyn
   const { bridge, child } = bridgeFixture()
   const pending = bridge.traceIngress({ entrypoint: 'desktop', consumer_id: 'desktop-local' })
   const request = await readRequest(child)
+
   const lease = {
     endpoint: 'http://127.0.0.1:49152/v1/traces',
     authorization: `Bearer ${'a'.repeat(43)}`,

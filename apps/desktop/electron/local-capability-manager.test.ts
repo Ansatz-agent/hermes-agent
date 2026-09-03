@@ -87,11 +87,7 @@ class FakeControl {
   readonly pending: PendingControl[] = []
   closedReason: Error | null = null
 
-  request(
-    encoded: string,
-    match: (value: ScopeControlAck) => boolean,
-    _timeoutMs?: number
-  ): Promise<ScopeControlAck> {
+  request(encoded: string, match: (value: ScopeControlAck) => boolean, _timeoutMs?: number): Promise<ScopeControlAck> {
     if (this.closedReason) {
       return Promise.reject(this.closedReason)
     }
@@ -175,8 +171,7 @@ class FakeControl {
       operation: 'scope_token_promoted',
       transition_id: String(frame.transition_id),
       registration_id: String(frame.registration_id),
-      previous_registration_id:
-        frame.previous_registration_id === null ? null : String(frame.previous_registration_id),
+      previous_registration_id: frame.previous_registration_id === null ? null : String(frame.previous_registration_id),
       connection_id: String(frame.connection_id),
       runtime_instance_id: String(frame.runtime_instance_id),
       epoch: Number(frame.epoch),
@@ -196,11 +191,7 @@ class FakeControl {
 class FakeProbe {
   readonly calls: PendingProbe[] = []
 
-  readonly request = (
-    baseUrl: string,
-    bearer: string,
-    signal?: AbortSignal
-  ): Promise<ProbeResult> => {
+  readonly request = (baseUrl: string, bearer: string, signal?: AbortSignal): Promise<ProbeResult> => {
     const response = deferred<ProbeResult>()
     this.calls.push({ baseUrl, bearer, signal: signal ?? null, deferred: response })
 
@@ -244,10 +235,7 @@ type Fixture = {
   probe: FakeProbe
   tokensByBearer: Map<string, AuthScopeToken>
   completePendingRotation: (control?: FakeControl) => Promise<void>
-  resolveProbe: (
-    state?: ProbeResult['state'],
-    promotedTransitionId?: string | null
-  ) => void
+  resolveProbe: (state?: ProbeResult['state'], promotedTransitionId?: string | null) => void
 }
 
 function managerFixture(
@@ -439,8 +427,7 @@ test('retries a register ACK timeout with bounded backoff while the old active s
   assert.equal(fixture.control.operationCount('register_scope_token'), 2)
 
   const retryEvent = await eventually(
-    () =>
-      fixture.diagnostics.find(event => event.name === 'scope_rotation_retry_scheduled') ?? null,
+    () => fixture.diagnostics.find(event => event.name === 'scope_rotation_retry_scheduled') ?? null,
     'Retry diagnostic was not emitted'
   )
 
@@ -463,8 +450,7 @@ test('caps retry jitter at twenty percent', async () => {
   await fixture.control.waitForPending('register_scope_token')
   fixture.control.rejectPending('register_scope_token', new Error('ACK timeout'))
   await eventually(
-    () =>
-      fixture.diagnostics.find(event => event.name === 'scope_rotation_retry_scheduled') ?? null,
+    () => fixture.diagnostics.find(event => event.name === 'scope_rotation_retry_scheduled') ?? null,
     'Retry diagnostic was not emitted'
   )
 
@@ -573,10 +559,7 @@ test('ignores stale, duplicate, wrong-scope, and wrong-transition ACKs until the
     }),
     false
   )
-  assert.equal(
-    fixture.control.ackRegistered({ connection_id: 'other-connection' } as Partial<ScopeControlAck>),
-    false
-  )
+  assert.equal(fixture.control.ackRegistered({ connection_id: 'other-connection' } as Partial<ScopeControlAck>), false)
   assert.equal(fixture.probe.pending(), null)
   assert.equal(fixture.control.ackRegistered(), true)
   await fixture.probe.waitForPending()
@@ -593,10 +576,7 @@ test('ignores stale, duplicate, wrong-scope, and wrong-transition ACKs until the
   assert.equal(fixture.control.ackPromoted(), true)
   await rotating
 
-  assert.equal(
-    fixture.manager.snapshot('backend-1').registrationId,
-    String(registration.registration_id)
-  )
+  assert.equal(fixture.manager.snapshot('backend-1').registrationId, String(registration.registration_id))
   assert.equal(String(promotion.previous_registration_id), first.registrationId)
 })
 
@@ -610,9 +590,7 @@ test('revoke cancels an in-flight refresh and late ACKs cannot resurrect the des
 
   await assert.rejects(
     rotating,
-    error =>
-      error instanceof LocalBackendCapabilityUnavailableError &&
-      error.code === 'local_backend_unavailable'
+    error => error instanceof LocalBackendCapabilityUnavailableError && error.code === 'local_backend_unavailable'
   )
   assert.equal(fixture.control.closedReason instanceof LocalBackendCapabilityUnavailableError, true)
   assert.equal(fixture.control.ackRegistered(), false)
@@ -628,15 +606,9 @@ test('revokeByControl clears every descriptor owned by the terminated control ch
 
   fixture.manager.revokeByControl(fixture.binding.control)
 
-  assert.throws(
-    () => fixture.manager.snapshot('backend-1'),
-    LocalBackendCapabilityUnavailableError
-  )
+  assert.throws(() => fixture.manager.snapshot('backend-1'), LocalBackendCapabilityUnavailableError)
   assert.equal(fixture.control.closedReason instanceof LocalBackendCapabilityUnavailableError, true)
-  assert.equal(
-    fixture.diagnostics.find(event => event.name === 'scope_revoked')?.elapsedMs,
-    0
-  )
+  assert.equal(fixture.diagnostics.find(event => event.name === 'scope_revoked')?.elapsedMs, 0)
 })
 
 test('a replacement backend generation cancels the old refresh and owns the only visible descriptor', async () => {
@@ -685,10 +657,7 @@ test('consecutive failures reaching active expiry surface only a local backend u
   await vi.advanceTimersByTimeAsync(500)
 
   await rejected
-  assert.throws(
-    () => fixture.manager.snapshot('backend-1'),
-    LocalBackendCapabilityUnavailableError
-  )
+  assert.throws(() => fixture.manager.snapshot('backend-1'), LocalBackendCapabilityUnavailableError)
 })
 
 test('snapshot expiry aborts a sleeping retry and closes its terminal control channel', async () => {
@@ -701,18 +670,13 @@ test('snapshot expiry aborts a sleeping retry and closes its terminal control ch
   await fixture.control.waitForPending('register_scope_token')
   fixture.control.rejectPending('register_scope_token', new Error('ACK timeout'))
   await eventually(
-    () =>
-      fixture.diagnostics.find(event => event.name === 'scope_rotation_retry_scheduled') ?? null,
+    () => fixture.diagnostics.find(event => event.name === 'scope_rotation_retry_scheduled') ?? null,
     'Retry diagnostic was not emitted before expiry'
   )
   fixture.clock.now = first.validUntil
-  assert.throws(
-    () => fixture.manager.snapshot('backend-1'),
-    LocalBackendCapabilityUnavailableError
-  )
+  assert.throws(() => fixture.manager.snapshot('backend-1'), LocalBackendCapabilityUnavailableError)
 
-  const closedAtExpiry =
-    fixture.control.closedReason instanceof LocalBackendCapabilityUnavailableError
+  const closedAtExpiry = fixture.control.closedReason instanceof LocalBackendCapabilityUnavailableError
 
   fixture.manager.revoke('backend-1')
   await rejected
@@ -817,23 +781,20 @@ test('snapshot returns an immutable copy and diagnostics never contain capabilit
   assert.equal(stable.scope.connection_id, SCOPE.connection_id)
   assert.notEqual(stable.bearer, 'mutated')
   assert.ok(fixture.diagnostics.length > 0)
-  assert.deepEqual(
-    Object.keys(fixture.diagnostics[0]).sort(),
-    [
-      'activeAvailable',
-      'attempt',
-      'backendGeneration',
-      'elapsedMs',
-      'failureCode',
-      'httpStatus',
-      'name',
-      'outcome',
-      'phase',
-      'remainingLifetimeMs',
-      'retryDelayMs',
-      'trigger'
-    ]
-  )
+  assert.deepEqual(Object.keys(fixture.diagnostics[0]).sort(), [
+    'activeAvailable',
+    'attempt',
+    'backendGeneration',
+    'elapsedMs',
+    'failureCode',
+    'httpStatus',
+    'name',
+    'outcome',
+    'phase',
+    'remainingLifetimeMs',
+    'retryDelayMs',
+    'trigger'
+  ])
   const diagnostics = JSON.stringify(fixture.diagnostics)
   const rendered = fixture.diagnostics.map(formatLocalCapabilityDiagnostic).join('\n')
   assert.equal(diagnostics.includes(stable.bearer), false)
@@ -854,20 +815,15 @@ test('retry diagnostics identify the failed phase without copying arbitrary erro
   const rejected = assert.rejects(rotating, LocalBackendCapabilityUnavailableError)
 
   await fixture.control.waitForPending('register_scope_token')
-  fixture.control.rejectPending(
-    'register_scope_token',
-    new Error('diagnostic-secret-sentinel')
-  )
+  fixture.control.rejectPending('register_scope_token', new Error('diagnostic-secret-sentinel'))
 
   const failed = await eventually(
-    () =>
-      fixture.diagnostics.find(event => event.name === 'scope_rotation_attempt_failed') ?? null,
+    () => fixture.diagnostics.find(event => event.name === 'scope_rotation_attempt_failed') ?? null,
     'Failure diagnostic was not emitted'
   )
 
   const retry = await eventually(
-    () =>
-      fixture.diagnostics.find(event => event.name === 'scope_rotation_retry_scheduled') ?? null,
+    () => fixture.diagnostics.find(event => event.name === 'scope_rotation_retry_scheduled') ?? null,
     'Retry diagnostic was not emitted'
   )
 
@@ -906,10 +862,7 @@ test('expiry emits a terminal diagnostic distinct from account logout', async ()
   fixture.diagnostics.length = 0
   fixture.clock.now = first.validUntil
 
-  assert.throws(
-    () => fixture.manager.snapshot('backend-1'),
-    LocalBackendCapabilityUnavailableError
-  )
+  assert.throws(() => fixture.manager.snapshot('backend-1'), LocalBackendCapabilityUnavailableError)
   assert.deepEqual(fixture.diagnostics, [
     {
       name: 'scope_expired',
@@ -940,9 +893,7 @@ test('production probe diagnostics expose status but never response content', as
   fixture.control.ackRegistered()
   await assert.rejects(activating, LocalBackendCapabilityUnavailableError)
 
-  const failed = fixture.diagnostics.find(
-    event => event.name === 'scope_rotation_attempt_failed'
-  )
+  const failed = fixture.diagnostics.find(event => event.name === 'scope_rotation_attempt_failed')
 
   assert.ok(failed)
   assert.equal(failed.phase, 'candidate_probe')

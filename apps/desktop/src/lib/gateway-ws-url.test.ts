@@ -77,9 +77,7 @@ describe('resolveGatewayWsUrl', () => {
     it('requires a freshly minted one-shot URL', async () => {
       const getGatewayWsUrl = vi.fn().mockResolvedValue('ws://host/api/ws?ticket=fresh')
 
-      await expect(resolveGatewayWsUrl({ getGatewayWsUrl }, scopeConn)).resolves.toBe(
-        'ws://host/api/ws?ticket=fresh'
-      )
+      await expect(resolveGatewayWsUrl({ getGatewayWsUrl }, scopeConn)).resolves.toBe('ws://host/api/ws?ticket=fresh')
       expect(getGatewayWsUrl).toHaveBeenCalledOnce()
     })
 

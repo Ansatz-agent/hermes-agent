@@ -143,9 +143,7 @@ function parseScopeControlAck(line: string): ScopeControlAck | null {
       ]) ||
       !validControlId(record.transition_id) ||
       !validControlId(record.registration_id) ||
-      !(
-        record.previous_registration_id === null || validControlId(record.previous_registration_id)
-      ) ||
+      !(record.previous_registration_id === null || validControlId(record.previous_registration_id)) ||
       !validConnectionId(record.connection_id) ||
       !validRuntimeInstanceId(record.runtime_instance_id) ||
       !validEpoch(record.epoch) ||
@@ -171,10 +169,7 @@ export class BackendControlChannel {
   private ready: BackendReady | null = null
   private closedReason: Error | null = null
 
-  constructor(
-    child: ChildProcessLike,
-    options: { onClose?: (reason: Error) => void; onLog: (line: string) => void }
-  ) {
+  constructor(child: ChildProcessLike, options: { onClose?: (reason: Error) => void; onLog: (line: string) => void }) {
     this.child = child
     this.onClose = options.onClose ?? (() => undefined)
     this.onLog = options.onLog
@@ -183,9 +178,7 @@ export class BackendControlChannel {
     child.on('exit', this.handleChildExit)
   }
 
-  waitForReady(
-    options: { readyFile?: fs.PathOrFileDescriptor; timeoutMs?: number } = {}
-  ): Promise<BackendReady> {
+  waitForReady(options: { readyFile?: fs.PathOrFileDescriptor; timeoutMs?: number } = {}): Promise<BackendReady> {
     if (this.closedReason) {
       return Promise.reject(this.closedReason)
     }
@@ -225,10 +218,7 @@ export class BackendControlChannel {
     })
   }
 
-  expectAck(
-    match: (value: ScopeControlAck) => boolean,
-    timeoutMs: number
-  ): Promise<ScopeControlAck> {
+  expectAck(match: (value: ScopeControlAck) => boolean, timeoutMs: number): Promise<ScopeControlAck> {
     if (this.closedReason) {
       return Promise.reject(this.closedReason)
     }
@@ -350,10 +340,7 @@ export class BackendControlChannel {
 
   private routeLine(line: string): void {
     if (line.startsWith(CONTROL_ACK_MARKER)) {
-      if (
-        !line.startsWith(CONTROL_ACK_PREFIX) ||
-        Buffer.byteLength(line, 'utf8') > MAX_CONTROL_ACK_LINE_BYTES
-      ) {
+      if (!line.startsWith(CONTROL_ACK_PREFIX) || Buffer.byteLength(line, 'utf8') > MAX_CONTROL_ACK_LINE_BYTES) {
         return
       }
 

@@ -215,8 +215,7 @@ test('bundled Desktop bootstrap args include the verified authentication toolcha
       activeRoot: '/managed/hermes-agent',
       hermesHome: '/managed/home',
       bundledSource: true,
-      bundledToolchainRoot:
-        '/Applications/Ansatz.app/Contents/Resources/bootstrap/auth-toolchain',
+      bundledToolchainRoot: '/Applications/Ansatz.app/Contents/Resources/bootstrap/auth-toolchain',
       bootstrapScope: 'auth'
     }),
     [

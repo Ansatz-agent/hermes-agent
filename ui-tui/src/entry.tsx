@@ -181,14 +181,14 @@ ink.render(
     </Suspense>
   </AuthGate>,
   {
-  exitOnCtrlC: false,
-  onFrame,
-  // Open URLs in the user's default browser when a link cell is clicked.
-  // The TUI's mouse tracking captures click events before Terminal.app's
-  // own URL detection can fire, so without this hook clicks on `<Link>`
-  // do nothing in any terminal where mouseTracking is on.
-  onHyperlinkClick: url => {
-    openExternalUrl(url)
-  }
+    exitOnCtrlC: false,
+    onFrame,
+    // Open URLs in the user's default browser when a link cell is clicked.
+    // The TUI's mouse tracking captures click events before Terminal.app's
+    // own URL detection can fire, so without this hook clicks on `<Link>`
+    // do nothing in any terminal where mouseTracking is on.
+    onHyperlinkClick: url => {
+      openExternalUrl(url)
+    }
   }
 )

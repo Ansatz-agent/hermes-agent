@@ -124,7 +124,11 @@ export function useComposerVoice({
   const voiceStartRequest = useStore($voiceConversationStartRequest)
   const senseVoiceReadiness = useSenseVoiceReadiness(sttProvider)
 
-  const { dictate: recordDictation, voiceActivityState, voiceStatus } = useVoiceRecorder({
+  const {
+    dictate: recordDictation,
+    voiceActivityState,
+    voiceStatus
+  } = useVoiceRecorder({
     focusInput,
     maxRecordingSeconds,
     onTranscript: insertText,

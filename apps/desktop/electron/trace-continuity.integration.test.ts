@@ -870,7 +870,10 @@ test('same-account Session rebind keeps ingress stable and recovers old and new 
     assert.equal(harness.admittedOwners.length, 25)
     assert.equal(harness.admittedOwners.filter(value => value.sessionId === initialOwner.sessionId).length, 13)
     assert.equal(harness.admittedOwners.filter(value => value.sessionId === reboundOwner.sessionId).length, 12)
-    assert.equal(harness.admittedOwners.every(value => value.accountKey === initialOwner.accountKey), true)
+    assert.equal(
+      harness.admittedOwners.every(value => value.accountKey === initialOwner.accountKey),
+      true
+    )
     assert.equal((await harness.diagnostics()).pending, 25)
     assert.equal((await harness.quit()).pending, 25)
 
@@ -881,7 +884,10 @@ test('same-account Session rebind keeps ingress stable and recovers old and new 
     assert.equal(persistedOwners.length, 25)
     assert.equal(persistedOwners.filter(value => value.sessionId === initialOwner.sessionId).length, 13)
     assert.equal(persistedOwners.filter(value => value.sessionId === reboundOwner.sessionId).length, 12)
-    assert.equal(persistedOwners.every(value => value.accountKey === initialOwner.accountKey), true)
+    assert.equal(
+      persistedOwners.every(value => value.accountKey === initialOwner.accountKey),
+      true
+    )
 
     let credentialsAvailable = false
     let resumedCredentialCalls = 0
@@ -974,7 +980,10 @@ test('local durability failures return 503 and emit one secret-free storage tran
       harnesses.push(harness)
       assert.equal((await harness.post(payload(`storage-${testCase.label}`), 1)).status, 503)
       assert.equal(upstreamCalls, 1)
-      assert.deepEqual(events.map(event => event.code), ['trace_storage_failed'])
+      assert.deepEqual(
+        events.map(event => event.code),
+        ['trace_storage_failed']
+      )
       assert.equal(events[0]?.errorClass, testCase.errorClass)
       assert.doesNotMatch(JSON.stringify(events), /Bearer |access_token|wrappedKey|payload/)
     } finally {
@@ -1014,9 +1023,7 @@ test('an unavailable real key protector is classified as a local storage failure
       /secure_key_storage_unavailable/
     )
 
-    assert.deepEqual(events, [
-      { code: 'trace_storage_failed', errorClass: 'secure_key_storage_unavailable' }
-    ])
+    assert.deepEqual(events, [{ code: 'trace_storage_failed', errorClass: 'secure_key_storage_unavailable' }])
   } finally {
     await rm(userData, { force: true, recursive: true })
   }
@@ -1088,7 +1095,10 @@ test('hard lock isolates account B from account A storage and a delayed account 
     const accountBBatchId = gatewayB.attempts[0]?.batchId
 
     assert.notEqual(harnessA.root, harnessB.root)
-    assert.equal(harnessB.admittedOwners.every(value => value.accountKey === ownerB.accountKey), true)
+    assert.equal(
+      harnessB.admittedOwners.every(value => value.accountKey === ownerB.accountKey),
+      true
+    )
     assert.equal(accountBKey.includes(ownerA.accountKey), false)
     assert.equal(accountBKey.includes(ownerA.sessionId!), false)
     assert.notEqual(accountBBatchId, accountABatch.batchId)

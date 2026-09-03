@@ -326,11 +326,7 @@ async function completeWithModelConfirm(
 
       notifyGatewayTools(res.gateway_tools)
     } catch (error) {
-      onFail(
-        error instanceof Error
-          ? error.message
-          : 'Ansatz could not save the selected model.'
-      )
+      onFail(error instanceof Error ? error.message : 'Ansatz could not save the selected model.')
 
       return
     }

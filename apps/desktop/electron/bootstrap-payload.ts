@@ -43,8 +43,7 @@ const FORBIDDEN_ARCHIVE_PREFIXES = [
   'hermes-agent/.git/'
 ]
 
-const TEST_ENTRY_RE =
-  /(^|\/)(tests?|__tests__)(\/|$)|\.(test|spec)\.(py|js|mjs|ts|tsx)$|\/test_[^/]*\.py$/
+const TEST_ENTRY_RE = /(^|\/)(tests?|__tests__)(\/|$)|\.(test|spec)\.(py|js|mjs|ts|tsx)$|\/test_[^/]*\.py$/
 
 const DECLARATION_TEST_RE = /\.(test|spec)-d\.ts$/
 const NESTED_DOCS_RE = /(^|\/)docs(\/|$)/
@@ -145,14 +144,18 @@ function installerFileForPlatform(platform: NodeJS.Platform): DesktopInstallerFi
 }
 
 function parseManifest(raw: unknown, installerFile: DesktopInstallerFile): BundledPayloadManifest {
-  if (!raw || typeof raw !== 'object') {throw new Error('Bundled payload manifest must be an object')}
+  if (!raw || typeof raw !== 'object') {
+    throw new Error('Bundled payload manifest must be an object')
+  }
   const value = raw as Record<string, any>
 
   if (value.schemaVersion !== MANIFEST_SCHEMA_VERSION) {
     throw new Error(`Bundled payload manifest schemaVersion must be ${MANIFEST_SCHEMA_VERSION}`)
   }
 
-  if (!isRealCommit(value.commit)) {throw new Error('Bundled payload manifest commit is invalid')}
+  if (!isRealCommit(value.commit)) {
+    throw new Error('Bundled payload manifest commit is invalid')
+  }
 
   if (value.branch !== null && typeof value.branch !== 'string') {
     throw new Error('Bundled payload manifest branch must be a string or null')
@@ -178,6 +181,7 @@ function parseManifest(raw: unknown, installerFile: DesktopInstallerFile): Bundl
 
   if (installerFile === 'install.ps1') {
     const git = value.gitBashRuntime
+
     if (
       !git ||
       git.file !== 'git-bash-runtime.tar.xz' ||
@@ -221,14 +225,20 @@ async function requireRegularFile(filePath: string, label: string): Promise<fs.S
 }
 
 async function sha256File(filePath: string): Promise<string> {
-  return createHash('sha256').update(await fsp.readFile(filePath)).digest('hex')
+  return createHash('sha256')
+    .update(await fsp.readFile(filePath))
+    .digest('hex')
 }
 
 export function archiveEntryIsSafe(entry: string): boolean {
-  if (!entry || entry.includes('\\') || entry.includes('\0') || path.posix.isAbsolute(entry)) {return false}
+  if (!entry || entry.includes('\\') || entry.includes('\0') || path.posix.isAbsolute(entry)) {
+    return false
+  }
   const normalized = path.posix.normalize(entry)
 
-  if (normalized === 'hermes-agent' || normalized === 'hermes-agent/') {return true}
+  if (normalized === 'hermes-agent' || normalized === 'hermes-agent/') {
+    return true
+  }
 
   return normalized.startsWith('hermes-agent/') && !normalized.split('/').includes('..')
 }
@@ -248,21 +258,26 @@ function runtimeScriptEntryIsAllowed(entry: string): boolean {
   const prefix = 'hermes-agent/scripts'
   const normalized = entry.replace(/\/$/, '')
 
-  if (normalized === prefix) {return true}
+  if (normalized === prefix) {
+    return true
+  }
 
-  if (!normalized.startsWith(`${prefix}/`)) {return true}
+  if (!normalized.startsWith(`${prefix}/`)) {
+    return true
+  }
 
   const relative = normalized.slice(prefix.length + 1)
 
-  if (RUNTIME_SCRIPT_FILES.includes(relative)) {return true}
+  if (RUNTIME_SCRIPT_FILES.includes(relative)) {
+    return true
+  }
 
-  if (RUNTIME_SCRIPT_FILES.some(filePath => filePath.startsWith(`${relative}/`))) {return true}
+  if (RUNTIME_SCRIPT_FILES.some(filePath => filePath.startsWith(`${relative}/`))) {
+    return true
+  }
 
   return RUNTIME_SCRIPT_DIRECTORIES.some(
-    directory =>
-      relative === directory ||
-      relative.startsWith(`${directory}/`) ||
-      directory.startsWith(`${relative}/`)
+    directory => relative === directory || relative.startsWith(`${directory}/`) || directory.startsWith(`${relative}/`)
   )
 }
 
@@ -270,7 +285,9 @@ async function verifyArchiveEntries(archivePath: string): Promise<void> {
   const namesOutput = await execFileText('tar', ['-tzf', archivePath])
   const entries = namesOutput.split(/\r?\n/).filter(Boolean)
 
-  if (entries.length === 0) {throw new Error('Bundled backend archive is empty')}
+  if (entries.length === 0) {
+    throw new Error('Bundled backend archive is empty')
+  }
 
   for (const entry of entries) {
     if (!archiveEntryIsSafe(entry) || archiveEntryIsForbidden(entry)) {
@@ -306,22 +323,24 @@ export async function resolveBundledPayload({
 
   const archivePath = path.join(bootstrapRoot, ARCHIVE_FILE)
   const installerPath = path.join(bootstrapRoot, installerFile)
-  const gitRuntimePath = manifest.gitBashRuntime
-    ? path.join(bootstrapRoot, manifest.gitBashRuntime.file)
-    : null
+
+  const gitRuntimePath = manifest.gitBashRuntime ? path.join(bootstrapRoot, manifest.gitBashRuntime.file) : null
+
   const archiveStats = await requireRegularFile(archivePath, 'bundled backend archive')
   const installerStats = await requireRegularFile(installerPath, 'bundled installer')
-  const gitRuntimeStats = gitRuntimePath
-    ? await requireRegularFile(gitRuntimePath, 'bundled Git Bash runtime')
-    : null
+
+  const gitRuntimeStats = gitRuntimePath ? await requireRegularFile(gitRuntimePath, 'bundled Git Bash runtime') : null
 
   if (archiveStats.size !== manifest.archive.size) {
-    throw new Error(`Bundled backend archive size mismatch: expected ${manifest.archive.size}, got ${archiveStats.size}`)
+    throw new Error(
+      `Bundled backend archive size mismatch: expected ${manifest.archive.size}, got ${archiveStats.size}`
+    )
   }
 
   if (installerStats.size !== manifest.installer.size) {
     throw new Error(`Bundled installer size mismatch: expected ${manifest.installer.size}, got ${installerStats.size}`)
   }
+
   if (gitRuntimeStats && gitRuntimeStats.size !== manifest.gitBashRuntime?.size) {
     throw new Error('Bundled Git Bash runtime size mismatch')
   }
@@ -339,6 +358,7 @@ export async function resolveBundledPayload({
   if (installerSha256 !== manifest.installer.sha256) {
     throw new Error('Bundled installer SHA-256 checksum mismatch')
   }
+
   if (manifest.gitBashRuntime && gitRuntimeSha256 !== manifest.gitBashRuntime.sha256) {
     throw new Error('Bundled Git Bash runtime SHA-256 checksum mismatch')
   }
@@ -349,7 +369,9 @@ export async function resolveBundledPayload({
 }
 
 function parseSourceMarker(raw: unknown): BundledSourceMarker | null {
-  if (!raw || typeof raw !== 'object') {return null}
+  if (!raw || typeof raw !== 'object') {
+    return null
+  }
   const value = raw as Record<string, unknown>
 
   if (
@@ -377,7 +399,9 @@ async function sourceTreeIsComplete(sourceRoot: string): Promise<boolean> {
     try {
       const stats = await fsp.stat(path.join(sourceRoot, relativePath))
 
-      if (relativePath === 'scripts' ? !stats.isDirectory() : !stats.isFile()) {return false}
+      if (relativePath === 'scripts' ? !stats.isDirectory() : !stats.isFile()) {
+        return false
+      }
     } catch {
       return false
     }
@@ -421,7 +445,9 @@ async function assertCompleteManagedBackup(backupPath: string): Promise<void> {
   }
 
   if (!readBundledSourceMarker(backupPath) || !(await sourceTreeIsComplete(backupPath))) {
-    throw new Error(`Refusing bundled-source recovery: backup is not a complete managed bundled source at ${backupPath}`)
+    throw new Error(
+      `Refusing bundled-source recovery: backup is not a complete managed bundled source at ${backupPath}`
+    )
   }
 }
 
@@ -452,7 +478,9 @@ async function restoreManagedBackup(activeRoot: string, backupPath: string): Pro
     throw error
   }
 
-  if (displacedPath) {await removeTreeBestEffort(displacedPath)}
+  if (displacedPath) {
+    await removeTreeBestEffort(displacedPath)
+  }
 }
 
 function noOpTransaction(
@@ -479,7 +507,9 @@ function managedSourceTransaction(
   let settled = false
 
   const finalize = async (): Promise<void> => {
-    if (settled) {return}
+    if (settled) {
+      return
+    }
 
     if (backupPath) {
       await assertCompleteManagedBackup(backupPath)
@@ -495,7 +525,9 @@ function managedSourceTransaction(
   }
 
   const rollback = async (): Promise<void> => {
-    if (settled) {return}
+    if (settled) {
+      return
+    }
 
     if (backupPath) {
       // Validate ownership before touching either directory. The active tree
@@ -600,14 +632,7 @@ export async function prepareBundledSource({
   const kind: 'fresh' | 'refresh' = activeExists ? 'refresh' : 'fresh'
 
   try {
-    await execFileText('tar', [
-      '-xzf',
-      payload.archivePath,
-      '-C',
-      stagingPath,
-      '--strip-components',
-      '1'
-    ])
+    await execFileText('tar', ['-xzf', payload.archivePath, '-C', stagingPath, '--strip-components', '1'])
 
     if (!(await sourceTreeIsComplete(stagingPath))) {
       throw new Error('Bundled backend is missing required runtime file tools/sensevoice_stt.py or another core path')
@@ -638,7 +663,9 @@ export async function prepareBundledSource({
     try {
       await fsp.rename(stagingPath, activeRoot)
     } catch (error) {
-      if (backupPath && !fs.existsSync(activeRoot)) {await fsp.rename(backupPath, activeRoot)}
+      if (backupPath && !fs.existsSync(activeRoot)) {
+        await fsp.rename(backupPath, activeRoot)
+      }
       throw error
     }
   } catch (error) {

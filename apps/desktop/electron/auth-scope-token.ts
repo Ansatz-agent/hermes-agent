@@ -96,6 +96,7 @@ export function issueAuthScopeToken(scope: ConnectionScope, options: IssueAuthSc
   if (Buffer.from(bearer, 'base64url').byteLength !== AUTH_SCOPE_TOKEN_BYTES) {
     throw new Error('Auth scope token entropy source returned an invalid value')
   }
+
   if (Buffer.from(registrationId, 'base64url').byteLength !== AUTH_SCOPE_ID_BYTES) {
     throw new Error('Auth scope registration id source returned an invalid value')
   }
@@ -113,9 +114,11 @@ export function issueAuthScopeToken(scope: ConnectionScope, options: IssueAuthSc
 
 export function issueScopeTransitionId(randomBytes = nodeRandomBytes): string {
   const transitionId = randomBytes(AUTH_SCOPE_ID_BYTES).toString('base64url')
+
   if (Buffer.from(transitionId, 'base64url').byteLength !== AUTH_SCOPE_ID_BYTES) {
     throw new Error('Auth scope transition id source returned an invalid value')
   }
+
   return transitionId
 }
 
@@ -152,9 +155,11 @@ export function encodeScopeTokenPromotion(
 
 function boundedScopeControlFrame(value: Record<string, unknown>): string {
   const frame = `${JSON.stringify(value)}\n`
+
   if (Buffer.byteLength(frame) > AUTH_SCOPE_CONTROL_FRAME_MAX_BYTES) {
     throw new Error('Auth scope control frame is too large')
   }
+
   return frame
 }
 

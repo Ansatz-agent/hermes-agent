@@ -416,6 +416,7 @@ describe('AuthGate', () => {
 
   it('keeps the protected tree mounted while cloud auth is unreachable', async () => {
     const mounted = vi.fn()
+
     const { emit } = renderGate(
       { status: vi.fn(async () => authenticated) },
       null,

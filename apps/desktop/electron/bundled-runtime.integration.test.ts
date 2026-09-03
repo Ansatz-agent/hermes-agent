@@ -17,18 +17,30 @@ test('packaged macOS and Windows resolve the bundled bootstrap resource', () => 
     }),
     path.join('/Applications/Ansatz.app/Contents/Resources', 'bootstrap')
   )
-  assert.equal(resolveBundledBootstrapRoot({ packaged: false, platform: 'darwin', resourcesPath: '/tmp/resources' }), null)
+  assert.equal(
+    resolveBundledBootstrapRoot({ packaged: false, platform: 'darwin', resourcesPath: '/tmp/resources' }),
+    null
+  )
   assert.equal(
     resolveBundledBootstrapRoot({ packaged: true, platform: 'win32', resourcesPath: 'C:\\resources' }),
     path.join('C:\\resources', 'bootstrap')
   )
-  assert.equal(resolveBundledBootstrapRoot({ packaged: true, platform: 'linux', resourcesPath: '/tmp/resources' }), null)
+  assert.equal(
+    resolveBundledBootstrapRoot({ packaged: true, platform: 'linux', resourcesPath: '/tmp/resources' }),
+    null
+  )
 })
 
 test('bundled runtime installs, reuses, and refreshes only verified desktop payloads', () => {
   assert.equal(classifyBundledRuntime({ packaged: false, runtimeUsable: false }), 'not-applicable')
-  assert.equal(classifyBundledRuntime({ packaged: true, runtimeUsable: false, payloadCommit: '0'.repeat(40) }), 'payload-invalid')
-  assert.equal(classifyBundledRuntime({ packaged: true, runtimeUsable: false, payloadCommit: PAYLOAD_COMMIT }), 'install')
+  assert.equal(
+    classifyBundledRuntime({ packaged: true, runtimeUsable: false, payloadCommit: '0'.repeat(40) }),
+    'payload-invalid'
+  )
+  assert.equal(
+    classifyBundledRuntime({ packaged: true, runtimeUsable: false, payloadCommit: PAYLOAD_COMMIT }),
+    'install'
+  )
   assert.equal(
     classifyBundledRuntime({
       packaged: true,

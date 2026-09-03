@@ -34,7 +34,12 @@ function createWrapper(client: QueryClient) {
 describe('useSenseVoiceReadiness', () => {
   beforeEach(() => {
     apiMocks.prepareSenseVoice.mockReset()
-    $connection.set({ baseUrl: 'http://127.0.0.1:43210', connectionId: 'local-1', mode: 'local', profile: 'default' } as never)
+    $connection.set({
+      baseUrl: 'http://127.0.0.1:43210',
+      connectionId: 'local-1',
+      mode: 'local',
+      profile: 'default'
+    } as never)
   })
 
   afterEach(() => {

@@ -19,10 +19,7 @@ test('bundled runtime validation receives and applies the selected runtime home'
   const runner = extractFunction(bootstrapSource, 'async function runBootstrap(')
 
   assert.match(validation, /function validateBundledRuntime\(activeRoot, hermesHome, bootstrapScope = 'runtime'\)/)
-  assert.match(
-    validation,
-    /env: buildBundledRuntimeValidationEnvironment\(activeRoot, hermesHome\)/
-  )
+  assert.match(validation, /env: buildBundledRuntimeValidationEnvironment\(activeRoot, hermesHome\)/)
   assert.match(runner, /await validateBundledRuntime\(activeRoot, hermesHome, bootstrapScope\)/)
 })
 

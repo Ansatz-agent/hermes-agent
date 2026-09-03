@@ -61,8 +61,5 @@ test('managed environment is immutable between calls and rejects unknown phases'
   first.UV_DEFAULT_INDEX = 'https://attacker.invalid/mutated'
   const second = buildManagedDownloadEnvironment({}, 'runtime-install')
   assert.equal(second.UV_DEFAULT_INDEX, 'https://mirrors.ustc.edu.cn/pypi/simple')
-  assert.throws(
-    () => buildManagedDownloadEnvironment({}, 'unknown' as never),
-    /unknown managed download phase/
-  )
+  assert.throws(() => buildManagedDownloadEnvironment({}, 'unknown' as never), /unknown managed download phase/)
 })

@@ -238,6 +238,7 @@ function applyAuthBootstrapEvent(
     const previous = current.stages[event.stage]
     const units = new Set<DesktopBootstrapProgressUnit>(['bytes', 'packages', 'items', 'files', 'steps'])
     const completed = Number.isFinite(event.completed) && event.completed >= 0 ? event.completed : 0
+
     const total =
       typeof event.total === 'number' && Number.isFinite(event.total) && event.total > 0 ? event.total : null
 

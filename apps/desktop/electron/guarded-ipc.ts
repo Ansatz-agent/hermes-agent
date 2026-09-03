@@ -299,10 +299,7 @@ export function createGuardedIpc(ipcMain: IpcMainLike, authority: () => GuardedI
           // and machine-readable without copying bridge/keyring error text.
           event.returnValue = {
             error: {
-              code:
-                error instanceof IpcAuthorizationUnavailableError
-                  ? 'AUTHORIZATION_UNAVAILABLE'
-                  : 'AUTH_REQUIRED'
+              code: error instanceof IpcAuthorizationUnavailableError ? 'AUTHORIZATION_UNAVAILABLE' : 'AUTH_REQUIRED'
             }
           }
 

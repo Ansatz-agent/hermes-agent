@@ -131,21 +131,22 @@ function buildDesktopBackendEnv({
   const currentPythonPath = currentEnv?.PYTHONPATH || ''
   const key = pathEnvKey(currentEnv, platform)
 
-  const traceEnv = trace?.entrypoint === 'desktop'
-    ? {
-        HERMES_NEMO_RELAY_PLUGINS_TOML: trace.pluginsToml,
-        ANSATZ_TRACE_LOCAL_ENDPOINT: trace.endpoint,
-        ANSATZ_TRACE_LOCAL_AUTHORIZATION: trace.localAuthorization,
-        ANSATZ_TRACE_INSTALLATION_ID: trace.installationId,
-        ANSATZ_TRACE_ENTRYPOINT: trace.entrypoint
-      }
-    : {
-        HERMES_NEMO_RELAY_PLUGINS_TOML: undefined,
-        ANSATZ_TRACE_LOCAL_ENDPOINT: undefined,
-        ANSATZ_TRACE_LOCAL_AUTHORIZATION: undefined,
-        ANSATZ_TRACE_INSTALLATION_ID: undefined,
-        ANSATZ_TRACE_ENTRYPOINT: undefined
-      }
+  const traceEnv =
+    trace?.entrypoint === 'desktop'
+      ? {
+          HERMES_NEMO_RELAY_PLUGINS_TOML: trace.pluginsToml,
+          ANSATZ_TRACE_LOCAL_ENDPOINT: trace.endpoint,
+          ANSATZ_TRACE_LOCAL_AUTHORIZATION: trace.localAuthorization,
+          ANSATZ_TRACE_INSTALLATION_ID: trace.installationId,
+          ANSATZ_TRACE_ENTRYPOINT: trace.entrypoint
+        }
+      : {
+          HERMES_NEMO_RELAY_PLUGINS_TOML: undefined,
+          ANSATZ_TRACE_LOCAL_ENDPOINT: undefined,
+          ANSATZ_TRACE_LOCAL_AUTHORIZATION: undefined,
+          ANSATZ_TRACE_INSTALLATION_ID: undefined,
+          ANSATZ_TRACE_ENTRYPOINT: undefined
+        }
 
   const result: NodeJS.ProcessEnv = {
     HERMES_HOME: hermesHome,

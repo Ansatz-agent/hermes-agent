@@ -54,9 +54,11 @@ describe('useRuntimeMessageRepository', () => {
 
   it('keeps the repository identity when only the array wrapper changes', () => {
     const first = [text('user-1', 'user', 'hi'), text('assistant-1', 'assistant', 'hello')]
+
     const { result, rerender } = renderHook(({ messages }) => useRuntimeMessageRepository(messages), {
       initialProps: { messages: first }
     })
+
     const repository = result.current
 
     rerender({ messages: [...first] })
