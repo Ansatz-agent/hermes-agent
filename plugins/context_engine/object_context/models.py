@@ -76,6 +76,60 @@ class DeltaRecord:
     raw_view: tuple[dict[str, Any], ...]
     object_refs: tuple[str, ...] = ()
     compressed_view: tuple[dict[str, Any], ...] | None = None
+    raw_seen_count: int = 0
+    first_seen_request_sequence: int | None = None
+    last_seen_request_sequence: int | None = None
+    first_seen_success_sequence: int | None = None
+    last_seen_success_sequence: int | None = None
+    eligibility_success_sequence: int | None = None
+    projection_epoch_id: str = ""
+    projected_at_request_sequence: int | None = None
+
+
+@dataclass(frozen=True)
+class PendingLedgerAccrual:
+    """One immutable gain snapshot carried in a successful raw request."""
+
+    delta_id: str
+    gain_tokens: int
+    ledger_generation: int
+
+
+@dataclass(frozen=True)
+class PendingLedgerRecord:
+    """Durable amortized-compression state for one still-raw Delta."""
+
+    conversation_id: str
+    delta_id: str
+    entered_success_sequence: int
+    bucket_sequence: int
+    raw_tokens: int
+    projected_tokens: int
+    gain_tokens: int
+    wait_area_token_requests: int
+    last_accrued_success_sequence: int | None
+    ledger_generation: int
+    estimator_version: str
+    pending_reason: str
+    created_at: float
+    updated_at: float
+
+
+@dataclass(frozen=True)
+class SuccessfulRequestObservationResult:
+    """Result of an exactly-once successful-request observation."""
+
+    request_attempt_id: str
+    conversation_id: str
+    success_sequence: int
+    exposure_request_sequence: int
+    route_namespace_hash: str
+    outcome: str
+    duplicate: bool
+    raw_exposed_delta_ids: tuple[str, ...] = ()
+    accrued_delta_ids: tuple[str, ...] = ()
+    skipped_pending_delta_ids: tuple[str, ...] = ()
+    newly_eligible_delta_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -123,6 +177,7 @@ class ObjectCard:
     language: str
     summary: str
     contains: dict[str, Any]
+    origin: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
     supersedes: str = ""
     derived_from: tuple[str, ...] = ()

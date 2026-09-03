@@ -110,6 +110,38 @@ def test_reconciliation_matches_live_delta_despite_non_durable_runtime_fields(tm
     assert len(resumed._store.list_objects("conversation-root")) == 1
 
 
+def test_restart_does_not_confirm_an_unfinished_request_exposure(tmp_path):
+    raw = json.dumps({f"field_{i}": "x" * 24 for i in range(100)})
+    clean = {"role": "user", "content": raw, "timestamp": 1.0}
+    durable = {**clean, "_row_id": 1}
+    first = _start(tmp_path, _HistoryDB([]))
+    first.on_delta_committed(
+        ContextDelta(
+            delta_id="pending:user:0",
+            kind="user",
+            conversation_id="conversation-root",
+            session_id="parent",
+            turn_id="pending",
+            sequence=0,
+            messages=(clean,),
+        )
+    )
+    first.select_context([clean])
+    assert first._store.get_delta("pending:user:0").raw_seen_count == 0
+
+    resumed = _start(tmp_path, _HistoryDB([durable]))
+    unseen = resumed._store.get_delta("pending:user:0")
+    assert unseen is not None
+    assert unseen.raw_seen_count == 0
+    assert unseen.first_seen_request_sequence is None
+
+    resumed.select_context([clean])
+    resumed.update_from_response({})
+    confirmed = resumed._store.get_delta("pending:user:0")
+    assert confirmed.raw_seen_count == 1
+    assert confirmed.first_seen_request_sequence == 1
+
+
 def test_compression_session_rotation_keeps_conversation_authority_and_sequence(
     tmp_path,
 ):

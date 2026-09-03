@@ -1,6 +1,8 @@
 import json
 import os
 import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -12,6 +14,46 @@ from plugins.context_engine.object_context.models import (
     ObjectType,
 )
 from plugins.context_engine.object_context.store import ObjectContextStore
+
+
+def _decision_record(
+    epoch_id: str,
+    *,
+    kind: str = "flush",
+    mode: str = "normal",
+    reason: str = "FLUSH_NET_POSITIVE",
+    delta_ids=(),
+    object_refs=(),
+):
+    return {
+        "projection_epoch_id": epoch_id,
+        "conversation_id": "conv-a",
+        "session_id": "session-a",
+        "request_sequence": 2,
+        "decision_kind": kind,
+        "decision_mode": mode,
+        "decision_reason": reason,
+        "candidate_count": len(delta_ids),
+        "member_delta_ids": delta_ids,
+        "member_object_refs": object_refs,
+        "earliest_changed_delta_id": delta_ids[0] if delta_ids else "",
+        "baseline_prompt_tokens": 2_000 if delta_ids else None,
+        "candidate_prompt_tokens": 500 if delta_ids else None,
+        "gross_tokens_removed": 1_500 if delta_ids else None,
+        "card_or_receipt_tokens": 40 if delta_ids else None,
+        "baseline_reusable_prefix_tokens": 1_000 if delta_ids else None,
+        "candidate_reusable_prefix_tokens": 800 if delta_ids else None,
+        "cache_tokens_invalidated": 200 if delta_ids else None,
+        "cache_penalty_equivalent_tokens": 180.0 if delta_ids else None,
+        "known_summary_cost_equivalent_tokens": 0.0 if delta_ids else None,
+        "net_saving_equivalent_tokens": 1_320.0 if delta_ids else None,
+        "net_saving_usd": None,
+        "cache_read_weight": 0.1,
+        "cache_write_weight": 1.0,
+        "pricing_source": "test",
+        "pricing_version": "v1",
+        "estimator_source": "rough_message_estimator",
+    }
 
 
 def _registered_json(store, *, delta_id="turn-1:user:0", conversation="conv-a"):
@@ -94,6 +136,191 @@ def _registered_multi_object_delta(store):
     return observed, delta, detected, records
 
 
+def test_v1_database_migrates_exposure_fields_idempotently(tmp_path):
+    path = tmp_path / "legacy.sqlite3"
+    raw_view = '[{"content":"legacy raw","role":"user"}]'
+    with sqlite3.connect(path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE schema_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            INSERT INTO schema_meta(key, value) VALUES('schema_version', '1');
+            CREATE TABLE deltas (
+                delta_id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                turn_id TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                inference_id TEXT NOT NULL DEFAULT '',
+                turn_sequence INTEGER NOT NULL,
+                global_sequence INTEGER NOT NULL,
+                raw_token_count INTEGER NOT NULL,
+                state TEXT NOT NULL,
+                raw_view_json TEXT NOT NULL,
+                compressed_view_json TEXT,
+                object_refs_json TEXT NOT NULL DEFAULT '[]',
+                created_at REAL NOT NULL,
+                compressed_at REAL,
+                failure_error TEXT NOT NULL DEFAULT '',
+                UNIQUE (conversation_id, global_sequence)
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO deltas(delta_id, conversation_id, session_id, "
+            "turn_id, kind, turn_sequence, global_sequence, raw_token_count, "
+            "state, raw_view_json, created_at) "
+            "VALUES('legacy:user:0', 'legacy', 'segment', 'legacy-turn', "
+            "'user', 0, 1, 3, 'hot', ?, 1.0)",
+            (raw_view,),
+        )
+
+    first = ObjectContextStore(path)
+    migrated = first.get_delta("legacy:user:0")
+    assert migrated is not None
+    assert migrated.raw_seen_count == 0
+    assert migrated.first_seen_request_sequence is None
+    assert migrated.last_seen_request_sequence is None
+    assert migrated.projection_epoch_id == ""
+    assert migrated.projected_at_request_sequence is None
+
+    second = ObjectContextStore(path)
+    reopened = second.get_delta("legacy:user:0")
+    assert reopened == migrated
+    with sqlite3.connect(path) as conn:
+        assert conn.execute(
+            "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+        ).fetchone()[0] == "5"
+        columns = [row[1] for row in conn.execute("PRAGMA table_info(deltas)")]
+        decision_columns = [
+            row[1] for row in conn.execute("PRAGMA table_info(projection_epochs)")
+        ]
+    assert columns.count("raw_seen_count") == 1
+    assert columns.count("projection_epoch_id") == 1
+    assert decision_columns.count("decision_mode") == 1
+    assert decision_columns.count("card_or_receipt_tokens") == 1
+    assert reopened.raw_view == ({"content": "legacy raw", "role": "user"},)
+
+
+def test_raw_exposure_confirmation_is_durable_and_idempotent(tmp_path):
+    store = ObjectContextStore(tmp_path / "objects.sqlite3")
+    _, delta, _, _ = _registered_json(store)
+
+    assert store.mark_raw_deltas_seen(
+        [delta.delta_id, delta.delta_id], request_sequence=7
+    ) == (delta.delta_id,)
+    assert store.mark_raw_deltas_seen(
+        [delta.delta_id], request_sequence=7
+    ) == (delta.delta_id,)
+    first = store.get_delta(delta.delta_id)
+    assert first is not None
+    assert first.raw_seen_count == 1
+    assert first.first_seen_request_sequence == 7
+    assert first.last_seen_request_sequence == 7
+
+    store.mark_raw_deltas_seen([delta.delta_id], request_sequence=9)
+    reopened = ObjectContextStore(store.path).get_delta(delta.delta_id)
+    assert reopened is not None
+    assert reopened.raw_seen_count == 2
+    assert reopened.first_seen_request_sequence == 7
+    assert reopened.last_seen_request_sequence == 9
+    assert store.max_request_sequence("conv-a") == 9
+
+
+def test_v2_to_v3_migration_preserves_raw_blob_and_card_bytes(tmp_path):
+    path = tmp_path / "legacy-v2.sqlite3"
+    store = ObjectContextStore(path)
+    _, delta, _, record = _registered_json(store)
+    store.set_delta_states(
+        {delta.delta_id: DeltaState.COMPRESSION_ELIGIBLE},
+        expected=DeltaState.HOT,
+    )
+    stable_card = "<OBJECT_CARD>{\"stable\":true}</OBJECT_CARD>"
+    store.publish_cards_and_compressed_delta(
+        delta_id=delta.delta_id,
+        cards=[(record.object_ref, "stable", stable_card, {"json": True})],
+        compressed_view=[{"role": "user", "content": stable_card}],
+    )
+    with sqlite3.connect(path) as conn:
+        before = {
+            "raw": conn.execute(
+                "SELECT raw_view_json FROM deltas WHERE delta_id = ?",
+                (delta.delta_id,),
+            ).fetchone()[0],
+            "compressed": conn.execute(
+                "SELECT compressed_view_json FROM deltas WHERE delta_id = ?",
+                (delta.delta_id,),
+            ).fetchone()[0],
+            "card": conn.execute(
+                "SELECT card_text FROM object_versions WHERE object_ref = ?",
+                (record.object_ref,),
+            ).fetchone()[0],
+            "blob": conn.execute(
+                "SELECT content FROM blobs WHERE sha256 = ?",
+                (record.sha256,),
+            ).fetchone()[0],
+        }
+        conn.execute(
+            "UPDATE schema_meta SET value = '2' WHERE key = 'schema_version'"
+        )
+        conn.execute("DROP TABLE projection_epochs")
+
+    reopened = ObjectContextStore(path)
+
+    with sqlite3.connect(path) as conn:
+        after = {
+            "raw": conn.execute(
+                "SELECT raw_view_json FROM deltas WHERE delta_id = ?",
+                (delta.delta_id,),
+            ).fetchone()[0],
+            "compressed": conn.execute(
+                "SELECT compressed_view_json FROM deltas WHERE delta_id = ?",
+                (delta.delta_id,),
+            ).fetchone()[0],
+            "card": conn.execute(
+                "SELECT card_text FROM object_versions WHERE object_ref = ?",
+                (record.object_ref,),
+            ).fetchone()[0],
+            "blob": conn.execute(
+                "SELECT content FROM blobs WHERE sha256 = ?",
+                (record.sha256,),
+            ).fetchone()[0],
+        }
+        assert conn.execute(
+            "SELECT value FROM schema_meta WHERE key = 'schema_version'"
+        ).fetchone()[0] == "5"
+    assert after == before
+    assert reopened.projection_decisions("conv-a") == []
+
+
+def test_content_free_wait_decision_round_trips_and_rejects_payload_fields(tmp_path):
+    store = ObjectContextStore(tmp_path / "objects.sqlite3")
+    record = _decision_record(
+        "decision-wait",
+        kind="wait",
+        reason="WAIT_NO_BASELINE",
+    )
+
+    store.record_projection_decision(record)
+
+    [stored] = ObjectContextStore(store.path).projection_decisions("conv-a")
+    assert stored["projection_epoch_id"] == "decision-wait"
+    assert stored["decision_kind"] == "wait"
+    assert stored["decision_mode"] == "normal"
+    assert stored["decision_reason"] == "WAIT_NO_BASELINE"
+    assert stored["member_delta_ids"] == []
+    assert stored["member_object_refs"] == []
+    assert stored["baseline_prompt_tokens"] is None
+    assert "prompt" not in stored
+    assert "message" not in stored
+    assert "content" not in stored
+
+    with pytest.raises(ValueError, match="unsupported fields"):
+        store.record_projection_decision({**record, "prompt": "secret payload"})
+
+
 def test_exact_blob_is_hash_verified_and_conversation_authorized(tmp_path):
     store = ObjectContextStore(tmp_path / "context" / "objects.sqlite3")
     _, _, _, record = _registered_json(store)
@@ -106,17 +333,49 @@ def test_exact_blob_is_hash_verified_and_conversation_authorized(tmp_path):
     assert store.object_exists(record.object_ref) is True
 
 
+def test_retrieval_totals_are_scoped_to_exact_main_turns(tmp_path):
+    store = ObjectContextStore(tmp_path / "context" / "objects.sqlite3")
+    _, delta, _, record = _registered_json(store)
+    store.mount_retrieval(
+        conversation_id="conv-a",
+        turn_id="turn-main",
+        object_ref=record.object_ref,
+        tool_call_id="call-main",
+        reason="main request",
+        mounted_at_delta=delta.global_sequence,
+    )
+    store.mount_retrieval(
+        conversation_id="conv-a",
+        turn_id="turn-background",
+        object_ref=record.object_ref,
+        tool_call_id="call-background",
+        reason="background review",
+        mounted_at_delta=delta.global_sequence,
+    )
+
+    assert store.retrieval_totals_for_turns("conv-a", ["turn-main"]) == {
+        "retrieval_count": 1,
+        "retrieved_tokens": record.token_count,
+    }
+    assert store.retrieval_totals_for_turns(
+        "conv-a", ["turn-main", "turn-main", ""]
+    ) == {
+        "retrieval_count": 1,
+        "retrieved_tokens": record.token_count,
+    }
+    assert store.retrieval_totals_for_turns("conv-a", []) == {
+        "retrieval_count": 0,
+        "retrieved_tokens": 0,
+    }
+
+
 def test_status_separates_request_projection_metrics_from_delta_metrics(tmp_path):
     store = ObjectContextStore(tmp_path / "objects.sqlite3")
 
     # One-time Card construction for a Delta: retained in the compatibility
     # aggregate, but excluded from cumulative outbound-request savings.
-    store.record_metric(
-        "conv-a", "tokens_saved", 500, delta_id="turn-1:user:0"
-    )
-    store.record_metric(
-        "conv-a", "raw_context_tokens", 800, delta_id="turn-1:user:0"
-    )
+    store.record_metric("conv-a", "tokens_saved", 500, delta_id="turn-1:user:0")
+    store.record_metric("conv-a", "raw_context_tokens", 800, delta_id="turn-1:user:0")
 
     for raw, rendered, saved, hot_tail in (
         (1_000, 400, 600, 250),
@@ -124,6 +383,12 @@ def test_status_separates_request_projection_metrics_from_delta_metrics(tmp_path
     ):
         store.record_metric("conv-a", "raw_context_tokens", raw)
         store.record_metric("conv-a", "rendered_context_tokens", rendered)
+        store.record_metric("conv-a", "raw_conversation_tokens", raw)
+        store.record_metric("conv-a", "rendered_conversation_tokens", rendered)
+        store.record_metric("conv-a", "conversation_tokens_saved", saved)
+        store.record_metric(
+            "conv-a", "conversation_compression_ratio", saved / raw
+        )
         store.record_metric("conv-a", "tokens_saved", saved)
         store.record_metric("conv-a", "compression_ratio", saved / raw)
         store.record_metric("conv-a", "hot_tail_tokens", hot_tail)
@@ -135,10 +400,15 @@ def test_status_separates_request_projection_metrics_from_delta_metrics(tmp_path
     assert status["request_metric_totals"]["raw_context_tokens"] == 3_000
     assert status["request_metric_totals"]["rendered_context_tokens"] == 900
     assert status["request_metric_totals"]["tokens_saved"] == 2_100
+    assert status["request_metric_totals"]["conversation_tokens_saved"] == 2_100
     assert status["request_metric_averages"]["tokens_saved"] == 1_050
     assert status["last_request_metrics"] == {
         "raw_context_tokens": 2_000,
         "rendered_context_tokens": 500,
+        "raw_conversation_tokens": 2_000,
+        "rendered_conversation_tokens": 500,
+        "conversation_tokens_saved": 1_500,
+        "conversation_compression_ratio": 0.75,
         "tokens_saved": 1_500,
         "compression_ratio": 0.75,
         "hot_tail_tokens": 300,
@@ -152,6 +422,10 @@ def test_projection_timeline_groups_atomic_metrics_and_marks_legacy_rows(tmp_pat
         {
             "raw_context_tokens": 100,
             "rendered_context_tokens": 40,
+            "raw_conversation_tokens": 90,
+            "rendered_conversation_tokens": 30,
+            "conversation_tokens_saved": 60,
+            "conversation_compression_ratio": 2 / 3,
             "tokens_saved": 60,
             "projection_latency_ms": 1.25,
         },
@@ -168,6 +442,10 @@ def test_projection_timeline_groups_atomic_metrics_and_marks_legacy_rows(tmp_pat
         {
             "raw_context_tokens": 200,
             "rendered_context_tokens": 75,
+            "raw_conversation_tokens": 175,
+            "rendered_conversation_tokens": 50,
+            "conversation_tokens_saved": 125,
+            "conversation_compression_ratio": 5 / 7,
             "tokens_saved": 125,
             "projection_latency_ms": 2.5,
         },
@@ -198,6 +476,10 @@ def test_projection_timeline_groups_atomic_metrics_and_marks_legacy_rows(tmp_pat
         "metrics": {
             "raw_context_tokens": 100.0,
             "rendered_context_tokens": 40.0,
+            "raw_conversation_tokens": 90.0,
+            "rendered_conversation_tokens": 30.0,
+            "conversation_tokens_saved": 60.0,
+            "conversation_compression_ratio": 2 / 3,
             "tokens_saved": 60.0,
             "projection_latency_ms": 1.25,
         },
@@ -219,7 +501,7 @@ def test_projection_timeline_groups_atomic_metrics_and_marks_legacy_rows(tmp_pat
         if json.loads(row["metadata_json"] or "{}").get("projection_id")
         == "projection-1"
     ]
-    assert len(rows) == 4
+    assert len(rows) == 8
     assert len({row["created_at"] for row in rows}) == 1
 
 
@@ -510,21 +792,121 @@ def test_atomic_batch_failure_leaves_delta_and_cards_unpublished(tmp_path):
     )
 
     with pytest.raises(RuntimeError, match="Card target missing"):
-        store.publish_compressed_batch([
-            (
-                delta.delta_id,
-                [
-                    (record.object_ref, "valid", "<OBJECT_CARD>{}</OBJECT_CARD>", {}),
-                    ("object://obj_000000000000000000000000@v1", "bad", "bad", {}),
-                ],
-                [{"role": "user", "content": "card"}],
-            )
-        ])
+        store.publish_compressed_batch(
+            [
+                (
+                    delta.delta_id,
+                    [
+                        (
+                            record.object_ref,
+                            "valid",
+                            "<OBJECT_CARD>{}</OBJECT_CARD>",
+                            {},
+                        ),
+                        (
+                            "object://obj_000000000000000000000000@v1",
+                            "bad",
+                            "bad",
+                            {},
+                        ),
+                    ],
+                    [{"role": "user", "content": "card"}],
+                )
+            ],
+            projection_epoch_id="epoch-failed",
+            projection_decision=_decision_record(
+                "epoch-failed",
+                delta_ids=(delta.delta_id,),
+                object_refs=(record.object_ref,),
+            ),
+        )
 
     current = store.get_delta(delta.delta_id)
     assert current.state == DeltaState.COMPRESSION_ELIGIBLE
     assert current.compressed_view is None
     assert store.get_object("conv-a", record.object_ref).card_text == ""
+    assert store.projection_decisions("conv-a") == []
+
+
+def test_batch_state_cards_and_flush_decision_commit_in_one_epoch(tmp_path):
+    store = ObjectContextStore(tmp_path / "objects.sqlite3")
+    _, delta, _, record = _registered_json(store)
+    store.mark_raw_deltas_seen([delta.delta_id], request_sequence=1)
+    card = "<OBJECT_CARD>{\"object_ref\":\"stable\"}</OBJECT_CARD>"
+
+    store.publish_compressed_batch(
+        [
+            (
+                delta.delta_id,
+                [(record.object_ref, "stable", card, {"json": True})],
+                [{"role": "user", "content": card}],
+            )
+        ],
+        projection_epoch_id="epoch-success",
+        request_sequence=2,
+        min_raw_exposures=1,
+        projection_decision=_decision_record(
+            "epoch-success",
+            delta_ids=(delta.delta_id,),
+            object_refs=(record.object_ref,),
+        ),
+    )
+
+    projected = store.get_delta(delta.delta_id)
+    [decision] = store.projection_decisions("conv-a")
+    assert projected.state == DeltaState.COMPRESSED
+    assert projected.projection_epoch_id == "epoch-success"
+    assert projected.projected_at_request_sequence == 2
+    assert store.get_object("conv-a", record.object_ref).card_text == card
+    assert decision["projection_epoch_id"] == projected.projection_epoch_id
+    assert decision["member_delta_ids"] == [delta.delta_id]
+    assert decision["member_object_refs"] == [record.object_ref]
+    assert decision["card_or_receipt_tokens"] == 40
+
+
+def test_concurrent_batch_publication_commits_exactly_one_epoch(tmp_path):
+    store = ObjectContextStore(tmp_path / "objects.sqlite3")
+    _, delta, _, record = _registered_json(store)
+    store.mark_raw_deltas_seen([delta.delta_id], request_sequence=1)
+    card = "<OBJECT_CARD>{\"stable\":true}</OBJECT_CARD>"
+    barrier = threading.Barrier(2)
+
+    def publish(epoch_id):
+        barrier.wait()
+        try:
+            store.publish_compressed_batch(
+                [
+                    (
+                        delta.delta_id,
+                        [(record.object_ref, "stable", card, {})],
+                        [{"role": "user", "content": card}],
+                    )
+                ],
+                projection_epoch_id=epoch_id,
+                request_sequence=2,
+                min_raw_exposures=1,
+                projection_decision=_decision_record(
+                    epoch_id,
+                    delta_ids=(delta.delta_id,),
+                    object_refs=(record.object_ref,),
+                ),
+            )
+            return "committed"
+        except RuntimeError:
+            return "rejected"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(publish, ("epoch-a", "epoch-b")))
+
+    assert sorted(results) == ["committed", "rejected"]
+    [decision] = store.projection_decisions("conv-a")
+    projected = store.get_delta(delta.delta_id)
+    assert decision["projection_epoch_id"] == projected.projection_epoch_id
+    assert decision["projection_epoch_id"] in {"epoch-a", "epoch-b"}
+    assert store.mark_deltas_failed_if_unprojected(
+        [delta.delta_id], "losing concurrent publisher"
+    ) == ()
+    assert store.get_delta(delta.delta_id).state == DeltaState.COMPRESSED
 
 
 def test_corrupt_blob_raises_hash_mismatch(tmp_path):
