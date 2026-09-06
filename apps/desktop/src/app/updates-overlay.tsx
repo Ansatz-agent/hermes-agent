@@ -204,7 +204,7 @@ function IdleView({
             {u.tryAgain}
           </Button>
         }
-        body={u.connectionRetry}
+        body={status.message || u.connectionRetry}
         icon={<ErrorIcon />}
         title={u.checkFailedTitle}
       />
@@ -214,7 +214,7 @@ function IdleView({
   if (!updateAvailable) {
     return (
       <CenteredStatus
-        body={target === 'backend' ? u.latestBodyBackend : u.latestBody}
+        body={status.message || (target === 'backend' ? u.latestBodyBackend : u.latestBody)}
         icon={<BrandMark className="size-12" />}
         title={u.allSetTitle}
       />

@@ -6298,7 +6298,9 @@ def _desktop_packaged_executable(desktop_dir: Path) -> Optional[Path]:
     """Return the current platform's unpacked Electron app executable."""
     release_dir = desktop_dir / "release"
     if sys.platform == "darwin":
-        candidates = list(release_dir.glob("mac*/Hermes.app/Contents/MacOS/Hermes"))
+        candidates = list(release_dir.glob("mac*/Ansatz.app/Contents/MacOS/Ansatz"))
+        if not candidates:
+            candidates = list(release_dir.glob("mac*/Hermes.app/Contents/MacOS/Hermes"))
     elif sys.platform == "win32":
         candidates = [
             release_dir / "win-unpacked" / "Hermes.exe",
@@ -9523,7 +9525,6 @@ def cmd_update(args):
     """
     from hermes_cli.config import (
         detect_install_method,
-        format_desktop_bundle_update_message,
         format_docker_update_message,
         is_managed,
         managed_error,
@@ -9541,10 +9542,6 @@ def cmd_update(args):
     # repository" text.  See format_docker_update_message() for the full
     # rationale and tag-pinning / config-persistence notes.
     install_method = detect_install_method(PROJECT_ROOT)
-    if install_method == "desktop-bundle":
-        print(format_desktop_bundle_update_message())
-        sys.exit(1)
-
     if install_method == "docker":
         print(format_docker_update_message())
         sys.exit(1)
