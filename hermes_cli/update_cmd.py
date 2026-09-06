@@ -1118,11 +1118,11 @@ def _discard_stashed_changes(
     return True
 
 OFFICIAL_REPO_URLS = {
-    "git@github.com:NousResearch/hermes-agent.git",
-    "git@github.com:NousResearch/hermes-agent",
+    "git@github.com:Ansatz-agent/hermes-agent.git",
+    "git@github.com:Ansatz-agent/hermes-agent",
 }
 
-OFFICIAL_REPO_URL = "git@github.com:NousResearch/hermes-agent.git"
+OFFICIAL_REPO_URL = "git@github.com:Ansatz-agent/hermes-agent.git"
 
 SKIP_UPSTREAM_PROMPT_FILE = ".skip_upstream_prompt"
 
@@ -1248,7 +1248,7 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
         # Ask user if they want to add upstream
         print()
         print("ℹ Your fork is not tracking the official Hermes repository.")
-        print("  This means you may miss updates from NousResearch/hermes-agent.")
+        print("  This means you may miss updates from Ansatz-agent/hermes-agent.")
         print()
         try:
             response = (
