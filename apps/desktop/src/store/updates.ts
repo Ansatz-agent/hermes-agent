@@ -69,7 +69,11 @@ export const resetUpdateApplyState = () => {
   $backendUpdateApply.set(IDLE)
 }
 
-const UPDATE_TOAST_ID = 'desktop-update-available'
+const UPDATE_TOAST_ID: Record<UpdateTarget, string> = {
+  client: 'desktop-update-available',
+  backend: 'backend-update-available'
+}
+
 // Time-based snooze instead of per-sha dismissal: this repo lands ~100 commits
 // a day, so a "don't show this exact sha again" guard re-popped the toast on
 // every new commit. We instead suppress the toast for a cooldown window that
@@ -201,8 +205,8 @@ export function reportInstallMethodWarning(message: string | undefined): void {
  * (re)starts the cooldown, so a busy upstream branch doesn't re-spam the user
  * on every new commit. The snooze is persisted, so it survives relaunches too.
  */
-export function maybeNotifyUpdateAvailable(status: DesktopUpdateStatus | null) {
-  if (!status || status.supported === false || status.error || !status.targetSha) {
+export function maybeNotifyUpdateAvailable(status: DesktopUpdateStatus | null, target: UpdateTarget = 'client') {
+  if (!status || status.supported === false || status.error) {
     return
   }
 
@@ -211,14 +215,16 @@ export function maybeNotifyUpdateAvailable(status: DesktopUpdateStatus | null) {
   // behind === null means "update available, exact count unknown" (shallow
   // clone). That still deserves the toast — just with count-free copy.
   if ((behind ?? 0) <= 0 && !status.updateAvailable) {
+    dismissNotification(UPDATE_TOAST_ID[target])
+
     return
   }
 
-  if (isUpdateToastSnoozed()) {
+  if (!status.targetSha || isUpdateToastSnoozed()) {
     return
   }
 
-  if ($updateApply.get().applying) {
+  if ((target === 'client' ? $updateApply : $backendUpdateApply).get().applying) {
     return
   }
 
@@ -227,12 +233,12 @@ export function maybeNotifyUpdateAvailable(status: DesktopUpdateStatus | null) {
       label: translateNow('notifications.seeWhatsNew'),
       onClick: () => {
         snoozeUpdateToast()
-        openUpdatesWindow()
+        openUpdateOverlayFor(target)
       }
     },
     durationMs: 0,
     icon: 'gift',
-    id: UPDATE_TOAST_ID,
+    id: UPDATE_TOAST_ID[target],
     kind: 'info',
     message:
       behind !== null && behind > 0
@@ -337,7 +343,7 @@ export async function checkBackendUpdates(): Promise<DesktopUpdateStatus | null>
   try {
     const status = mapBackendCheck(await checkHermesUpdate(true))
     $backendUpdateStatus.set(status)
-    maybeNotifyUpdateAvailable(status)
+    maybeNotifyUpdateAvailable(status, 'backend')
 
     return status
   } catch (error) {
@@ -398,7 +404,7 @@ export async function applyUpdates(opts: DesktopUpdateApplyOptions = {}): Promis
     return { ok: false, error: 'unavailable', message: 'Desktop bridge unavailable.' }
   }
 
-  dismissNotification(UPDATE_TOAST_ID)
+  dismissNotification(UPDATE_TOAST_ID.client)
   $updateApply.set({ ...IDLE, applying: true, stage: 'prepare', message: 'Starting update…' })
 
   try {
@@ -465,7 +471,7 @@ export async function applyUpdates(opts: DesktopUpdateApplyOptions = {}): Promis
         resetUpdateApplyState()
         notify({
           durationMs: 8000,
-          id: UPDATE_TOAST_ID,
+          id: UPDATE_TOAST_ID.client,
           kind: 'success',
           message: translateNow('updates.manualPickedUp'),
           // No action button here, but it's still update-lifecycle news — keep
@@ -565,7 +571,7 @@ function legacyBackendReachedTarget(
 let backendUpdateInFlight: Promise<DesktopUpdateApplyResult> | null = null
 
 async function runBackendUpdate(): Promise<DesktopUpdateApplyResult> {
-  dismissNotification(UPDATE_TOAST_ID)
+  dismissNotification(UPDATE_TOAST_ID.backend)
   $backendUpdateApply.set({
     ...IDLE,
     applying: true,
