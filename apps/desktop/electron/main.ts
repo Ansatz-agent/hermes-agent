@@ -90,6 +90,7 @@ import {
 import { decideBootstrapRepair } from './bootstrap-repair-guard'
 import { runBootstrap } from './bootstrap-runner'
 import { classifyBundledRuntime, resolveBundledBootstrapRoot } from './bundled-runtime-state'
+import { checkBundledUpdate } from './bundled-update-check'
 import { applyConnectionChange, resolveTerminalConnection } from './connection-apply'
 import {
   authModeFromStatus,
@@ -342,7 +343,6 @@ import {
 import { waitForUpdateClearance } from './update-gate'
 import { readLiveUpdateMarker, updateHandoffConflict, writeUpdateMarker } from './update-marker'
 import { isOfficialSshRemote, OFFICIAL_REPO_HTTPS_URL } from './update-remote'
-import { checkBundledUpdate } from './bundled-update-check'
 import {
   collectRelaunchArgs,
   observeUpdaterHandoff,
@@ -4286,6 +4286,7 @@ async function applyUpdatesPosixHandoff(opts: any) {
 
   // Apply the same branch selected by the update checker.
   let branch = readDesktopUpdateConfig().branch
+
   if (directoryExists(path.join(updateRoot, '.git'))) {
     branch = await resolveHealedBranch(updateRoot, branch)
   }
@@ -4454,7 +4455,8 @@ function classifyPackagedBundledRuntime(runtimeUsable) {
     installMethod: readActiveInstallMethod(),
     sourceCommit: sourceMarker?.commit || null,
     payloadCommit: typeof payloadManifest?.commit === 'string' ? payloadManifest.commit : null,
-    transactionPending: fs.existsSync(bundledSourceBackupPath(ACTIVE_HERMES_ROOT))
+    transactionPending: fs.existsSync(bundledSourceBackupPath(ACTIVE_HERMES_ROOT)),
+    gitCheckout: directoryExists(path.join(ACTIVE_HERMES_ROOT, '.git'))
   })
 }
 

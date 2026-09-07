@@ -106,6 +106,8 @@ def test_adopt_then_apply_real_git_update_preserves_runtime_and_source_backup(tm
     assert git(root, "status", "--porcelain") == ""
     assert (root / ".install_method").read_text().strip() == "git"
     assert (backup / ".install_method").read_text().strip() == "desktop-bundle"
+    assert not (root / update.SOURCE_MARKER).exists()
+    assert update.read_source_commit(backup) == current
     assert (backup / "hermes_cli/main.py").read_text() == "LOCAL_EDIT = True\n"
     assert (root / ".env").read_text() == "fixture credential\n"
     assert (root / "venv/keep").read_text() == "runtime\n"
@@ -133,6 +135,26 @@ def test_adoption_rename_failure_rolls_back(tmp_path, remote, monkeypatch):
     assert (root / "hermes_cli/main.py").read_text() == "LOCAL_EDIT = True\n"
     assert (root / "apps/desktop/build/keep").read_text() == "packaging inputs\n"
     assert not (root / "pyproject.toml").exists()
+    assert update.read_source_commit(root) == current
+
+
+def test_marker_move_failure_restores_bundled_identity(tmp_path, remote, monkeypatch):
+    repo, current, target = remote
+    root = installed(tmp_path, current)
+    original_rename = Path.rename
+
+    def fail_marker_move(source, destination):
+        if source == root / update.SOURCE_MARKER:
+            raise OSError("marker move failed")
+        return original_rename(source, destination)
+
+    monkeypatch.setattr(Path, "rename", fail_marker_move)
+    with pytest.raises(OSError, match="marker move failed"):
+        update.adopt_bundled_checkout(root, "main", current, target, repository_url=str(repo))
+    assert not (root / ".git").exists()
+    assert (root / ".install_method").read_text().strip() == "desktop-bundle"
+    assert update.read_source_commit(root) == current
+    assert (root / "hermes_cli/main.py").read_text() == "LOCAL_EDIT = True\n"
 
 
 def test_unknown_commit_never_replaces_bundled_source(tmp_path, remote):
