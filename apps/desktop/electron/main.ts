@@ -3454,6 +3454,8 @@ function execText(command, args) {
   })
 }
 
+const POSIX_PROCESS_START_MARKER_RETRY_DELAYS_MS = [10, 25, 50]
+
 async function processStartMarker(pid) {
   if (process.platform === 'linux') {
     const stat = await fs.promises.readFile(`/proc/${pid}/stat`, 'utf8')
@@ -3485,13 +3487,27 @@ async function processStartMarker(pid) {
     return `win:${ticks}`
   }
 
-  const started = await execText('ps', ['-p', String(pid), '-o', 'lstart='])
+  let lastError: unknown = null
 
-  if (!started) {
-    throw new Error(`Missing process start marker for PID ${pid}`)
+  for (let attempt = 0; attempt <= POSIX_PROCESS_START_MARKER_RETRY_DELAYS_MS.length; attempt += 1) {
+    if (attempt > 0) {
+      await new Promise(resolve => setTimeout(resolve, POSIX_PROCESS_START_MARKER_RETRY_DELAYS_MS[attempt - 1]))
+    }
+
+    try {
+      const started = await execText('ps', ['-p', String(pid), '-o', 'lstart='])
+
+      if (started) {
+        return `ps:${started}`
+      }
+
+      lastError = new Error(`Missing process start marker for PID ${pid}`)
+    } catch (error) {
+      lastError = error
+    }
   }
 
-  return `ps:${started}`
+  throw lastError ?? new Error(`Missing process start marker for PID ${pid}`)
 }
 
 async function backendCommandForPid(pid) {
