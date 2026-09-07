@@ -78,7 +78,6 @@ from hermes_cli.config import (
     custom_endpoint_key_env,
     check_config_version,
     detect_install_method,
-    format_desktop_bundle_update_message,
     format_docker_update_message,
     recommended_update_command_for_method,
     redact_key,
@@ -4529,18 +4528,6 @@ async def update_hermes():
         }
 
     install_method = detect_install_method(PROJECT_ROOT)
-    if install_method == "desktop-bundle":
-        message = format_desktop_bundle_update_message()
-        _record_completed_action("hermes-update", message, exit_code=1)
-        return {
-            "ok": False,
-            "pid": None,
-            "name": "hermes-update",
-            "error": "desktop_bundle_update_unsupported",
-            "message": message,
-            "update_command": recommended_update_command_for_method(install_method),
-        }
-
     if install_method == "docker":
         message = format_docker_update_message()
         _record_completed_action("hermes-update", message, exit_code=1)
@@ -4704,7 +4691,18 @@ async def check_hermes_update(force: bool = False):
     }
 
     if install_method == "desktop-bundle":
-        payload["message"] = format_desktop_bundle_update_message()
+        try:
+            from hermes_cli.bundled_update import check_bundled_update
+
+            status = await asyncio.to_thread(check_bundled_update, PROJECT_ROOT)
+            payload["behind"] = status.get("behind", 0)
+            payload["update_available"] = bool(status.get("updateAvailable"))
+            payload["can_apply"] = bool(status.get("supported", False)) and not status.get("error")
+            payload["message"] = status.get("message") or (
+                "An update is available." if payload["update_available"] else "You're on the latest version."
+            )
+        except Exception:
+            payload["message"] = "Couldn't reach the update source — try again later."
         return payload
 
     if install_method == "docker":
