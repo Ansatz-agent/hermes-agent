@@ -342,6 +342,7 @@ import {
 import { waitForUpdateClearance } from './update-gate'
 import { readLiveUpdateMarker, updateHandoffConflict, writeUpdateMarker } from './update-marker'
 import { isOfficialSshRemote, OFFICIAL_REPO_HTTPS_URL } from './update-remote'
+import { checkBundledUpdate } from './bundled-update-check'
 import {
   collectRelaunchArgs,
   observeUpdaterHandoff,
@@ -3070,6 +3071,10 @@ async function checkUpdates() {
   const gitDir = path.join(updateRoot, '.git')
 
   if (!directoryExists(gitDir)) {
+    if (readActiveInstallMethod() === 'desktop-bundle') {
+      return checkBundledUpdate(updateRoot, branch)
+    }
+
     return {
       supported: false,
       reason: 'not-a-git-checkout',
@@ -4279,19 +4284,10 @@ async function applyUpdatesPosixHandoff(opts: any) {
   // ── Pre-flight state.db integrity guard (#68474) ──
   preflightStateDb(HERMES_HOME, rememberLog)
 
-  // Branch-pin so a non-main checkout doesn't get switched to main (and
-  // self-heal to main when the pinned branch no longer exists on origin).
-  let branch = 'main'
-
-  try {
-    const head = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: updateRoot })
-    const current = (head.stdout || '').trim()
-
-    if (head.code === 0 && current && current !== 'HEAD') {
-      branch = await resolveHealedBranch(updateRoot, current)
-    }
-  } catch {
-    // best effort
+  // Apply the same branch selected by the update checker.
+  let branch = readDesktopUpdateConfig().branch
+  if (directoryExists(path.join(updateRoot, '.git'))) {
+    branch = await resolveHealedBranch(updateRoot, branch)
   }
 
   const args = [...handoff.args, '--install-root', updateRoot, '--branch', branch, '--desktop-pid', String(process.pid)]
@@ -4327,6 +4323,8 @@ async function applyUpdatesPosixHandoff(opts: any) {
     env: {
       ...process.env,
       HERMES_HOME,
+      ...(IS_MAC && targetApp ? { ANSATZ_DESKTOP_UPDATE_APP: targetApp } : {}),
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1',
       PATH: pathWithHermesManagedNode(path.join(updateRoot, 'venv', 'bin'))
     },
     detached: true,

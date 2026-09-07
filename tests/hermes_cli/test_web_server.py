@@ -2255,6 +2255,43 @@ class TestConfigRoundTrip:
         self.client = TestClient(app)
         self.client.headers[_SESSION_HEADER_NAME] = _SESSION_TOKEN
 
+    def test_update_hermes_spawns_for_desktop_bundle(self, monkeypatch):
+        import hermes_cli.web_server as web_server
+
+        class Proc:
+            pid = 23456
+
+        monkeypatch.setattr(web_server, "_dashboard_local_update_managed_externally", lambda: False)
+        monkeypatch.setattr(web_server, "detect_install_method", lambda _root: "desktop-bundle")
+        monkeypatch.setattr(web_server.secrets, "token_hex", lambda _size: "b" * 32)
+        monkeypatch.setattr(web_server, "_spawn_hermes_action", lambda *args, **kwargs: Proc())
+        web_server._ACTION_PROCS.pop("hermes-update", None)
+        response = self.client.post("/api/hermes/update")
+        assert response.json()["ok"] is True
+
+
+class TestDesktopBundleUpdateCheck:
+    @pytest.fixture(autouse=True)
+    def _setup(self, _isolate_hermes_home):
+        from starlette.testclient import TestClient
+        from hermes_cli.web_server import app, _SESSION_HEADER_NAME, _SESSION_TOKEN
+
+        self.client = TestClient(app)
+        self.client.headers[_SESSION_HEADER_NAME] = _SESSION_TOKEN
+
+    def test_desktop_bundle_uses_shared_github_checker(self, monkeypatch):
+        import hermes_cli.web_server as ws
+
+        monkeypatch.setattr(ws, "detect_install_method", lambda *args, **kwargs: "desktop-bundle")
+        monkeypatch.setattr(ws, "_dashboard_local_update_managed_externally", lambda: False)
+        import hermes_cli.bundled_update as bundled_update
+        monkeypatch.setattr(bundled_update, "check_bundled_update", lambda *args, **kwargs: {
+            "supported": True, "behind": 2, "updateAvailable": True, "message": "Two commits available."
+        })
+        response = self.client.get("/api/hermes/update/check")
+        assert response.json()["can_apply"] is True
+        assert response.json()["behind"] == 2
+
 
 
 

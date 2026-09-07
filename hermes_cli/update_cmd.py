@@ -1118,11 +1118,13 @@ def _discard_stashed_changes(
     return True
 
 OFFICIAL_REPO_URLS = {
-    "git@github.com:NousResearch/hermes-agent.git",
-    "git@github.com:NousResearch/hermes-agent",
+    "https://github.com/Ansatz-agent/hermes-agent.git",
+    "ssh://git@github.com/Ansatz-agent/hermes-agent.git",
+    "git@github.com:Ansatz-agent/hermes-agent.git",
+    "git@github.com:Ansatz-agent/hermes-agent",
 }
 
-OFFICIAL_REPO_URL = "git@github.com:NousResearch/hermes-agent.git"
+OFFICIAL_REPO_URL = "git@github.com:Ansatz-agent/hermes-agent.git"
 
 SKIP_UPSTREAM_PROMPT_FILE = ".skip_upstream_prompt"
 
@@ -1248,7 +1250,7 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
         # Ask user if they want to add upstream
         print()
         print("ℹ Your fork is not tracking the official Hermes repository.")
-        print("  This means you may miss updates from NousResearch/hermes-agent.")
+        print("  This means you may miss updates from Ansatz-agent/hermes-agent.")
         print()
         try:
             response = (
@@ -2057,11 +2059,17 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
     """
     from hermes_cli.config import detect_install_method, recommended_update_command_for_method
     method = detect_install_method(_m().PROJECT_ROOT)
-    if method == "desktop-bundle":
-        from hermes_cli.config import format_desktop_bundle_update_message
+    if method == "desktop-bundle" and not (_m().PROJECT_ROOT / ".git").exists():
+        from hermes_cli.bundled_update import check_bundled_update
 
-        print(format_desktop_bundle_update_message())
-        sys.exit(1)
+        status = check_bundled_update(_m().PROJECT_ROOT, branch)
+        print(status.get("message") or (
+            f"↑ {status['behind']} new commit(s). Run `ansatz update` to install."
+            if status.get("updateAvailable") else "✓ Already up to date."
+        ))
+        if status.get("error"):
+            sys.exit(1)
+        return
 
     if method == "docker":
         # Docker can't ``git fetch`` from within the container.  Surface the
@@ -3952,12 +3960,15 @@ def _rebuild_desktop_after_update(
     # The release tree is ignored by git and can disappear during an update.
     # Its pre-update presence is enough to restore it; do not make people who
     # have never used Desktop pay for an Electron build.
-    has_desktop_app = had_desktop_app_before_update or _desktop_app_present(desktop_dir)
+    update_app = os.environ.get("ANSATZ_DESKTOP_UPDATE_APP")
+    has_desktop_app = bool(update_app) or had_desktop_app_before_update or _desktop_app_present(desktop_dir)
     if not (
         (desktop_dir / "package.json").exists()
         and _m()._resolve_node_runtime_npm()
         and has_desktop_app
     ):
+        if update_app:
+            raise RuntimeError("The Desktop source or Node.js runtime is missing; the app cannot be rebuilt.")
         return
 
     print("→ Checking if desktop app needs rebuilding...")
@@ -3975,11 +3986,19 @@ def _rebuild_desktop_after_update(
         )
     except Exception:
         skip_desktop_build = False
-    if skip_desktop_build:
+    if skip_desktop_build and not update_app:
         print("  ✓ Desktop app up to date")
         return
 
+    if update_app and sys.platform == "darwin":
+        from hermes_cli.bundled_update import prepare_desktop_rebuild
+
+        prepare_desktop_rebuild(_m().PROJECT_ROOT, Path(update_app))
+
     desktop_build_cmd = [sys.executable, "-m", "hermes_cli.main", "desktop", "--build-only"]
+    if update_app:
+        # Python-only updates also need a newly stamped bootstrap payload.
+        desktop_build_cmd.append("--force-build")
     # Capture the (very loud) Electron/vite build output into update.log
     # instead of streaming it to the terminal. On the rare nonzero exit,
     # retry once after waiting again for the venv — this covers a
@@ -4019,6 +4038,20 @@ def _cmd_update_impl(args, gateway_mode: bool):
     # A managed-runtime refresh can replace site-packages before the normal
     # ``.[all]`` install runs. Snapshot while the old environment can still
     # prove which optional backends the user had activated.
+    bundled_status = None
+    if not (_m().PROJECT_ROOT / ".git").exists():
+        from hermes_cli.config import detect_install_method
+
+        if detect_install_method(_m().PROJECT_ROOT) == "desktop-bundle":
+            from hermes_cli.bundled_update import check_bundled_update
+
+            bundled_status = check_bundled_update(_m().PROJECT_ROOT, _m()._resolve_update_branch(args))
+            if not bundled_status.get("updateAvailable"):
+                print(bundled_status.get("message") or "✓ Already up to date.")
+                if bundled_status.get("error"):
+                    sys.exit(1)
+                return
+
     active_lazy_features = _m()._capture_active_lazy_features()
     active_tool_dependencies = _m()._capture_active_tool_dependencies()
 
@@ -4166,6 +4199,15 @@ def _cmd_update_impl(args, gateway_mode: bool):
     # when git file I/O is broken (antivirus, NTFS filter drivers, etc.)
     use_zip_update = False
     git_dir = _m().PROJECT_ROOT / ".git"
+
+    if bundled_status:
+        from hermes_cli.bundled_update import adopt_bundled_checkout
+
+        backup = adopt_bundled_checkout(
+            _m().PROJECT_ROOT, bundled_status["branch"],
+            bundled_status["currentSha"], bundled_status["targetSha"],
+        )
+        print(f"✓ Prepared Git source checkout; previous bundled source saved at {backup}")
 
     if not git_dir.exists():
         if sys.platform == "win32":
@@ -4481,6 +4523,10 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     print("  Close all Hermes windows/gateways and re-run: ansatz update")
             else:
                 _repair_node_deps_on_current_checkout(_print_update_completion)
+            if os.environ.get("ANSATZ_DESKTOP_UPDATE_APP"):
+                _rebuild_desktop_after_update(
+                    desktop_dir, had_desktop_app_before_update=had_desktop_app_before_update,
+                )
             if runtime_repaired is not None and not _m()._is_windows():
                 print()
                 print(
