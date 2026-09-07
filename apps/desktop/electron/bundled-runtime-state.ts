@@ -9,6 +9,7 @@ export interface BundledRuntimeInput {
   sourceCommit?: string | null
   payloadCommit?: string | null
   transactionPending?: boolean
+  gitCheckout?: boolean
 }
 
 export type BundledRuntimeDecision = 'not-applicable' | 'install' | 'reuse' | 'refresh' | 'payload-invalid'
@@ -37,7 +38,8 @@ export function classifyBundledRuntime({
   installMethod,
   sourceCommit,
   payloadCommit,
-  transactionPending = false
+  transactionPending = false,
+  gitCheckout = false
 }: BundledRuntimeInput): BundledRuntimeDecision {
   if (!packaged) {
     return 'not-applicable'
@@ -53,6 +55,12 @@ export function classifyBundledRuntime({
 
   if (transactionPending && isRealCommit(sourceCommit)) {
     return 'refresh'
+  }
+
+  // Older updaters leave the bundled marker behind when adopting Git.
+  // A completed Git adoption is not an interrupted bundled bootstrap.
+  if (installMethod === 'git' && gitCheckout) {
+    return 'not-applicable'
   }
 
   if (installMethod !== 'desktop-bundle') {

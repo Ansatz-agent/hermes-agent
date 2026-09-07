@@ -87,7 +87,7 @@ def adopt_bundled_checkout(root: Path, branch: str, current: str, target: str, *
         raise ValueError("Git adoption is only for a bundled source directory.")
     if read_source_commit(root) != current or not SHA_RE.fullmatch(target):
         raise ValueError("Bundled source identity changed; check for updates again.")
-    if (root / ".install_method").read_text().strip() != "desktop-bundle":
+    if (root / ".install_method").read_text(encoding="utf-8").strip() != "desktop-bundle":
         raise ValueError("This directory is not a Desktop bundled installation.")
 
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
@@ -113,10 +113,11 @@ def adopt_bundled_checkout(root: Path, branch: str, current: str, target: str, *
             if source.exists() and not destination.exists():
                 shutil.copytree(source, destination, symlinks=True)
         # These local identity files must not become a stash on the first update.
-        with (stage / ".git/info/exclude").open("a") as exclude:
+        with (stage / ".git/info/exclude").open("a", encoding="utf-8") as exclude:
             exclude.write(f"\n/{SOURCE_MARKER}\n/.install_method\n/.hermes_build_sha\n")
-        # Leave bundled-refresh mode once Git owns the source. Otherwise the
-        # next app launch would replace the checkout with its filtered payload.
+        # The source marker must move to the backup too: Desktop interprets
+        # a bundled marker without a desktop-bundle stamp as an interrupted
+        # bootstrap, even when the directory now contains a Git checkout.
         (stage / ".install_method").write_text("git\n", encoding="utf-8")
 
         backups = root.parent / "source-update-backups"
@@ -133,6 +134,8 @@ def adopt_bundled_checkout(root: Path, branch: str, current: str, target: str, *
                     moved.append(name)
                 (stage / name).rename(destination)
                 installed.append(name)
+            (root / SOURCE_MARKER).rename(backup / SOURCE_MARKER)
+            moved.append(SOURCE_MARKER)
         except Exception:
             for name in reversed(installed):
                 (root / name).rename(stage / name)

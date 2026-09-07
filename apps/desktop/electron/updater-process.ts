@@ -2,6 +2,7 @@ import { spawn, type SpawnOptions } from 'node:child_process'
 import { statSync } from 'node:fs'
 import path from 'node:path'
 
+import { ansatzAuthEnvironment } from './ansatz-product'
 import { hiddenWindowsChildOptions } from './windows-child-options'
 
 export interface UpdaterChild {
@@ -298,8 +299,9 @@ export interface SpawnUpdaterProcessDeps {
 
 /**
  * Spawn the detached installer used for update and bootstrap-recovery handoffs.
- * The helper owns both hidden-console selection and unref semantics so every
- * updater handoff follows the same behavior and can be tested without Electron.
+ * Keep the updater on the same auth owner as Desktop after the window exits.
+ * The helper owns identity, hidden-console selection and unref semantics for
+ * both script and staged-installer handoffs.
  */
 export function spawnUpdaterProcess(
   updater: string,
@@ -308,7 +310,12 @@ export function spawnUpdaterProcess(
   deps: SpawnUpdaterProcessDeps = {}
 ): UpdaterChild {
   const isWindows = deps.isWindows ?? process.platform === 'win32'
-  const spawnOptions = hiddenWindowsChildOptions(options, isWindows) as SpawnOptions
+  const hermesHome = options.env?.HERMES_HOME
+
+  const spawnOptions = hiddenWindowsChildOptions({
+    ...options,
+    ...(hermesHome ? { env: ansatzAuthEnvironment(hermesHome, options.env) } : {})
+  }, isWindows) as SpawnOptions
 
   const child = deps.spawnProcess
     ? deps.spawnProcess(updater, updaterArgs, spawnOptions)
