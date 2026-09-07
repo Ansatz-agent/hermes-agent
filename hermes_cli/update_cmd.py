@@ -3962,13 +3962,24 @@ def _rebuild_desktop_after_update(
     # have never used Desktop pay for an Electron build.
     update_app = os.environ.get("ANSATZ_DESKTOP_UPDATE_APP")
     has_desktop_app = bool(update_app) or had_desktop_app_before_update or _desktop_app_present(desktop_dir)
-    if not (
-        (desktop_dir / "package.json").exists()
-        and _m()._resolve_node_runtime_npm()
-        and has_desktop_app
-    ):
+    if not has_desktop_app:
+        return
+    if not (desktop_dir / "package.json").is_file():
         if update_app:
-            raise RuntimeError("The Desktop source or Node.js runtime is missing; the app cannot be rebuilt.")
+            raise RuntimeError(f"The Desktop source is missing at {desktop_dir}; the app cannot be rebuilt.")
+        return
+
+    npm = _m()._resolve_node_runtime_npm()
+    if not npm and update_app:
+        # Bundled installs need no Node to run. Their first source update does,
+        # and a Finder-launched updater cannot see the user's nvm shell PATH.
+        from hermes_constants import bootstrap_hermes_managed_node
+
+        print("→ Preparing Node.js for the Desktop update...", flush=True)
+        npm = bootstrap_hermes_managed_node()
+    if not npm:
+        if update_app:
+            raise RuntimeError("Node.js could not be prepared for the Desktop update; retry the update.")
         return
 
     print("→ Checking if desktop app needs rebuilding...")
@@ -4013,6 +4024,8 @@ def _rebuild_desktop_after_update(
     from hermes_constants import with_hermes_node_path
 
     build_env = with_hermes_node_path()
+    if update_app:
+        build_env["PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD"] = "1"
     build_result = _m()._run_logged_subprocess(
         desktop_build_cmd, cwd=_m().PROJECT_ROOT, env=build_env
     )
@@ -4021,13 +4034,18 @@ def _rebuild_desktop_after_update(
             desktop_build_cmd, cwd=_m().PROJECT_ROOT, env=build_env
         )
     if build_result.returncode != 0:
-        print("  ⚠ Desktop build failed (non-fatal; run `ansatz desktop` to retry)")
+        if update_app:
+            print("  ⚠ Desktop build failed")
+        else:
+            print("  ⚠ Desktop build failed (non-fatal; run `ansatz desktop` to retry)")
         tail = "\n".join((build_result.stdout or "").strip().splitlines()[-15:])
         if tail:
             print(tail)
         from hermes_constants import display_hermes_home as _dhh
 
         print(f"  Full build log: {_dhh()}/logs/update.log")
+        if update_app:
+            raise RuntimeError("Desktop rebuild failed; the previous app was kept. Retry the update.")
     else:
         print("  ✓ Desktop app up to date")
 

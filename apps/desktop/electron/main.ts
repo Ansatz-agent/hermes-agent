@@ -136,6 +136,7 @@ import {
 import { describeCrashReason, installCrashForensics } from './crash-forensics'
 import { adoptServedDashboardToken } from './dashboard-token'
 import { DESKTOP_WINDOW_TITLE } from './desktop-branding'
+import { reconcileDesktopBuild } from './desktop-build-update'
 import { loadOrCreateInstallationId, sshOwnershipId } from './desktop-installation'
 import { formatDesktopLogLine } from './desktop-log-line'
 import { coordinateAuthenticatedDesktopRuntime, DesktopRuntimeGate } from './desktop-runtime-gate'
@@ -3066,6 +3067,21 @@ async function resolveHealedBranch(updateRoot, branch) {
 }
 
 async function checkUpdates() {
+  const status = await checkSourceUpdates()
+  const updateRoot = resolveUpdateRoot()
+
+  return reconcileDesktopBuild(status, {
+    managedPackagedApp: IS_PACKAGED && updateRoot === ACTIVE_HERMES_ROOT,
+    installedSha: INSTALL_STAMP?.commit,
+    isAncestor: async (older, newer) => {
+      const result = await runGit(['merge-base', '--is-ancestor', older, newer], { cwd: updateRoot })
+
+      return result.code === 0
+    }
+  })
+}
+
+async function checkSourceUpdates() {
   const updateRoot = resolveUpdateRoot()
   let { branch } = readDesktopUpdateConfig()
   const gitDir = path.join(updateRoot, '.git')
