@@ -227,6 +227,7 @@ for (const scenario of uploadDiagnosticScenarios) {
     const { root, store } = await temporaryStore()
     const events: unknown[] = []
     const batch = await store.enqueue(envelope(`diagnostic-${scenario.expected.failureCode}`))
+
     const forwarder = new TraceForwarder({
       clock: () => traceCredentialNow,
       credentialProvider:

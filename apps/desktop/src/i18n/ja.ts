@@ -20,8 +20,7 @@ export const ja = defineLocale({
     preparingFullRuntime: '完全なオフラインランタイムをインストール中…',
     preparingFullStage: (current, total, title) =>
       `完全なオフラインランタイムをインストール中（${current}/${total}）：${title}…`,
-    runtimePreparationFailed:
-      'Ansatz のローカルランタイムをインストールできませんでした。再試行してください。',
+    runtimePreparationFailed: 'Ansatz のローカルランタイムをインストールできませんでした。再試行してください。',
     administratorManaged: 'アカウントの発行とパスワードの支援はサーバー管理者が行います。',
     accountMenu: 'アカウント',
     signOut: 'サインアウト',
@@ -2191,8 +2190,7 @@ export const ja = defineLocale({
       'セッショントークンまたはブラウザーサインインでリモートバックエンドを使用します。ローカルインストールは開始されません。',
     installLocalTitle: 'Hermes をローカルにインストール',
     installLocalDesc: 'Hermes をダウンロードし、Python 環境を作成して、このコンピューターでバックエンドを実行します。',
-    localStartUnavailable:
-      'ローカルインストールを開始できません。Ansatz を再起動して、もう一度お試しください。',
+    localStartUnavailable: 'ローカルインストールを開始できません。Ansatz を再起動して、もう一度お試しください。',
     remoteSetupTitle: '既存の Hermes に接続',
     remoteSetupDesc:
       'ゲートウェイ URL を入力してください。Ansatz がトークンとブラウザーサインインのどちらが必要かを検出します。',

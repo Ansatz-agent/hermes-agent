@@ -192,8 +192,7 @@ export const en: Translations = {
       elevenLabsRejectedKey: 'ElevenLabs rejected the API key (401).',
       diskFull: 'Disk full — free some space, then try again.',
       gatewayAuthFailed: 'Gateway authentication failed — check your API_SERVER_KEY.',
-      methodNotAllowed:
-        'The desktop backend rejected that request (405 Method Not Allowed). Try restarting Ansatz.',
+      methodNotAllowed: 'The desktop backend rejected that request (405 Method Not Allowed). Try restarting Ansatz.',
       microphonePermission: 'Microphone permission was denied.',
       openaiRejectedApiKey: 'OpenAI rejected the API key.',
       openaiRejectedApiKeyWithStatus: status => `OpenAI rejected the API key (${status} invalid_api_key).`,
@@ -879,8 +878,7 @@ export const en: Translations = {
         'The host key has CHANGED since you last connected. Verify this is expected, then run ssh-keygen -R <host> and reconnect.',
       sshErrNotInstalled:
         'Hermes is not installed on the remote host. Install it there (curl -fsSL https://hermes-agent.nousresearch.com/install.sh | sh) or set the Hermes path.',
-      sshErrPlatform:
-        'Unsupported remote platform. Ansatz SSH mode supports Linux, macOS, and Windows remote hosts.',
+      sshErrPlatform: 'Unsupported remote platform. Ansatz SSH mode supports Linux, macOS, and Windows remote hosts.',
       sshErrTimeout: 'SSH connection timed out. The host may be unreachable or asleep.',
       sshErrUpdateRequired: 'Update Hermes on the remote host before connecting with Desktop SSH.',
       sshErrUnknown: 'SSH connection failed.'
@@ -2474,8 +2472,7 @@ export const en: Translations = {
     installLocalDesc: 'Download Hermes, create its Python environment, and run the backend on this computer.',
     localStartUnavailable: 'Local installation could not start. Restart Ansatz and try again.',
     remoteSetupTitle: 'Connect to existing Hermes',
-    remoteSetupDesc:
-      'Enter your gateway URL. Ansatz will detect whether it needs a token or browser sign-in.',
+    remoteSetupDesc: 'Enter your gateway URL. Ansatz will detect whether it needs a token or browser sign-in.',
     remoteUrlTitle: 'Gateway URL',
     remoteUrlDesc: 'Use the base URL of the Hermes gateway, including https:// when remote.',
     remoteUrlPlaceholder: 'https://gateway.example.com/hermes',

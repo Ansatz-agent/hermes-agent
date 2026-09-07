@@ -291,6 +291,7 @@ export class TraceOutboxStore {
         options.keyProtector,
         expectedOwner.accountKey
       )
+
       dataKey = loaded.dataKey
       legacyUnboundKey = loaded.legacyUnbound
     } catch (error) {
@@ -305,6 +306,7 @@ export class TraceOutboxStore {
       dataKey = randomBytes(32)
       keyLost = true
     }
+
     const journal = await TraceJournal.open({ fs, path: join(options.root, JOURNAL_FILE_NAME) })
 
     const store = new TraceOutboxStore({
@@ -541,6 +543,7 @@ export class TraceOutboxStore {
       resolve = currentResolve
       reject = currentReject
     })
+
     const trackedDurable = this.trackMutationPromise(durable)
 
     const item: PendingCommit = {
@@ -595,6 +598,7 @@ export class TraceOutboxStore {
     ) {
       throw new Error('invalid_trace_namespace_migration')
     }
+
     if ((await fs.readFile(join(options.sourceRoot, KEY_FILE_NAME))) === null) {
       return false
     }
@@ -611,6 +615,7 @@ export class TraceOutboxStore {
       keyProtector: options.keyProtector,
       root: options.sourceRoot
     })
+
     let complete = false
 
     try {
@@ -623,11 +628,13 @@ export class TraceOutboxStore {
           await this.importMigratedBatch(batch, record.state)
         } else if (record.state === 'receipt') {
           const receipt = source.receipts.get(record.batch.batchId)
+
           if (receipt !== undefined) {
             await this.importMigratedReceipt(receipt)
             migratedReceipts.add(receipt.batchId)
           }
         }
+
         await new Promise<void>(resolve => setImmediate(resolve))
       }
 
@@ -637,6 +644,7 @@ export class TraceOutboxStore {
           await new Promise<void>(resolve => setImmediate(resolve))
         }
       }
+
       complete = true
     } finally {
       await source.close()
@@ -816,9 +824,11 @@ export class TraceOutboxStore {
 
     const dedupeIdentity =
       record === undefined ? this.completeReceiptIdentity(existing!) : this.receiptDedupeIdentity(record.batch)
+
     if (dedupeIdentity === null) {
       throw new Error('invalid_trace_receipt_identity')
     }
+
     await this.persistReceipt(receipt, {
       accountKey: record?.batch.owner.accountKey ?? existing!.accountKey,
       dedupeKey: record === undefined ? existing!.dedupeKey : this.dedupeKey(record.batch),
@@ -910,13 +920,16 @@ export class TraceOutboxStore {
           if (this.accountKey !== null) {
             throw new Error('trace_outbox_account_mismatch')
           }
+
           this.legacyOwnerUnknown = true
         } else {
           if (this.legacyOwnerUnknown) {
             throw new Error('trace_outbox_account_mismatch')
           }
+
           this.bindRecoveredAccount(operation.accountKey)
         }
+
         this.ownerJournaled = true
       }
 
@@ -932,7 +945,9 @@ export class TraceOutboxStore {
           runId: operation.runId ?? null,
           receivedAt: operation.receivedAt
         }
+
         const prior = this.receipts.get(operation.batchId)
+
         if (
           prior !== undefined &&
           (prior.outcome !== tombstone.outcome ||
@@ -950,6 +965,7 @@ export class TraceOutboxStore {
         ) {
           throw new Error('conflicting_gateway_receipt')
         }
+
         if (prior !== undefined) {
           tombstone.accountKey ??= prior.accountKey
           tombstone.dedupeKey ??= prior.dedupeKey
@@ -958,13 +974,17 @@ export class TraceOutboxStore {
           tombstone.payloadSha256 ??= prior.payloadSha256
           tombstone.runId ??= prior.runId
         }
+
         if (tombstone.accountKey !== null) {
           this.bindRecoveredAccount(tombstone.accountKey)
         }
+
         this.receipts.set(operation.batchId, tombstone)
+
         if (tombstone.dedupeKey !== null) {
           this.dedupe.set(tombstone.dedupeKey, tombstone.batchId)
         }
+
         terminalStates.delete(operation.batchId)
       }
 
@@ -977,6 +997,7 @@ export class TraceOutboxStore {
         terminalStates.set(operation.batchId, operation)
         const supersededReceipt = this.receipts.get(operation.batchId)
         this.receipts.delete(operation.batchId)
+
         if (
           supersededReceipt?.dedupeKey !== null &&
           supersededReceipt?.dedupeKey !== undefined &&
@@ -1000,9 +1021,11 @@ export class TraceOutboxStore {
         if (receipt.accountKey !== null && receipt.accountKey !== record.header.owner.accountKey) {
           throw new Error('trace_outbox_account_mismatch')
         }
+
         if (receipt.dedupeKey !== null && receipt.dedupeKey !== dedupeKey) {
           throw new Error('invalid_trace_receipt_dedupe')
         }
+
         receipt.accountKey = record.header.owner.accountKey
         receipt.dedupeKey = dedupeKey
         receipt.entrypoint = record.header.entrypoint
@@ -1117,6 +1140,7 @@ export class TraceOutboxStore {
         const nonceLength = prefix.readUInt32BE(9)
         const tagLength = prefix.readUInt32BE(13)
         const ciphertextLength = prefix.readUInt32BE(17)
+
         if (
           !prefix.subarray(0, 4).equals(Buffer.from('ATOB')) ||
           prefix.readUInt8(4) !== 1 ||
@@ -1133,7 +1157,9 @@ export class TraceOutboxStore {
             trustedPrefix: Buffer.alloc(0)
           }
         }
+
         const recordLength = RECORD_PREFIX_BYTES + headerLength + nonceLength + tagLength + ciphertextLength + 32
+
         if (recordLength > MAX_RECORD_BYTES) {
           return {
             nextOffset: offset,
@@ -1143,6 +1169,7 @@ export class TraceOutboxStore {
             trustedPrefix: Buffer.alloc(0)
           }
         }
+
         if (recordLength > size - offset) {
           return {
             nextOffset: offset,
@@ -1394,6 +1421,7 @@ export class TraceOutboxStore {
         this.accepted += 1
         item.resolve(record.batch)
       }
+
       this.pruneReceipts(this.config.now())
     } catch (error) {
       // If the failure came after the group's segment records were synced
@@ -1509,6 +1537,7 @@ export class TraceOutboxStore {
 
         const owner = this.targetOwner()
         const existing = this.records.get(sourceBatch.batchId)
+
         if (existing !== undefined) {
           if (
             existing.batch.payloadSha256 !== sourceBatch.payloadSha256 ||
@@ -1518,6 +1547,7 @@ export class TraceOutboxStore {
           ) {
             throw new Error('conflicting_trace_namespace_batch')
           }
+
           return
         }
 
@@ -1527,10 +1557,13 @@ export class TraceOutboxStore {
           owner,
           sequence: this.nextSequence
         }
+
         const dedupeKey = this.dedupeKey(batch)
+
         if (this.dedupe.has(dedupeKey)) {
           return
         }
+
         const header = this.headerFrom(batch)
 
         if (!isValidTraceSegmentHeader(header)) {
@@ -1542,10 +1575,12 @@ export class TraceOutboxStore {
           this.config.dataKey,
           Buffer.from(`${owner.accountKey}/${batch.batchId}`, 'utf8')
         )
+
         const encoded = encodeSegmentRecord({ encrypted, header })
         const offset = this.segmentOffset
         await this.config.fs.appendFile(this.config.segmentPath, encoded)
         await this.config.fs.syncFile(this.config.segmentPath)
+
         const operations: TraceJournalOperation[] = [
           {
             op: 'pending',
@@ -1557,6 +1592,7 @@ export class TraceOutboxStore {
             sequence: batch.sequence
           }
         ]
+
         if (state === 'quarantined') {
           operations.push({
             op: 'terminal',
@@ -1565,6 +1601,7 @@ export class TraceOutboxStore {
             terminal: 'quarantined'
           })
         }
+
         this.records.set(batch.batchId, {
           batch: header,
           encodedBytes: encoded.length,
@@ -1584,21 +1621,28 @@ export class TraceOutboxStore {
     return this.withMutationGate(() =>
       this.withWriterLock(async () => {
         const identity = this.completeReceiptIdentity(receipt)
+
         if (identity === null) {
           throw new Error('trace_receipt_migration_identity_unavailable')
         }
+
         const dedupeKey = this.dedupeKeyForIdentity(this.config.expectedAccountKey, identity)
         const existing = this.receipts.get(receipt.batchId)
+
         if (existing !== undefined) {
           if (existing.outcome !== receipt.outcome || existing.receivedAt !== receipt.receivedAt) {
             throw new Error('conflicting_gateway_receipt')
           }
+
           return
         }
+
         const duplicate = this.dedupe.get(dedupeKey)
+
         if (duplicate !== undefined && duplicate !== receipt.batchId) {
           return
         }
+
         await this.appendExtendedReceipt(receipt, this.config.expectedAccountKey, dedupeKey, identity)
         this.receipts.set(receipt.batchId, {
           accountKey: this.config.expectedAccountKey,
@@ -1649,6 +1693,7 @@ export class TraceOutboxStore {
     if (item.cancellationOperation !== null) {
       try {
         this.validateReceipt(item.batchId, receipt)
+
         if (
           item.cancellation === null ||
           item.cancellation.outcome !== receipt.outcome ||
@@ -1686,6 +1731,7 @@ export class TraceOutboxStore {
         if (input === null) {
           throw new Error('local_commit_cancelled')
         }
+
         await this.persistReceipt(receipt, {
           accountKey: input.owner.accountKey,
           dedupeKey: this.dedupeKey(input),
@@ -1706,15 +1752,18 @@ export class TraceOutboxStore {
 
       if (item.receiptJournaled) {
         await this.compactIfIdleInternal()
+
         return
       }
     }
 
     if (item.state === 'committed' || item.state === 'flushing') {
       const record = this.records.get(item.batchId)
+
       if (record === undefined) {
         throw new Error('unknown_trace_batch')
       }
+
       await this.persistReceipt(receipt, {
         accountKey: record.batch.owner.accountKey,
         dedupeKey: this.dedupeKey(record.batch),
@@ -1769,6 +1818,7 @@ export class TraceOutboxStore {
     if (record !== undefined) {
       record.state = 'receipt'
     }
+
     this.pruneReceipts(this.config.now())
   }
 
@@ -1798,6 +1848,7 @@ export class TraceOutboxStore {
   private validateDuplicateReceipt(existing: ReceiptTombstone, receipt: DurableReceipt): Promise<void> {
     try {
       this.validateReceipt(existing.batchId, receipt)
+
       return Promise.resolve()
     } catch (error) {
       return Promise.reject(error)
@@ -2066,6 +2117,7 @@ export class TraceOutboxStore {
   private async compactJournal(): Promise<void> {
     const rewrite = this.journalTail.then(async () => {
       const recovered = await this.config.journal.recover()
+
       const retained = recovered.operations.filter(operation => {
         if (operation.op === 'owner' || operation.op === 'receipt') {
           return false
@@ -2089,6 +2141,7 @@ export class TraceOutboxStore {
       const receipts = [...this.receipts.values()]
         .sort((left, right) => left.receivedAt - right.receivedAt || left.batchId.localeCompare(right.batchId))
         .map(receipt => this.receiptOperation(receipt))
+
       retained.push(...receipts)
 
       this.journalCompactedBytes = await this.config.journal.replace(retained)
@@ -2154,6 +2207,7 @@ export class TraceOutboxStore {
     const ordered = [...this.receipts.values()].sort(
       (left, right) => left.receivedAt - right.receivedAt || left.batchId.localeCompare(right.batchId)
     )
+
     let pruned = false
 
     for (const receipt of ordered) {
@@ -2187,6 +2241,7 @@ export class TraceOutboxStore {
 
     if (receipt.dedupeKey !== null && this.dedupe.get(receipt.dedupeKey) === receipt.batchId) {
       const record = this.records.get(receipt.batchId)
+
       if (record === undefined || record.state === 'receipt' || record.state === 'terminal') {
         this.dedupe.delete(receipt.dedupeKey)
       }
@@ -2266,9 +2321,11 @@ export class TraceOutboxStore {
     }
 
     let release!: () => void
+
     const marker = new Promise<void>(resolve => {
       release = resolve
     })
+
     this.inflightMutations.add(marker)
 
     let result: T | Promise<T>
@@ -2290,9 +2347,11 @@ export class TraceOutboxStore {
 
   private trackMutationPromise<T>(result: Promise<T>): Promise<T> {
     let release!: () => void
+
     const marker = new Promise<void>(resolve => {
       release = resolve
     })
+
     this.inflightMutations.add(marker)
 
     return result.finally(() => {

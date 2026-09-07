@@ -32,6 +32,7 @@ test('authenticates the account namespace inside the OS-wrapped key', () => {
     encryptString: (plaintext: string) => Buffer.from(plaintext, 'utf8'),
     decryptString: (wrapped: Buffer) => wrapped.toString('utf8')
   }
+
   const protector = createSafeStorageTraceKeyProtector(safeStorage)
   const key = Buffer.alloc(32, 29)
   const accountA = 'account-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'

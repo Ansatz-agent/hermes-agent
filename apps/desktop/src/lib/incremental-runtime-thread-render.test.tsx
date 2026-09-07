@@ -1,4 +1,4 @@
-import { AssistantRuntimeProvider, type AssistantRuntime, type ThreadMessage } from '@assistant-ui/react'
+import { type AssistantRuntime, AssistantRuntimeProvider, type ThreadMessage } from '@assistant-ui/react'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { useEffect, useMemo, useState } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -23,6 +23,7 @@ vi.stubGlobal('cancelAnimationFrame', (id: number) => window.clearTimeout(id))
 vi.stubGlobal('CSS', { escape: (str: string) => str })
 
 Element.prototype.scrollTo = function scrollTo() {}
+
 Element.prototype.animate = function animate() {
   return { cancel: () => {}, finished: Promise.resolve() } as unknown as Animation
 }
@@ -58,6 +59,7 @@ function assistantMessage(text: string, running = true): ThreadMessage {
 function Harness({ onRuntime }: { onRuntime?: (runtime: AssistantRuntime) => void }) {
   const [messages, setMessages] = useState<ThreadMessage[]>([userMessage()])
   const [isRunning, setIsRunning] = useState(true)
+
   const repository = useMemo(
     () => ({
       headId: messages.at(-1)?.id ?? null,
@@ -73,9 +75,11 @@ function Harness({ onRuntime }: { onRuntime?: (runtime: AssistantRuntime) => voi
     const first = window.setTimeout(() => {
       setMessages([userMessage(), assistantMessage('first chunk')])
     }, 20)
+
     const second = window.setTimeout(() => {
       setMessages([userMessage(), assistantMessage('first chunk second chunk')])
     }, 100)
+
     const complete = window.setTimeout(() => {
       setMessages([userMessage(), assistantMessage('first chunk second chunk', false)])
       setIsRunning(false)
@@ -96,6 +100,7 @@ function Harness({ onRuntime }: { onRuntime?: (runtime: AssistantRuntime) => voi
     onEdit: async () => {},
     onReload: async () => {}
   })
+
   onRuntime?.(runtime)
 
   return (
@@ -110,6 +115,7 @@ afterEach(() => cleanup())
 describe('incremental runtime with the real thread renderer', () => {
   it('renders the first streamed response without a snapshot loop', async () => {
     const errors: unknown[] = []
+
     const errorSpy = vi.spyOn(console, 'error').mockImplementation((...args) => {
       errors.push(args)
     })

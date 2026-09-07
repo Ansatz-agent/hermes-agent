@@ -117,7 +117,11 @@ export function AuthBootstrapProgress({ mode, now, onLogout, onRetry, state }: A
         {view.current ? (
           <>
             <p className="text-sm text-(--ui-text-secondary)">
-              {copy.stagePosition(currentIndex, view.totalStages, view.current.descriptor.title || view.current.descriptor.name)}
+              {copy.stagePosition(
+                currentIndex,
+                view.totalStages,
+                view.current.descriptor.title || view.current.descriptor.name
+              )}
             </p>
             {view.current.result.progress ? <ProgressDetail progress={view.current.result.progress} /> : null}
           </>

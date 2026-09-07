@@ -3,10 +3,7 @@ import http from 'node:http'
 
 import { test, vi } from 'vitest'
 
-import {
-  BackendHttpError,
-  requestJsonWithLocalCapability
-} from './backend-json-client'
+import { BackendHttpError, requestJsonWithLocalCapability } from './backend-json-client'
 import type { BackendJsonTransportRequest } from './backend-json-client'
 import type { LocalCapabilitySnapshot } from './local-capability-manager'
 
@@ -147,10 +144,7 @@ test('performs the bounded recovery against a real HTTP backend', async () => {
 })
 
 test('serializes a non-idempotent body once and reuses the exact bytes on recovery', async () => {
-  const manager = fakeManager([
-    snapshot('old-registration', 'old-token'),
-    snapshot('new-registration', 'new-token')
-  ])
+  const manager = fakeManager([snapshot('old-registration', 'old-token'), snapshot('new-registration', 'new-token')])
 
   let modelReads = 0
 

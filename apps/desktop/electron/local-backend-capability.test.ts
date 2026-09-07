@@ -6,10 +6,7 @@ import { test } from 'vitest'
 
 import type { ConnectionScope } from './auth-bridge'
 import type { ScopeControlAck } from './auth-scope-token'
-import {
-  LocalBackendCapabilityLifecycle,
-  LocalRuntimeProtocolError
-} from './local-backend-capability'
+import { LocalBackendCapabilityLifecycle, LocalRuntimeProtocolError } from './local-backend-capability'
 import {
   LocalBackendCapabilityUnavailableError,
   LocalCapabilityManager,
@@ -81,8 +78,7 @@ function promotedAck(frame: ControlFrame): ScopeControlAck {
     operation: 'scope_token_promoted',
     transition_id: String(frame.transition_id),
     registration_id: String(frame.registration_id),
-    previous_registration_id:
-      frame.previous_registration_id === null ? null : String(frame.previous_registration_id),
+    previous_registration_id: frame.previous_registration_id === null ? null : String(frame.previous_registration_id),
     connection_id: String(frame.connection_id),
     runtime_instance_id: String(frame.runtime_instance_id),
     epoch: Number(frame.epoch),
@@ -131,10 +127,7 @@ function capabilityFixture() {
     child.emitAck(promotedAck(promotion))
   }
 
-  const complete = async (
-    preparing: ReturnType<typeof start>,
-    child: FakeChild
-  ) => {
+  const complete = async (preparing: ReturnType<typeof start>, child: FakeChild) => {
     child.stdout.write('HERMES_BACKEND_READY port=43210 desktop_scope_protocol=2\n')
     await acknowledgeRegistration(child)
     await acknowledgePromotion(child)
@@ -212,10 +205,7 @@ test('child exit revokes its exact capability and closes the control input with 
   assert.equal(fixture.lifecycle.snapshot('primary').backendGeneration, 1)
   child.emit('exit', 0, null)
 
-  assert.throws(
-    () => fixture.lifecycle.snapshot('primary'),
-    LocalBackendCapabilityUnavailableError
-  )
+  assert.throws(() => fixture.lifecycle.snapshot('primary'), LocalBackendCapabilityUnavailableError)
   assert.equal(child.stdin.writableEnded, true)
   assert.equal(fixture.stoppedChildren.includes(child), true)
 })
@@ -245,10 +235,7 @@ test('active capability expiry closes the backend control input with EOF', async
 
   fixture.clock.now = prepared.snapshot.validUntil
 
-  assert.throws(
-    () => fixture.lifecycle.snapshot('primary'),
-    LocalBackendCapabilityUnavailableError
-  )
+  assert.throws(() => fixture.lifecycle.snapshot('primary'), LocalBackendCapabilityUnavailableError)
   assert.equal(child.stdin.writableEnded, true)
   assert.equal(fixture.stoppedChildren.includes(child), true)
 })
@@ -312,10 +299,7 @@ test('a superseded in-flight activation cleans up only its own control', async (
   const currentChild = new FakeChild()
   const stalePreparation = fixture.start('primary', staleChild)
 
-  const staleRejected = assert.rejects(
-    stalePreparation,
-    LocalBackendCapabilityUnavailableError
-  )
+  const staleRejected = assert.rejects(stalePreparation, LocalBackendCapabilityUnavailableError)
 
   staleChild.stdout.write('HERMES_BACKEND_READY port=43210 desktop_scope_protocol=2\n')
   await staleChild.nextFrame('register_scope_token')

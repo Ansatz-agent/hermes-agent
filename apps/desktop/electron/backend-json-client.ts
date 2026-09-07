@@ -1,17 +1,16 @@
 import http from 'node:http'
 import https from 'node:https'
 
-import type {
-  LocalCapabilitySnapshot,
-  RotationReason
-} from './local-capability-manager'
+import type { LocalCapabilitySnapshot, RotationReason } from './local-capability-manager'
 import { redactSecrets } from './ssh-connection'
 
 const DEFAULT_TIMEOUT_MS = 20_000
 const MAX_RECOVERY_WAIT_MS = 20_000
 const MAX_BODY_PREVIEW_CHARS = 200
-const SENSITIVE_BODY_KEY = /^(?:authorization|bearer|cookie|csrf|password|secret|client[_-]?secret|(?:x[_-]?hermes[_-]?)?session[_-]?token|(?:access|refresh|id)[_-]?token|api[_-]?key|token)$/i
-const SENSITIVE_BODY_ASSIGNMENT = /(["']?(?:authorization|bearer|cookie|csrf|password|secret|client[_-]?secret|(?:x[_-]?hermes[_-]?)?session[_-]?token|(?:access|refresh|id)[_-]?token|api[_-]?key|token)["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,\r\n}]+)/gi
+const SENSITIVE_BODY_KEY =
+  /^(?:authorization|bearer|cookie|csrf|password|secret|client[_-]?secret|(?:x[_-]?hermes[_-]?)?session[_-]?token|(?:access|refresh|id)[_-]?token|api[_-]?key|token)$/i
+const SENSITIVE_BODY_ASSIGNMENT =
+  /(["']?(?:authorization|bearer|cookie|csrf|password|secret|client[_-]?secret|(?:x[_-]?hermes[_-]?)?session[_-]?token|(?:access|refresh|id)[_-]?token|api[_-]?key|token)["']?\s*[:=]\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^,\r\n}]+)/gi
 
 type LocalCapabilitySource = {
   snapshot: (key: string) => LocalCapabilitySnapshot
@@ -27,9 +26,7 @@ export type BackendJsonTransportRequest = {
   bearer?: string | null
 }
 
-export type BackendJsonTransport<T = unknown> = (
-  request: BackendJsonTransportRequest
-) => Promise<T>
+export type BackendJsonTransport<T = unknown> = (request: BackendJsonTransportRequest) => Promise<T>
 
 export type LocalCapabilityJsonRequest<T = unknown> = {
   manager: LocalCapabilitySource
@@ -46,9 +43,7 @@ function safeString(value: unknown): string | null {
 }
 
 function safeBody(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {}
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
 }
 
 function redactStructuredBody(value: unknown): unknown {
@@ -82,10 +77,10 @@ function redactBodyPreview(value: string): string {
 
   const sanitized = redactSecrets(preview)
 
-  return (parsed
-    ? sanitized
-    : sanitized.replace(SENSITIVE_BODY_ASSIGNMENT, '$1<redacted>')
-  ).slice(0, MAX_BODY_PREVIEW_CHARS)
+  return (parsed ? sanitized : sanitized.replace(SENSITIVE_BODY_ASSIGNMENT, '$1<redacted>')).slice(
+    0,
+    MAX_BODY_PREVIEW_CHARS
+  )
 }
 
 export class BackendHttpError extends Error {
@@ -99,11 +94,7 @@ export class BackendHttpError extends Error {
   constructor(status: number, body: Record<string, unknown>, bodyPreview = '') {
     const sanitizedPreview = redactBodyPreview(bodyPreview)
 
-    super(
-      sanitizedPreview
-        ? `${status}: ${sanitizedPreview}`
-        : `Backend request failed (${status})`
-    )
+    super(sanitizedPreview ? `${status}: ${sanitizedPreview}` : `Backend request failed (${status})`)
     this.name = 'Error'
     this.status = status
     this.code = safeString(body.code)
@@ -114,9 +105,7 @@ export class BackendHttpError extends Error {
   }
 }
 
-export function isRetryableLocalCapabilityError(
-  error: unknown
-): error is BackendHttpError {
+export function isRetryableLocalCapabilityError(error: unknown): error is BackendHttpError {
   return (
     error instanceof BackendHttpError &&
     error.status === 401 &&
@@ -182,20 +171,14 @@ async function refreshBeforeDeadline(
   }
 }
 
-export async function requestJsonWithLocalCapability<T = unknown>(
-  options: LocalCapabilityJsonRequest<T>
-): Promise<T> {
+export async function requestJsonWithLocalCapability<T = unknown>(options: LocalCapabilityJsonRequest<T>): Promise<T> {
   const method = String(options.method || 'GET').toUpperCase()
 
-  const bodyBytes =
-    options.body === undefined
-      ? undefined
-      : Buffer.from(JSON.stringify(options.body), 'utf8')
+  const bodyBytes = options.body === undefined ? undefined : Buffer.from(JSON.stringify(options.body), 'utf8')
 
   const timeoutMs = normalizedTimeout(options.timeoutMs)
 
-  const transport: BackendJsonTransport<T> =
-    options.transport ?? backendJsonTransport<T>
+  const transport: BackendJsonTransport<T> = options.transport ?? backendJsonTransport<T>
 
   const first = options.manager.snapshot(options.key)
 
@@ -215,12 +198,7 @@ export async function requestJsonWithLocalCapability<T = unknown>(
       throw error
     }
 
-    const replacement = await refreshBeforeDeadline(
-      options.manager,
-      options.key,
-      timeoutMs,
-      error
-    )
+    const replacement = await refreshBeforeDeadline(options.manager, options.key, timeoutMs, error)
 
     if (!sameRequestAuthority(first, replacement, options.key)) {
       throw error
@@ -230,9 +208,7 @@ export async function requestJsonWithLocalCapability<T = unknown>(
   }
 }
 
-export function backendJsonTransport<T = unknown>(
-  request: BackendJsonTransportRequest
-): Promise<T> {
+export function backendJsonTransport<T = unknown>(request: BackendJsonTransportRequest): Promise<T> {
   return new Promise((resolve, reject) => {
     let parsed: URL
 
@@ -265,62 +241,56 @@ export function backendJsonTransport<T = unknown>(
       headers['Content-Length'] = String(request.bodyBytes.length)
     }
 
-    const outgoing = client.request(
-      parsed,
-      { method: request.method, headers },
-      response => {
-        const chunks: Buffer[] = []
+    const outgoing = client.request(parsed, { method: request.method, headers }, response => {
+      const chunks: Buffer[] = []
 
-        response.on('error', reject)
-        response.on('data', chunk => chunks.push(Buffer.from(chunk)))
-        response.on('end', () => {
-          const text = Buffer.concat(chunks).toString('utf8')
-          const status = response.statusCode || 500
+      response.on('error', reject)
+      response.on('data', chunk => chunks.push(Buffer.from(chunk)))
+      response.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8')
+        const status = response.statusCode || 500
 
-          if (status >= 400) {
-            let payload: unknown = {}
-
-            try {
-              payload = text ? JSON.parse(text) : {}
-            } catch {
-              // A malformed error body remains a typed HTTP failure, but its
-              // raw content is never copied into the public error message.
-            }
-
-            reject(new BackendHttpError(status, safeBody(payload), text))
-
-            return
-          }
-
-          if (!text) {
-            resolve(null as T)
-
-            return
-          }
-
-          const looksHtml = /^\s*<(?:!doctype|html)/i.test(text)
-          const contentType = String(response.headers['content-type'] || '')
-
-          if (looksHtml || contentType.includes('text/html')) {
-            reject(new Error(`Expected JSON from Hermes backend (status ${status})`))
-
-            return
-          }
+        if (status >= 400) {
+          let payload: unknown = {}
 
           try {
-            resolve(JSON.parse(text) as T)
+            payload = text ? JSON.parse(text) : {}
           } catch {
-            reject(new Error(`Invalid JSON from Hermes backend (status ${status})`))
+            // A malformed error body remains a typed HTTP failure, but its
+            // raw content is never copied into the public error message.
           }
-        })
-      }
-    )
+
+          reject(new BackendHttpError(status, safeBody(payload), text))
+
+          return
+        }
+
+        if (!text) {
+          resolve(null as T)
+
+          return
+        }
+
+        const looksHtml = /^\s*<(?:!doctype|html)/i.test(text)
+        const contentType = String(response.headers['content-type'] || '')
+
+        if (looksHtml || contentType.includes('text/html')) {
+          reject(new Error(`Expected JSON from Hermes backend (status ${status})`))
+
+          return
+        }
+
+        try {
+          resolve(JSON.parse(text) as T)
+        } catch {
+          reject(new Error(`Invalid JSON from Hermes backend (status ${status})`))
+        }
+      })
+    })
 
     outgoing.on('error', reject)
     outgoing.setTimeout(request.timeoutMs, () => {
-      outgoing.destroy(
-        new Error(`Timed out connecting to Hermes backend after ${request.timeoutMs}ms`)
-      )
+      outgoing.destroy(new Error(`Timed out connecting to Hermes backend after ${request.timeoutMs}ms`))
     })
 
     if (request.bodyBytes) {

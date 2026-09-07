@@ -191,10 +191,7 @@ function shouldTrustHermesOverride(hermesOverride?: string) {
   return typeof hermesOverride === 'string' && hermesOverride.trim().length > 0
 }
 
-function verifyHermesCli(
-  hermesCommand: string,
-  opts: { env?: NodeJS.ProcessEnv; shell?: boolean } = {}
-) {
+function verifyHermesCli(hermesCommand: string, opts: { env?: NodeJS.ProcessEnv; shell?: boolean } = {}) {
   if (!hermesCommand) {
     return false
   }

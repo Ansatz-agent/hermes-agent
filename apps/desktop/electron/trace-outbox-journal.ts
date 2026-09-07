@@ -108,6 +108,7 @@ export const nodeTraceFileSystem: TraceFileSystem = {
 
     const available = blockSize * availableBlocks
     const total = blockSize * totalBlocks
+
     if (!Number.isSafeInteger(available) || !Number.isSafeInteger(total) || available < 0 || total < 0) {
       throw new Error('invalid_trace_outbox_free_space')
     }
@@ -167,6 +168,7 @@ export const nodeTraceFileSystem: TraceFileSystem = {
         if (offset > size || length > size - offset) {
           return null
         }
+
         const output = Buffer.allocUnsafe(length)
         let cursor = 0
 
@@ -176,6 +178,7 @@ export const nodeTraceFileSystem: TraceFileSystem = {
           if (bytesRead === 0) {
             return null
           }
+
           cursor += bytesRead
         }
 
@@ -187,6 +190,7 @@ export const nodeTraceFileSystem: TraceFileSystem = {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         return null
       }
+
       throw error
     }
   },
@@ -220,6 +224,7 @@ export const nodeTraceFileSystem: TraceFileSystem = {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         return null
       }
+
       throw error
     }
   },
@@ -652,6 +657,7 @@ export class TraceJournal {
       if (chunk === null) {
         throw new Error('trace_outbox_journal_short_read')
       }
+
       offset += length
       pending = Buffer.concat([pending, chunk])
       let newline: number
@@ -666,6 +672,7 @@ export class TraceJournal {
         if (line.length >= JOURNAL_CHUNK_BYTES) {
           throw new Error('trace_outbox_journal_line_too_large')
         }
+
         operations.push(parseLine(line))
         pending = pending.subarray(newline + 1)
       }

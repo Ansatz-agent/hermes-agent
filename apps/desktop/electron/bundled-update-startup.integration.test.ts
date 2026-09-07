@@ -12,15 +12,19 @@ import { classifyBundledRuntime } from './bundled-runtime-state'
 
 const repoRoot = fileURLToPath(new URL('../../..', import.meta.url))
 
-const python = process.env.HERMES_PYTHON || path.join(
-  repoRoot, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python'
-)
+const python =
+  process.env.HERMES_PYTHON ||
+  path.join(repoRoot, '.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
 
 test('Python Git adoption leaves a source identity Desktop can start without another bootstrap', () => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'bundled-update-startup-'))
 
   try {
-    const result = execFileSync(python, ['-c', `
+    const result = execFileSync(
+      python,
+      [
+        '-c',
+        `
 import json, subprocess, sys
 from pathlib import Path
 from hermes_cli.bundled_update import adopt_bundled_checkout, SOURCE_MARKER
@@ -54,12 +58,16 @@ backup = adopt_bundled_checkout(root, 'main', current, target, repository_url=st
 git(root, 'merge', '--ff-only', 'origin/main')
 assert git(root, 'rev-parse', 'HEAD') == target
 print(json.dumps({'root': str(root), 'backup': str(backup), 'current': current, 'target': target}))
-`, temporary], {
-      cwd: repoRoot,
-      env: { ...process.env, PYTHONPATH: repoRoot, HERMES_HOME: path.join(temporary, 'home') },
-      encoding: 'utf8',
-      timeout: 15_000
-    })
+`,
+        temporary
+      ],
+      {
+        cwd: repoRoot,
+        env: { ...process.env, PYTHONPATH: repoRoot, HERMES_HOME: path.join(temporary, 'home') },
+        encoding: 'utf8',
+        timeout: 15_000
+      }
+    )
 
     const { root, backup, current, target } = JSON.parse(result)
     const source = readBundledSourceMarker(root)
@@ -68,20 +76,20 @@ print(json.dumps({'root': str(root), 'backup': str(backup), 'current': current, 
 
     // Both the replacement app and the previous app can reuse the Git runtime.
     for (const payloadCommit of [target, current]) {
-      assert.equal(classifyBundledRuntime({
-        packaged: true,
-        runtimeUsable: true,
-        installMethod: fs.readFileSync(path.join(root, '.install_method'), 'utf8').trim(),
-        sourceCommit: source?.commit,
-        payloadCommit
-      }), 'not-applicable')
+      assert.equal(
+        classifyBundledRuntime({
+          packaged: true,
+          runtimeUsable: true,
+          installMethod: fs.readFileSync(path.join(root, '.install_method'), 'utf8').trim(),
+          sourceCommit: source?.commit,
+          payloadCommit
+        }),
+        'not-applicable'
+      )
     }
 
     // A pre-fix updater runs its old adoption code before pulling the new app.
-    fs.copyFileSync(
-      path.join(backup, '.hermes-bundled-source.json'),
-      path.join(root, '.hermes-bundled-source.json')
-    )
+    fs.copyFileSync(path.join(backup, '.hermes-bundled-source.json'), path.join(root, '.hermes-bundled-source.json'))
 
     const legacyState = {
       packaged: true,

@@ -263,10 +263,7 @@ test('scanSshHostKey uses bounded non-shell ssh-keyscan and computes SHA256 loca
     return fakeChild({ stdout: `[box]:2222 ssh-ed25519 ${key.toString('base64')}\n` })
   }
 
-  const candidate = await scanSshHostKey(
-    { host: 'box', port: 2222 },
-    { spawnFn, timeoutMs: 1_000 }
-  )
+  const candidate = await scanSshHostKey({ host: 'box', port: 2222 }, { spawnFn, timeoutMs: 1_000 })
 
   const digest = crypto.createHash('sha256').update(key).digest('base64').replace(/=+$/, '')
   assert.deepEqual(candidate, {

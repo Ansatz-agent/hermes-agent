@@ -39,7 +39,10 @@ export function isProcessGoneError(error: unknown): boolean {
   )
 }
 
-export function backendExitedBeforeOwnershipError(pid: number, cause?: unknown): Error & { code: string; cause?: unknown } {
+export function backendExitedBeforeOwnershipError(
+  pid: number,
+  cause?: unknown
+): Error & { code: string; cause?: unknown } {
   const error = new Error(`Hermes backend process ${pid} exited before ownership could be recorded.`) as Error & {
     code: string
     cause?: unknown

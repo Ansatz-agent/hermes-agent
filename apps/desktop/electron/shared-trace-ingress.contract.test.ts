@@ -32,7 +32,10 @@ test('legacy Electron ciphertext is recovery-only and never opens an admission s
 
   assert.match(recovery, /forwarder\.startRecovery\(owner\)/)
   assert.doesNotMatch(recovery, /forwarder\.start\(owner\)/)
-  assert.match(source, /install\(_ingress\) \{\n\s*\/\/ New OTLP is admitted only by the shared auth-owner ingress lease\./)
+  assert.match(
+    source,
+    /install\(_ingress\) \{\n\s*\/\/ New OTLP is admitted only by the shared auth-owner ingress lease\./
+  )
 })
 
 test('backend Trace registration is sourced only from the shared owner lease', () => {

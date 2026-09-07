@@ -2,11 +2,7 @@ import assert from 'node:assert/strict'
 
 import { test } from 'vitest'
 
-import {
-  buildBootstrapEnvironment,
-  DOMESTIC_BOOTSTRAP_MIRRORS,
-  runBootstrapProcess
-} from './bootstrap-process'
+import { buildBootstrapEnvironment, DOMESTIC_BOOTSTRAP_MIRRORS, runBootstrapProcess } from './bootstrap-process'
 
 test('buildBootstrapEnvironment drops inherited package-manager redirects and Python injection', () => {
   const env = buildBootstrapEnvironment(
@@ -78,10 +74,7 @@ test('buildBootstrapEnvironment replaces hostile package redirects with the fixe
 test('runBootstrapProcess drains large stdout and stderr while bounding captured output', async () => {
   const result = await runBootstrapProcess({
     command: process.execPath,
-    args: [
-      '-e',
-      "process.stdout.write('o'.repeat(1024*1024+17)); process.stderr.write('e'.repeat(1024*1024+19))"
-    ],
+    args: ['-e', "process.stdout.write('o'.repeat(1024*1024+17)); process.stderr.write('e'.repeat(1024*1024+19))"],
     captureLimitBytes: 128 * 1024,
     hardTimeoutMs: 5_000,
     idleTimeoutMs: 2_000,
@@ -209,10 +202,7 @@ test('runBootstrapProcess emits reserved structured progress without exposing th
 
   const result = await runBootstrapProcess({
     command: process.execPath,
-    args: [
-      '-e',
-      `process.stdout.write(${JSON.stringify(`HERMES_BOOTSTRAP_PROGRESS ${JSON.stringify(frame)}\n`)})`
-    ],
+    args: ['-e', `process.stdout.write(${JSON.stringify(`HERMES_BOOTSTRAP_PROGRESS ${JSON.stringify(frame)}\n`)})`],
     emit: event => events.push(event),
     stageName: 'python-deps',
     hardTimeoutMs: 2_000,
@@ -221,7 +211,10 @@ test('runBootstrapProcess emits reserved structured progress without exposing th
   })
 
   assert.equal(result.code, 0)
-  assert.equal(events.some(event => event.type === 'log' && event.line.includes('HERMES_BOOTSTRAP_PROGRESS')), false)
+  assert.equal(
+    events.some(event => event.type === 'log' && event.line.includes('HERMES_BOOTSTRAP_PROGRESS')),
+    false
+  )
   assert.deepEqual(events, [{ ...frame, updatedAt: events[0]?.updatedAt }])
   assert.equal(typeof events[0]?.updatedAt, 'number')
 })
@@ -284,7 +277,10 @@ test('runBootstrapProcess swallows malformed or wrong-stage structured frames an
     killGraceMs: 50
   })
 
-  assert.equal(events.some(event => event.type === 'log'), false)
+  assert.equal(
+    events.some(event => event.type === 'log'),
+    false
+  )
   assert.equal(events.length, 1)
   assert.equal(events[0].type, 'progress')
   assert.equal(events[0].stage, 'python-deps')

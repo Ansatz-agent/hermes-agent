@@ -49,9 +49,7 @@ export function safeTraceFailureCode(error: unknown): string {
   const code =
     typeof error === 'object' && error !== null && 'code' in error ? (error as { code?: unknown }).code : undefined
 
-  return typeof code === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(code)
-    ? code
-    : 'trace_operation_failed'
+  return typeof code === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(code) ? code : 'trace_operation_failed'
 }
 
 type TraceDurabilityFacadeAdapter = {
@@ -191,8 +189,7 @@ export class TraceDurabilityRuntime {
 
         return {
           ...pending,
-          cancelForGatewayReceipt: receipt =>
-            observeMutation(() => pending.cancelForGatewayReceipt(receipt), store),
+          cancelForGatewayReceipt: receipt => observeMutation(() => pending.cancelForGatewayReceipt(receipt), store),
           durable: pending.durable.catch(async error => {
             await reportStoreFailure(error, store)
             throw error
@@ -202,10 +199,8 @@ export class TraceDurabilityRuntime {
       close: store.close ? () => observeMutation(() => store.close!(), store) : undefined,
       diagnostics: () => observeMutation(() => store.diagnostics(), store),
       peekEligible: now => observeMutation(() => store.peekEligible(now), store),
-      quarantine: (batchId, errorClass) =>
-        observeMutation(() => store.quarantine(batchId, errorClass), store),
-      quarantineInput: (input, errorClass) =>
-        observeMutation(() => store.quarantineInput(input, errorClass), store)
+      quarantine: (batchId, errorClass) => observeMutation(() => store.quarantine(batchId, errorClass), store),
+      quarantineInput: (input, errorClass) => observeMutation(() => store.quarantineInput(input, errorClass), store)
     })
 
     return {

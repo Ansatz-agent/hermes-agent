@@ -312,10 +312,13 @@ export function spawnUpdaterProcess(
   const isWindows = deps.isWindows ?? process.platform === 'win32'
   const hermesHome = options.env?.HERMES_HOME
 
-  const spawnOptions = hiddenWindowsChildOptions({
-    ...options,
-    ...(hermesHome ? { env: ansatzAuthEnvironment(hermesHome, options.env) } : {})
-  }, isWindows) as SpawnOptions
+  const spawnOptions = hiddenWindowsChildOptions(
+    {
+      ...options,
+      ...(hermesHome ? { env: ansatzAuthEnvironment(hermesHome, options.env) } : {})
+    },
+    isWindows
+  ) as SpawnOptions
 
   const child = deps.spawnProcess
     ? deps.spawnProcess(updater, updaterArgs, spawnOptions)

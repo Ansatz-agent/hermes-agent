@@ -23,10 +23,7 @@ export interface AudioTranscriptionResponse {
 }
 
 export type SttPreparationErrorCode =
-  | 'checksum_mismatch'
-  | 'dependency_install_failed'
-  | 'download_failed'
-  | 'insufficient_disk'
+  'checksum_mismatch' | 'dependency_install_failed' | 'download_failed' | 'insufficient_disk'
 
 export type SttPreparationResponse =
   | { state: 'not_applicable' | 'not_ready' | 'ready' }

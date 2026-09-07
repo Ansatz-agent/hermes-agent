@@ -57,17 +57,11 @@ test('mode predicates classify what each mode removes', () => {
 
 test('resolveRemovableAppPath finds only the Ansatz app bundle on macOS', () => {
   assert.equal(
-    resolveRemovableAppPath(
-      '/Applications/Ansatz.app/Contents/MacOS/Ansatz',
-      'darwin'
-    ),
+    resolveRemovableAppPath('/Applications/Ansatz.app/Contents/MacOS/Ansatz', 'darwin'),
     '/Applications/Ansatz.app'
   )
   assert.equal(
-    resolveRemovableAppPath(
-      '/Users/x/Applications/Ansatz.app/Contents/MacOS/Ansatz',
-      'darwin'
-    ),
+    resolveRemovableAppPath('/Users/x/Applications/Ansatz.app/Contents/MacOS/Ansatz', 'darwin'),
     '/Users/x/Applications/Ansatz.app'
   )
   // An independent legacy Hermes app is not owned by this product and must not be deleted.
@@ -84,10 +78,7 @@ test('resolveRemovableAppPath rejects development and unrelated app bundles', ()
 
 test('resolveRemovableAppPath finds only the Ansatz install dir on Windows', () => {
   assert.equal(
-    resolveRemovableAppPath(
-      'C:\\Users\\x\\AppData\\Local\\Programs\\Ansatz\\Ansatz.exe',
-      'win32'
-    ),
+    resolveRemovableAppPath('C:\\Users\\x\\AppData\\Local\\Programs\\Ansatz\\Ansatz.exe', 'win32'),
     'C:\\Users\\x\\AppData\\Local\\Programs\\Ansatz'
   )
   assert.equal(resolveRemovableAppPath('C:\\Users\\x\\AppData\\Local\\Programs\\Hermes\\Hermes.exe', 'win32'), null)

@@ -13,6 +13,7 @@ function fixtureRoot(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ansatz-legacy-partitions-'))
   temporaryRoots.push(root)
   fs.mkdirSync(path.join(root, 'Partitions'), { recursive: true })
+
   return root
 }
 

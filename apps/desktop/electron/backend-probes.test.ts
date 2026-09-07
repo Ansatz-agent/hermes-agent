@@ -106,10 +106,7 @@ test('verifyHermesCli forwards the explicit probe environment', () => {
   const expectedHome = path.join(os.tmpdir(), `ansatz-probe-home-${process.pid}`)
   const windows = process.platform === 'win32'
 
-  const probePath = path.join(
-    os.tmpdir(),
-    `hermes-probe-env-${Date.now()}-${process.pid}${windows ? '.cmd' : '.sh'}`
-  )
+  const probePath = path.join(os.tmpdir(), `hermes-probe-env-${Date.now()}-${process.pid}${windows ? '.cmd' : '.sh'}`)
 
   const previousInherited = process.env.HERMES_PROBE_INHERITED
   process.env.HERMES_PROBE_INHERITED = 'parent-sentinel'
@@ -140,14 +137,17 @@ test('verifyHermesCli forwards the explicit probe environment', () => {
       fs.chmodSync(probePath, 0o755)
     }
 
-    assert.equal(verifyHermesCli(probePath, {
-      env: {
-        ...probeEnv,
-        HERMES_HOME: expectedHome,
-        HERMES_PROBE_EXPECTED_HOME: expectedHome
-      },
-      shell: windows
-    }), true)
+    assert.equal(
+      verifyHermesCli(probePath, {
+        env: {
+          ...probeEnv,
+          HERMES_HOME: expectedHome,
+          HERMES_PROBE_EXPECTED_HOME: expectedHome
+        },
+        shell: windows
+      }),
+      true
+    )
   } finally {
     if (previousInherited === undefined) {
       delete process.env.HERMES_PROBE_INHERITED

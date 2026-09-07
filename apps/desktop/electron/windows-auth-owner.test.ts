@@ -202,10 +202,9 @@ test('owner retirement passes install root as data and revalidates each selected
   assert.equal(calls[0].args.includes(ACTIVE_ROOT), false)
   assert.equal(calls[1].args.includes(ACTIVE_ROOT), false)
 
-  const terminationScript = Buffer.from(
-    calls[1].args[calls[1].args.indexOf('-EncodedCommand') + 1],
-    'base64'
-  ).toString('utf16le')
+  const terminationScript = Buffer.from(calls[1].args[calls[1].args.indexOf('-EncodedCommand') + 1], 'base64').toString(
+    'utf16le'
+  )
 
   assert.match(terminationScript, /ParentProcessId/)
   assert.match(terminationScript, /pythonw\.exe/)

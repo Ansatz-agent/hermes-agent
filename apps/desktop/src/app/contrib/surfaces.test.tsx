@@ -85,12 +85,7 @@ function renderStatusbar(locale: 'en' | 'zh' = 'en') {
   render(
     <I18nProvider configClient={null} initialLocale={locale}>
       <MemoryRouter>
-        <StatusbarSurface
-          actions={statusbarActions}
-          agentsOpen={false}
-          chatOpen
-          commandCenterOpen={false}
-        />
+        <StatusbarSurface actions={statusbarActions} agentsOpen={false} chatOpen commandCenterOpen={false} />
       </MemoryRouter>
     </I18nProvider>
   )

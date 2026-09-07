@@ -70,9 +70,11 @@ function parseAsset(value: unknown, expectedFile: string | null, label: string):
   if (expectedFile !== null && file !== expectedFile) {
     throw new Error(`${label} file is invalid`)
   }
+
   if (!isPositiveSafeInteger(asset.size)) {
     throw new Error(`${label} size is invalid`)
   }
+
   if (typeof asset.sha256 !== 'string' || !SHA256_RE.test(asset.sha256)) {
     throw new Error(`${label} checksum is invalid`)
   }
@@ -110,6 +112,7 @@ function parseManifest(raw: unknown): AuthToolchainManifest {
   if (value.schemaVersion !== MANIFEST_SCHEMA_VERSION) {
     throw new Error(`authentication toolchain schemaVersion must be ${MANIFEST_SCHEMA_VERSION}`)
   }
+
   const target = targetFor(value.platform, value.arch)
 
   const uv = parseVersionedAsset(value.uv, target.uvFile, 'uv')
@@ -121,12 +124,14 @@ function parseManifest(raw: unknown): AuthToolchainManifest {
   }
 
   const seen = new Set<string>()
+
   const wheels = value.wheels.map((candidate, index) => {
     const wheel = parseAsset(candidate, null, `wheel ${index + 1}`)
 
     if (!wheel.file.startsWith('wheelhouse/') || seen.has(wheel.file)) {
       throw new Error('wheel file path is invalid or duplicated')
     }
+
     seen.add(wheel.file)
 
     return wheel
@@ -168,7 +173,9 @@ async function requireRegularDirectory(directoryPath: string, label: string): Pr
 }
 
 async function sha256File(filePath: string): Promise<string> {
-  return createHash('sha256').update(await fsp.readFile(filePath)).digest('hex')
+  return createHash('sha256')
+    .update(await fsp.readFile(filePath))
+    .digest('hex')
 }
 
 function assetPath(root: string, relativeFile: string): string {
@@ -193,6 +200,7 @@ export async function resolveBundledAuthToolchain(
   await requireRegularFile(manifestPath, 'authentication toolchain manifest')
 
   let raw: unknown
+
   try {
     raw = JSON.parse(await fsp.readFile(manifestPath, 'utf8'))
   } catch (error) {
@@ -200,11 +208,13 @@ export async function resolveBundledAuthToolchain(
   }
 
   const manifest = parseManifest(raw)
+
   if (manifest.platform !== requestedTarget.platform || manifest.arch !== requestedTarget.arch) {
     throw new Error(
       `authentication toolchain target mismatch: expected ${requestedTarget.platform}-${requestedTarget.arch}`
     )
   }
+
   const assets = [manifest.uv, manifest.python, manifest.requirements, ...manifest.wheels]
 
   for (const asset of assets) {
@@ -214,6 +224,7 @@ export async function resolveBundledAuthToolchain(
     if (stats.size !== asset.size) {
       throw new Error(`authentication toolchain asset size mismatch: ${asset.file}`)
     }
+
     if ((await sha256File(filePath)) !== asset.sha256) {
       throw new Error(`authentication toolchain asset checksum mismatch: ${asset.file}`)
     }

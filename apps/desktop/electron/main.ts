@@ -759,12 +759,7 @@ const desktopLocalCapabilities = new LocalBackendCapabilityLifecycle(
 async function writeBackendTraceTransport(child, root) {
   const trace = desktopSharedTraceLease
 
-  if (
-    !trace ||
-    !child?.stdin ||
-    child.stdin.destroyed ||
-    !child.stdin.writable
-  ) {
+  if (!trace || !child?.stdin || child.stdin.destroyed || !child.stdin.writable) {
     throw new TraceTransportUnavailableError('trace_transport_pipe_unavailable')
   }
 
@@ -924,9 +919,7 @@ async function ensurePackagedWindowsAuthRuntime() {
   const candidate = resolveHermesBackend([], { requirePythonModule: true })
 
   const request =
-    candidate?.kind === 'bootstrap-needed'
-      ? candidate
-      : authRuntimeBootstrapRequest(candidate?.args || [])
+    candidate?.kind === 'bootstrap-needed' ? candidate : authRuntimeBootstrapRequest(candidate?.args || [])
 
   await ensureRuntime(request, { scope: 'auth' })
 
@@ -9124,11 +9117,7 @@ async function attachDesktopTraceTransportToRunningBackends() {
 }
 
 function scheduleDesktopTraceTransportAttachRetry(delayOverride = null) {
-  if (
-    desktopTraceAttachRetryTimer ||
-    !desktopSharedTraceLease ||
-    desktopTraceBackends.active().length === 0
-  ) {
+  if (desktopTraceAttachRetryTimer || !desktopSharedTraceLease || desktopTraceBackends.active().length === 0) {
     return
   }
 
@@ -9326,8 +9315,8 @@ async function createDesktopLegacyTraceRecoverySession(
   const observedStore = traceDiagnostics.observeStore(store)
 
   const sourceOwner = ownerValidation.uploadable
-    ? traceMigrationSourceOwner(status, owner.installationId) ??
-      traceLocalOnlySourceOwner(status, owner.installationId)
+    ? (traceMigrationSourceOwner(status, owner.installationId) ??
+      traceLocalOnlySourceOwner(status, owner.installationId))
     : null
 
   const migrationBarrier =
@@ -9426,8 +9415,7 @@ async function createDesktopLegacyTraceRecoverySession(
   const validatedStatus = desktopAuthCoordinator?.status('local')
 
   const validatedOwner =
-    validatedStatus?.state === 'authenticated' &&
-    sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope)
+    validatedStatus?.state === 'authenticated' && sameConnectionScope(desktopAuthCoordinator?.scope('local'), scope)
       ? traceOwnerFromScope(validatedStatus, scope, desktopInstallationId)
       : null
 

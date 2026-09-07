@@ -28,28 +28,12 @@ const ANSATZ_PRODUCT = Object.freeze({
   remoteOauthSessionPartition: 'persist:ansatz-voice-trace-remote-oauth',
   linkTitleSession: 'ansatz:link-titles',
   desktopProduct: 'ansatz-voice-trace',
-  canonicalCliLaunchers: Object.freeze([
-    'ansatz',
-    'ansatz-agent',
-    'ansatz-acp'
-  ] as const),
-  legacyCliLaunchers: Object.freeze([
-    'hermes',
-    'hermes-agent',
-    'hermes-acp'
-  ] as const),
-  posixLaunchers: Object.freeze([
-    'ansatz-voice-trace',
-    'ansatz-voice-trace-agent',
-    'ansatz-voice-trace-acp'
-  ] as const)
+  canonicalCliLaunchers: Object.freeze(['ansatz', 'ansatz-agent', 'ansatz-acp'] as const),
+  legacyCliLaunchers: Object.freeze(['hermes', 'hermes-agent', 'hermes-acp'] as const),
+  posixLaunchers: Object.freeze(['ansatz-voice-trace', 'ansatz-voice-trace-agent', 'ansatz-voice-trace-acp'] as const)
 } as const)
 
-function resolveAnsatzCliPath(
-  canonicalPath: string,
-  legacyPath: string,
-  exists: (candidate: string) => boolean
-) {
+function resolveAnsatzCliPath(canonicalPath: string, legacyPath: string, exists: (candidate: string) => boolean) {
   return exists(canonicalPath) ? canonicalPath : legacyPath
 }
 
@@ -193,11 +177,7 @@ function resolveAnsatzSshControlDirectory(hermesHome: string) {
       ? String(process.getuid())
       : crypto.createHash('sha256').update(os.homedir()).digest('hex').slice(0, 8)
 
-  const runtimeIdentity = crypto
-    .createHash('sha256')
-    .update(path.posix.resolve(hermesHome))
-    .digest('hex')
-    .slice(0, 16)
+  const runtimeIdentity = crypto.createHash('sha256').update(path.posix.resolve(hermesHome)).digest('hex').slice(0, 16)
 
   return path.posix.join('/tmp', `ansatz-vtc-ssh-${userIdentity}-${runtimeIdentity}`)
 }

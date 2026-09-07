@@ -58,12 +58,7 @@ async function openSshWithExplicitHostTrust({ append, confirm, openStrict, scan 
   await openStrict()
 }
 
-async function bootstrapRemoteAuthOnly({
-  credentials = null,
-  openBridge,
-  openTrustedTransport,
-  startBackend
-}) {
+async function bootstrapRemoteAuthOnly({ credentials = null, openBridge, openTrustedTransport, startBackend }) {
   await openTrustedTransport()
   const bridge = await openBridge()
   let status = await bridge.status()

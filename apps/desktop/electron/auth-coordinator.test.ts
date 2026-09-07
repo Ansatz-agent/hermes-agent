@@ -191,6 +191,7 @@ test('logout recovers an unavailable local bridge and finishes signed out', asyn
 
   const cleanup = vi.fn(async () => {})
   const recoverBridge = vi.fn(async () => replacement)
+
   const coordinator = new AuthCoordinator(bridge, {
     cleanup,
     pollIntervalMs: 0,
@@ -381,6 +382,7 @@ test('local bridge recovery preserves the scope when the authenticated owner is 
     pollIntervalMs: 0,
     recoverBridge
   })
+
   coordinator.subscribe(status => order.push(`event:${status.state}`))
   await coordinator.start()
   const originalScope = coordinator.scope('local')
@@ -711,6 +713,7 @@ test('matching Trace terminal revocation locks and cleans exactly once while mis
     revokedAt: '2026-08-25T00:00:00Z',
     sessionId: authenticated.session_id!
   }
+
   assert.equal(await coordinator.applyTraceTerminalRevocation(revocation), true)
   assert.equal(await coordinator.applyTraceTerminalRevocation(revocation), false)
   assert.equal(coordinator.status().reason, 'session_revoked')

@@ -253,9 +253,11 @@ export class DesktopAuthBridge {
     this.loginTimeoutMs = options.loginTimeoutMs ?? options.timeoutMs ?? DEFAULT_LOGIN_TIMEOUT_MS
     this.logoutTimeoutMs = options.logoutTimeoutMs ?? options.timeoutMs ?? DEFAULT_LOGOUT_TIMEOUT_MS
     this.onDiagnostic = options.onDiagnostic ?? (() => {})
+
     if (!isNativeClientContext(options.nativeClientContext)) {
       throw new AuthBridgeError('invalid_request')
     }
+
     this.nativeClientContext = { ...options.nativeClientContext }
 
     const spawnChild: SpawnChild =
@@ -429,7 +431,7 @@ export class DesktopAuthBridge {
           ? isTraceCredential(response.result, pending.request.params.installation_id, this.clock())
           : pending.request.method === 'trace_ingress_open'
             ? isTraceIngressLease(response.result)
-          : isBridgeStatus(response.result)
+            : isBridgeStatus(response.result)
 
       if (Object.keys(response).length !== 3 || !validResult) {
         return false
@@ -592,8 +594,10 @@ function isTraceIngressLease(value: unknown): value is TraceIngressLease {
   ) {
     return false
   }
+
   try {
     const endpoint = new URL(value.endpoint)
+
     return (
       endpoint.protocol === 'http:' &&
       endpoint.hostname === '127.0.0.1' &&

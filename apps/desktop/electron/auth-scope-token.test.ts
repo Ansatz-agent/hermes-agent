@@ -57,6 +57,7 @@ test('encodes strict v2 register and promote frames inside bounded stdin frames'
     randomBytes: size => Buffer.alloc(size, 0xa5),
     randomIdBytes: size => Buffer.alloc(size, 0x5a)
   })
+
   const transitionId = issueScopeTransitionId(size => Buffer.alloc(size, 0x33))
 
   const registration = encodeScopeTokenRegistration(token)
@@ -127,10 +128,7 @@ test('rejects malformed scopes and entropy before producing a candidate', () => 
   const randomBytes = vi.fn((_size: number) => Buffer.alloc(32))
   const randomIdBytes = vi.fn((_size: number) => Buffer.alloc(16))
 
-  assert.throws(
-    () => issueAuthScopeToken({ ...scope, connection_id: '' }, { randomBytes, randomIdBytes }),
-    /scope/i
-  )
+  assert.throws(() => issueAuthScopeToken({ ...scope, connection_id: '' }, { randomBytes, randomIdBytes }), /scope/i)
   assert.equal(randomBytes.mock.calls.length, 0)
   assert.equal(randomIdBytes.mock.calls.length, 0)
 

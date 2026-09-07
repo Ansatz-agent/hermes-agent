@@ -12,9 +12,8 @@ test('a real updated Git checkout stays actionable until the installed app catch
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'desktop-rebuild-'))
   const git = (...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim()
 
-  const isAncestor = async (older: string, newer: string) => spawnSync(
-    'git', ['merge-base', '--is-ancestor', older, newer], { cwd: root }
-  ).status === 0
+  const isAncestor = async (older: string, newer: string) =>
+    spawnSync('git', ['merge-base', '--is-ancestor', older, newer], { cwd: root }).status === 0
 
   try {
     git('init', '--quiet')
@@ -35,22 +34,34 @@ test('a real updated Git checkout stays actionable until the installed app catch
     assert.equal('reason' in incomplete && incomplete.reason, 'desktop-rebuild-required')
 
     const completed = await reconcileDesktopBuild(status, {
-      managedPackagedApp: true, installedSha: targetSha, isAncestor
+      managedPackagedApp: true,
+      installedSha: targetSha,
+      isAncestor
     })
 
     assert.equal(completed, status)
 
     // Installing a newer branch build must not offer a downgrade to main.
     const olderSource = { ...status, currentSha: installedSha, targetSha: installedSha }
-    assert.equal(await reconcileDesktopBuild(olderSource, {
-      managedPackagedApp: true, installedSha: targetSha, isAncestor
-    }), olderSource)
+    assert.equal(
+      await reconcileDesktopBuild(olderSource, {
+        managedPackagedApp: true,
+        installedSha: targetSha,
+        isAncestor
+      }),
+      olderSource
+    )
 
     git('checkout', '--detach', installedSha)
     git('commit', '--allow-empty', '-qm', 'diverged local build')
-    assert.equal(await reconcileDesktopBuild(status, {
-      managedPackagedApp: true, installedSha: git('rev-parse', 'HEAD'), isAncestor
-    }), status)
+    assert.equal(
+      await reconcileDesktopBuild(status, {
+        managedPackagedApp: true,
+        installedSha: git('rev-parse', 'HEAD'),
+        isAncestor
+      }),
+      status
+    )
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }
@@ -61,7 +72,9 @@ test('only a successfully checked managed app is eligible for rebuild recovery',
   const installedSha = 'b'.repeat(40)
   const status = { supported: true, updateAvailable: false, currentSha, targetSha: currentSha }
 
-  const isAncestor = async () => { throw new Error('ancestry should not be queried') }
+  const isAncestor = async () => {
+    throw new Error('ancestry should not be queried')
+  }
 
   for (const candidate of [
     { ...status, supported: false },
@@ -69,15 +82,30 @@ test('only a successfully checked managed app is eligible for rebuild recovery',
     { ...status, updateAvailable: true },
     { ...status, targetSha: 'c'.repeat(40) }
   ]) {
-    assert.equal(await reconcileDesktopBuild(candidate, {
-      managedPackagedApp: true, installedSha, isAncestor
-    }), candidate)
+    assert.equal(
+      await reconcileDesktopBuild(candidate, {
+        managedPackagedApp: true,
+        installedSha,
+        isAncestor
+      }),
+      candidate
+    )
   }
 
-  assert.equal(await reconcileDesktopBuild(status, {
-    managedPackagedApp: false, installedSha, isAncestor
-  }), status)
-  assert.equal(await reconcileDesktopBuild(status, {
-    managedPackagedApp: true, installedSha: null, isAncestor
-  }), status)
+  assert.equal(
+    await reconcileDesktopBuild(status, {
+      managedPackagedApp: false,
+      installedSha,
+      isAncestor
+    }),
+    status
+  )
+  assert.equal(
+    await reconcileDesktopBuild(status, {
+      managedPackagedApp: true,
+      installedSha: null,
+      isAncestor
+    }),
+    status
+  )
 })

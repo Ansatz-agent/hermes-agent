@@ -19,15 +19,22 @@ export async function reconcileDesktopBuild<T extends SourceUpdateStatus>(
 ) {
   const sha = /^[0-9a-f]{40}$/i
 
-  if (!managedPackagedApp || !status.supported || status.error || status.updateAvailable ||
-    !sha.test(installedSha || '') || !sha.test(status.currentSha || '') ||
-    status.currentSha !== status.targetSha || installedSha === status.currentSha) {
+  if (
+    !managedPackagedApp ||
+    !status.supported ||
+    status.error ||
+    status.updateAvailable ||
+    !sha.test(installedSha || '') ||
+    !sha.test(status.currentSha || '') ||
+    status.currentSha !== status.targetSha ||
+    installedSha === status.currentSha
+  ) {
     return status
   }
 
   // An unpublished/newer local app must never be offered a downgrade. Require
   // the Git graph to prove that its source precedes the checked-out target.
-  if (!await isAncestor(installedSha!, status.currentSha!)) {
+  if (!(await isAncestor(installedSha!, status.currentSha!))) {
     return status
   }
 

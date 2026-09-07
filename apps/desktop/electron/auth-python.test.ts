@@ -6,8 +6,10 @@ import { resolveNoConsoleAuthPython } from './auth-python'
 
 test('Windows auth Python uses an existing GUI-subsystem sibling', () => {
   const checked: string[] = []
+
   const resolved = resolveNoConsoleAuthPython('C:\\Hermes\\venv\\Scripts\\python.exe', true, candidate => {
     checked.push(candidate)
+
     return candidate === 'C:\\Hermes\\venv\\Scripts\\pythonw.exe'
   })
 

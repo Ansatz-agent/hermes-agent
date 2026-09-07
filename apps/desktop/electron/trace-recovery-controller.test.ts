@@ -24,7 +24,10 @@ async function nextTurn() {
 }
 
 test('owner rebound is a supported recovery signal', () => {
-  assert.equal(ALL_TRACE_RECOVERY_REASONS.some(reason => reason === 'owner-rebound'), true)
+  assert.equal(
+    ALL_TRACE_RECOVERY_REASONS.some(reason => reason === 'owner-rebound'),
+    true
+  )
 })
 
 test('coalesces same-turn recovery signals into one account pump', async () => {

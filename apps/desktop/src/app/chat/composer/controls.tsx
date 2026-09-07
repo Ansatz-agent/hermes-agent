@@ -203,7 +203,12 @@ export function SenseVoiceReadinessNotice({ readiness }: { readiness: SenseVoice
 
   if (status?.state === 'preparing' && status.phase === 'dependencies') {
     message = t.composer.senseVoicePreparingDependencies
-  } else if (status?.state === 'preparing' && status.phase === 'download' && status.total && status.downloaded != null) {
+  } else if (
+    status?.state === 'preparing' &&
+    status.phase === 'download' &&
+    status.total &&
+    status.downloaded != null
+  ) {
     const percent = Math.min(100, Math.round((status.downloaded / status.total) * 100))
     message = t.composer.senseVoiceDownloading(
       formatPreparationBytes(status.downloaded),
@@ -222,7 +227,11 @@ export function SenseVoiceReadinessNotice({ readiness }: { readiness: SenseVoice
   }
 
   return (
-    <div aria-live="polite" className="flex max-w-52 items-center gap-1.5 text-[0.6875rem] text-muted-foreground" role="status">
+    <div
+      aria-live="polite"
+      className="flex max-w-52 items-center gap-1.5 text-[0.6875rem] text-muted-foreground"
+      role="status"
+    >
       <span className="line-clamp-2">{message}</span>
       {canRetry ? (
         <Button

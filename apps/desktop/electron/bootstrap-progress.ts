@@ -108,13 +108,14 @@ export type SafeBootstrapEvent =
       durationMs?: number
       error?: 'bootstrap_failed'
     }
-  | Omit<BootstrapProgress, 'updatedAt'> & { type: 'progress'; updatedAt: number }
+  | (Omit<BootstrapProgress, 'updatedAt'> & { type: 'progress'; updatedAt: number })
   | { type: 'complete'; completedAt: number }
   | { type: 'failed'; stage?: string; error: 'bootstrap_failed' }
 
 const PROGRESS_UNITS = new Set<BootstrapProgressUnit>(['bytes', 'packages', 'items', 'files', 'steps'])
 const SAFE_STAGE_NAME = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/
-const SENSITIVE_TERM = /\b(?:authorization|bearer|cookie|set-cookie|password|passwd|session|sessionid|csrf|csrftoken|keychain)\b/i
+const SENSITIVE_TERM =
+  /\b(?:authorization|bearer|cookie|set-cookie|password|passwd|session|sessionid|csrf|csrftoken|keychain)\b/i
 const LOCAL_OR_REMOTE_PATH = /(?:[a-z]:\\|\/(?:Users|home|private|var|tmp)\/|(?:https?|file):\/\/)/i
 const UNSAFE_LABEL_CHARACTERS = /[^/\p{L}\p{N} .,_:;()\-+%]/gu
 const MAX_LABEL_LENGTH = 80
@@ -159,9 +160,7 @@ export function sanitizeBootstrapLabel(value: unknown, fallback: string): string
       return ''
     }
 
-    const normalized = stripControlCharacters(candidate.normalize('NFKC'))
-      .replace(/\s+/g, ' ')
-      .trim()
+    const normalized = stripControlCharacters(candidate.normalize('NFKC')).replace(/\s+/g, ' ').trim()
 
     if (!normalized || SENSITIVE_TERM.test(normalized) || LOCAL_OR_REMOTE_PATH.test(normalized)) {
       return ''
@@ -201,9 +200,7 @@ export function normalizeBootstrapProgress(
   const completed = safeCount(event.completed)
   const total = event.total === null ? null : safeCount(event.total)
 
-  const unit = PROGRESS_UNITS.has(event.unit as BootstrapProgressUnit)
-    ? (event.unit as BootstrapProgressUnit)
-    : null
+  const unit = PROGRESS_UNITS.has(event.unit as BootstrapProgressUnit) ? (event.unit as BootstrapProgressUnit) : null
 
   if (!stage || !descriptor || completed === null || unit === null || (total !== null && total <= 0)) {
     return null
@@ -221,11 +218,7 @@ export function normalizeBootstrapProgress(
   }
 }
 
-export function reduceBootstrapState(
-  state: BootstrapState,
-  event: BootstrapEvent,
-  now = Date.now()
-): BootstrapState {
+export function reduceBootstrapState(state: BootstrapState, event: BootstrapEvent, now = Date.now()): BootstrapState {
   const timestamp = safeTimestamp(now, Date.now())
 
   if (event.type === 'dismissed') {

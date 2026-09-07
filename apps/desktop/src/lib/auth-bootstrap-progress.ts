@@ -29,7 +29,8 @@ const EMPTY_RESULT: DesktopSafeBootstrapStageResult = {
   progress: null
 }
 
-const SENSITIVE_TEXT = /\b(?:authorization|bearer|cookie|set-cookie|password|passwd|session|sessionid|csrf|csrftoken|keychain)\b/i
+const SENSITIVE_TEXT =
+  /\b(?:authorization|bearer|cookie|set-cookie|password|passwd|session|sessionid|csrf|csrftoken|keychain)\b/i
 const PATH_OR_URL = /(?:[a-z]:\\|\/(?:Users|home|private|var|tmp)\/|(?:https?|file):\/\/)/i
 const UNSAFE_CHARACTERS = /[^/\p{L}\p{N} .,_:;()\-+%]/gu
 
@@ -47,9 +48,7 @@ export function sanitizeAuthBootstrapText(value: unknown, fallback: string): str
       return ''
     }
 
-    const normalized = stripControlCharacters(candidate.normalize('NFKC'))
-      .replace(/\s+/g, ' ')
-      .trim()
+    const normalized = stripControlCharacters(candidate.normalize('NFKC')).replace(/\s+/g, ' ').trim()
 
     if (!normalized || SENSITIVE_TEXT.test(normalized) || PATH_OR_URL.test(normalized)) {
       return ''
@@ -76,9 +75,7 @@ export function deriveAuthBootstrapProgress(
     const result = state.stages[descriptor.name] || EMPTY_RESULT
 
     const elapsedMs =
-      result.state === 'running' && typeof result.startedAt === 'number'
-        ? Math.max(0, now - result.startedAt)
-        : null
+      result.state === 'running' && typeof result.startedAt === 'number' ? Math.max(0, now - result.startedAt) : null
 
     return { descriptor, elapsedMs, result }
   })

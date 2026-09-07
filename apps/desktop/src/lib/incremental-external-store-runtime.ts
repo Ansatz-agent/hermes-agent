@@ -38,8 +38,8 @@ const shallowEqual = (a: object, b: object): boolean => {
 // render can therefore publish a fresh snapshot even when the transcript did
 // not change and trip React's getSnapshot loop guard.
 const EMPTY_THREAD_LIST_ADAPTER = {}
-const getThreadListAdapter = (store: ExternalStoreAdapter) =>
-  store.adapters?.threadList ?? EMPTY_THREAD_LIST_ADAPTER
+
+const getThreadListAdapter = (store: ExternalStoreAdapter) => store.adapters?.threadList ?? EMPTY_THREAD_LIST_ADAPTER
 
 type StatefulRuntime = { getState: () => object }
 
@@ -57,6 +57,7 @@ function withStableState<T extends StatefulRuntime>(source: T): T {
       }
 
       cachedState = nextState
+
       return nextState
     }
   })
@@ -309,17 +310,20 @@ export function useIncrementalExternalStoreRuntime<T extends ThreadMessage>(
     const messageCache = new Map<string, object>()
 
     const stableMessage = (key: string, sourceMessage: object | undefined) => {
-      if (!sourceMessage) return sourceMessage
+      if (!sourceMessage) {
+        return sourceMessage
+      }
 
       const previous = messageCache.get(key)
+
       if (previous) {
         return previous
       }
 
       const wrappedMessage = Object.create(sourceMessage) as typeof sourceMessage
-      const messageComposer = withStableState(
-        (sourceMessage as { composer: StatefulRuntime }).composer
-      )
+
+      const messageComposer = withStableState((sourceMessage as { composer: StatefulRuntime }).composer)
+
       const messageState = withStableState(sourceMessage as StatefulRuntime)
 
       Object.defineProperties(wrappedMessage, {
@@ -330,6 +334,7 @@ export function useIncrementalExternalStoreRuntime<T extends ThreadMessage>(
       // getMessageById/getMessageByIndex call. Its binding is still live, so
       // cache by lookup key rather than by that transient wrapper identity.
       messageCache.set(key, wrappedMessage)
+
       return wrappedMessage
     }
 

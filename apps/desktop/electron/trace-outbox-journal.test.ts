@@ -6,12 +6,7 @@ import { join } from 'node:path'
 
 import { test } from 'vitest'
 
-import {
-  canonicalJson,
-  nodeTraceFileSystem,
-  type TraceFileSystem,
-  TraceJournal
-} from './trace-outbox-journal'
+import { canonicalJson, nodeTraceFileSystem, type TraceFileSystem, TraceJournal } from './trace-outbox-journal'
 
 class MemoryFileSystem implements TraceFileSystem {
   readonly files = new Map<string, Buffer>()

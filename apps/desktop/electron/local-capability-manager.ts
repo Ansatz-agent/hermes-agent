@@ -56,22 +56,10 @@ export type LocalCapabilityDiagnosticName =
   | 'scope_rotation_started'
 
 export type LocalCapabilityDiagnosticPhase =
-  | 'lifecycle'
-  | 'issue'
-  | 'register'
-  | 'candidate_probe'
-  | 'promote'
-  | 'promotion_confirmation'
-  | 'complete'
+  'lifecycle' | 'issue' | 'register' | 'candidate_probe' | 'promote' | 'promotion_confirmation' | 'complete'
 
 export type LocalCapabilityDiagnosticOutcome =
-  | 'started'
-  | 'succeeded'
-  | 'failed'
-  | 'retry_scheduled'
-  | 'recovered'
-  | 'revoked'
-  | 'expired'
+  'started' | 'succeeded' | 'failed' | 'retry_scheduled' | 'recovered' | 'revoked' | 'expired'
 
 export type LocalCapabilityDiagnosticFailureCode =
   | 'none'
@@ -125,11 +113,7 @@ export type LocalCapabilityManagerOptions = {
   clock?: () => number
   issueToken?: (scope: ConnectionScope) => AuthScopeToken
   issueTransitionId?: () => string
-  probe?: (
-    baseUrl: string,
-    bearer: string,
-    signal: AbortSignal
-  ) => Promise<LocalCapabilityProbe>
+  probe?: (baseUrl: string, bearer: string, signal: AbortSignal) => Promise<LocalCapabilityProbe>
   probeTimeoutMs?: number
   random?: () => number
   onDiagnostic?: (event: LocalCapabilityDiagnostic) => void
@@ -173,11 +157,7 @@ class CapabilityProbeError extends Error {
   readonly failureCode: LocalCapabilityDiagnosticFailureCode
   readonly httpStatus: number | null
 
-  constructor(
-    failureCode: LocalCapabilityDiagnosticFailureCode,
-    httpStatus: number | null,
-    cause?: unknown
-  ) {
+  constructor(failureCode: LocalCapabilityDiagnosticFailureCode, httpStatus: number | null, cause?: unknown) {
     super('Local capability probe failed', { cause })
     this.name = 'CapabilityProbeError'
     this.failureCode = failureCode
@@ -273,11 +253,7 @@ function validatedProbe(value: unknown): LocalCapabilityProbe {
   return record as LocalCapabilityProbe
 }
 
-async function defaultProbe(
-  baseUrl: string,
-  bearer: string,
-  signal: AbortSignal
-): Promise<LocalCapabilityProbe> {
+async function defaultProbe(baseUrl: string, bearer: string, signal: AbortSignal): Promise<LocalCapabilityProbe> {
   const endpoint = new URL('/api/auth/scope-token-probe', baseUrl)
   let response: Response
 
@@ -332,28 +308,17 @@ function diagnosticFailureCode(error: unknown): LocalCapabilityDiagnosticFailure
 }
 
 function diagnosticHttpStatus(error: unknown): number | null {
-  if (
-    error instanceof CapabilityRotationAttemptError ||
-    error instanceof CapabilityProbeError
-  ) {
+  if (error instanceof CapabilityRotationAttemptError || error instanceof CapabilityProbeError) {
     return error.httpStatus
   }
 
   return null
 }
 
-function rotationAttemptError(
-  phase: LocalCapabilityDiagnosticPhase,
-  error: unknown
-): CapabilityRotationAttemptError {
+function rotationAttemptError(phase: LocalCapabilityDiagnosticPhase, error: unknown): CapabilityRotationAttemptError {
   return error instanceof CapabilityRotationAttemptError
     ? error
-    : new CapabilityRotationAttemptError(
-        phase,
-        diagnosticFailureCode(error),
-        diagnosticHttpStatus(error),
-        error
-      )
+    : new CapabilityRotationAttemptError(phase, diagnosticFailureCode(error), diagnosticHttpStatus(error), error)
 }
 
 export class LocalCapabilityManager {
@@ -361,11 +326,7 @@ export class LocalCapabilityManager {
   private readonly clock: () => number
   private readonly issueToken: (scope: ConnectionScope) => AuthScopeToken
   private readonly issueTransitionId: () => string
-  private readonly probe: (
-    baseUrl: string,
-    bearer: string,
-    signal: AbortSignal
-  ) => Promise<LocalCapabilityProbe>
+  private readonly probe: (baseUrl: string, bearer: string, signal: AbortSignal) => Promise<LocalCapabilityProbe>
   private readonly probeTimeoutMs: number
   private readonly random: () => number
   private readonly onDiagnostic: (event: LocalCapabilityDiagnostic) => void
@@ -378,8 +339,7 @@ export class LocalCapabilityManager {
     }
 
     this.clock = options.clock ?? uptime
-    this.issueToken =
-      options.issueToken ?? (scope => issueAuthScopeToken(scope, { clock: this.clock }))
+    this.issueToken = options.issueToken ?? (scope => issueAuthScopeToken(scope, { clock: this.clock }))
     this.issueTransitionId = options.issueTransitionId ?? (() => issueScopeTransitionId())
     this.probe = options.probe ?? defaultProbe
     this.probeTimeoutMs = probeTimeoutMs
@@ -476,10 +436,7 @@ export class LocalCapabilityManager {
     }
   }
 
-  private startRefresh(
-    state: CapabilityState,
-    reason: RotationReason
-  ): Promise<LocalCapabilitySnapshot> {
+  private startRefresh(state: CapabilityState, reason: RotationReason): Promise<LocalCapabilitySnapshot> {
     if (state.refreshPromise) {
       return state.refreshPromise
     }
@@ -498,10 +455,7 @@ export class LocalCapabilityManager {
     return tracked
   }
 
-  private async rotateWithRetries(
-    state: CapabilityState,
-    reason: RotationReason
-  ): Promise<LocalCapabilitySnapshot> {
+  private async rotateWithRetries(state: CapabilityState, reason: RotationReason): Promise<LocalCapabilitySnapshot> {
     let attempt = 0
     const refreshStartedAt = this.clock()
 
@@ -518,19 +472,13 @@ export class LocalCapabilityManager {
         state.retryAttempt = 0
 
         if (attempt > 0) {
-          this.diagnostic(
-            state,
-            'scope_rotation_recovered_backend',
-            attempt,
-            refreshStartedAt,
-            {
-              trigger: reason,
-              phase: 'complete',
-              outcome: 'recovered',
-              failureCode: 'none',
-              retryDelayMs: 0
-            }
-          )
+          this.diagnostic(state, 'scope_rotation_recovered_backend', attempt, refreshStartedAt, {
+            trigger: reason,
+            phase: 'complete',
+            outcome: 'recovered',
+            failureCode: 'none',
+            retryDelayMs: 0
+          })
         }
 
         return snapshot
@@ -545,9 +493,7 @@ export class LocalCapabilityManager {
 
         if (!state.active) {
           const initialRetryDelay =
-            failed.phase === 'candidate_probe' &&
-            failed.failureCode === 'probe_http_error' &&
-            failed.httpStatus === 401
+            failed.phase === 'candidate_probe' && failed.failureCode === 'probe_http_error' && failed.httpStatus === 401
               ? INITIAL_PROBE_RETRY_DELAYS_SECONDS[attempt]
               : undefined
 
@@ -644,9 +590,7 @@ export class LocalCapabilityManager {
 
       phase = 'candidate_probe'
 
-      const probe = validatedProbe(
-        await this.probeWithTimeout(state, candidate.bearer)
-      )
+      const probe = validatedProbe(await this.probeWithTimeout(state, candidate.bearer))
 
       this.assertCandidateProbe(state, candidate, probe, 'candidate', null)
       this.diagnostic(state, 'scope_candidate_probe_succeeded', attempt, startedAt, {
@@ -667,14 +611,7 @@ export class LocalCapabilityManager {
           state,
           state.binding.control.request(
             encodeScopeTokenPromotion(candidate, previousRegistrationId, transitionId),
-            ack =>
-              this.matchesPromotedAck(
-                state,
-                candidate,
-                previousRegistrationId,
-                transitionId,
-                ack
-              ),
+            ack => this.matchesPromotedAck(state, candidate, previousRegistrationId, transitionId, ack),
             DEFAULT_CONTROL_ACK_TIMEOUT_MS
           )
         )
@@ -682,9 +619,7 @@ export class LocalCapabilityManager {
         this.assertCandidate(state, candidate)
         phase = 'promotion_confirmation'
 
-        const confirmation = validatedProbe(
-          await this.probeWithTimeout(state, candidate.bearer)
-        )
+        const confirmation = validatedProbe(await this.probeWithTimeout(state, candidate.bearer))
 
         this.assertCandidateProbe(state, candidate, confirmation, 'active', transitionId)
 
@@ -692,19 +627,13 @@ export class LocalCapabilityManager {
           throw unavailable(error)
         }
 
-        this.diagnostic(
-          state,
-          'scope_promotion_ack_recovered_by_probe',
-          attempt,
-          startedAt,
-          {
-            trigger: reason,
-            phase,
-            outcome: 'recovered',
-            failureCode: 'none',
-            retryDelayMs: 0
-          }
-        )
+        this.diagnostic(state, 'scope_promotion_ack_recovered_by_probe', attempt, startedAt, {
+          trigger: reason,
+          phase,
+          outcome: 'recovered',
+          failureCode: 'none',
+          retryDelayMs: 0
+        })
       }
 
       this.assertCandidate(state, candidate)
@@ -742,11 +671,7 @@ export class LocalCapabilityManager {
     }
   }
 
-  private matchesRegisteredAck(
-    state: CapabilityState,
-    candidate: AuthScopeToken,
-    ack: ScopeControlAck
-  ): boolean {
+  private matchesRegisteredAck(state: CapabilityState, candidate: AuthScopeToken, ack: ScopeControlAck): boolean {
     return (
       this.isCurrent(state) &&
       state.candidate === candidate &&
@@ -849,10 +774,7 @@ export class LocalCapabilityManager {
     })
   }
 
-  private probeWithTimeout(
-    state: CapabilityState,
-    bearer: string
-  ): Promise<LocalCapabilityProbe> {
+  private probeWithTimeout(state: CapabilityState, bearer: string): Promise<LocalCapabilityProbe> {
     return new Promise((resolve, reject) => {
       const controller = new AbortController()
       let timer: NodeJS.Timeout | null = null
@@ -991,9 +913,7 @@ export class LocalCapabilityManager {
       const now = this.clock()
       const activeAvailable = Boolean(state.active && now < state.active.validUntil)
 
-      const remainingLifetimeMs = state.active
-        ? Math.max(0, Math.round((state.active.validUntil - now) * 1_000))
-        : 0
+      const remainingLifetimeMs = state.active ? Math.max(0, Math.round((state.active.validUntil - now) * 1_000)) : 0
 
       this.onDiagnostic({
         name,

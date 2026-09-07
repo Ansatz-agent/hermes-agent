@@ -26,6 +26,7 @@ function makeToolchain() {
   fs.writeFileSync(path.join(root, 'python.tar.gz'), 'fixture python\n')
   fs.writeFileSync(path.join(root, 'auth-requirements.txt'), 'fixture requirements\n')
   fs.writeFileSync(path.join(root, 'wheelhouse', 'httpx.whl'), 'fixture wheel\n')
+
   const manifest = {
     schemaVersion: 1,
     platform: 'darwin',
@@ -35,6 +36,7 @@ function makeToolchain() {
     requirements: asset(root, 'auth-requirements.txt'),
     wheels: [asset(root, 'wheelhouse/httpx.whl')]
   }
+
   fs.writeFileSync(path.join(root, 'manifest.json'), JSON.stringify(manifest))
 
   return { root, manifest }
@@ -80,16 +82,14 @@ test('resolveBundledAuthToolchain rejects path traversal and the wrong target', 
   const wrongTarget = makeToolchain()
 
   try {
-    const traversalManifest = JSON.parse(
-      fs.readFileSync(path.join(traversal.root, 'manifest.json'), 'utf8')
-    )
+    const traversalManifest = JSON.parse(fs.readFileSync(path.join(traversal.root, 'manifest.json'), 'utf8'))
+
     traversalManifest.wheels[0].file = '../outside.whl'
     fs.writeFileSync(path.join(traversal.root, 'manifest.json'), JSON.stringify(traversalManifest))
     await assert.rejects(resolveBundledAuthToolchain(traversal.root), /wheel .*file path is invalid/)
 
-    const wrongManifest = JSON.parse(
-      fs.readFileSync(path.join(wrongTarget.root, 'manifest.json'), 'utf8')
-    )
+    const wrongManifest = JSON.parse(fs.readFileSync(path.join(wrongTarget.root, 'manifest.json'), 'utf8'))
+
     wrongManifest.arch = 'x64'
     fs.writeFileSync(path.join(wrongTarget.root, 'manifest.json'), JSON.stringify(wrongManifest))
     await assert.rejects(resolveBundledAuthToolchain(wrongTarget.root), /unsupported authentication toolchain target/)
@@ -108,6 +108,7 @@ test('resolveBundledAuthToolchain accepts the verified Windows x64 asset layout 
     fs.writeFileSync(path.join(root, 'python-embed.zip'), 'fixture CPython embed archive\n')
     fs.writeFileSync(path.join(root, 'auth-requirements.txt'), 'fixture requirements\n')
     fs.writeFileSync(path.join(root, 'wheelhouse', 'keyring-25.7.0-py3-none-any.whl'), 'fixture wheel\n')
+
     const manifest = {
       schemaVersion: 1,
       platform: 'win32',
@@ -117,15 +118,13 @@ test('resolveBundledAuthToolchain accepts the verified Windows x64 asset layout 
       requirements: asset(root, 'auth-requirements.txt'),
       wheels: [asset(root, 'wheelhouse/keyring-25.7.0-py3-none-any.whl')]
     }
+
     fs.writeFileSync(path.join(root, 'manifest.json'), JSON.stringify(manifest))
 
     const resolved = await resolveBundledAuthToolchain(root, { platform: 'win32', arch: 'x64' })
     assert.equal(resolved.uvAssetPath, path.join(root, 'uv.exe'))
     assert.equal(resolved.pythonArchivePath, path.join(root, 'python-embed.zip'))
-    await assert.rejects(
-      resolveBundledAuthToolchain(root, { platform: 'darwin', arch: 'arm64' }),
-      /target mismatch/
-    )
+    await assert.rejects(resolveBundledAuthToolchain(root, { platform: 'darwin', arch: 'arm64' }), /target mismatch/)
   } finally {
     fs.rmSync(root, { recursive: true, force: true })
   }

@@ -497,11 +497,7 @@ function parseScannedHostKey(output, host, port) {
     const algorithm = parts[1]
     const key = parts[2]
 
-    if (
-      parts.length < 3 ||
-      !/^[A-Za-z0-9@._+-]+$/.test(algorithm) ||
-      !/^[A-Za-z0-9+/]+={0,2}$/.test(key)
-    ) {
+    if (parts.length < 3 || !/^[A-Za-z0-9@._+-]+$/.test(algorithm) || !/^[A-Za-z0-9+/]+={0,2}$/.test(key)) {
       continue
     }
 

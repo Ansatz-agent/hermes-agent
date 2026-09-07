@@ -1,11 +1,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-const LEGACY_ANSATZ_PARTITIONS = Object.freeze([
-  'hermes-embed',
-  'hermes-preview',
-  'hermes-remote-oauth'
-] as const)
+const LEGACY_ANSATZ_PARTITIONS = Object.freeze(['hermes-embed', 'hermes-preview', 'hermes-remote-oauth'] as const)
 
 type LegacyCleanupOptions = {
   onError?: (partitionName: string) => void
@@ -18,6 +14,7 @@ async function lstatOrNull(target: string) {
     if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
       return null
     }
+
     throw error
   }
 }
@@ -39,6 +36,7 @@ export async function removeLegacyAnsatzPartitions(
     rootDetails = await lstatOrNull(partitionsRoot)
   } catch {
     options.onError?.('Partitions')
+
     return []
   }
 

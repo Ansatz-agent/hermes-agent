@@ -5,27 +5,18 @@ import { test } from 'vitest'
 import { shouldLatchBackendStartFailure, shouldLatchRemoteReauthFailure } from './backend-start-failure'
 
 test('latches a LOCAL backend failure so the install-retry loop is broken', () => {
-  assert.equal(
-    shouldLatchBackendStartFailure({ attemptedRemote: false, traceDurabilityStartup: false }),
-    true
-  )
+  assert.equal(shouldLatchBackendStartFailure({ attemptedRemote: false, traceDurabilityStartup: false }), true)
 })
 
 test('does not latch a LOCAL Trace durability startup failure so a later attempt can recover', () => {
-  assert.equal(
-    shouldLatchBackendStartFailure({ attemptedRemote: false, traceDurabilityStartup: true }),
-    false
-  )
+  assert.equal(shouldLatchBackendStartFailure({ attemptedRemote: false, traceDurabilityStartup: true }), false)
 })
 
 test('never latches a REMOTE failure so recovery stays retryable without a restart', () => {
   // A lapsed OAuth session / mint timeout / host briefly unreachable across a
   // laptop sleep must not wedge the app: the next connect has to re-attempt and
   // re-mint against the refreshed session.
-  assert.equal(
-    shouldLatchBackendStartFailure({ attemptedRemote: true, traceDurabilityStartup: false }),
-    false
-  )
+  assert.equal(shouldLatchBackendStartFailure({ attemptedRemote: true, traceDurabilityStartup: false }), false)
 })
 
 test('only an ordinary LOCAL backend failure latches', () => {

@@ -125,10 +125,7 @@ test('Windows auth runtime uses System32 PowerShell and only bundled local packa
         }
 
         if (options.command.endsWith('python.exe')) {
-          verificationPathContents = fs.readFileSync(
-            path.join(path.dirname(options.command), 'python313._pth'),
-            'utf8'
-          )
+          verificationPathContents = fs.readFileSync(path.join(path.dirname(options.command), 'python313._pth'), 'utf8')
         }
 
         return { code: 0, killed: false, signal: null, stderr: '', stdout: '', termination: null }
@@ -172,10 +169,7 @@ test('Windows auth runtime uses System32 PowerShell and only bundled local packa
       fs.readFileSync(path.join(result.runtimeRoot, 'python313._pth'), 'utf8'),
       /^python313\.zip\n\.\nLib\\site-packages\n\.\.\nimport site\n$/
     )
-    assert.match(
-      verificationPathContents,
-      /^python313\.zip\n\.\nLib\\site-packages\n\.\.\\\.\.\nimport site\n$/
-    )
+    assert.match(verificationPathContents, /^python313\.zip\n\.\nLib\\site-packages\n\.\.\\\.\.\nimport site\n$/)
     assert.ok(fs.statSync(path.join(result.runtimeRoot, 'python.exe')).isFile())
     assert.ok(fs.statSync(result.managedUvPath).isFile())
     assert.ok(fs.statSync(path.join(fixture.activeRoot, 'bin', 'ansatz.cmd')).isFile())
