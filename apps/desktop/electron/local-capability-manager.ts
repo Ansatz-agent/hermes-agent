@@ -14,6 +14,11 @@ import {
 import { type BackendControlChannel } from './backend-control-channel'
 
 const RETRY_DELAYS_SECONDS = [1, 2, 5, 10, 30] as const
+// The first backend scope probe can briefly see the auth owner before its
+// authorization state is visible to the freshly started backend. Keep the
+// backend alive for a short, bounded window so this startup race does not
+// become a fatal boot error.
+const INITIAL_PROBE_RETRY_DELAYS_SECONDS = [0.25, 0.5, 1, 2] as const
 const DEFAULT_CONTROL_ACK_TIMEOUT_MS = 5_000
 const DEFAULT_CAPABILITY_PROBE_TIMEOUT_MS = 5_000
 
@@ -536,7 +541,32 @@ export class LocalCapabilityManager {
 
         state.candidate = null
 
+        const failed = rotationAttemptError('complete', error)
+
         if (!state.active) {
+          const initialRetryDelay =
+            failed.phase === 'candidate_probe' &&
+            failed.failureCode === 'probe_http_error' &&
+            failed.httpStatus === 401
+              ? INITIAL_PROBE_RETRY_DELAYS_SECONDS[attempt]
+              : undefined
+
+          if (initialRetryDelay !== undefined) {
+            attempt += 1
+            state.retryAttempt = attempt
+            this.diagnostic(state, 'scope_rotation_retry_scheduled', attempt, refreshStartedAt, {
+              trigger: reason,
+              phase: failed.phase,
+              outcome: 'retry_scheduled',
+              failureCode: failed.failureCode,
+              httpStatus: failed.httpStatus,
+              retryDelayMs: initialRetryDelay * 1_000
+            })
+            await this.waitForRetry(state, initialRetryDelay)
+
+            continue
+          }
+
           throw unavailable(error)
         }
 
@@ -551,7 +581,6 @@ export class LocalCapabilityManager {
         const baseDelay = RETRY_DELAYS_SECONDS[Math.min(attempt, RETRY_DELAYS_SECONDS.length - 1)]
         const random = Math.min(1, Math.max(0, this.random()))
         const delay = Math.min(baseDelay * (1 + random * 0.2), remaining)
-        const failed = rotationAttemptError('complete', error)
         attempt += 1
         state.retryAttempt = attempt
         this.diagnostic(state, 'scope_rotation_retry_scheduled', attempt, refreshStartedAt, {

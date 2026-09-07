@@ -87,6 +87,7 @@ describe('maybeNotifyUpdateAvailable', () => {
   beforeEach(() => {
     storage.clear()
     notifySpy.mockClear()
+    dismissSpy.mockClear()
     vi.useRealTimers()
   })
 
@@ -119,9 +120,31 @@ describe('maybeNotifyUpdateAvailable', () => {
     expect(notifySpy).toHaveBeenCalledTimes(1)
   })
 
-  it('does nothing when already up to date', () => {
-    maybeNotifyUpdateAvailable(status({ behind: 0 }))
-    expect(notifySpy).not.toHaveBeenCalled()
+  it('removes the previous notification when a new check confirms the update is complete', () => {
+    maybeNotifyUpdateAvailable(status())
+    const id = notifySpy.mock.calls[0]?.[0].id
+
+    maybeNotifyUpdateAvailable(status({ behind: 0, updateAvailable: false }))
+    expect(notifySpy).toHaveBeenCalledTimes(1)
+    expect(dismissSpy).toHaveBeenCalledWith(id)
+  })
+
+  it('clears each target independently, including backend checks without a target SHA', () => {
+    maybeNotifyUpdateAvailable(status(), 'client')
+    maybeNotifyUpdateAvailable(status(), 'backend')
+    const clientId = notifySpy.mock.calls[0]?.[0].id
+    const backendId = notifySpy.mock.calls[1]?.[0].id
+
+    expect(clientId).not.toBe(backendId)
+    maybeNotifyUpdateAvailable(status({ behind: 0, targetSha: undefined }), 'backend')
+    expect(dismissSpy).toHaveBeenCalledWith(backendId)
+    expect(dismissSpy).not.toHaveBeenCalledWith(clientId)
+  })
+
+  it('does not treat a failed check as proof that an existing update disappeared', () => {
+    maybeNotifyUpdateAvailable(status())
+    maybeNotifyUpdateAvailable(status({ behind: 0, error: 'fetch-failed' }))
+    expect(dismissSpy).not.toHaveBeenCalled()
   })
 
   // FAIL-BEFORE: a shallow installer clone reports behind:null + updateAvailable

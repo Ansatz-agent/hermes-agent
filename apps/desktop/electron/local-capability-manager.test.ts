@@ -535,6 +535,60 @@ test('bounds a hanging probe during initial activation and reports only local ba
   }
 })
 
+test('retries a transient unauthorized probe during initial activation', async () => {
+  const fixture = managerFixture({ useDefaultProbe: true })
+  const fetchMock = vi.fn()
+  let probeCount = 0
+
+  vi.stubGlobal('fetch', fetchMock)
+  fetchMock.mockImplementation(async (_url: URL, init: RequestInit) => {
+    probeCount += 1
+
+    if (probeCount === 1) {
+      return { ok: false, status: 401 }
+    }
+
+    const headers = init.headers as Record<string, string>
+    const token = fixture.tokensByBearer.get(headers['X-Hermes-Session-Token'])
+    assert.ok(token)
+
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        protocol_version: 2,
+        registration_id: token.registrationId,
+        connection_id: token.scope.connection_id,
+        runtime_instance_id: token.scope.runtime_instance_id,
+        epoch: token.scope.epoch,
+        state: 'candidate',
+        promoted_transition_id: null
+      })
+    }
+  })
+
+  const activating = fixture.manager.activate(fixture.binding)
+
+  await fixture.control.waitForPending('register_scope_token')
+  assert.equal(fixture.control.ackRegistered(), true)
+  await eventually(
+    () => (fixture.diagnostics.some(event => event.name === 'scope_rotation_retry_scheduled') ? true : null),
+    'Initial probe retry was not scheduled'
+  )
+  assert.equal(probeCount, 1)
+
+  await vi.advanceTimersByTimeAsync(250)
+  await fixture.control.waitForPending('register_scope_token')
+  assert.equal(fixture.control.ackRegistered(), true)
+  await eventually(() => (probeCount >= 2 ? true : null), 'Retry probe did not run')
+  await fixture.control.waitForPending('promote_scope_token')
+  assert.equal(fixture.control.ackPromoted(), true)
+  await activating
+
+  assert.equal(probeCount, 2)
+  assert.equal(fixture.manager.snapshot('backend-1').registrationId, Buffer.alloc(16, 66).toString('base64url'))
+})
+
 test('accepts an identical promoted transition from the probe when the promote ACK is lost', async () => {
   const fixture = managerFixture()
   await activate(fixture)
